@@ -245,6 +245,7 @@ let viewer = null;  // { box, img, vid, next, label, clock, playBtn, soundBtn }
 
 function showFrame(force) {
   if (!viewer) return;
+  if (viewer.mode === "export") { paintHead(); return; }
   const cuts = cutsNow();
   const { i, local } = itemAt(play.t);
   const c = cuts[i];
@@ -323,8 +324,18 @@ function tick(now) {
   play.raf = requestAnimationFrame(tick);
 }
 
+function leaveExportView() {
+  if (!viewer || viewer.mode !== "export") return;
+  viewer.mode = "";
+  viewer.vid.controls = false;
+  viewer.vid.pause();
+  viewer.vid.dataset.src = "";
+  play.idx = -1;
+}
+
 function startPlay() {
   if (!cutsNow().length) return;
+  leaveExportView();
   if (play.t >= totalSec() - 0.05) play.t = 0;
   play.on = true;
   play.last = performance.now();
@@ -343,6 +354,7 @@ function stopPlay() {
 function togglePlay() { play.on ? stopPlay() : startPlay(); }
 
 function seek(t) {
+  leaveExportView();
   play.t = Math.max(0, Math.min(totalSec(), t));
   play.last = performance.now();
   showFrame();
@@ -523,6 +535,21 @@ function mountTimeline(el) {
         <button class="gg-btn gg-zoom-in" title="Zoom in">+</button>
         <button class="gg-btn gg-reset" title="Reset to 공간쉐어 order and lengths">Reset</button>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
+        <span class="gg-sep"></span>
+        <select class="gg-ex-preset" title="Export size">
+          <option value="480p">480p</option><option value="720p" selected>720p</option><option value="1080p">1080p</option>
+        </select>
+        <label class="gg-ex-snd" title="Include clip audio (silence for stills)"><input type="checkbox" class="gg-ex-sound" checked /> audio</label>
+        <button class="gg-btn gg-export gg-primary" title="Render the timeline to one mp4 (CPU, ffmpeg)">Export mp4</button>
+      </div>
+      <div class="gg-ex-row" hidden>
+        <div class="gg-ex-bar"><div class="gg-ex-fill"></div></div>
+        <span class="gg-ex-text"></span>
+        <button class="gg-btn gg-ex-cancel">Cancel</button>
+        <button class="gg-btn gg-ex-play" hidden>▶ Preview</button>
+        <a class="gg-btn gg-ex-open" target="_blank" rel="noopener" hidden>Open</a>
+        <span class="gg-ex-path" title="Click to copy path"></span>
+        <button class="gg-btn gg-ex-close" title="Hide">×</button>
       </div>
       <div class="gg-error" hidden></div>
       <div class="gg-tl-scroll">
@@ -555,6 +582,11 @@ function mountTimeline(el) {
   $r(".gg-zoom-in").addEventListener("click", () => zoom(1.5));
   $r(".gg-zoom-out").addEventListener("click", () => zoom(1 / 1.5));
   $r(".gg-reset").addEventListener("click", resetEdit);
+  $r(".gg-export").addEventListener("click", () => startExport($r(".gg-ex-preset").value, $r(".gg-ex-sound").checked));
+  $r(".gg-ex-cancel").addEventListener("click", cancelExport);
+  $r(".gg-ex-play").addEventListener("click", () => showExport(exp.job));
+  $r(".gg-ex-close").addEventListener("click", () => { exp.hidden = true; paintExport(); });
+  $r(".gg-ex-path").addEventListener("click", (e) => { navigator.clipboard?.writeText(e.target.textContent).catch(() => {}); });
   $r(".gg-reload").addEventListener("click", () => loadProjects());
   $r(".gg-ruler").addEventListener("pointerdown", (e) => {
     const rect = $r(".gg-track").getBoundingClientRect();
@@ -616,6 +648,8 @@ function mountTimeline(el) {
   bus.addEventListener("dirty", onDirty);
   bus.addEventListener("select", onSel);
   paintTrack();
+  paintExport();
+  refreshExport();
   if (!state.projects.length) loadProjects();
   return () => {
     stopPlay();
@@ -627,6 +661,98 @@ function mountTimeline(el) {
     if (viewer && viewer.box === root) viewer = null;
   };
 }
+
+// ---- export ----
+const exp = { job: null, poll: 0, hidden: false };
+const exportUrl = (name) => api.apiURL("/gonggan/export/file?name=" + encodeURIComponent(name));
+const fmtMB = (b) => (b / 1048576).toFixed(1) + " MB";
+
+function onExportJob(job) {
+  if (!job || job.status === "idle") return;
+  const was = exp.job && exp.job.status;
+  exp.job = job;
+  if (job.status === "running") exp.hidden = false;
+  paintExport();
+  if (job.status === "running" && !exp.poll) exp.poll = setInterval(refreshExport, 1000);
+  if (job.status !== "running" && exp.poll) { clearInterval(exp.poll); exp.poll = 0; }
+  if (was === "running" && job.status === "done") showExport(job);
+}
+
+async function refreshExport() {
+  try { const d = await getJson("/gonggan/export/status"); onExportJob(d.job); } catch (_) {}
+}
+
+async function startExport(preset, sound) {
+  const tl = state.timeline;
+  if (!tl || !tl.cuts.length) return;
+  clearTimeout(ed.saveTimer);
+  if (ed.saving || ed.saveTimer) await saveEdit();   // export what is on screen
+  stopPlay();
+  try {
+    const res = await api.fetchApi("/gonggan/export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pid: tl.project.id, preset, fps: 24, sound }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.message || `HTTP ${res.status}`);
+    exp.hidden = false;
+    onExportJob(data.job);
+  } catch (e) {
+    state.error = "Export failed to start: " + e.message;
+    bus.dispatchEvent(new Event("timeline"));
+  }
+}
+
+async function cancelExport() {
+  try { await api.fetchApi("/gonggan/export/cancel", { method: "POST" }); } catch (_) {}
+  refreshExport();
+}
+
+function showExport(job) {
+  if (!viewer || !job || job.status !== "done") return;
+  stopPlay();
+  viewer.mode = "export";
+  const { img, vid, blank, label } = viewer;
+  img.hidden = true; blank.hidden = true; vid.hidden = false;
+  vid.controls = true;
+  vid.muted = !ed.sound;
+  const url = exportUrl(job.file);
+  vid.dataset.src = url;
+  vid.src = url;
+  label.textContent = `EXPORT · ${job.file}`;
+  document.querySelectorAll(".gg-timeline .gg-clip").forEach((el) => el.classList.remove("gg-play"));
+}
+
+function paintExport() {
+  const root = document.querySelector(".gg-timeline");
+  if (!root) return;
+  const row = root.querySelector(".gg-ex-row");
+  const job = exp.job;
+  const btn = root.querySelector(".gg-export");
+  const running = job && job.status === "running";
+  btn.disabled = !!running;
+  btn.textContent = running ? "Exporting…" : "Export mp4";
+  row.hidden = !job || exp.hidden;
+  if (!job) return;
+  const pct = Math.round((job.progress || 0) * 100);
+  row.querySelector(".gg-ex-fill").style.width = (job.status === "done" ? 100 : pct) + "%";
+  row.classList.toggle("gg-ex-done", job.status === "done");
+  row.classList.toggle("gg-ex-bad", job.status === "error" || job.status === "cancelled");
+  const text = row.querySelector(".gg-ex-text");
+  if (running) text.textContent = `${job.project} · ${job.preset} · ${job.step || ""} · ${pct}%`;
+  else if (job.status === "done") text.textContent = `✓ ${job.preset} · ${fmtClock(job.expected_sec || 0)} · ${fmtMB(job.size || 0)} · ${Math.round((job.finished_at - job.started_at) || 0)}s`;
+  else if (job.status === "cancelled") text.textContent = "Export cancelled";
+  else if (job.status === "error") text.textContent = "Export failed: " + (job.error || "");
+  row.querySelector(".gg-ex-cancel").hidden = !running;
+  const done = job.status === "done";
+  row.querySelector(".gg-ex-play").hidden = !done;
+  const open = row.querySelector(".gg-ex-open");
+  open.hidden = !done;
+  if (done) open.href = exportUrl(job.file);
+  row.querySelector(".gg-ex-path").textContent = done ? job.path : "";
+}
+
+api.addEventListener("gonggan.export", (e) => onExportJob(e.detail));
 
 // Space = play/pause, only while the pointer is over (or focus is inside) the Timeline panel,
 // so ComfyUI's own space-drag canvas panning keeps working everywhere else.
