@@ -81,3 +81,46 @@ async def gg_poster(request):
         "Content-Type": gg_data.MIME.get(path.suffix.lower(), "image/jpeg"),
         "Cache-Control": "private, max-age=300",
     })
+
+
+async def _json_body(request) -> dict:
+    try:
+        data = await request.json()
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+@routes.post("/gonggan/edit")
+async def gg_edit(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    try:
+        tl = await asyncio.to_thread(gg_data.save_edit, pid, data.get("order"), data.get("clips"))
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] edit save failed")
+        return _err(500, str(ex))
+    if tl is None:
+        return _err(404, "project not found")
+    return web.json_response(tl)
+
+
+@routes.post("/gonggan/edit/reset")
+async def gg_edit_reset(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    try:
+        tl = await asyncio.to_thread(gg_data.reset_edit, pid)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        return _err(500, str(ex))
+    if tl is None:
+        return _err(404, "project not found")
+    return web.json_response(tl)
