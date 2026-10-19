@@ -5,6 +5,7 @@ ComfyUI's own python never imports comfy_sdk. Generation only happens through re
 from __future__ import annotations
 
 import json
+import re
 import os
 import random
 import subprocess
@@ -69,6 +70,27 @@ def status(force: bool = False) -> dict:
     return v
 
 
+_NULL = r"(?:none|null|undefined|nan|n/a)"
+_NULL_FRAG = re.compile(r"\s*[;,]\s*" + _NULL + r"\s*(?=[.;,!?]|$)", re.I)       # "trousers; None."
+_NULL_SENT = re.compile(r"(^|(?<=[.;!?]))\s*(?:[\w ]{1,30}:\s*)?" + _NULL + r"\s*[.;,]?(?=\s|$)", re.I)  # "None." / "Outfit: None."
+_EMPTY_FRAG = re.compile(r"\s*([;,])\s*(?=[.;,!?])")                               # "a; ." / "a, ,"
+
+
+def clean_prompt(text: str) -> str:
+    """Drop None/null/empty fragments that 공간쉐어 templates leave behind (e.g. 'trousers; None.')."""
+    t = str(text or "")
+    for _ in range(3):
+        t2 = _NULL_FRAG.sub("", t)
+        t2 = _NULL_SENT.sub(lambda m: m.group(1), t2)
+        t2 = _EMPTY_FRAG.sub("", t2)
+        t2 = re.sub(r"([.;,!?])(?:\s*[.;,])+", r"\1", t2)
+        t2 = re.sub(r"[ \t]{2,}", " ", t2).strip(" ;,")
+        if t2 == t:
+            break
+        t = t2
+    return t.strip()
+
+
 def build_draft_workflow(prompt: str, seed: int, aspect: str, prefix: str) -> dict:
     """Same graph as 공간쉐어 _build_qwen_image_workflow (server.py:3226), with draft steps/size."""
     return {
@@ -109,7 +131,7 @@ def plan(pid: str, cut_id: str, seed: int | None = None) -> dict:
     cut = next((c for c in tl["cuts"] if c["id"] == cut_id), None)
     if not cut:
         raise ValueError("cut not found")
-    prompt = (cut.get("prompt") or "").strip()
+    prompt = clean_prompt(cut.get("prompt") or "")
     if not prompt:
         raise ValueError("cut has no prompt in 공간쉐어")
     aspect = cut.get("prompt_aspect") if cut.get("prompt_aspect") in ASPECTS else "16:9"
@@ -163,9 +185,10 @@ def _run_worker(p: dict) -> None:
         info = gg_data.add_version(p["pid"], p["cut_id"], Path(f), {
             "source": "local-sdk", "model": p["model"], "seed": p["seed"], "steps": p["steps"],
             "prompt": p["prompt"], "aspect": p["aspect"], "sdk_job_id": res.get("job_id"),
-            "base_url": settings()["proxy_url"]})
+            "base_url": settings()["proxy_url"], "render_seconds": res.get("seconds")})
         added.append(info["id"])
-    _set(status="done", versions=added, sdk_job_id=res.get("job_id"), finished_at=time.time())
+    _set(status="done", versions=added, sdk_job_id=res.get("job_id"), render_seconds=res.get("seconds"),
+         finished_at=time.time())
 
 
 def run_confirmed(pid: str, cut_id: str, seed: int) -> dict:

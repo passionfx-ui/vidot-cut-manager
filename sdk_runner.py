@@ -107,6 +107,11 @@ def cmd_run(a) -> dict:
         wf = client.workflows.from_json(graph)
         job = client.submit(wf)
         job_id = job.id
+        try:
+            job.wait(timeout=1500)
+        except TimeoutError:
+            job.cancel()
+            return {"ok": False, "job_id": job_id, "error": "timed out after 1500 s; cancel requested"}
         job = job.result()
         files = []
         for o in job.get_outputs(a.node):
