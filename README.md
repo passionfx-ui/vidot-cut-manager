@@ -20,3 +20,26 @@ All routes are also available under `/api/gonggan/*`.
 
 ## Install (dev)
 `mklink /J C:\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-gonggan-cut C:\dev\comfyui-gonggan-cut`
+
+## Comfy SDK path (local)
+ComfyUI's own Python never imports the SDK. The pack calls `sdk_runner.py` in an isolated venv:
+
+```
+ComfyUI (pack routes) -> .venv-sdk\Scripts\python.exe sdk_runner.py -> comfy-sdk (COMFY_BASE_URL=http://127.0.0.1:8189)
+                      -> comfy-api-proxy :8189 -> ComfyUI :8188
+```
+
+Setup (once):
+```
+py -3.13 -m venv .venv-sdk
+.venv-sdk\Scripts\python -m pip install comfy-sdk comfy-api-proxy
+start_proxy.bat        (runs comfy-api-proxy on 127.0.0.1:8189)
+```
+Tested with Python 3.13.6, comfy-sdk 0.5.0, comfy-api-proxy 0.1.6.
+
+- `GET /gonggan/sdk/status` - venv + proxy health + an SDK `list_jobs` round trip (no generation).
+- `POST /gonggan/regen {pid, cut_id}` - **dry run by default**: builds the draft workflow
+  (Qwen-Image 2.1 + turbo LoRA, 4 steps, ~0.25 MP, same graph as 공간쉐어) and validates it against `/object_info`.
+  Queues only with `{"dry_run": false, "confirm": true, "seed": <seed from the dry run>}`; the UI asks first.
+- `POST /gonggan/send-output {pid, cut_id}` - copies ComfyUI's last output (in-memory `/history`, else newest file in `output/`) into the cut.
+- New takes are stored in the pack's `versions/<pid>/<cut_id>/` (gitignored), never in 공간쉐어 data, and become the cut's pick in `edits/edit_<pid>.json`.

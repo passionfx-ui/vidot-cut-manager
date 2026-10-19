@@ -170,3 +170,67 @@ async def gg_export_file(request):
     if path is None:
         return _err(404, "file not found")
     return web.FileResponse(path, headers={"Content-Type": "video/mp4", "Cache-Control": "no-cache"})
+
+
+# ---------------- Comfy SDK path ----------------
+from . import gg_sdk  # noqa: E402
+
+
+def _notify_regen(job: dict) -> None:
+    PromptServer.instance.send_sync("gonggan.regen", job)
+
+
+gg_sdk._notify = _notify_regen
+
+
+@routes.get("/gonggan/sdk/status")
+async def gg_sdk_status(request):
+    force = request.query.get("force") == "1"
+    return web.json_response(await asyncio.to_thread(gg_sdk.status, force))
+
+
+@routes.post("/gonggan/regen")
+async def gg_regen(request):
+    """dry_run (default) builds + validates the workflow and queues nothing.
+    A real run needs {"dry_run": false, "confirm": true, "seed": <seed from the dry run>}."""
+    data = await _json_body(request)
+    pid, cid = data.get("pid"), data.get("cut_id")
+    if not isinstance(pid, str) or not isinstance(cid, str):
+        return _err(400, "pid and cut_id required")
+    seed = data.get("seed")
+    try:
+        seed = int(seed) if seed is not None else None
+    except (TypeError, ValueError):
+        return _err(400, "bad seed")
+    try:
+        if data.get("dry_run", True) or data.get("confirm") is not True:
+            return web.json_response(await asyncio.to_thread(gg_sdk.dry_run, pid, cid, seed))
+        if seed is None:
+            return _err(400, "confirmed run needs the seed shown in the dry run")
+        return web.json_response(await asyncio.to_thread(gg_sdk.run_confirmed, pid, cid, seed))
+    except ValueError as ex:
+        return _err(400, str(ex))
+
+
+@routes.get("/gonggan/regen/status")
+async def gg_regen_status(request):
+    return web.json_response({"ok": True, "job": gg_sdk.job_status()})
+
+
+@routes.get("/gonggan/last-output")
+async def gg_last_output(request):
+    lo = await asyncio.to_thread(gg_sdk.last_output)
+    return web.json_response({"ok": bool(lo), "output": lo})
+
+
+@routes.post("/gonggan/send-output")
+async def gg_send_output(request):
+    data = await _json_body(request)
+    pid, cid = data.get("pid"), data.get("cut_id")
+    if not isinstance(pid, str) or not isinstance(cid, str):
+        return _err(400, "pid and cut_id required")
+    try:
+        res = await asyncio.to_thread(gg_sdk.send_last_output, pid, cid)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    return web.json_response(res, status=200 if res.get("ok") else 404)

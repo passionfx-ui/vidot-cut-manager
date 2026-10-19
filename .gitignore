@@ -4,3 +4,5 @@ gonggan_settings.json
 *.log
 cache/
 edits/
+.venv-sdk/
+versions/

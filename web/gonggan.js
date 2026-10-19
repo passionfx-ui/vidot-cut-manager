@@ -94,12 +94,124 @@ function paintSelection(root) {
 }
 
 // ---------------- Shots (sidebar) ----------------
+// ---- SDK status / versions / regen (Shots tab) ----
+const sdk = { st: null, busy: "", msg: "" };
+
+async function refreshSdk(force) {
+  try { sdk.st = await (await api.fetchApi("/gonggan/sdk/status" + (force ? "?force=1" : ""))).json(); }
+  catch (e) { sdk.st = { ok: false, error: String(e) }; }
+  bus.dispatchEvent(new Event("sdk"));
+}
+
+function sdkBadge() {
+  const st = sdk.st;
+  if (!st) return `<span class="gg-sdk gg-sdk-wait" title="checking Comfy SDK…">● SDK</span>`;
+  const tip = st.ok
+    ? `Comfy SDK ${st.comfy_sdk} → comfy-api-proxy ${st.comfy_api_proxy} at ${st.proxy_url || st.base_url} → ComfyUI (${st.sdk_roundtrip_ms} ms)`
+    : (st.error || "SDK not ready");
+  return `<span class="gg-sdk ${st.ok ? "gg-sdk-ok" : "gg-sdk-bad"}" title="${esc(tip)}">● SDK${st.ok ? "" : " off"}</span>`;
+}
+
+const fmtSrc = (s) => ({ gonggan: "공간쉐어", "local-sdk": "SDK", "comfy-history": "Comfy", "comfy-output-folder": "Comfy" }[s] || s || "");
+
+async function postJson(route, body) {
+  const res = await api.fetchApi(route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function setPick(cutId, vid) {
+  const tl = state.timeline;
+  const c = tl && tl.cuts.find((x) => x.id === cutId);
+  if (!c) return;
+  c.pick = vid;
+  clearTimeout(ed.saveTimer);
+  await saveEdit();
+}
+
+async function regenCut(cutId) {
+  const tl = state.timeline;
+  if (!tl) return;
+  sdk.busy = "regen"; sdk.msg = "Building + validating workflow (dry run)…"; bus.dispatchEvent(new Event("sdk"));
+  try {
+    const d = await postJson("/gonggan/regen", { pid: tl.project.id, cut_id: cutId, dry_run: true });
+    const p = d.plan, v = d.validation || {};
+    sdk.msg = v.ok ? `Dry run OK · ${p.model} · ${p.steps} steps · ~${p.approx_size} · seed ${p.seed}` : "Validation failed: " + (v.problems || [v.error]).join("; ");
+    bus.dispatchEvent(new Event("sdk"));
+    if (!v.ok) return;
+    const ok = confirm(
+      `Queue ONE generation job on this PC's GPU?\n\nCut ${p.cut_no}. ${p.cut_name}\nModel: ${p.model}\nSteps: ${p.steps} · CFG ${p.cfg} · ${p.sampler}\n` +
+      `Size: ~${p.approx_size} (${p.megapixels} MP, ${p.aspect})\nSeed: ${p.seed}\n\nPrompt:\n${p.prompt.slice(0, 400)}`);
+    if (!ok) { sdk.msg = "Not queued (cancelled)."; return; }
+    await postJson("/gonggan/regen", { pid: tl.project.id, cut_id: cutId, dry_run: false, confirm: true, seed: p.seed });
+    sdk.msg = "Queued through Comfy SDK → proxy → ComfyUI…";
+  } catch (e) {
+    sdk.msg = "Regenerate failed: " + e.message;
+  } finally {
+    sdk.busy = "";
+    bus.dispatchEvent(new Event("sdk"));
+  }
+}
+
+async function sendLastOutput(cutId) {
+  const tl = state.timeline;
+  if (!tl) return;
+  sdk.busy = "send"; sdk.msg = "Looking for the last ComfyUI output…"; bus.dispatchEvent(new Event("sdk"));
+  try {
+    const d = await postJson("/gonggan/send-output", { pid: tl.project.id, cut_id: cutId });
+    sdk.msg = `Added ${d.output.name} (${d.output.from}) as a new version.`;
+    await loadTimeline();
+  } catch (e) {
+    sdk.msg = "Send failed: " + e.message;
+  } finally {
+    sdk.busy = "";
+    bus.dispatchEvent(new Event("sdk"));
+  }
+}
+
+api.addEventListener("gonggan.regen", (e) => {
+  const j = e.detail || {};
+  if (j.status === "done") { sdk.msg = `New version from SDK job ${j.sdk_job_id || ""}`; loadTimeline(); }
+  else if (j.status === "error") sdk.msg = "SDK job failed: " + (j.error || "");
+  else if (j.status === "running") sdk.msg = "SDK job running…";
+  bus.dispatchEvent(new Event("sdk"));
+});
+
+function cutPanelHtml(c) {
+  if (!c) return `<div class="gg-panel-empty">Select a cut for versions and actions.</div>`;
+  const cur = c.media ? c.media.id : "";
+  const vers = (c.versions_list || []).map((v) => `
+    <button class="gg-ver${v.id === cur ? " gg-on" : ""}" data-vid="${esc(v.id)}" title="${esc(`${fmtSrc(v.source)} · ${v.model || ""} · ${new Date(v.created * 1000).toLocaleString()}`)}">
+      <img src="${esc(posterUrl(v.id))}" loading="lazy" alt="" /><span class="gg-ver-src gg-src-${esc(v.source)}">${esc(fmtSrc(v.source))}</span>
+    </button>`).join("");
+  return `
+    <div class="gg-panel-title"><span class="gg-no">${c.pos + 1}</span>${esc(c.name)}</div>
+    <div class="gg-vers">${vers || '<span class="gg-dim">no versions yet</span>'}</div>
+    <div class="gg-actions">
+      <button class="gg-btn gg-regen" ${sdk.busy || !(sdk.st && sdk.st.ok) ? "disabled" : ""} title="Draft re-render through Comfy SDK → comfy-api-proxy → ComfyUI. Shows the job and asks before queueing.">Regenerate (new version)</button>
+      <button class="gg-btn gg-send" ${sdk.busy ? "disabled" : ""} title="Copy ComfyUI's last output (from /history, else newest file in output/) into this cut as a new version">Send last ComfyUI output</button>
+    </div>
+    <div class="gg-sdk-msg">${esc(sdk.msg)}</div>`;
+}
+
 function mountShots(el) {
   el.innerHTML = "";
   const root = document.createElement("div");
   root.className = "gg-root gg-shots";
   el.appendChild(root);
 
+  const paintPanel = () => {
+    const panel = root.querySelector(".gg-cutpanel");
+    const badge = root.querySelector(".gg-sdk-slot");
+    if (badge) badge.innerHTML = sdkBadge();
+    if (!panel) return;
+    const c = state.timeline && state.timeline.cuts.find((x) => x.id === state.cutId);
+    panel.innerHTML = cutPanelHtml(c);
+    panel.querySelectorAll(".gg-ver").forEach((b) => b.addEventListener("click", () => setPick(c.id, b.dataset.vid)));
+    panel.querySelector(".gg-regen")?.addEventListener("click", () => regenCut(c.id));
+    panel.querySelector(".gg-send")?.addEventListener("click", () => sendLastOutput(c.id));
+  };
   const paint = () => {
     const tl = state.timeline;
     const opts = state.projects.map((p) =>
@@ -108,6 +220,7 @@ function mountShots(el) {
     root.innerHTML = `
       <div class="gg-head">
         <select class="gg-proj" title="Project">${opts}</select>
+        <span class="gg-sdk-slot"></span>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
       </div>
       ${state.error ? `<div class="gg-error">${esc(state.error)}</div>` : ""}
@@ -115,29 +228,36 @@ function mountShots(el) {
       <ol class="gg-cutlist">
         ${cuts.map((c) => `
           <li class="gg-cut" data-cut-id="${esc(c.id)}" title="${esc(c.story || c.prompt)}">
-            <div class="gg-cut-thumb">${thumbHtml(c.media, "gg-thumb")}${c.media && c.media.kind === "video" ? '<span class="gg-badge">▶</span>' : ""}</div>
+            <div class="gg-cut-thumb">${thumbHtml(c.media, "gg-thumb")}${c.media && c.media.kind === "video" ? '<span class="gg-badge">▶</span>' : ""}${c.media && c.media.source && c.media.source !== "gonggan" ? `<span class="gg-badge gg-badge-l gg-src-${esc(c.media.source)}">${esc(fmtSrc(c.media.source))}</span>` : ""}</div>
             <div class="gg-cut-text">
               <div class="gg-cut-name"><span class="gg-no">${(c.pos ?? c.index) + 1}</span>${esc(c.name || "(untitled)")}</div>
               <div class="gg-cut-sub">${esc(c.scene)}${c.scene ? " · " : ""}${c.sec.toFixed(1)}s${c.versions > 1 ? ` · v${c.versions}` : ""}</div>
             </div>
           </li>`).join("")}
-      </ol>`;
+      </ol>
+      <div class="gg-cutpanel"></div>`;
     root.querySelector(".gg-proj")?.addEventListener("change", (e) => selectProject(e.target.value));
-    root.querySelector(".gg-reload")?.addEventListener("click", () => loadProjects());
+    root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); });
     root.querySelectorAll(".gg-cut").forEach((li) => li.addEventListener("click", () => selectCut(li.dataset.cutId)));
     bindHoverPlay(root);
     paintSelection(root);
+    paintPanel();
   };
-  const onSel = () => paintSelection(root);
+  const onSel = () => { paintSelection(root); paintPanel(); };
   bus.addEventListener("projects", paint);
   bus.addEventListener("timeline", paint);
   bus.addEventListener("select", onSel);
+  bus.addEventListener("sdk", paintPanel);
   paint();
   if (!state.projects.length) loadProjects();
+  refreshSdk(false);
+  const timer = setInterval(() => refreshSdk(false), 20000);
   return () => {
+    clearInterval(timer);
     bus.removeEventListener("projects", paint);
     bus.removeEventListener("timeline", paint);
     bus.removeEventListener("select", onSel);
+    bus.removeEventListener("sdk", paintPanel);
   };
 }
 
@@ -196,7 +316,7 @@ async function saveEdit() {
   const body = {
     pid: tl.project.id,
     order: tl.cuts.map((c) => c.id),
-    clips: Object.fromEntries(tl.cuts.map((c) => [c.id, { in: c.in, sec: c.sec }])),
+    clips: Object.fromEntries(tl.cuts.map((c) => [c.id, { in: c.in, sec: c.sec, pick: c.pick || null }])),
   };
   try {
     const res = await api.fetchApi("/gonggan/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
