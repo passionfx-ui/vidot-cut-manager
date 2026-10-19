@@ -86,3 +86,25 @@
 .gg-timeline .gg-ex-bad .gg-ex-fill { background: #e05a5a; }
 .gg-timeline .gg-ex-text { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .gg-timeline .gg-ex-path { flex: 1 1 100%; order: 10; min-width: 0; color: var(--gg-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: copy; }
+
+/* SDK + versions (Shots) */
+.gg-shots .gg-sdk-slot { display: inline-flex; align-items: center; }
+.gg-root .gg-sdk { font-size: 11px; white-space: nowrap; cursor: help; padding: 1px 6px; border-radius: 9px; border: 1px solid var(--gg-line); }
+.gg-root .gg-sdk-ok { color: #6ee07a; border-color: #3d6b42; }
+.gg-root .gg-sdk-bad { color: #ff8a8a; border-color: #6b3d3d; }
+.gg-root .gg-sdk-wait { color: var(--gg-dim); }
+.gg-shots .gg-cutpanel { border-top: 1px solid var(--gg-line); padding: 8px; flex: 0 0 auto; max-height: 45%; overflow-y: auto; background: #1f2228; }
+.gg-shots .gg-panel-empty, .gg-root .gg-dim { color: var(--gg-dim); font-size: 11px; }
+.gg-shots .gg-panel-title { font-weight: 600; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gg-shots .gg-vers { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.gg-shots .gg-ver { position: relative; width: 64px; height: 36px; padding: 0; border: 1px solid var(--gg-line); border-radius: 3px; overflow: hidden; background: #000; cursor: pointer; }
+.gg-shots .gg-ver img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gg-shots .gg-ver.gg-on { outline: 2px solid var(--gg-acc); outline-offset: -1px; }
+.gg-shots .gg-ver-src, .gg-shots .gg-badge-l { position: absolute; left: 2px; bottom: 1px; font-size: 8px; padding: 0 2px; border-radius: 2px; background: rgba(0,0,0,.7); }
+.gg-shots .gg-badge-l { right: auto; left: 3px; bottom: 2px; font-size: 9px; }
+.gg-root .gg-src-local-sdk { color: #7cc4ff; }
+.gg-root .gg-src-comfy-history, .gg-root .gg-src-comfy-output-folder { color: #f2b84b; }
+.gg-shots .gg-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.gg-shots .gg-actions .gg-btn:disabled { opacity: .5; cursor: not-allowed; }
+.gg-shots .gg-sdk-msg { margin-top: 6px; font-size: 11px; color: var(--gg-dim); word-break: break-word; }
+.gg-shots .gg-sdk-msg:empty { display: none; }

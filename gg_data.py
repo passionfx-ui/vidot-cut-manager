@@ -106,10 +106,49 @@ def _load_jobs(d: Path) -> dict:
             "height": num(meta.get("height")),
             "seconds": num(meta.get("seconds")),
             "model": str(meta.get("model_name") or meta.get("model_id") or ""),
+            "aspect": str(meta.get("aspect") or ""),
+            "source": "gonggan",
+            "path": str(p),
         }
     with _lock:
         _jobs_cache.update(key=key, jobs=jobs)
     return jobs
+
+
+# ---- pack-owned versions (new takes from the SDK path or ComfyUI history) ----
+VERSIONS_DIR = PACK_DIR / "versions"          # versions/<pid>/<cut_id>/<vid>.<ext> + <vid>.json
+VER_ID_RE = re.compile(r"^v\d{10,14}_[a-f0-9]{6}$")
+
+
+def _load_versions() -> dict:
+    out: dict = {}
+    if not VERSIONS_DIR.is_dir():
+        return out
+    for mf in VERSIONS_DIR.glob("*/*/v*.json"):
+        try:
+            meta = json.loads(mf.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        vid = mf.stem
+        ext = str(meta.get("ext") or "")
+        media = mf.with_name(vid + ext)
+        if not VER_ID_RE.fullmatch(vid) or ext not in MEDIA_KINDS or not media.is_file():
+            continue
+        num = lambda v: v if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # noqa: E731
+        out[vid] = {
+            "id": vid, "kind": MEDIA_KINDS[ext], "ext": ext, "mtime": media.stat().st_mtime,
+            "cut_id": mf.parent.name, "project_id": mf.parent.parent.name,
+            "width": num(meta.get("width")), "height": num(meta.get("height")), "seconds": num(meta.get("seconds")),
+            "model": str(meta.get("model") or ""), "aspect": str(meta.get("aspect") or ""),
+            "source": str(meta.get("source") or "local-sdk"), "path": str(media),
+        }
+    return out
+
+
+def _all_media(d: Path) -> dict:
+    m = dict(_load_jobs(d))
+    m.update(_load_versions())
+    return m
 
 
 def _jobs_by_cut(jobs: dict) -> dict:
@@ -122,8 +161,18 @@ def _jobs_by_cut(jobs: dict) -> dict:
     return out
 
 
-def _preview(cut: dict, by_cut: dict, jobs: dict) -> tuple[dict | None, int]:
+def _versions_of(cut: dict, by_cut: dict, jobs: dict) -> list:
+    lst = list(by_cut.get(cut.get("id"), []))
+    picked = cut.get("preview_job_id")
+    if isinstance(picked, str) and picked in jobs and all(j["id"] != picked for j in lst):
+        lst = [jobs[picked]] + lst
+    return lst
+
+
+def _preview(cut: dict, by_cut: dict, jobs: dict, pick: str | None = None) -> tuple[dict | None, int]:
     lst = by_cut.get(cut.get("id"), [])
+    if pick and pick in jobs and jobs[pick]["cut_id"] == cut.get("id"):
+        return jobs[pick], len(_versions_of(cut, by_cut, jobs))
     picked = cut.get("preview_job_id")
     if isinstance(picked, str) and picked in jobs and all(j["id"] != picked for j in lst):
         lst = [jobs[picked]] + lst
@@ -146,14 +195,14 @@ def clip_seconds(cut: dict, job: dict | None) -> float:
 def _media_view(job: dict | None) -> dict | None:
     if not job:
         return None
-    return {k: job[k] for k in ("id", "kind", "width", "height", "seconds", "model")}
+    return {k: job.get(k) for k in ("id", "kind", "width", "height", "seconds", "model", "source")}
 
 
 def list_projects() -> dict:
     s = load_settings()
     d = user_dir(s)
     ws = _load_workspace(d)
-    jobs = _load_jobs(d)
+    jobs = _all_media(d)
     by_cut = _jobs_by_cut(jobs)
     projects = []
     for p in ws.get("projects") or []:
@@ -277,20 +326,25 @@ def timeline(pid: str) -> dict | None:
     d, proj = _find_project(pid)
     if not proj:
         return None
-    jobs = _load_jobs(d)
+    jobs = _all_media(d)
     by_cut = _jobs_by_cut(jobs)
     edit = load_edit(pid) or {}
     clips_edit = edit.get("clips") if isinstance(edit.get("clips"), dict) else {}
     src_cuts = proj.get("cuts") or []
     base = []
     for i, c in enumerate(src_cuts):
-        job, n = _preview(c, by_cut, jobs)
+        e = clips_edit.get(c.get("id")) if isinstance(clips_edit.get(c.get("id")), dict) else None
+        pick = e.get("pick") if e and isinstance(e.get("pick"), str) else None
+        job, n = _preview(c, by_cut, jobs, pick)
         kind = job["kind"] if job else None
         src_dur = media_duration(job)
         tl_in = c.get("tl_in") if isinstance(c.get("tl_in"), (int, float)) else 0.0
         seed_in, seed_sec = tl_in, clip_seconds(c, job)
-        e = clips_edit.get(c.get("id")) if isinstance(clips_edit.get(c.get("id")), dict) else None
+        if e and "sec" not in e:
+            e = None if not pick else {"pick": pick}
         cur_in, cur_sec = (e.get("in", seed_in), e.get("sec", seed_sec)) if e else (seed_in, seed_sec)
+        vers = [{"id": v["id"], "kind": v["kind"], "source": v.get("source"), "model": v.get("model"),
+                 "created": v["mtime"]} for v in _versions_of(c, by_cut, jobs)]
         cur_in, cur_sec = clamp_clip(kind, cur_in, cur_sec, src_dur)
         base.append({
             "index": i,                       # position in 공간쉐어 order
@@ -309,6 +363,9 @@ def timeline(pid: str) -> dict | None:
             "edited": bool(e),
             "media": _media_view(job),
             "versions": n,
+            "versions_list": vers,
+            "pick": pick if job and pick == job["id"] else None,
+            "prompt_aspect": (job or {}).get("aspect") or "",
         })
     by_id = {c["id"]: c for c in base}
     order = [x for x in (edit.get("order") or []) if x in by_id]
@@ -341,11 +398,19 @@ def save_edit(pid: str, order, clips) -> dict | None:
     order += [cid for cid in by_id if cid not in order]
     out_clips = {}
     clips = clips if isinstance(clips, dict) else {}
+    old = (load_edit(pid) or {}).get("clips") or {}
     for cid, c in by_id.items():
         e = clips.get(cid) if isinstance(clips.get(cid), dict) else {"in": c["in"], "sec": c["sec"]}
-        kind = c["media"]["kind"] if c["media"] else None
-        i, sec = clamp_clip(kind, e.get("in", c["in"]), e.get("sec", c["sec"]), c["src_dur"])
-        out_clips[cid] = {"in": i, "sec": sec}
+        pick = e["pick"] if "pick" in e else (old.get(cid) or {}).get("pick")
+        valid = {v["id"]: v for v in c["versions_list"]}
+        if not (isinstance(pick, str) and pick in valid):
+            pick = None
+        kind = valid[pick]["kind"] if pick else (c["media"]["kind"] if c["media"] else None)
+        src_dur = c["src_dur"] if not pick or (c["media"] and c["media"]["id"] == pick) else None
+        if pick and kind == "video" and src_dur is None:
+            src_dur = media_duration(_all_media(user_dir()).get(pick))
+        i, sec = clamp_clip(kind, e.get("in", c["in"]), e.get("sec", c["sec"]), src_dur)
+        out_clips[cid] = {"in": i, "sec": sec, **({"pick": pick} if pick else {})}
     data = {"version": 1, "pid": pid, "order": order, "clips": out_clips, "updated_at": time.time()}
     f = _edit_file(pid)
     f.parent.mkdir(parents=True, exist_ok=True)
@@ -365,7 +430,17 @@ def reset_edit(pid: str) -> dict | None:
 
 
 def media_path(job_id: str) -> Path | None:
-    """Resolve a result file by job id, restricted to <data_root>/<uid>/."""
+    """Resolve a result file by id: 공간쉐어 job ids under <data_root>/<uid>/, version ids under versions/."""
+    if isinstance(job_id, str) and VER_ID_RE.fullmatch(job_id):
+        v = _load_versions().get(job_id)
+        if not v:
+            return None
+        p = Path(v["path"]).resolve()
+        try:
+            p.relative_to(VERSIONS_DIR.resolve())
+        except ValueError:
+            return None
+        return p if p.is_file() else None
     if not isinstance(job_id, str) or not JOB_ID_RE.fullmatch(job_id):
         return None
     d = user_dir()
@@ -417,3 +492,30 @@ def poster_path(job_id: str) -> Path | None:
         tmp.replace(out)
         return out
     return None if is_video else src   # image fallback: the original file
+
+
+def add_version(pid: str, cut_id: str, src: Path, meta: dict) -> dict:
+    """Copy a finished file into versions/<pid>/<cut>/ and make it the cut's pick in the edit."""
+    import secrets
+    import time
+    if not PID_RE.fullmatch(pid or "") or not PID_RE.fullmatch(cut_id or ""):
+        raise ValueError("invalid project/cut id")
+    tl = timeline(pid)
+    if tl is None or not any(c["id"] == cut_id for c in tl["cuts"]):
+        raise ValueError("cut not found in project")
+    ext = src.suffix.lower()
+    if ext not in MEDIA_KINDS:
+        raise ValueError(f"unsupported media type {ext}")
+    vid = f"v{int(time.time() * 1000)}_{secrets.token_hex(3)}"
+    d = VERSIONS_DIR / pid / cut_id
+    d.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, d / f"{vid}{ext}")
+    info = {"id": vid, "pid": pid, "cut_id": cut_id, "ext": ext, "created_at": time.time(), **meta}
+    (d / f"{vid}.json").write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
+    # make it the cut's pick, keeping order/trims
+    edit = load_edit(pid) or {}
+    clips = {c["id"]: {"in": c["in"], "sec": c["sec"], **({"pick": c["pick"]} if c.get("pick") else {})}
+             for c in tl["cuts"]}
+    clips[cut_id]["pick"] = vid
+    save_edit(pid, edit.get("order") or [c["id"] for c in tl["cuts"]], clips)
+    return info
