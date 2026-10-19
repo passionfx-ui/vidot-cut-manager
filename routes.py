@@ -67,3 +67,17 @@ async def gg_media(request):
             "Cache-Control": "private, max-age=300",
         },
     )
+
+
+@routes.get("/gonggan/poster")
+async def gg_poster(request):
+    try:
+        path = await asyncio.to_thread(gg_data.poster_path, request.query.get("id", ""))
+    except Exception as ex:  # noqa: BLE001
+        return _err(500, str(ex))
+    if path is None:
+        return _err(404, "poster not found")
+    return web.FileResponse(path, headers={
+        "Content-Type": gg_data.MIME.get(path.suffix.lower(), "image/jpeg"),
+        "Cache-Control": "private, max-age=300",
+    })

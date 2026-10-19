@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import threading
 from pathlib import Path
 
@@ -23,6 +25,9 @@ MIME = {
 }
 JOB_ID_RE = re.compile(r"^j\d+_[A-Za-z0-9]+$")
 UID_RE = re.compile(r"^[A-Za-z0-9_-]{2,32}$")
+
+CACHE_DIR = PACK_DIR / "cache"                                # pack-local, gitignored (never the data root)
+_poster_sem = threading.Semaphore(2)                          # ffmpeg is CPU-only here; keep it light
 
 _lock = threading.Lock()
 _ws_cache: dict = {}
@@ -226,3 +231,43 @@ def media_path(job_id: str) -> Path | None:
     except ValueError:
         return None
     return p if p.is_file() else None
+
+
+def ffmpeg_exe() -> str | None:
+    s = load_settings()
+    exe = s.get("ffmpeg") or shutil.which("ffmpeg")
+    if exe:
+        return str(exe)
+    try:
+        import imageio_ffmpeg  # bundled with ComfyUI portable
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def poster_path(job_id: str) -> Path | None:
+    """Image results are their own poster; videos get a frame grabbed into the pack cache."""
+    src = media_path(job_id)
+    if src is None:
+        return None
+    if MEDIA_KINDS.get(src.suffix.lower()) == "image":
+        return src
+    out = CACHE_DIR / "posters" / f"{job_id}.jpg"
+    if out.is_file() and out.stat().st_mtime >= src.stat().st_mtime:
+        return out
+    exe = ffmpeg_exe()
+    if not exe:
+        return None
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".tmp.jpg")
+    with _poster_sem:
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.run(
+            [exe, "-y", "-loglevel", "error", "-ss", "0.3", "-i", str(src), "-frames:v", "1",
+             "-vf", "scale=320:-2", "-q:v", "4", str(tmp)],
+            check=False, capture_output=True, timeout=30, creationflags=flags,
+        )
+    if tmp.is_file() and tmp.stat().st_size > 0:
+        tmp.replace(out)
+        return out
+    return None

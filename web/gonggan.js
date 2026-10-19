@@ -20,6 +20,7 @@ const state = { projects: [], pid: localStorage.getItem(PID_KEY) || "", timeline
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const mediaUrl = (id) => api.apiURL("/gonggan/media?id=" + encodeURIComponent(id));
+const posterUrl = (id) => api.apiURL("/gonggan/poster?id=" + encodeURIComponent(id));
 const fmt = (t) => {
   t = Math.max(0, Number(t) || 0);
   const m = Math.floor(t / 60), s = Math.floor(t % 60), f = Math.floor((t * 10) % 10);
@@ -30,7 +31,8 @@ function thumbHtml(media, cls) {
   if (!media) return `<div class="${cls} gg-thumb-empty">no media</div>`;
   const url = esc(mediaUrl(media.id));
   if (media.kind === "video") {
-    return `<video class="${cls}" src="${url}#t=0.1" muted playsinline preload="metadata"></video>`;
+    // poster from the pack cache; the video itself loads only on hover (preload=none)
+    return `<video class="${cls}" src="${url}" poster="${esc(posterUrl(media.id))}" muted playsinline preload="none"></video>`;
   }
   return `<img class="${cls}" src="${url}" loading="lazy" alt="" />`;
 }
@@ -198,7 +200,7 @@ function bindHoverPlay(root) {
   root.querySelectorAll("video").forEach((v) => {
     const host = v.parentElement;
     host.addEventListener("mouseenter", () => { v.loop = true; v.play().catch(() => {}); });
-    host.addEventListener("mouseleave", () => { v.pause(); try { v.currentTime = 0.1; } catch (_) {} });
+    host.addEventListener("mouseleave", () => { v.pause(); try { v.currentTime = 0; } catch (_) {} });
   });
 }
 
