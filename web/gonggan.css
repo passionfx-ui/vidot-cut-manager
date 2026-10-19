@@ -38,10 +38,10 @@
 .gg-timeline .gg-clock { font-variant-numeric: tabular-nums; font-family: ui-monospace, Consolas, monospace; flex: 1; }
 .gg-root .gg-btn.gg-on { border-color: var(--gg-acc); color: var(--gg-acc); }
 .gg-timeline .gg-editor { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.gg-timeline .gg-tl-tools { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--gg-line); }
+.gg-timeline .gg-tl-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 4px 8px; border-bottom: 1px solid var(--gg-line); }
 .gg-timeline .gg-tl-title { font-weight: 600; white-space: nowrap; }
 .gg-timeline .gg-tl-info { color: var(--gg-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.gg-timeline .gg-tip { flex: 1; color: var(--gg-acc); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gg-timeline .gg-tip { flex: 1 1 0; min-width: 0; color: var(--gg-acc); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gg-timeline .gg-error[hidden] { display: none; }
 .gg-timeline .gg-tl-scroll { overflow-x: auto; overflow-y: hidden; flex: 1; padding: 0 8px 6px; }
 .gg-timeline .gg-tl-inner { position: relative; height: 100%; }
@@ -77,7 +77,7 @@
 .gg-root .gg-btn.gg-primary { background: #3a5f2e; border-color: #5c9447; }
 .gg-root .gg-btn.gg-primary:disabled { opacity: .6; cursor: progress; }
 .gg-root a.gg-btn { text-decoration: none; display: inline-block; }
-.gg-timeline .gg-ex-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--gg-line); background: #1f2329; }
+.gg-timeline .gg-ex-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--gg-line); background: #1f2329; }
 .gg-timeline .gg-ex-row[hidden] { display: none; }
 .gg-timeline .gg-ex-row [hidden] { display: none !important; }
 .gg-timeline .gg-ex-bar { flex: 0 0 180px; height: 8px; border-radius: 4px; background: #2d323b; overflow: hidden; }
@@ -85,4 +85,4 @@
 .gg-timeline .gg-ex-done .gg-ex-fill { background: #6ee07a; }
 .gg-timeline .gg-ex-bad .gg-ex-fill { background: #e05a5a; }
 .gg-timeline .gg-ex-text { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.gg-timeline .gg-ex-path { flex: 1; min-width: 0; color: var(--gg-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: copy; direction: rtl; text-align: left; }
+.gg-timeline .gg-ex-path { flex: 1 1 100%; order: 10; min-width: 0; color: var(--gg-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: copy; }
