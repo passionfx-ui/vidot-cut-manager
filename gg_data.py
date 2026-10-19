@@ -246,12 +246,11 @@ def ffmpeg_exe() -> str | None:
 
 
 def poster_path(job_id: str) -> Path | None:
-    """Image results are their own poster; videos get a frame grabbed into the pack cache."""
+    """320px JPEG thumbnail in the pack cache: a frame for videos, a downscale for images."""
     src = media_path(job_id)
     if src is None:
         return None
-    if MEDIA_KINDS.get(src.suffix.lower()) == "image":
-        return src
+    is_video = MEDIA_KINDS.get(src.suffix.lower()) == "video"
     out = CACHE_DIR / "posters" / f"{job_id}.jpg"
     if out.is_file() and out.stat().st_mtime >= src.stat().st_mtime:
         return out
@@ -263,11 +262,11 @@ def poster_path(job_id: str) -> Path | None:
     with _poster_sem:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         subprocess.run(
-            [exe, "-y", "-loglevel", "error", "-ss", "0.3", "-i", str(src), "-frames:v", "1",
+            [exe, "-y", "-loglevel", "error", *(["-ss", "0.3"] if is_video else []), "-i", str(src), "-frames:v", "1",
              "-vf", "scale=320:-2", "-q:v", "4", str(tmp)],
             check=False, capture_output=True, timeout=30, creationflags=flags,
         )
     if tmp.is_file() and tmp.stat().st_size > 0:
         tmp.replace(out)
         return out
-    return None
+    return None if is_video else src   # image fallback: the original file

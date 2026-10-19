@@ -34,7 +34,7 @@ function thumbHtml(media, cls) {
     // poster from the pack cache; the video itself loads only on hover (preload=none)
     return `<video class="${cls}" src="${url}" poster="${esc(posterUrl(media.id))}" muted playsinline preload="none"></video>`;
   }
-  return `<img class="${cls}" src="${url}" loading="lazy" alt="" />`;
+  return `<img class="${cls}" src="${esc(posterUrl(media.id))}" loading="lazy" decoding="async" alt="" />`;
 }
 
 async function getJson(route) {
