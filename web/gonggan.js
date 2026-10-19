@@ -5,7 +5,6 @@ import { api } from "../../scripts/api.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
-const PX_PER_SEC = 48;
 const bus = new EventTarget();
 const state = { projects: [], pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", error: "" };
 
@@ -84,6 +83,8 @@ function selectProject(pid) {
 function selectCut(cutId) {
   state.cutId = cutId;
   bus.dispatchEvent(new Event("select"));
+  const i = state.timeline ? state.timeline.cuts.findIndex((c) => c.id === cutId) : -1;
+  if (i >= 0 && typeof seek === "function" && !play.on) seek(startOf(i) + 0.001);
 }
 
 function paintSelection(root) {
@@ -116,7 +117,7 @@ function mountShots(el) {
           <li class="gg-cut" data-cut-id="${esc(c.id)}" title="${esc(c.story || c.prompt)}">
             <div class="gg-cut-thumb">${thumbHtml(c.media, "gg-thumb")}${c.media && c.media.kind === "video" ? '<span class="gg-badge">▶</span>' : ""}</div>
             <div class="gg-cut-text">
-              <div class="gg-cut-name"><span class="gg-no">${c.index + 1}</span>${esc(c.name || "(untitled)")}</div>
+              <div class="gg-cut-name"><span class="gg-no">${(c.pos ?? c.index) + 1}</span>${esc(c.name || "(untitled)")}</div>
               <div class="gg-cut-sub">${esc(c.scene)}${c.scene ? " · " : ""}${c.sec.toFixed(1)}s${c.versions > 1 ? ` · v${c.versions}` : ""}</div>
             </div>
           </li>`).join("")}
@@ -141,60 +142,490 @@ function mountShots(el) {
 }
 
 // ---------------- Timeline (bottom panel) ----------------
+// Edit model: state.timeline.cuts in edit order, each with in/sec (+ src_dur for video caps).
+const ed = {
+  px: Number(localStorage.getItem("gg.px")) || 48,      // pixels per second (zoom)
+  snap: localStorage.getItem("gg.snap") !== "0",          // on = 1 s steps, off = 0.1 s
+  sound: localStorage.getItem("gg.sound") === "1",
+  saveTimer: 0,
+  saving: false,
+  dragging: false,
+};
+const play = { on: false, t: 0, idx: -1, raf: 0, last: 0 };
+
+const IMG_MIN = 0.5, IMG_MAX = 60, VID_MIN = 0.2;
+const r2 = (x) => Math.round(x * 100 + 1e-6) / 100;
+const cutsNow = () => (state.timeline ? state.timeline.cuts : []);
+const totalSec = () => cutsNow().reduce((a, c) => a + c.sec, 0);
+const startOf = (i) => cutsNow().slice(0, i).reduce((a, c) => a + c.sec, 0);
+const kindOf = (c) => (c.media ? c.media.kind : null);
+const fmtClock = (t) => {
+  t = Math.max(0, Number(t) || 0);
+  const m = Math.floor(t / 60), s = Math.floor(t % 60), f = Math.floor((t % 1) * 24 + 1e-6);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}:${String(f).padStart(2, "0")}`;
+};
+
+function snapSec(raw) {
+  const n = Number(raw) || 0;
+  return ed.snap ? Math.round(n) : Math.round(n * 10) / 10;
+}
+
+// Same rule as gg_data.clamp_clip (server re-validates on save).
+function clampClip(c, tlIn, sec) {
+  if (kindOf(c) !== "video") return { in: 0, sec: r2(Math.min(IMG_MAX, Math.max(IMG_MIN, sec))) };
+  const dur = Number(c.src_dur) || 0;
+  tlIn = Math.max(0, tlIn);
+  if (dur) {
+    tlIn = Math.min(tlIn, Math.max(0, dur - VID_MIN));
+    sec = Math.min(sec, dur - tlIn);
+  }
+  return { in: r2(tlIn), sec: r2(Math.min(60, Math.max(VID_MIN, sec))) };
+}
+
+function scheduleSave() {
+  clearTimeout(ed.saveTimer);
+  ed.saveTimer = setTimeout(saveEdit, 400);
+  bus.dispatchEvent(new Event("dirty"));
+}
+
+async function saveEdit() {
+  const tl = state.timeline;
+  if (!tl) return;
+  ed.saving = true;
+  bus.dispatchEvent(new Event("dirty"));
+  const body = {
+    pid: tl.project.id,
+    order: tl.cuts.map((c) => c.id),
+    clips: Object.fromEntries(tl.cuts.map((c) => [c.id, { in: c.in, sec: c.sec }])),
+  };
+  try {
+    const res = await api.fetchApi("/gonggan/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
+    if (!ed.dragging && state.timeline && state.timeline.project.id === data.project.id) {
+      state.timeline = data;
+      state.error = "";
+    }
+  } catch (e) {
+    state.error = "Save failed: " + e.message;
+  }
+  ed.saving = false;
+  bus.dispatchEvent(new Event("timeline"));
+}
+
+async function resetEdit() {
+  const tl = state.timeline;
+  if (!tl) return;
+  if (!confirm("Reset this timeline to the 공간쉐어 order and lengths? (the current edit is kept as a backup file)")) return;
+  stopPlay();
+  try {
+    const res = await api.fetchApi("/gonggan/edit/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pid: tl.project.id }) });
+    const data = await res.json();
+    if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
+    state.timeline = data;
+    state.error = "";
+  } catch (e) {
+    state.error = "Reset failed: " + e.message;
+  }
+  bus.dispatchEvent(new Event("timeline"));
+}
+
+// ---- playback ----
+function itemAt(t) {
+  const cuts = cutsNow();
+  let at = 0;
+  for (let i = 0; i < cuts.length; i++) {
+    if (t < at + cuts[i].sec - 1e-6) return { i, local: t - at };
+    at += cuts[i].sec;
+  }
+  return cuts.length ? { i: cuts.length - 1, local: cuts[cuts.length - 1].sec } : { i: -1, local: 0 };
+}
+
+let viewer = null;  // { box, img, vid, next, label, clock, playBtn, soundBtn }
+
+function showFrame(force) {
+  if (!viewer) return;
+  const cuts = cutsNow();
+  const { i, local } = itemAt(play.t);
+  const c = cuts[i];
+  const { img, vid, label, blank } = viewer;
+  if (i !== play.idx || force) {
+    play.idx = i;
+    document.querySelectorAll(".gg-timeline .gg-clip").forEach((el) => el.classList.toggle("gg-play", c && el.dataset.cutId === c.id));
+    if (!c) { img.hidden = vid.hidden = true; blank.hidden = false; blank.textContent = ""; label.textContent = ""; return; }
+    label.textContent = `${c.pos + 1}. ${c.name}`;
+    if (c.media && c.media.kind === "video") {
+      img.hidden = true; blank.hidden = true; vid.hidden = false;
+      const url = mediaUrl(c.media.id);
+      if (vid.dataset.src !== url) { vid.dataset.src = url; vid.src = url; }
+    } else if (c.media) {
+      vid.pause(); vid.hidden = true; blank.hidden = true; img.hidden = false;
+      const url = mediaUrl(c.media.id);
+      if (img.dataset.src !== url) { img.dataset.src = url; img.src = url; }
+    } else {
+      vid.pause(); vid.hidden = true; img.hidden = true; blank.hidden = false;
+      blank.textContent = `${c.pos + 1}. ${c.name} — no media`;
+    }
+    preloadNext(i + 1);
+  }
+  if (c && c.media && c.media.kind === "video") {
+    vid.muted = !ed.sound;
+    const want = c.in + local;
+    try {
+      if (vid.readyState >= 1) {
+        const dur = Number(vid.duration);
+        if (Number.isFinite(dur) && want >= dur - 0.04) { if (!vid.paused) vid.pause(); }
+        else {
+          if (Math.abs((vid.currentTime || 0) - want) > (play.on ? 0.15 : 0.02)) vid.currentTime = want;
+          if (play.on && vid.paused) vid.play().catch(() => {});
+          if (!play.on && !vid.paused) vid.pause();
+        }
+      } else if (!vid._ggWait) {
+        vid._ggWait = true;
+        vid.addEventListener("loadedmetadata", () => { vid._ggWait = false; showFrame(); }, { once: true });
+      }
+    } catch (_) {}
+  }
+  paintHead();
+}
+
+function preloadNext(i) {
+  const c = cutsNow()[i];
+  if (!viewer || !c || !c.media) return;
+  const url = mediaUrl(c.media.id);
+  if (c.media.kind === "video") { if (viewer.next.dataset.src !== url) { viewer.next.dataset.src = url; viewer.next.src = url; } }
+  else { const im = new Image(); im.src = url; }
+}
+
+function paintHead() {
+  const total = totalSec();
+  document.querySelectorAll(".gg-timeline .gg-head-line").forEach((h) => { h.style.left = play.t * ed.px + "px"; });
+  document.querySelectorAll(".gg-timeline .gg-clock").forEach((el) => { el.textContent = `${fmtClock(play.t)} / ${fmtClock(total)}`; });
+  document.querySelectorAll(".gg-timeline .gg-play-btn").forEach((b) => { b.textContent = play.on ? "❚❚" : "▶"; b.title = play.on ? "Pause (Space)" : "Play (Space)"; });
+  if (play.on) {
+    const wrap = document.querySelector(".gg-timeline .gg-tl-scroll");
+    if (wrap) {
+      const x = play.t * ed.px, sl = wrap.scrollLeft, vw = wrap.clientWidth;
+      if (x < sl + 16) wrap.scrollLeft = Math.max(0, x - 16);
+      else if (x > sl + vw - 40) wrap.scrollLeft = x - 40;
+    }
+  }
+}
+
+function tick(now) {
+  if (!play.on) return;
+  const dt = Math.min(0.25, (now - play.last) / 1000);
+  play.last = now;
+  play.t += dt;
+  const total = totalSec();
+  if (play.t >= total) { play.t = total; stopPlay(); showFrame(); return; }
+  showFrame();
+  play.raf = requestAnimationFrame(tick);
+}
+
+function startPlay() {
+  if (!cutsNow().length) return;
+  if (play.t >= totalSec() - 0.05) play.t = 0;
+  play.on = true;
+  play.last = performance.now();
+  showFrame(true);
+  play.raf = requestAnimationFrame(tick);
+}
+
+function stopPlay() {
+  play.on = false;
+  if (play.raf) cancelAnimationFrame(play.raf);
+  play.raf = 0;
+  if (viewer) viewer.vid.pause();
+  paintHead();
+}
+
+function togglePlay() { play.on ? stopPlay() : startPlay(); }
+
+function seek(t) {
+  play.t = Math.max(0, Math.min(totalSec(), t));
+  play.last = performance.now();
+  showFrame();
+}
+
+// ---- trim (port of app.js bindTlTrim) ----
+function bindTrim(root) {
+  root.querySelectorAll(".gg-edge").forEach((edge) => {
+    edge.addEventListener("pointerdown", (e) => {
+      if (e.button) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const el = edge.closest(".gg-clip");
+      const c = cutsNow().find((x) => x.id === el.dataset.cutId);
+      if (!c) return;
+      const side = edge.dataset.side;
+      const startX = e.clientX;
+      const startIn = c.in, startSec = c.sec, outPt = startIn + startSec;
+      const isVid = kindOf(c) === "video";
+      let raf = 0, pendingX = startX;
+      ed.dragging = true;
+      el.classList.add("gg-trimming");
+      const paint = (x) => {
+        const dx = x - startX;
+        let next;
+        if (side === "l" && isVid) {
+          const nextIn = Math.max(0, snapSec(startIn + dx / ed.px));
+          next = clampClip(c, Math.min(nextIn, outPt - VID_MIN), outPt - Math.min(nextIn, outPt - VID_MIN));
+        } else if (side === "l") {
+          next = clampClip(c, 0, snapSec(startSec - dx / ed.px));
+        } else {
+          next = clampClip(c, startIn, snapSec(startSec + dx / ed.px));
+        }
+        c.in = next.in; c.sec = next.sec;
+        layoutClips(root);
+        const badge = el.querySelector(".gg-clip-dur");
+        if (badge) badge.textContent = `${c.sec.toFixed(1)}s`;
+        const inb = el.querySelector(".gg-clip-in");
+        if (inb) inb.textContent = isVid && c.in > 0 ? `in ${c.in.toFixed(1)}` : "";
+        const tip = root.querySelector(".gg-tip");
+        if (tip) tip.textContent = isVid ? `in ${c.in.toFixed(2)}s · len ${c.sec.toFixed(2)}s · src ${c.src_dur ? c.src_dur.toFixed(2) + "s" : "?"}` : `len ${c.sec.toFixed(2)}s (still ${IMG_MIN}–${IMG_MAX}s)`;
+      };
+      const move = (ev) => {
+        pendingX = ev.clientX;
+        if (raf) return;
+        raf = requestAnimationFrame(() => { raf = 0; paint(pendingX); });
+      };
+      const up = (ev) => {
+        edge.removeEventListener("pointermove", move);
+        edge.removeEventListener("pointerup", up);
+        edge.removeEventListener("pointercancel", up);
+        try { edge.releasePointerCapture(e.pointerId); } catch (_) {}
+        if (raf) cancelAnimationFrame(raf);
+        paint(ev.clientX || pendingX);
+        el.classList.remove("gg-trimming");
+        ed.dragging = false;
+        c.edited = true;
+        play.idx = -1;
+        if (startIn !== c.in || startSec !== c.sec) scheduleSave();
+        bus.dispatchEvent(new Event("timeline"));
+      };
+      try { edge.setPointerCapture(e.pointerId); } catch (_) {}
+      edge.addEventListener("pointermove", move);
+      edge.addEventListener("pointerup", up);
+      edge.addEventListener("pointercancel", up);
+    });
+  });
+}
+
+// ---- reorder (pointer-based; ComfyUI owns HTML5 drop for workflow files) ----
+function bindReorder(root) {
+  const track = root.querySelector(".gg-track");
+  const marker = root.querySelector(".gg-drop");
+  root.querySelectorAll(".gg-clip").forEach((el) => {
+    el.addEventListener("pointerdown", (e) => {
+      if (e.button || e.target.closest(".gg-edge")) return;
+      const startX = e.clientX, startY = e.clientY;
+      let active = false, target = -1;
+      const cuts = cutsNow();
+      const from = cuts.findIndex((x) => x.id === el.dataset.cutId);
+      const slot = (x) => {
+        const rect = track.getBoundingClientRect();
+        const t = (x - rect.left) / ed.px;
+        let at = 0;
+        for (let i = 0; i < cuts.length; i++) {
+          if (t < at + cuts[i].sec / 2) return i;
+          at += cuts[i].sec;
+        }
+        return cuts.length;
+      };
+      const move = (ev) => {
+        if (!active && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
+        if (!active) { active = true; ed.dragging = true; el.classList.add("gg-moving"); try { el.setPointerCapture(e.pointerId); } catch (_) {} }
+        target = slot(ev.clientX);
+        marker.hidden = false;
+        marker.style.left = startOf(target) * ed.px + "px";
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+        marker.hidden = true;
+        el.classList.remove("gg-moving");
+        if (!active) { selectCut(el.dataset.cutId); return; }
+        ed.dragging = false;
+        if (target >= 0 && target !== from && target !== from + 1) {
+          const [m] = cuts.splice(from, 1);
+          cuts.splice(target > from ? target - 1 : target, 0, m);
+          cuts.forEach((c, i) => { c.pos = i; });
+          play.idx = -1;
+          scheduleSave();
+        }
+        bus.dispatchEvent(new Event("timeline"));
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    });
+  });
+}
+
+function layoutClips(root) {
+  const cuts = cutsNow();
+  const byId = new Map(cuts.map((c) => [c.id, c]));
+  root.querySelectorAll(".gg-clip").forEach((el) => {
+    const c = byId.get(el.dataset.cutId);
+    if (c) el.style.width = c.sec * ed.px + "px";
+  });
+  paintRuler(root);
+}
+
+function paintRuler(root) {
+  const total = totalSec();
+  const inner = root.querySelector(".gg-tl-inner");
+  if (inner) inner.style.width = Math.max(1, Math.ceil((total + 2) * ed.px)) + "px";
+  const ruler = root.querySelector(".gg-ruler");
+  if (!ruler) return;
+  const step = ed.px >= 30 ? 1 : ed.px >= 12 ? 2 : 5;
+  const ticks = [];
+  for (let s = 0; s <= Math.ceil(total) + 1; s += step) {
+    const major = s % (step * 5) === 0;
+    ticks.push(`<span class="gg-tick${major ? " gg-major" : ""}" style="left:${s * ed.px}px">${major ? esc(fmtClock(s).slice(0, 5)) : ""}</span>`);
+  }
+  ruler.innerHTML = ticks.join("");
+  const info = root.querySelector(".gg-tl-info");
+  if (info) info.textContent = `${cutsNow().length} cuts · ${fmtClock(total)}${state.timeline && state.timeline.edited ? " · edited" : ""}${ed.saving ? " · saving…" : ""}`;
+}
+
 function mountTimeline(el) {
   el.innerHTML = "";
   const root = document.createElement("div");
   root.className = "gg-root gg-timeline";
+  root.tabIndex = -1;
   el.appendChild(root);
-
-  const paint = () => {
-    const tl = state.timeline;
-    const cuts = tl ? tl.cuts : [];
-    const total = tl ? tl.total_sec : 0;
-    const width = Math.max(1, Math.ceil(total * PX_PER_SEC));
-    const ticks = [];
-    for (let s = 0; s <= Math.ceil(total); s += 1) {
-      ticks.push(`<span class="gg-tick${s % 5 === 0 ? " gg-major" : ""}" style="left:${s * PX_PER_SEC}px">${s % 5 === 0 ? esc(fmt(s).slice(0, 5)) : ""}</span>`);
-    }
-    root.innerHTML = `
+  root.innerHTML = `
+    <div class="gg-viewer">
+      <div class="gg-screen">
+        <img class="gg-v-img" alt="" hidden />
+        <video class="gg-v-vid" playsinline preload="auto" hidden></video>
+        <video class="gg-v-next" muted preload="auto" hidden></video>
+        <div class="gg-v-blank"></div>
+        <div class="gg-v-label"></div>
+      </div>
+      <div class="gg-transport">
+        <button class="gg-btn gg-play-btn" title="Play (Space)">▶</button>
+        <span class="gg-clock">00:00:00 / 00:00:00</span>
+        <button class="gg-btn gg-sound" title="Sound"></button>
+      </div>
+    </div>
+    <div class="gg-editor">
       <div class="gg-tl-tools">
-        <span class="gg-tl-title">${tl ? esc(tl.project.name) : "No project"}</span>
-        <span class="gg-tl-info">${cuts.length} cuts · ${fmt(total)}</span>
+        <span class="gg-tl-title"></span>
+        <span class="gg-tl-info"></span>
+        <span class="gg-tip"></span>
+        <button class="gg-btn gg-snap" title="Snap: 1 s steps (off = 0.1 s)">Snap</button>
+        <button class="gg-btn gg-zoom-out" title="Zoom out">−</button>
+        <button class="gg-btn gg-zoom-in" title="Zoom in">+</button>
+        <button class="gg-btn gg-reset" title="Reset to 공간쉐어 order and lengths">Reset</button>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
       </div>
-      ${state.error ? `<div class="gg-error">${esc(state.error)}</div>` : ""}
+      <div class="gg-error" hidden></div>
       <div class="gg-tl-scroll">
-        <div class="gg-tl-inner" style="width:${width}px">
-          <div class="gg-ruler">${ticks.join("")}</div>
-          <div class="gg-track">
-            ${cuts.map((c) => `
-              <div class="gg-clip${c.media ? "" : " gg-clip-empty"}${c.media && c.media.kind === "video" ? " gg-clip-video" : ""}"
-                   data-cut-id="${esc(c.id)}" style="width:${Math.max(4, c.sec * PX_PER_SEC)}px"
-                   title="${esc(`${c.index + 1}. ${c.name}  ${c.sec.toFixed(1)}s`)}">
-                ${thumbHtml(c.media, "gg-clip-thumb")}
-                <div class="gg-clip-label"><span class="gg-no">${c.index + 1}</span>${esc(c.name)}</div>
-                <div class="gg-clip-dur">${c.sec.toFixed(1)}s</div>
-              </div>`).join("")}
-          </div>
+        <div class="gg-tl-inner">
+          <div class="gg-ruler" title="Click to seek"></div>
+          <div class="gg-track"></div>
+          <div class="gg-drop" hidden></div>
+          <div class="gg-head-line"></div>
         </div>
-      </div>`;
-    root.querySelector(".gg-reload")?.addEventListener("click", () => loadProjects());
-    root.querySelectorAll(".gg-clip").forEach((c) => c.addEventListener("click", () => selectCut(c.dataset.cutId)));
-    bindHoverPlay(root);
-    paintSelection(root);
+      </div>
+    </div>`;
+  viewer = {
+    box: root,
+    img: root.querySelector(".gg-v-img"),
+    vid: root.querySelector(".gg-v-vid"),
+    next: root.querySelector(".gg-v-next"),
+    blank: root.querySelector(".gg-v-blank"),
+    label: root.querySelector(".gg-v-label"),
   };
+  const $r = (q) => root.querySelector(q);
+  const paintButtons = () => {
+    $r(".gg-snap").classList.toggle("gg-on", ed.snap);
+    $r(".gg-sound").textContent = ed.sound ? "🔊" : "🔇";
+    $r(".gg-sound").classList.toggle("gg-on", ed.sound);
+  };
+  $r(".gg-play-btn").addEventListener("click", togglePlay);
+  $r(".gg-sound").addEventListener("click", () => { ed.sound = !ed.sound; localStorage.setItem("gg.sound", ed.sound ? "1" : "0"); viewer.vid.muted = !ed.sound; paintButtons(); });
+  $r(".gg-snap").addEventListener("click", () => { ed.snap = !ed.snap; localStorage.setItem("gg.snap", ed.snap ? "1" : "0"); paintButtons(); });
+  const zoom = (f) => { ed.px = Math.max(6, Math.min(240, Math.round(ed.px * f))); localStorage.setItem("gg.px", String(ed.px)); paintTrack(); };
+  $r(".gg-zoom-in").addEventListener("click", () => zoom(1.5));
+  $r(".gg-zoom-out").addEventListener("click", () => zoom(1 / 1.5));
+  $r(".gg-reset").addEventListener("click", resetEdit);
+  $r(".gg-reload").addEventListener("click", () => loadProjects());
+  $r(".gg-ruler").addEventListener("pointerdown", (e) => {
+    const rect = $r(".gg-track").getBoundingClientRect();
+    const go = (x) => seek((x - rect.left) / ed.px);
+    go(e.clientX);
+    const move = (ev) => go(ev.clientX);
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  });
+  root.addEventListener("mouseenter", () => { root._ggHover = true; });
+  root.addEventListener("mouseleave", () => { root._ggHover = false; });
+
+  const paintTrack = () => {
+    const tl = state.timeline;
+    const cuts = cutsNow();
+    $r(".gg-tl-title").textContent = tl ? tl.project.name : "No project";
+    const err = $r(".gg-error");
+    err.hidden = !state.error;
+    err.textContent = state.error || "";
+    $r(".gg-track").innerHTML = cuts.map((c) => `
+      <div class="gg-clip${c.media ? "" : " gg-clip-empty"}${kindOf(c) === "video" ? " gg-clip-video" : ""}${c.pos !== c.index ? " gg-moved" : ""}"
+           data-cut-id="${esc(c.id)}" style="width:${c.sec * ed.px}px"
+           title="${esc(`${c.pos + 1}. ${c.name}  ${c.sec.toFixed(1)}s${c.src_dur ? ` (src ${c.src_dur}s)` : ""}`)}">
+        ${thumbHtml(c.media, "gg-clip-thumb")}
+        <div class="gg-clip-label"><span class="gg-no">${c.pos + 1}</span>${esc(c.name)}</div>
+        <div class="gg-clip-in">${kindOf(c) === "video" && c.in > 0 ? `in ${c.in.toFixed(1)}` : ""}</div>
+        <div class="gg-clip-dur">${c.sec.toFixed(1)}s</div>
+        <div class="gg-edge gg-edge-l" data-side="l" title="Trim in"></div>
+        <div class="gg-edge gg-edge-r" data-side="r" title="Trim out"></div>
+      </div>`).join("");
+    layoutClips(root);
+    bindTrim(root);
+    bindReorder(root);
+    paintSelection(root);
+    paintButtons();
+    if (play.t > totalSec()) play.t = totalSec();
+    play.idx = -1;
+    showFrame(true);
+  };
+  const onTimeline = () => { if (!ed.dragging) paintTrack(); };
+  const onDirty = () => paintRuler(root);
   const onSel = () => paintSelection(root);
-  bus.addEventListener("projects", paint);
-  bus.addEventListener("timeline", paint);
+  const onProjects = () => { stopPlay(); play.t = 0; };
+  bus.addEventListener("timeline", onTimeline);
+  bus.addEventListener("projects", onProjects);
+  bus.addEventListener("dirty", onDirty);
   bus.addEventListener("select", onSel);
-  paint();
+  paintTrack();
   if (!state.projects.length) loadProjects();
   return () => {
-    bus.removeEventListener("projects", paint);
-    bus.removeEventListener("timeline", paint);
+    stopPlay();
+    bus.removeEventListener("timeline", onTimeline);
+    bus.removeEventListener("projects", onProjects);
+    bus.removeEventListener("dirty", onDirty);
     bus.removeEventListener("select", onSel);
+    if (viewer && viewer.box === root) viewer = null;
   };
 }
+
+// Space = play/pause, only while the pointer is over (or focus is inside) the Timeline panel,
+// so ComfyUI's own space-drag canvas panning keeps working everywhere else.
+window.addEventListener("keydown", (e) => {
+  if (e.code !== "Space" || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+  const root = document.querySelector(".gg-timeline");
+  if (!root || !root.isConnected || !(root._ggHover || root.contains(document.activeElement))) return;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+  e.preventDefault();
+  e.stopPropagation();
+  togglePlay();
+}, true);
 
 function bindHoverPlay(root) {
   root.querySelectorAll("video").forEach((v) => {

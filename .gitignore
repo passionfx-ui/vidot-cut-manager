@@ -3,3 +3,4 @@ __pycache__/
 gonggan_settings.json
 *.log
 cache/
+edits/

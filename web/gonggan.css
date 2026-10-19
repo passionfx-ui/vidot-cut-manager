@@ -24,21 +24,48 @@
 .gg-shots .gg-cut-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gg-shots .gg-cut-sub { color: var(--gg-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* Timeline bottom panel */
-.gg-timeline { display: flex; flex-direction: column; background: var(--gg-bg); }
-.gg-timeline .gg-tl-tools { display: flex; align-items: center; gap: 10px; padding: 4px 8px; border-bottom: 1px solid var(--gg-line); }
-.gg-timeline .gg-tl-title { font-weight: 600; }
-.gg-timeline .gg-tl-info { color: var(--gg-dim); font-variant-numeric: tabular-nums; flex: 1; }
+/* Timeline bottom panel: viewer (left) + editor (right) */
+.gg-timeline { display: flex; flex-direction: row; background: var(--gg-bg); outline: none; min-height: 220px; }
+.gg-timeline .gg-viewer { flex: 0 0 auto; display: flex; flex-direction: column; padding: 6px; border-right: 1px solid var(--gg-line); }
+.gg-timeline .gg-screen { position: relative; height: calc(100% - 34px); min-height: 150px; aspect-ratio: 16 / 9; background: #000; border-radius: 4px; overflow: hidden; }
+.gg-timeline .gg-screen img, .gg-timeline .gg-screen video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.gg-timeline .gg-screen [hidden] { display: none !important; }
+.gg-timeline .gg-v-blank { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--gg-dim); }
+.gg-timeline .gg-v-label { position: absolute; left: 6px; top: 4px; font-size: 11px; padding: 1px 5px; border-radius: 3px; background: rgba(0,0,0,.55); max-width: calc(100% - 12px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gg-timeline .gg-v-label:empty { display: none; }
+.gg-timeline .gg-transport { display: flex; align-items: center; gap: 8px; height: 28px; margin-top: 6px; }
+.gg-timeline .gg-play-btn { min-width: 40px; font-size: 13px; }
+.gg-timeline .gg-clock { font-variant-numeric: tabular-nums; font-family: ui-monospace, Consolas, monospace; flex: 1; }
+.gg-root .gg-btn.gg-on { border-color: var(--gg-acc); color: var(--gg-acc); }
+.gg-timeline .gg-editor { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.gg-timeline .gg-tl-tools { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--gg-line); }
+.gg-timeline .gg-tl-title { font-weight: 600; white-space: nowrap; }
+.gg-timeline .gg-tl-info { color: var(--gg-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.gg-timeline .gg-tip { flex: 1; color: var(--gg-acc); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gg-timeline .gg-error[hidden] { display: none; }
 .gg-timeline .gg-tl-scroll { overflow-x: auto; overflow-y: hidden; flex: 1; padding: 0 8px 6px; }
 .gg-timeline .gg-tl-inner { position: relative; min-height: 100%; }
-.gg-timeline .gg-ruler { position: relative; height: 18px; border-bottom: 1px solid var(--gg-line); }
-.gg-timeline .gg-tick { position: absolute; top: 10px; width: 1px; height: 8px; background: var(--gg-line); }
-.gg-timeline .gg-tick.gg-major { top: 0; height: 18px; background: #555c68; }
-.gg-timeline .gg-tick { font-size: 9px; color: var(--gg-dim); text-indent: 3px; white-space: nowrap; line-height: 10px; }
-.gg-timeline .gg-track { display: flex; height: 76px; margin-top: 6px; }
-.gg-timeline .gg-clip { position: relative; flex: 0 0 auto; height: 100%; overflow: hidden; border: 1px solid #0b0c0e; border-radius: 4px; background: #2b3d55; cursor: pointer; }
+.gg-timeline .gg-ruler { position: relative; height: 20px; border-bottom: 1px solid var(--gg-line); cursor: col-resize; }
+.gg-timeline .gg-tick { position: absolute; top: 12px; width: 1px; height: 8px; background: var(--gg-line); font-size: 9px; color: var(--gg-dim); text-indent: 3px; white-space: nowrap; line-height: 10px; pointer-events: none; }
+.gg-timeline .gg-tick.gg-major { top: 0; height: 20px; background: #555c68; }
+.gg-timeline .gg-track { display: flex; height: 84px; margin-top: 6px; }
+.gg-timeline .gg-clip { position: relative; flex: 0 0 auto; box-sizing: border-box; height: 100%; overflow: hidden; border: 1px solid #0b0c0e; border-radius: 4px; background: #2b3d55; cursor: grab; user-select: none; touch-action: none; }
 .gg-timeline .gg-clip-video { background: #3b2b55; }
+.gg-timeline .gg-clip.gg-moved { box-shadow: inset 0 -3px 0 #4bb3f2; }
 .gg-timeline .gg-clip.gg-on { outline: 2px solid var(--gg-acc); outline-offset: -2px; z-index: 1; }
-.gg-timeline .gg-clip-thumb { width: 100%; height: 100%; object-fit: cover; display: block; opacity: .85; }
-.gg-timeline .gg-clip-label { position: absolute; left: 0; right: 0; top: 0; padding: 2px 4px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: linear-gradient(rgba(0,0,0,.75), transparent); }
-.gg-timeline .gg-clip-dur { position: absolute; right: 3px; bottom: 2px; font-size: 10px; background: rgba(0,0,0,.6); border-radius: 3px; padding: 0 3px; font-variant-numeric: tabular-nums; }
+.gg-timeline .gg-clip.gg-play { box-shadow: inset 0 0 0 2px #6ee07a; }
+.gg-timeline .gg-clip.gg-moving { opacity: .45; cursor: grabbing; }
+.gg-timeline .gg-clip.gg-trimming { outline: 2px solid #6ee07a; outline-offset: -2px; z-index: 2; }
+.gg-timeline .gg-clip-thumb { width: 100%; height: 100%; object-fit: cover; display: block; opacity: .85; pointer-events: none; }
+.gg-timeline .gg-clip-label { position: absolute; left: 0; right: 0; top: 0; padding: 2px 6px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: linear-gradient(rgba(0,0,0,.75), transparent); pointer-events: none; }
+.gg-timeline .gg-clip-dur { position: absolute; right: 7px; bottom: 2px; font-size: 10px; background: rgba(0,0,0,.6); border-radius: 3px; padding: 0 3px; font-variant-numeric: tabular-nums; pointer-events: none; }
+.gg-timeline .gg-clip-in { position: absolute; left: 7px; bottom: 2px; font-size: 10px; color: #6ee07a; pointer-events: none; }
+.gg-timeline .gg-clip-in:empty { display: none; }
+.gg-timeline .gg-edge { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; z-index: 3; background: rgba(255,255,255,.0); }
+.gg-timeline .gg-edge:hover, .gg-timeline .gg-trimming .gg-edge { background: rgba(242,184,75,.55); }
+.gg-timeline .gg-edge-l { left: 0; border-radius: 4px 0 0 4px; }
+.gg-timeline .gg-edge-r { right: 0; border-radius: 0 4px 4px 0; }
+.gg-timeline .gg-drop { position: absolute; top: 22px; height: 88px; width: 3px; margin-left: -1px; background: #4bb3f2; border-radius: 2px; pointer-events: none; z-index: 4; }
+.gg-timeline .gg-drop[hidden] { display: none; }
+.gg-timeline .gg-head-line { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #ff5a5a; pointer-events: none; z-index: 5; left: 0; }
+.gg-timeline .gg-head-line::before { content: ""; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top: 8px solid #ff5a5a; }

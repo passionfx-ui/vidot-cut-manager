@@ -181,22 +181,119 @@ def list_projects() -> dict:
     return {"ok": True, "uid": s.get("uid"), "active_project_id": ws.get("active_project_id"), "projects": projects}
 
 
-def timeline(pid: str) -> dict | None:
+EDITS_DIR = PACK_DIR / "edits"                                # pack-local edit decisions (never the data root)
+PID_RE = re.compile(r"^[A-Za-z0-9_-]{2,64}$")
+IMG_MIN, IMG_MAX = 0.5, 60.0
+VID_MIN = 0.2
+_dur_cache: dict = {}
+
+
+def _round(x: float) -> float:
+    return round(float(x) + 1e-9, 2)
+
+
+def media_duration(job: dict | None) -> float | None:
+    """Real duration of a video result (PyAV, fallback ffprobe). Cached by id + mtime."""
+    if not job or job.get("kind") != "video":
+        return None
+    key = (job["id"], job["mtime"])
+    with _lock:
+        if key in _dur_cache:
+            return _dur_cache[key]
+    path = media_path(job["id"])
+    dur = None
+    if path is not None:
+        try:
+            import av  # ships with ComfyUI
+            with av.open(str(path)) as c:
+                if c.duration:
+                    dur = c.duration / 1_000_000
+                elif c.streams.video and c.streams.video[0].duration:
+                    st = c.streams.video[0]
+                    dur = float(st.duration * st.time_base)
+        except Exception:  # noqa: BLE001
+            dur = None
+        if not dur:
+            exe = ffmpeg_exe()
+            probe = exe and str(Path(exe).with_name(Path(exe).name.replace("ffmpeg", "ffprobe")))
+            if probe and Path(probe).is_file():
+                try:
+                    out = subprocess.run(
+                        [probe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                        capture_output=True, text=True, timeout=20,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    ).stdout.strip()
+                    dur = float(out) if out else None
+                except Exception:  # noqa: BLE001
+                    dur = None
+    dur = _round(dur) if dur and dur > 0 else None
+    with _lock:
+        _dur_cache[key] = dur
+    return dur
+
+
+def clamp_clip(kind: str | None, tl_in: float, sec: float, src_dur: float | None) -> tuple[float, float]:
+    """Images: free length 0.5-60 s, no in-point. Video: in >= 0, in + sec <= real duration."""
+    try:
+        tl_in = float(tl_in or 0.0)
+        sec = float(sec)
+    except (TypeError, ValueError):
+        tl_in, sec = 0.0, 3.0
+    if kind != "video":
+        return 0.0, _round(min(IMG_MAX, max(IMG_MIN, sec)))
+    if src_dur:
+        tl_in = min(max(0.0, tl_in), max(0.0, src_dur - VID_MIN))
+        sec = min(sec, src_dur - tl_in)
+    else:
+        tl_in = max(0.0, tl_in)
+    return _round(tl_in), _round(min(60.0, max(VID_MIN, sec)))
+
+
+def _edit_file(pid: str) -> Path:
+    if not PID_RE.fullmatch(pid or ""):
+        raise ValueError("invalid project id")
+    return EDITS_DIR / f"edit_{pid}.json"
+
+
+def load_edit(pid: str) -> dict | None:
+    f = _edit_file(pid)
+    if not f.is_file():
+        return None
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _find_project(pid: str):
     d = user_dir()
     ws = _load_workspace(d)
     proj = next((p for p in ws.get("projects") or [] if p.get("id") == pid), None)
+    return d, proj
+
+
+def timeline(pid: str) -> dict | None:
+    d, proj = _find_project(pid)
     if not proj:
         return None
     jobs = _load_jobs(d)
     by_cut = _jobs_by_cut(jobs)
-    cuts = []
-    at = 0.0
-    for i, c in enumerate(proj.get("cuts") or []):
+    edit = load_edit(pid) or {}
+    clips_edit = edit.get("clips") if isinstance(edit.get("clips"), dict) else {}
+    src_cuts = proj.get("cuts") or []
+    base = []
+    for i, c in enumerate(src_cuts):
         job, n = _preview(c, by_cut, jobs)
-        sec = clip_seconds(c, job)
+        kind = job["kind"] if job else None
+        src_dur = media_duration(job)
         tl_in = c.get("tl_in") if isinstance(c.get("tl_in"), (int, float)) else 0.0
-        cuts.append({
-            "index": i,
+        seed_in, seed_sec = tl_in, clip_seconds(c, job)
+        e = clips_edit.get(c.get("id")) if isinstance(clips_edit.get(c.get("id")), dict) else None
+        cur_in, cur_sec = (e.get("in", seed_in), e.get("sec", seed_sec)) if e else (seed_in, seed_sec)
+        cur_in, cur_sec = clamp_clip(kind, cur_in, cur_sec, src_dur)
+        base.append({
+            "index": i,                       # position in 공간쉐어 order
             "id": c.get("id"),
             "name": c.get("name") or "",
             "scene": c.get("scene") or "",
@@ -206,15 +303,65 @@ def timeline(pid: str) -> dict | None:
             "shot": c.get("shot") or "",
             "tl_sec": c.get("tl_sec"),
             "tl_in": float(tl_in or 0.0),
-            "sec": sec,
-            "start": round(at, 3),
+            "in": cur_in,
+            "sec": cur_sec,
+            "src_dur": src_dur,
+            "edited": bool(e),
             "media": _media_view(job),
             "versions": n,
         })
-        at += sec
+    by_id = {c["id"]: c for c in base}
+    order = [x for x in (edit.get("order") or []) if x in by_id]
+    seen = set(order)
+    order += [c["id"] for c in base if c["id"] not in seen]   # new cuts in 공간쉐어 go to the end
+    cuts = []
+    at = 0.0
+    for pos, cid in enumerate(dict.fromkeys(order)):
+        c = by_id[cid]
+        c["pos"] = pos
+        c["start"] = _round(at)
+        at += c["sec"]
+        cuts.append(c)
     return {"ok": True, "project": {"id": proj.get("id"), "name": proj.get("name") or "",
                                     "logline": proj.get("logline") or ""},
-            "cuts": cuts, "total_sec": round(at, 3)}
+            "cuts": cuts, "total_sec": _round(at),
+            "edited": bool(edit), "edit_updated_at": edit.get("updated_at")}
+
+
+def save_edit(pid: str, order, clips) -> dict | None:
+    """Validate against the project, clamp, and write edits/edit_<pid>.json atomically."""
+    import time
+    tl = timeline(pid)
+    if tl is None:
+        return None
+    by_id = {c["id"]: c for c in tl["cuts"]}
+    if not isinstance(order, list):
+        order = []
+    order = [x for x in dict.fromkeys(order) if isinstance(x, str) and x in by_id]
+    order += [cid for cid in by_id if cid not in order]
+    out_clips = {}
+    clips = clips if isinstance(clips, dict) else {}
+    for cid, c in by_id.items():
+        e = clips.get(cid) if isinstance(clips.get(cid), dict) else {"in": c["in"], "sec": c["sec"]}
+        kind = c["media"]["kind"] if c["media"] else None
+        i, sec = clamp_clip(kind, e.get("in", c["in"]), e.get("sec", c["sec"]), c["src_dur"])
+        out_clips[cid] = {"in": i, "sec": sec}
+    data = {"version": 1, "pid": pid, "order": order, "clips": out_clips, "updated_at": time.time()}
+    f = _edit_file(pid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(f)
+    return timeline(pid)
+
+
+def reset_edit(pid: str) -> dict | None:
+    """Back to 공간쉐어 order/trims. The old edit is kept as edit_<pid>.reset-<ts>.json (reversible)."""
+    import time
+    f = _edit_file(pid)
+    if f.is_file():
+        f.replace(f.with_name(f"edit_{pid}.reset-{int(time.time())}.json"))
+    return timeline(pid)
 
 
 def media_path(job_id: str) -> Path | None:
