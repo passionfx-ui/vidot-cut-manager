@@ -27,7 +27,7 @@
 /* Timeline bottom panel: viewer (left) + editor (right) */
 .gg-timeline { display: flex; flex-direction: row; background: var(--gg-bg); outline: none; min-height: 220px; }
 .gg-timeline .gg-viewer { flex: 0 0 auto; display: flex; flex-direction: column; padding: 6px; border-right: 1px solid var(--gg-line); }
-.gg-timeline .gg-screen { position: relative; flex: 1 1 auto; min-height: 120px; aspect-ratio: 16 / 9; background: #000; border-radius: 4px; overflow: hidden; }
+.gg-timeline .gg-screen { position: relative; flex: 0 0 auto; min-height: 112px; aspect-ratio: 16 / 9; background: #000; border-radius: 4px; overflow: hidden; }
 .gg-timeline .gg-screen img, .gg-timeline .gg-screen video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .gg-timeline .gg-screen [hidden] { display: none !important; }
 .gg-timeline .gg-v-blank { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--gg-dim); }
