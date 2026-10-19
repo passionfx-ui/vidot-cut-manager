@@ -402,6 +402,7 @@ function bindTrim(root) {
         c.edited = true;
         play.idx = -1;
         if (startIn !== c.in || startSec !== c.sec) scheduleSave();
+        setTimeout(() => { const tip = root.querySelector(".gg-tip"); if (tip && !ed.dragging) tip.textContent = ""; }, 2500);
         bus.dispatchEvent(new Event("timeline"));
       };
       try { edge.setPointerCapture(e.pointerId); } catch (_) {}
@@ -564,6 +565,18 @@ function mountTimeline(el) {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   });
+  // The panel host has no definite height; size the root from it so the viewer can fill the panel.
+  const host = el.parentElement || el;
+  const fit = () => {
+    const h = host.clientHeight || el.clientHeight;
+    if (h > 60) root.style.height = h + "px";
+    const scr = root.querySelector(".gg-screen");
+    const w = Math.max(200, Math.min(host.clientWidth * 0.45, ((h || 220) - 46) * 16 / 9));
+    if (scr) scr.style.width = Math.round(w) + "px";
+  };
+  const ro = window.ResizeObserver ? new ResizeObserver(fit) : null;
+  if (ro) ro.observe(host);
+  fit();
   root.addEventListener("mouseenter", () => { root._ggHover = true; });
   root.addEventListener("mouseleave", () => { root._ggHover = false; });
 
@@ -606,6 +619,7 @@ function mountTimeline(el) {
   if (!state.projects.length) loadProjects();
   return () => {
     stopPlay();
+    if (ro) ro.disconnect();
     bus.removeEventListener("timeline", onTimeline);
     bus.removeEventListener("projects", onProjects);
     bus.removeEventListener("dirty", onDirty);
