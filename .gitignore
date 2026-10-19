@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+gonggan_settings.json
+*.log
