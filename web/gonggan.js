@@ -571,8 +571,8 @@ function mountTimeline(el) {
     const h = host.clientHeight || el.clientHeight;
     if (h > 60) root.style.height = h + "px";
     const scr = root.querySelector(".gg-screen");
-    const w = Math.max(200, Math.min(host.clientWidth * 0.45, ((h || 220) - 46) * 16 / 9));
-    if (scr) scr.style.width = Math.round(w) + "px";
+    const w = Math.max(200, Math.min(host.clientWidth * 0.4, ((h || 220) - 46) * 16 / 9));
+    if (scr) { scr.style.width = Math.round(w) + "px"; scr.style.height = Math.round(w * 9 / 16) + "px"; }
   };
   const ro = window.ResizeObserver ? new ResizeObserver(fit) : null;
   if (ro) ro.observe(host);
