@@ -12,7 +12,7 @@
 .gg-shots .gg-head { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--gg-line); }
 .gg-shots .gg-proj { flex: 1; min-width: 0; background: var(--gg-panel); color: var(--gg-fg); border: 1px solid var(--gg-line); border-radius: 4px; padding: 3px 4px; }
 .gg-shots .gg-meta { padding: 4px 10px; color: var(--gg-dim); }
-.gg-shots .gg-cutlist { list-style: none; margin: 0; padding: 0 6px 10px; overflow-y: auto; flex: 1; }
+.gg-shots .gg-cutlist { list-style: none; margin: 0; padding: 0 6px 10px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
 .gg-shots .gg-cut { display: flex; gap: 8px; align-items: center; padding: 4px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
 .gg-shots .gg-cut:hover { background: var(--gg-panel); }
 .gg-shots .gg-cut.gg-on { border-color: var(--gg-acc); background: #2c2a22; }

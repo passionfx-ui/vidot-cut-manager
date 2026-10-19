@@ -200,6 +200,30 @@ function mountShots(el) {
   const root = document.createElement("div");
   root.className = "gg-root gg-shots";
   el.appendChild(root);
+  // The sidebar host has no definite height; pin the root to the visible viewport so the
+  // cut list scrolls and the cut panel stays at the bottom.
+  const scroller = () => {
+    for (let e = el.parentElement; e && e !== document.body; e = e.parentElement) {
+      const o = getComputedStyle(e).overflowY;
+      if (o === "auto" || o === "scroll" || o === "hidden") return e;
+    }
+    return null;
+  };
+  let watched = null;
+  const fit = () => {
+    const sc = scroller();
+    if (sc && sc !== watched) { watched = sc; ro.observe(sc); }
+    const r = root.getBoundingClientRect();
+    const bottom = sc ? sc.getBoundingClientRect().top + sc.clientHeight : window.innerHeight;
+    const h = Math.floor(bottom - r.top - 1);
+    if (h > 0) root.style.height = Math.max(200, h) + "px";
+  };
+  const ro = new ResizeObserver(fit);
+  ro.observe(document.body);
+  window.addEventListener("resize", fit);
+  requestAnimationFrame(fit);
+  setTimeout(fit, 300);
+  setTimeout(fit, 1500);
 
   const paintPanel = () => {
     const panel = root.querySelector(".gg-cutpanel");
@@ -242,8 +266,9 @@ function mountShots(el) {
     bindHoverPlay(root);
     paintSelection(root);
     paintPanel();
+    fit();
   };
-  const onSel = () => { paintSelection(root); paintPanel(); };
+  const onSel = () => { paintSelection(root); paintPanel(); fit(); };
   bus.addEventListener("projects", paint);
   bus.addEventListener("timeline", paint);
   bus.addEventListener("select", onSel);
@@ -253,6 +278,8 @@ function mountShots(el) {
   refreshSdk(false);
   const timer = setInterval(() => refreshSdk(false), 20000);
   return () => {
+    ro.disconnect();
+    window.removeEventListener("resize", fit);
     clearInterval(timer);
     bus.removeEventListener("projects", paint);
     bus.removeEventListener("timeline", paint);
