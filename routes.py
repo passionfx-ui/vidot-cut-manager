@@ -124,3 +124,49 @@ async def gg_edit_reset(request):
     if tl is None:
         return _err(404, "project not found")
     return web.json_response(tl)
+
+
+# ---------------- export ----------------
+from . import gg_export  # noqa: E402
+
+
+def _notify(job: dict) -> None:
+    # send_sync is thread-safe (schedules onto the server loop)
+    PromptServer.instance.send_sync("gonggan.export", job)
+
+
+gg_export._notify = _notify
+
+
+@routes.post("/gonggan/export")
+async def gg_export_start(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    try:
+        res = await asyncio.to_thread(
+            gg_export.start, pid, str(data.get("preset") or "720p"), data.get("width"), data.get("height"),
+            data.get("fps") or 24, bool(data.get("sound", True)),
+        )
+    except ValueError as ex:
+        return _err(400, str(ex))
+    return web.json_response(res, status=200 if res.get("ok") else 409)
+
+
+@routes.get("/gonggan/export/status")
+async def gg_export_status(request):
+    return web.json_response({"ok": True, "job": gg_export.status()})
+
+
+@routes.post("/gonggan/export/cancel")
+async def gg_export_cancel(request):
+    return web.json_response(gg_export.cancel())
+
+
+@routes.get("/gonggan/export/file")
+async def gg_export_file(request):
+    path = await asyncio.to_thread(gg_export.export_file, request.query.get("name", ""))
+    if path is None:
+        return _err(404, "file not found")
+    return web.FileResponse(path, headers={"Content-Type": "video/mp4", "Cache-Control": "no-cache"})
