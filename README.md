@@ -43,3 +43,8 @@ Tested with Python 3.13.6, comfy-sdk 0.5.0, comfy-api-proxy 0.1.6.
   Queues only with `{"dry_run": false, "confirm": true, "seed": <seed from the dry run>}`; the UI asks first.
 - `POST /gonggan/send-output {pid, cut_id}` - copies ComfyUI's last output (in-memory `/history`, else newest file in `output/`) into the cut.
 - New takes are stored in the pack's `versions/<pid>/<cut_id>/` (gitignored), never in 공간쉐어 data, and become the cut's pick in `edits/edit_<pid>.json`.
+
+## Changelog
+
+- **0.2.1** — Promote save-failure rollback + warn toast; wider trim hit zones at clip edges.
+- **0.2.0** — Integration: shot click → canvas, scenes/groups, Shots → Timeline tab, promote (대표), trim cursors.
