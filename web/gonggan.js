@@ -766,7 +766,7 @@ function mountTimeline(el) {
     const err = $r(".gg-error");
     err.hidden = !state.error;
     err.textContent = state.error || "";
-    $r(".gg-track").innerHTML = cuts.map((c) => `
+    $r(".gg-track").innerHTML = cuts.map((c, i) => `
       <div class="gg-clip${c.media ? "" : " gg-clip-empty"}${kindOf(c) === "video" ? " gg-clip-video" : ""}${c.pos !== c.index ? " gg-moved" : ""}"
            data-cut-id="${esc(c.id)}" style="width:${c.sec * ed.px}px"
            title="${esc(`${c.pos + 1}. ${c.name}  ${c.sec.toFixed(1)}s${c.src_dur ? ` (src ${c.src_dur}s)` : ""}`)}">
@@ -774,8 +774,8 @@ function mountTimeline(el) {
         <div class="gg-clip-label"><span class="gg-no">${c.pos + 1}</span>${esc(c.name)}</div>
         <div class="gg-clip-in">${kindOf(c) === "video" && c.in > 0 ? `in ${c.in.toFixed(1)}` : ""}</div>
         <div class="gg-clip-dur">${c.sec.toFixed(1)}s</div>
-        <div class="gg-edge gg-edge-l" data-side="l" title="Trim in"></div>
-        <div class="gg-edge gg-edge-r" data-side="r" title="Trim out"></div>
+        <div class="gg-edge gg-edge-l${i > 0 ? " gg-edge-split" : ""}" data-side="l" title="Trim in"></div>
+        <div class="gg-edge gg-edge-r${i < cuts.length - 1 ? " gg-edge-split" : ""}" data-side="r" title="Trim out"></div>
       </div>`).join("");
     layoutClips(root);
     bindTrim(root);
