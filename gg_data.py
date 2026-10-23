@@ -640,6 +640,11 @@ def add_version(pid: str, cut_id: str, src: Path, meta: dict) -> dict:
     shutil.copy2(src, d / f"{vid}{ext}")
     info = {"id": vid, "pid": pid, "cut_id": cut_id, "ext": ext, "created_at": time.time(), **meta}
     (d / f"{vid}.json").write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
+    try:
+        from . import gg_wfstore
+        gg_wfstore.maybe_save_for_new_version(pid, cut_id, vid, d / f"{vid}{ext}", meta)
+    except Exception:  # noqa: BLE001
+        pass
     # make it the cut's pick, keeping order/trims
     edit = load_edit(pid) or {}
     clips = {c["id"]: {"in": c["in"], "sec": c["sec"], **({"pick": c["pick"]} if c.get("pick") else {})}
