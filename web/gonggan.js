@@ -6,6 +6,7 @@ import { api } from "../../scripts/api.js";
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
 const TIMELINE_TAB = "gg-timeline";
+const SHOTS_TAB = "gg-shots";
 const bus = new EventTarget();
 const state = { projects: [], pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", error: "" };
 
@@ -98,6 +99,22 @@ function openTimelinePanel() {
   if (!cmd?.execute) return;
   if (timelinePanelVisible()) return;
   cmd.execute(`Workspace.ToggleBottomPanelTab.${TIMELINE_TAB}`);
+}
+
+/** Open Timeline when the Shots sidebar panel becomes visible (not when leaving). */
+function bindShotsTabActivated(hostEl, onCleanup) {
+  let wasShown = false;
+  const sync = () => {
+    if (!hostEl.isConnected) return;
+    const r = hostEl.getBoundingClientRect();
+    const shown = r.width > 0 && r.height > 0 && hostEl.offsetParent !== null;
+    if (shown && !wasShown) openTimelinePanel();
+    wasShown = shown;
+  };
+  const io = new IntersectionObserver(() => sync(), { threshold: 0.01 });
+  io.observe(hostEl);
+  onCleanup.push(() => io.disconnect());
+  requestAnimationFrame(sync);
 }
 
 function paintSelection(root) {
@@ -213,6 +230,8 @@ function mountShots(el) {
   const root = document.createElement("div");
   root.className = "gg-root gg-shots";
   el.appendChild(root);
+  const extraCleanup = [];
+  bindShotsTabActivated(el, extraCleanup);
   // The sidebar host has no definite height; pin the root to the visible viewport so the
   // cut list scrolls and the cut panel stays at the bottom.
   const scroller = () => {
@@ -301,6 +320,7 @@ function mountShots(el) {
     bus.removeEventListener("timeline", paint);
     bus.removeEventListener("select", onSel);
     bus.removeEventListener("sdk", paintPanel);
+    extraCleanup.forEach((fn) => fn());
   };
 }
 
@@ -945,7 +965,7 @@ app.registerExtension({
   ],
   async setup() {
     app.extensionManager.registerSidebarTab({
-      id: "gg-shots",
+      id: SHOTS_TAB,
       icon: "pi pi-images",
       title: "Shots",
       tooltip: "공간쉐어 shot list",
