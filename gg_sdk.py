@@ -215,7 +215,8 @@ def _run_worker(p: dict) -> None:
         info = gg_data.add_version(p["pid"], p["cut_id"], Path(f), {
             "source": "local-sdk", "model": p["model"], "seed": p["seed"], "steps": p["steps"],
             "prompt": p["prompt"], "aspect": p["aspect"], "sdk_job_id": res.get("job_id"),
-            "base_url": settings()["proxy_url"], "render_seconds": res.get("seconds")})
+            "base_url": settings()["proxy_url"], "render_seconds": res.get("seconds"),
+            "api_prompt": p["workflow"]})
         added.append(info["id"])
     _set(status="done", versions=added, sdk_job_id=res.get("job_id"), render_seconds=res.get("seconds"),
          finished_at=time.time())

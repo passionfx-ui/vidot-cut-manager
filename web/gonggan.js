@@ -201,8 +201,35 @@ async function fetchProjectTemplatePayload() {
   return d.exists && d.workflow ? d.workflow : null;
 }
 
+const SOURCE_TOAST = {
+  stored: "stored version workflow",
+  template: "project template",
+  draft: "draft workflow",
+};
+
+async function fetchCutSourceWorkflowPayload(cutId) {
+  const tl = state.timeline;
+  const q = `/gonggan/cut-source-workflow?pid=${encodeURIComponent(tl.project.id)}&cut=${encodeURIComponent(cutId)}`;
+  const res = await api.fetchApi(q);
+  if (res.status === 404) {
+    const err = new Error("cut-source-workflow unavailable");
+    err.status = 404;
+    throw err;
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    const err = new Error(data.message || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  if (!data.workflow) {
+    throw new Error("no workflow for this shot");
+  }
+  return data;
+}
+
 /** Ordered workflow sources for shot click (prepend new sources here). */
-const CUT_WORKFLOW_SOURCES = [
+const LEGACY_CUT_WORKFLOW_SOURCES = [
   {
     id: "cut",
     async resolve(cutId) {
@@ -212,7 +239,7 @@ const CUT_WORKFLOW_SOURCES = [
         err.status = hit.status;
         throw err;
       }
-      return { workflow: hit.data.workflow, sdkMsg: `Canvas: ${hit.data.cut_no}. ${hit.data.cut_name} · ${hit.data.model} · seed ${hit.data.seed}`, toastKind: "ok", toastDetail: "asset + workflow on canvas" };
+      return { workflow: hit.data.workflow, sdkMsg: `Canvas: ${hit.data.cut_no}. ${hit.data.cut_name} · ${hit.data.model} · seed ${hit.data.seed}`, toastKind: "ok", toastDetail: "draft workflow", toastSummary: "draft" };
     },
   },
   {
@@ -222,9 +249,30 @@ const CUT_WORKFLOW_SOURCES = [
       if (!wf) throw new Error("no project template");
       const c = cutById(cutId);
       const title = shotTitle(c);
-      return { workflow: wf, sdkMsg: `Canvas: ${title} (project template)`, toastKind: "ok", toastDetail: "template", toastSummary: "template" };
+      return { workflow: wf, sdkMsg: `Canvas: ${title} (project template)`, toastKind: "ok", toastDetail: "project template", toastSummary: "template" };
     },
   },
+];
+
+const CUT_WORKFLOW_SOURCES = [
+  {
+    id: "stored",
+    async resolve(cutId) {
+      const data = await fetchCutSourceWorkflowPayload(cutId);
+      const c = cutById(cutId);
+      const title = shotTitle(c);
+      const src = data.source || "stored";
+      const label = SOURCE_TOAST[src] || src;
+      return {
+        workflow: data.workflow,
+        sdkMsg: `Canvas: ${title} (${label})`,
+        toastKind: "ok",
+        toastDetail: label,
+        toastSummary: src === "template" ? "template" : src === "draft" ? "draft" : "stored",
+      };
+    },
+  },
+  ...LEGACY_CUT_WORKFLOW_SOURCES,
 ];
 
 async function loadCutWorkflow(cutId, cut) {
@@ -244,11 +292,33 @@ async function loadCutWorkflow(cutId, cut) {
       sdk.msg = hit.sdkMsg;
       bus.dispatchEvent(new Event("sdk"));
       const sum = hit.toastSummary || "Shot";
-      const detail = hit.toastDetail === "template" ? `${title} — project template on canvas` : `${title} — ${hit.toastDetail}`;
+      const detail = hit.toastDetail ? `${title} — ${hit.toastDetail}` : title;
       ggToast(sum, detail, hit.toastKind);
       return;
     } catch (e) {
       lastErr = e;
+      if (src.id === "stored" && e.status === 404) {
+        for (const leg of LEGACY_CUT_WORKFLOW_SOURCES) {
+          try {
+            const hit = await leg.resolve(cutId);
+            if (gen !== wfLoadGen) return;
+            const loaded = await loadWorkflowIntoDedicatedTab(hit.workflow);
+            if (gen !== wfLoadGen || !loaded) return;
+            wfLastLoadedCutId = cutId;
+            sdk.msg = hit.sdkMsg;
+            bus.dispatchEvent(new Event("sdk"));
+            const sum = hit.toastSummary || "Shot";
+            const detail = hit.toastDetail ? `${title} — ${hit.toastDetail}` : title;
+            ggToast(sum, detail, hit.toastKind);
+            return;
+          } catch (le) {
+            lastErr = le;
+            if (leg.id === "cut" && le.status === 400) continue;
+            break;
+          }
+        }
+        break;
+      }
       if (src.id === "cut" && e.status === 400) continue;
       break;
     }
