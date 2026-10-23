@@ -46,5 +46,6 @@ Tested with Python 3.13.6, comfy-sdk 0.5.0, comfy-api-proxy 0.1.6.
 
 ## Changelog
 
+- **0.2.2** — Shot click reuses one gonggan workflow tab (no tab pile-up); debounced. Closing the Shots panel also closes the Timeline panel.
 - **0.2.1** — Promote save-failure rollback + warn toast; wider trim hit zones at clip edges.
 - **0.2.0** — Integration: shot click → canvas, scenes/groups, Shots → Timeline tab, promote (대표), trim cursors.

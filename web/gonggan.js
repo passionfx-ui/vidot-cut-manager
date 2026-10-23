@@ -78,13 +78,66 @@ function selectProject(pid) {
   state.pid = pid;
   state.cutId = "";
   state.cutSel.clear();
+  wfLastLoadedCutId = "";
   localStorage.setItem(PID_KEY, pid);
   bus.dispatchEvent(new Event("projects"));
   loadTimeline();
 }
 
+const GG_SHOT_WF_FILE = "gonggan-shot.json";
+const GG_SHOT_WF_PATH = "workflows/gonggan-shot.json";
+const WF_LOAD_DEBOUNCE_MS = 250;
+
 let wfLoadGen = 0;
+let wfLoadDebounce = 0;
+let wfLastLoadedCutId = "";
 let ggToastTimer = 0;
+
+function ggWorkflowStore() {
+  return app.extensionManager?.workflow;
+}
+
+function findDedicatedShotWorkflow() {
+  const ws = ggWorkflowStore();
+  if (!ws) return null;
+  const byPath = ws.getWorkflowByPath?.(GG_SHOT_WF_PATH);
+  if (byPath) return byPath;
+  const open = ws.openWorkflows || [];
+  return open.find(
+    (w) =>
+      w.path === GG_SHOT_WF_PATH ||
+      w.filename === GG_SHOT_WF_FILE ||
+      w.path?.endsWith(`/${GG_SHOT_WF_FILE}`) ||
+      w.path?.endsWith(GG_SHOT_WF_FILE)
+  ) ?? null;
+}
+
+async function ensureDedicatedShotWorkflowTab() {
+  const ws = ggWorkflowStore();
+  if (!ws) return null;
+  let wf = findDedicatedShotWorkflow();
+  if (wf) {
+    if (!ws.isActive?.(wf)) await ws.openWorkflow(wf);
+    return wf;
+  }
+  return null;
+}
+
+async function loadShotApiIntoDedicatedTab(apiJson) {
+  let wf = await ensureDedicatedShotWorkflowTab();
+  if (wf?.isModified && !confirm("Gonggan shot tab has unsaved changes. Load this shot's workflow anyway?")) {
+    return false;
+  }
+  const target = wf ?? GG_SHOT_WF_FILE;
+  if (typeof app.loadApiJson === "function") {
+    await app.loadApiJson(apiJson, target, { deferWarnings: true });
+  } else if (typeof app.loadGraphData === "function") {
+    await app.loadGraphData(apiJson, true, true, target, { deferWarnings: true });
+  } else {
+    return false;
+  }
+  return true;
+}
 
 function ggToast(summary, detail, kind = "info") {
   let host = document.getElementById("gg-toast-host");
@@ -122,16 +175,16 @@ function panelPreviewHtml(c) {
 async function loadCutWorkflow(cutId, cut) {
   const tl = state.timeline;
   if (!tl || !cutId) return;
+  if (cutId === wfLastLoadedCutId) return;
   const gen = ++wfLoadGen;
   const title = shotTitle(cut || cutById(cutId));
   try {
     const q = `/gonggan/workflow?pid=${encodeURIComponent(tl.project.id)}&cut_id=${encodeURIComponent(cutId)}`;
     const d = await getJson(q);
     if (gen !== wfLoadGen) return;
-    const label = `gonggan-cut-${d.cut_no || cutId}.json`;
-    if (app.extensionManager?.workflow?.activeWorkflow?.isModified && !confirm("Current workflow has unsaved changes. Load this shot's workflow anyway?")) return;
-    if (typeof app.loadApiJson === "function") app.loadApiJson(d.workflow, label);
-    else if (typeof app.loadGraphData === "function") await app.loadGraphData(d.workflow, true, true, label);
+    const loaded = await loadShotApiIntoDedicatedTab(d.workflow);
+    if (gen !== wfLoadGen || !loaded) return;
+    wfLastLoadedCutId = cutId;
     sdk.msg = `Canvas: ${d.cut_no}. ${d.cut_name} · ${d.model} · seed ${d.seed}`;
     bus.dispatchEvent(new Event("sdk"));
     ggToast("Shot", `${title} — asset + workflow on canvas`, "ok");
@@ -162,7 +215,10 @@ function selectCut(cutId, opts) {
     play.idx = -1;
     seek(startOf(i) + 0.001);
   }
-  if (!multi) loadCutWorkflow(cutId, cut);
+  if (!multi) {
+    clearTimeout(wfLoadDebounce);
+    wfLoadDebounce = setTimeout(() => loadCutWorkflow(cutId, cut), WF_LOAD_DEBOUNCE_MS);
+  }
 }
 
 function cutSelIds() {
@@ -305,6 +361,16 @@ function timelinePanelVisible() {
   return !!(el && el.isConnected && el.offsetParent);
 }
 
+function timelineBottomTabActive() {
+  const bp = app.extensionManager?.bottomPanel;
+  if (!bp) return false;
+  return !!bp.bottomPanelVisible && bp.activeBottomPanelTabId === TIMELINE_TAB;
+}
+
+function shotsSidebarActive() {
+  return app.extensionManager?.sidebarTab?.activeSidebarTabId === SHOTS_TAB;
+}
+
 function openTimelinePanel() {
   const cmd = app.extensionManager?.command;
   if (!cmd?.execute) return;
@@ -312,20 +378,46 @@ function openTimelinePanel() {
   cmd.execute(`Workspace.ToggleBottomPanelTab.${TIMELINE_TAB}`);
 }
 
-/** Open Timeline when the Shots sidebar panel becomes visible (not when leaving). */
+function closeTimelinePanel() {
+  const cmd = app.extensionManager?.command;
+  if (!cmd?.execute) return;
+  if (!timelineBottomTabActive()) return;
+  cmd.execute(`Workspace.ToggleBottomPanelTab.${TIMELINE_TAB}`);
+}
+
+/** Open Timeline when Shots becomes visible; close when Shots sidebar deactivates (if Timeline tab is active). */
 function bindShotsTabActivated(hostEl, onCleanup) {
   let wasShown = false;
-  const sync = () => {
+  const syncDom = () => {
     if (!hostEl.isConnected) return;
     const r = hostEl.getBoundingClientRect();
     const shown = r.width > 0 && r.height > 0 && hostEl.offsetParent !== null;
     if (shown && !wasShown) openTimelinePanel();
+    else if (wasShown && !shown && !shotsSidebarActive()) closeTimelinePanel();
     wasShown = shown;
   };
-  const io = new IntersectionObserver(() => sync(), { threshold: 0.01 });
+  const io = new IntersectionObserver(() => syncDom(), { threshold: 0.01 });
   io.observe(hostEl);
   onCleanup.push(() => io.disconnect());
-  requestAnimationFrame(sync);
+  requestAnimationFrame(syncDom);
+
+  const sidebar = app.extensionManager?.sidebarTab;
+  if (sidebar?.$subscribe) {
+    let prevId = sidebar.activeSidebarTabId;
+    const unsub = sidebar.$subscribe(() => {
+      const id = sidebar.activeSidebarTabId;
+      if (prevId === SHOTS_TAB && id !== SHOTS_TAB) closeTimelinePanel();
+      prevId = id;
+    });
+    onCleanup.push(() => {
+      unsub();
+      if (!shotsSidebarActive()) closeTimelinePanel();
+    });
+  } else {
+    onCleanup.push(() => {
+      if (!shotsSidebarActive()) closeTimelinePanel();
+    });
+  }
 }
 
 function paintSelection(root) {
