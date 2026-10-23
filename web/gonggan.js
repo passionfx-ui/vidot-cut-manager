@@ -5,6 +5,8 @@ import { api } from "../../scripts/api.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
+const TIMELINE_TAB = "gg-timeline";
+const SHOTS_TAB = "gg-shots";
 const bus = new EventTarget();
 const state = { projects: [], pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
 
@@ -298,6 +300,34 @@ function cutRowHtml(c) {
     </li>`;
 }
 
+function timelinePanelVisible() {
+  const el = document.querySelector(".gg-timeline");
+  return !!(el && el.isConnected && el.offsetParent);
+}
+
+function openTimelinePanel() {
+  const cmd = app.extensionManager?.command;
+  if (!cmd?.execute) return;
+  if (timelinePanelVisible()) return;
+  cmd.execute(`Workspace.ToggleBottomPanelTab.${TIMELINE_TAB}`);
+}
+
+/** Open Timeline when the Shots sidebar panel becomes visible (not when leaving). */
+function bindShotsTabActivated(hostEl, onCleanup) {
+  let wasShown = false;
+  const sync = () => {
+    if (!hostEl.isConnected) return;
+    const r = hostEl.getBoundingClientRect();
+    const shown = r.width > 0 && r.height > 0 && hostEl.offsetParent !== null;
+    if (shown && !wasShown) openTimelinePanel();
+    wasShown = shown;
+  };
+  const io = new IntersectionObserver(() => sync(), { threshold: 0.01 });
+  io.observe(hostEl);
+  onCleanup.push(() => io.disconnect());
+  requestAnimationFrame(sync);
+}
+
 function paintSelection(root) {
   root.querySelectorAll("[data-cut-id]").forEach((el) => {
     el.classList.toggle("gg-on", el.dataset.cutId === state.cutId);
@@ -466,6 +496,8 @@ function mountShots(el) {
   const root = document.createElement("div");
   root.className = "gg-root gg-shots";
   el.appendChild(root);
+  const extraCleanup = [];
+  bindShotsTabActivated(el, extraCleanup);
   // The sidebar host has no definite height; pin the root to the visible viewport so the
   // cut list scrolls and the cut panel stays at the bottom.
   const scroller = () => {
@@ -561,6 +593,7 @@ function mountShots(el) {
     });
     root.querySelectorAll(".gg-cut").forEach((li) => li.addEventListener("click", (e) => {
       selectCut(li.dataset.cutId, { multi: e.ctrlKey || e.metaKey });
+      openTimelinePanel();
       paintSelection(root);
       paintPanel();
     }));
@@ -586,6 +619,7 @@ function mountShots(el) {
     bus.removeEventListener("timeline", paint);
     bus.removeEventListener("select", onSel);
     bus.removeEventListener("sdk", paintPanel);
+    extraCleanup.forEach((fn) => fn());
   };
 }
 
@@ -1242,11 +1276,11 @@ function bindHoverPlay(root) {
 app.registerExtension({
   name: EXT,
   bottomPanelTabs: [
-    { id: "gg-timeline", title: "Timeline", type: "custom", icon: "pi pi-video", render: (el) => mountTimeline(el) },
+    { id: TIMELINE_TAB, title: "Timeline", type: "custom", icon: "pi pi-video", render: (el) => mountTimeline(el) },
   ],
   async setup() {
     app.extensionManager.registerSidebarTab({
-      id: "gg-shots",
+      id: SHOTS_TAB,
       icon: "pi pi-images",
       title: "Shots",
       tooltip: "공간쉐어 shot list",
