@@ -5,6 +5,7 @@ import { api } from "../../scripts/api.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
+const TIMELINE_TAB = "gg-timeline";
 const bus = new EventTarget();
 const state = { projects: [], pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", error: "" };
 
@@ -85,6 +86,18 @@ function selectCut(cutId) {
   bus.dispatchEvent(new Event("select"));
   const i = state.timeline ? state.timeline.cuts.findIndex((c) => c.id === cutId) : -1;
   if (i >= 0 && typeof seek === "function" && !play.on) seek(startOf(i) + 0.001);
+}
+
+function timelinePanelVisible() {
+  const el = document.querySelector(".gg-timeline");
+  return !!(el && el.isConnected && el.offsetParent);
+}
+
+function openTimelinePanel() {
+  const cmd = app.extensionManager?.command;
+  if (!cmd?.execute) return;
+  if (timelinePanelVisible()) return;
+  cmd.execute(`Workspace.ToggleBottomPanelTab.${TIMELINE_TAB}`);
 }
 
 function paintSelection(root) {
@@ -262,7 +275,10 @@ function mountShots(el) {
       <div class="gg-cutpanel"></div>`;
     root.querySelector(".gg-proj")?.addEventListener("change", (e) => selectProject(e.target.value));
     root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); });
-    root.querySelectorAll(".gg-cut").forEach((li) => li.addEventListener("click", () => selectCut(li.dataset.cutId)));
+    root.querySelectorAll(".gg-cut").forEach((li) => li.addEventListener("click", () => {
+      selectCut(li.dataset.cutId);
+      openTimelinePanel();
+    }));
     bindHoverPlay(root);
     paintSelection(root);
     paintPanel();
@@ -925,7 +941,7 @@ function bindHoverPlay(root) {
 app.registerExtension({
   name: EXT,
   bottomPanelTabs: [
-    { id: "gg-timeline", title: "Timeline", type: "custom", icon: "pi pi-video", render: (el) => mountTimeline(el) },
+    { id: TIMELINE_TAB, title: "Timeline", type: "custom", icon: "pi pi-video", render: (el) => mountTimeline(el) },
   ],
   async setup() {
     app.extensionManager.registerSidebarTab({
