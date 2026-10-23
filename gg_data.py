@@ -344,7 +344,8 @@ def timeline(pid: str) -> dict | None:
             e = None if not pick else {"pick": pick}
         cur_in, cur_sec = (e.get("in", seed_in), e.get("sec", seed_sec)) if e else (seed_in, seed_sec)
         vers = [{"id": v["id"], "kind": v["kind"], "source": v.get("source"), "model": v.get("model"),
-                 "created": v["mtime"]} for v in _versions_of(c, by_cut, jobs)]
+                 "created": v["mtime"], "seconds": v.get("seconds"), "width": v.get("width"),
+                 "height": v.get("height")} for v in _versions_of(c, by_cut, jobs)]
         cur_in, cur_sec = clamp_clip(kind, cur_in, cur_sec, src_dur)
         base.append({
             "index": i,                       # position in 공간쉐어 order
