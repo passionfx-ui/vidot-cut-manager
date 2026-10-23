@@ -183,6 +183,36 @@ def _notify_regen(job: dict) -> None:
 gg_sdk._notify = _notify_regen
 
 
+@routes.get("/gonggan/workflow")
+async def gg_workflow(request):
+    """API-format draft workflow for a cut (Shots/Timeline click → ComfyUI canvas). No queue."""
+    pid = request.query.get("pid", "")
+    cid = request.query.get("cut_id", "")
+    if not pid or not cid:
+        return _err(400, "pid and cut_id required")
+    seed = request.query.get("seed")
+    try:
+        seed = int(seed) if seed not in (None, "") else None
+    except (TypeError, ValueError):
+        return _err(400, "bad seed")
+    try:
+        p = await asyncio.to_thread(gg_sdk.cut_workflow, pid, cid, seed, save_file=False)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] workflow failed")
+        return _err(500, str(ex))
+    return web.json_response({
+        "ok": True,
+        "workflow": p["workflow"],
+        "seed": p["seed"],
+        "cut_no": p["cut_no"],
+        "cut_name": p["cut_name"],
+        "model": p["model"],
+        "approx_size": p["approx_size"],
+    })
+
+
 @routes.get("/gonggan/sdk/status")
 async def gg_sdk_status(request):
     force = request.query.get("force") == "1"

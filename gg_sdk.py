@@ -4,6 +4,7 @@ ComfyUI's own python never imports comfy_sdk. Generation only happens through re
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import os
@@ -124,7 +125,25 @@ def _draft_size(aspect: str) -> tuple[int, int]:
     return int(round(w / 8) * 8), int(round(h / 8) * 8)
 
 
-def plan(pid: str, cut_id: str, seed: int | None = None) -> dict:
+def _default_seed(pid: str, cut: dict) -> int:
+    pick = cut.get("pick")
+    if isinstance(pick, str) and gg_data.VER_ID_RE.fullmatch(pick):
+        vf = gg_data.VERSIONS_DIR / pid / cut["id"] / f"{pick}.json"
+        if vf.is_file():
+            try:
+                s = json.loads(vf.read_text(encoding="utf-8")).get("seed")
+                if isinstance(s, int) and not isinstance(s, bool):
+                    return s
+                if s is not None:
+                    return int(s)
+            except (OSError, ValueError, TypeError):
+                pass
+    h = hashlib.sha256(f"{pid}:{cut['id']}".encode()).hexdigest()
+    return int(h[:8], 16) % (2**31 - 1) or 1
+
+
+def cut_workflow(pid: str, cut_id: str, seed: int | None = None, *, save_file: bool = False) -> dict:
+    """Draft API-format workflow for a cut (canvas load / dry run). Never queues."""
     tl = gg_data.timeline(pid)
     if tl is None:
         raise ValueError("project not found")
@@ -135,19 +154,30 @@ def plan(pid: str, cut_id: str, seed: int | None = None) -> dict:
     if not prompt:
         raise ValueError("cut has no prompt in 공간쉐어")
     aspect = cut.get("prompt_aspect") if cut.get("prompt_aspect") in ASPECTS else "16:9"
-    seed = int(seed) if seed is not None else random.randint(1, 2**31 - 1)
+    if seed is None:
+        seed = _default_seed(pid, cut)
+    else:
+        seed = int(seed)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     prefix = f"gonggan_regen/{cut_id}_{stamp}"
     wf = build_draft_workflow(prompt, seed, aspect, prefix)
-    REGEN_DIR.mkdir(parents=True, exist_ok=True)
-    wf_file = REGEN_DIR / f"{pid}_{cut_id}_{stamp}.json"
-    wf_file.write_text(json.dumps(wf, ensure_ascii=False, indent=1), encoding="utf-8")
+    wf_file = ""
+    if save_file:
+        REGEN_DIR.mkdir(parents=True, exist_ok=True)
+        wf_file = str(REGEN_DIR / f"{pid}_{cut_id}_{stamp}.json")
+        Path(wf_file).write_text(json.dumps(wf, ensure_ascii=False, indent=1), encoding="utf-8")
     w, h = _draft_size(aspect)
     return {"pid": pid, "project": tl["project"]["name"], "cut_id": cut_id, "cut_no": cut["pos"] + 1,
             "cut_name": cut["name"], "model": DRAFT["model"], "unet": UNET, "lora": LORA,
             "steps": DRAFT["steps"], "cfg": DRAFT["cfg"], "sampler": DRAFT["sampler"],
             "megapixels": DRAFT["megapixels"], "aspect": aspect, "approx_size": f"{w}x{h}",
-            "seed": seed, "prompt": prompt, "workflow_file": str(wf_file), "output_node": "9", "workflow": wf}
+            "seed": seed, "prompt": prompt, "workflow_file": wf_file, "output_node": "9", "workflow": wf}
+
+
+def plan(pid: str, cut_id: str, seed: int | None = None) -> dict:
+    if seed is None:
+        seed = random.randint(1, 2**31 - 1)
+    return cut_workflow(pid, cut_id, seed, save_file=True)
 
 
 def dry_run(pid: str, cut_id: str, seed: int | None = None) -> dict:
