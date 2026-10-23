@@ -404,11 +404,34 @@ function applyPickLocally(c, vid) {
 
 async function setPick(cutId, vid) {
   const c = cutsNow().find((x) => x.id === cutId);
-  if (!c || !applyPickLocally(c, vid)) return;
+  if (!c) return;
+  const prev = {
+    pick: c.pick,
+    in: c.in,
+    sec: c.sec,
+    media: c.media ? { ...c.media } : null,
+    src_dur: c.src_dur,
+    edited: c.edited,
+  };
+  if (!applyPickLocally(c, vid)) return;
   bus.dispatchEvent(new Event("timeline"));
   bus.dispatchEvent(new Event("select"));
   clearTimeout(ed.saveTimer);
-  await saveEdit();
+  const ok = await saveEdit();
+  if (ok) return;
+  const v = (c.versions_list || []).find((x) => x.id === prev.pick);
+  c.pick = prev.pick;
+  c.media = prev.media || (v ? mediaFromVersion(v) : null);
+  c.src_dur = prev.src_dur;
+  c.in = prev.in;
+  c.sec = prev.sec;
+  c.edited = prev.edited;
+  recomputeCutStarts();
+  play.idx = -1;
+  bus.dispatchEvent(new Event("timeline"));
+  bus.dispatchEvent(new Event("select"));
+  const msg = (state.error || "").replace(/^Save failed:\s*/, "") || "unknown error";
+  ggToast("대표 저장 실패", `이전 버전으로 되돌림: ${msg}`, "warn");
 }
 
 async function regenCut(cutId) {
@@ -672,7 +695,7 @@ function scheduleSave() {
 
 async function saveEdit() {
   const tl = state.timeline;
-  if (!tl) return;
+  if (!tl) return true;
   ed.saving = true;
   bus.dispatchEvent(new Event("dirty"));
   const body = {
@@ -680,6 +703,7 @@ async function saveEdit() {
     order: tl.cuts.map((c) => c.id),
     clips: Object.fromEntries(tl.cuts.map((c) => [c.id, { in: c.in, sec: c.sec, pick: c.pick || null }])),
   };
+  let ok = true;
   try {
     const res = await api.fetchApi("/gonggan/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const data = await res.json();
@@ -689,10 +713,12 @@ async function saveEdit() {
       state.error = "";
     }
   } catch (e) {
+    ok = false;
     state.error = "Save failed: " + e.message;
   }
   ed.saving = false;
   bus.dispatchEvent(new Event("timeline"));
+  return ok;
 }
 
 async function resetEdit() {
