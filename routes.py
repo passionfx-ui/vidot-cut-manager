@@ -9,6 +9,7 @@ from server import PromptServer
 
 from . import gg_data
 from . import gg_template
+from . import gg_wfstore
 
 routes = PromptServer.instance.routes
 log = logging.getLogger("gonggan-cut")
@@ -236,6 +237,58 @@ async def gg_template_post(request):
         log.exception("[gonggan-cut] template save failed")
         return _err(500, str(ex))
     return web.json_response({"ok": True, "path": str(path)})
+
+
+@routes.get("/gonggan/version-workflow")
+async def gg_version_workflow(request):
+    pid = request.query.get("pid", "")
+    cut = request.query.get("cut", "")
+    vid = request.query.get("vid", "")
+    if not pid or not cut or not vid:
+        return _err(400, "pid, cut, and vid required")
+    try:
+        rec = await asyncio.to_thread(gg_wfstore.get_version_workflow, pid, cut, vid)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] version-workflow failed")
+        return _err(500, str(ex))
+    if rec is None:
+        return _err(404, "workflow not found")
+    return web.json_response({"ok": True, **rec})
+
+
+@routes.get("/gonggan/cut-source-workflow")
+async def gg_cut_source_workflow(request):
+    pid = request.query.get("pid", "")
+    cut = request.query.get("cut", "")
+    if not pid or not cut:
+        return _err(400, "pid and cut required")
+    try:
+        data = await asyncio.to_thread(gg_wfstore.cut_source_workflow, pid, cut)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] cut-source-workflow failed")
+        return _err(500, str(ex))
+    return web.json_response(data)
+
+
+@routes.post("/gonggan/wfstore/backfill")
+async def gg_wfstore_backfill(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if pid is not None and not isinstance(pid, str):
+        return _err(400, "pid must be a string")
+    dry_run = bool(data.get("dry_run"))
+    try:
+        counts = await asyncio.to_thread(gg_wfstore.backfill, pid, dry_run)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] wfstore backfill failed")
+        return _err(500, str(ex))
+    return web.json_response({"ok": True, "counts": counts, "dry_run": dry_run})
 
 
 @routes.get("/gonggan/workflow")
