@@ -23,11 +23,20 @@ Each project can store one ComfyUI workflow under the pack folder `templates/<pr
 
 - In the **Shots** header: **Save canvas as template** writes `app.graph.serialize()` for the selected project; **Load template file** imports a `.json` (UI graph or API-format workflow).
 - A small dot next to the project picker lights up when a template exists.
-- Clicking a shot loads that cut's draft workflow when the cut has a prompt; if the cut is empty (no prompt, `/gonggan/workflow` 400) and the project has a template, the template opens on the shared `gonggan-shot` tab instead (toast: `template`).
+
+## Per-version workflow store (0.4.0)
+Each pack version under `versions/<pid>/<cut_id>/` can have a sidecar workflow file at `workflows/<pid>/<cut_id>/<vid>.workflow.json` (gitignored). It stores the UI graph and/or API prompt used for that take (`source`: `generated` or `png-backfill`). New SDK/send-output versions save automatically; existing PNGs can be backfilled without modifying the PNG bytes.
+
+CLI (no server): `python -m gg_wfstore backfill [--dry-run] [--pid <project id>]` or `python tools/backfill_workflows.py …`
+
+Shot click workflow load order: **stored version** → **project template** → **draft** (`/gonggan/workflow`). Toast shows which source was used. If the server has not been restarted yet (new routes 404), the UI falls back to the pre-0.4.0 draft→template chain.
 
 Routes:
 - `GET /gonggan/template?pid=<project id>` → `{ok, exists, workflow}`
 - `POST /gonggan/template` `{pid, workflow}` → `{ok, path}`
+- `GET /gonggan/version-workflow?pid=&cut=&vid=` → stored record for one version
+- `GET /gonggan/cut-source-workflow?pid=&cut=` → `{ok, source, workflow, kind}` (`stored`|`template`|`draft`|null)
+- `POST /gonggan/wfstore/backfill` `{pid?, dry_run?}` → `{ok, counts}`
 
 ## Install (dev)
 `mklink /J C:\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-gonggan-cut C:\dev\comfyui-gonggan-cut`
@@ -57,6 +66,7 @@ Tested with Python 3.13.6, comfy-sdk 0.5.0, comfy-api-proxy 0.1.6.
 
 ## Changelog
 
+- **0.4.0** — Per-version workflow JSON under `workflows/`; generation-time save; PNG metadata backfill; `cut-source-workflow` resolver (stored → template → draft).
 - **0.3.0** — Per-project workflow template (save canvas / load JSON, indicator dot). Empty cuts fall back to the project template on shot click (ordered resolver; cut workflow always wins when available).
 - **0.2.2** — Shot click reuses one gonggan workflow tab (no tab pile-up); debounced. Closing the Shots panel also closes the Timeline panel.
 - **0.2.1** — Promote save-failure rollback + warn toast; wider trim hit zones at clip edges.
