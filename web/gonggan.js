@@ -121,11 +121,48 @@ async function postJson(route, body) {
   return data;
 }
 
-async function setPick(cutId, vid) {
+function repIdOf(c) {
+  return (c && (c.pick || (c.media && c.media.id))) || "";
+}
+
+function mediaFromVersion(v) {
+  if (!v) return null;
+  return { id: v.id, kind: v.kind, width: v.width, height: v.height, seconds: v.seconds, model: v.model, source: v.source };
+}
+
+function recomputeCutStarts() {
   const tl = state.timeline;
-  const c = tl && tl.cuts.find((x) => x.id === cutId);
-  if (!c) return;
+  if (!tl) return;
+  let at = 0;
+  for (const c of tl.cuts) {
+    c.start = r2(at);
+    at += c.sec;
+  }
+  tl.total_sec = r2(at);
+}
+
+/** Optimistic promote: swap timeline media + clamp trim, then persist via /gonggan/edit. */
+function applyPickLocally(c, vid) {
+  if (!c || !vid || repIdOf(c) === vid) return false;
+  const v = (c.versions_list || []).find((x) => x.id === vid);
+  if (!v) return false;
   c.pick = vid;
+  c.media = mediaFromVersion(v);
+  c.src_dur = v.kind === "video" ? Math.max(0, Number(v.seconds) || 0) : 0;
+  const clamped = clampClip(c, c.in, c.sec);
+  c.in = clamped.in;
+  c.sec = clamped.sec;
+  c.edited = true;
+  recomputeCutStarts();
+  play.idx = -1;
+  return true;
+}
+
+async function setPick(cutId, vid) {
+  const c = cutsNow().find((x) => x.id === cutId);
+  if (!c || !applyPickLocally(c, vid)) return;
+  bus.dispatchEvent(new Event("timeline"));
+  bus.dispatchEvent(new Event("select"));
   clearTimeout(ed.saveTimer);
   await saveEdit();
 }
@@ -180,11 +217,20 @@ api.addEventListener("gonggan.regen", (e) => {
 
 function cutPanelHtml(c) {
   if (!c) return `<div class="gg-panel-empty">Select a cut for versions and actions.</div>`;
-  const cur = c.media ? c.media.id : "";
-  const vers = (c.versions_list || []).map((v) => `
-    <button class="gg-ver${v.id === cur ? " gg-on" : ""}" data-vid="${esc(v.id)}" title="${esc(`${fmtSrc(v.source)} · ${v.model || ""} · ${new Date(v.created * 1000).toLocaleString()}`)}">
-      <img src="${esc(posterUrl(v.id))}" loading="lazy" alt="" /><span class="gg-ver-src gg-src-${esc(v.source)}">${esc(fmtSrc(v.source))}</span>
-    </button>`).join("");
+  const rep = repIdOf(c);
+  const vers = (c.versions_list || []).map((v) => {
+    const on = v.id === rep;
+    const tip = `${fmtSrc(v.source)} · ${v.model || ""} · ${new Date(v.created * 1000).toLocaleString()}`;
+    return `
+    <div class="gg-ver-wrap${on ? " gg-rep" : ""}" data-vid="${esc(v.id)}">
+      <div class="gg-ver" title="${esc(tip)}">
+        <img src="${esc(posterUrl(v.id))}" loading="lazy" alt="" />
+        <span class="gg-ver-src gg-src-${esc(v.source)}">${esc(fmtSrc(v.source))}</span>
+        ${on ? '<span class="gg-ver-rep">대표</span>' : ""}
+      </div>
+      <button type="button" class="gg-btn gg-promote${on ? " gg-on" : ""}" ${on ? "disabled" : ""} title="${on ? "타임라인에 쓰는 대표 버전" : "이 버전을 타임라인 대표로"}">${on ? "대표" : "대표로"}</button>
+    </div>`;
+  }).join("");
   return `
     <div class="gg-panel-title"><span class="gg-no">${c.pos + 1}</span>${esc(c.name)}</div>
     <div class="gg-vers">${vers || '<span class="gg-dim">no versions yet</span>'}</div>
@@ -232,7 +278,11 @@ function mountShots(el) {
     if (!panel) return;
     const c = state.timeline && state.timeline.cuts.find((x) => x.id === state.cutId);
     panel.innerHTML = cutPanelHtml(c);
-    panel.querySelectorAll(".gg-ver").forEach((b) => b.addEventListener("click", () => setPick(c.id, b.dataset.vid)));
+    panel.querySelectorAll(".gg-promote").forEach((b) => b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wrap = b.closest(".gg-ver-wrap");
+      if (!b.disabled && wrap) setPick(c.id, wrap.dataset.vid);
+    }));
     panel.querySelector(".gg-regen")?.addEventListener("click", () => regenCut(c.id));
     panel.querySelector(".gg-send")?.addEventListener("click", () => sendLastOutput(c.id));
   };
