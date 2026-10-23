@@ -28,6 +28,8 @@
   - 빈에서 끌어서 타임라인에 놓고 → 자르고 → 내보내기
   - 프로젝트/컷 관리는 원하는 사람만 쓰는 선택 기능.
   사용자 반응은 긍정적("좀더 다듬으면 너무 좋은 기능"). 다음 작업 1순위 후보.
+- **2026-10-24: 씬(Scene) = 컷 그룹.** UI 라벨은 **씬/Scene**. 데이터 모델: **프로젝트 > 씬(프로젝트별) > 샷(Shot)**. **샷** = 선택된 결과 미디어(영상/이미지) + 그걸 만든 워크플로/버전 한 묶음. 초기 씬 구성은 공간쉐어 `cut.scene` / `cut.scene_id` 연속 구간에서 읽고, 사용자가 만든 씬·이름·재배치·접기 상태는 팩 `edits/edit_<pid>.json`의 `groups: [{id,name,cut_ids,collapsed}]`에만 저장(타임라인 순서/trim `reset`과 별개로 유지). `POST /gonggan/groups`로 저장·검증.
+- **2026-10-24: 제품 원칙 — "정리를 같이 하면서 만드는 UI".** 새 결과가 해당 샷/씬에 바로 붙고, 승격(pick)·씬 묶기·순서 변경을 결과가 보이는 곳에서 한 번에. 따로 정리 단계 없음.
 - 저장소: 이 비공개 저장소는 개발용(전체 기록 + 맥락). 공개는 **새 공개 저장소에 깨끗한 코드만 한 커밋으로**.
 - 팩/저장소 이름은 아직 임시. 10/26 이전(README·데모 전)에 확정 예정. 바꿀 때 저장소·폴더·탭 이름을 함께 바꿀 것.
 
@@ -71,7 +73,8 @@ UI:
 
 라우트:
 - `GET /gonggan/settings`, `/projects`, `/timeline?pid=`, `/media?id=`(data_root/uid 안으로 제한), `/poster?id=`(ffmpeg 썸네일 → cache)
-- `POST /gonggan/edit`(순서+trim을 `edits/edit_<pid>.json`에 저장, 실제 길이에 맞춰 clamp), `POST /gonggan/edit/reset`(기존 파일을 `.reset-<ts>.json`으로 이름 변경)
+- `POST /gonggan/edit`(순서+trim을 `edits/edit_<pid>.json`에 저장, 실제 길이에 맞춰 clamp), `POST /gonggan/edit/reset`(기존 파일을 `.reset-<ts>.json`으로 이름 변경; `groups`는 백업 파일에 같이 들어감)
+- `POST /gonggan/groups` — 씬(컷 그룹) 생성·이름·삭제(컷만 미분류)·할당·접기; `groups` 배열 전체 저장, `cut_ids`는 프로젝트 컷만 허용
 - `POST /gonggan/export`, `GET /export/status`, `POST /export/cancel`, `GET /export/file` → 결과 `ComfyUI\output\gonggan\`
 - `GET /gonggan/sdk/status`, `POST /gonggan/regen`(기본 드라이런, `{"dry_run": false, "confirm": true, "seed": ...}`일 때만 큐), `GET /regen/status`
 - `GET /gonggan/last-output`, `POST /gonggan/send-output`(ComfyUI 마지막 결과를 컷 버전으로 복사)
