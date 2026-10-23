@@ -109,6 +109,26 @@ async def gg_edit(request):
     return web.json_response(tl)
 
 
+@routes.post("/gonggan/groups")
+async def gg_groups(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    if "groups" not in data:
+        return _err(400, "groups required")
+    try:
+        tl = await asyncio.to_thread(gg_data.save_groups, pid, data.get("groups"))
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] groups save failed")
+        return _err(500, str(ex))
+    if tl is None:
+        return _err(404, "project not found")
+    return web.json_response(tl)
+
+
 @routes.post("/gonggan/edit/reset")
 async def gg_edit_reset(request):
     data = await _json_body(request)

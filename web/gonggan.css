@@ -12,7 +12,18 @@
 .gg-shots .gg-head { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--gg-line); }
 .gg-shots .gg-proj { flex: 1; min-width: 0; background: var(--gg-panel); color: var(--gg-fg); border: 1px solid var(--gg-line); border-radius: 4px; padding: 3px 4px; }
 .gg-shots .gg-meta { padding: 4px 10px; color: var(--gg-dim); }
-.gg-shots .gg-cutlist { list-style: none; margin: 0; padding: 0 6px 10px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+.gg-shots .gg-grp-wrap { overflow-y: auto; flex: 1 1 auto; min-height: 0; padding: 0 4px 6px; }
+.gg-shots .gg-grp-sec { margin-bottom: 6px; border: 1px solid var(--gg-line); border-radius: 6px; overflow: hidden; border-left: 3px solid hsl(var(--gg-grp, 200) 55% 48%); }
+.gg-shots .gg-grp-loose { border-left-color: var(--gg-dim); }
+.gg-shots .gg-grp-head { display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: var(--gg-panel); font-size: 11px; }
+.gg-shots .gg-grp-fold, .gg-shots .gg-grp-ren, .gg-shots .gg-grp-del { background: transparent; border: none; color: var(--gg-dim); cursor: pointer; padding: 0 4px; }
+.gg-shots .gg-grp-fold:hover, .gg-shots .gg-grp-ren:hover, .gg-shots .gg-grp-del:hover { color: var(--gg-acc); }
+.gg-shots .gg-grp-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.gg-shots .gg-grp-meta { color: var(--gg-dim); font-variant-numeric: tabular-nums; }
+.gg-shots .gg-selbar { margin: 0 8px 4px; padding: 4px 6px; border-radius: 4px; background: #2c2a22; border: 1px solid var(--gg-acc); font-size: 11px; }
+.gg-shots .gg-cutlist { list-style: none; margin: 0; padding: 0 6px 6px; }
+.gg-shots .gg-cut.gg-sel { outline: 1px dashed var(--gg-acc); }
+.gg-shots .gg-scene-actions { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 0 6px; }
 .gg-shots .gg-cut { display: flex; gap: 8px; align-items: center; padding: 4px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
 .gg-shots .gg-cut:hover { background: var(--gg-panel); }
 .gg-shots .gg-cut.gg-on { border-color: var(--gg-acc); background: #2c2a22; }
@@ -51,6 +62,9 @@
 .gg-timeline .gg-track { display: flex; height: clamp(84px, calc(100% - 40px), 150px); margin-top: 6px; }
 .gg-timeline .gg-clip { position: relative; flex: 0 0 auto; box-sizing: border-box; height: 100%; overflow: hidden; border: 1px solid #0b0c0e; border-radius: 4px; background: #2b3d55; cursor: grab; user-select: none; touch-action: none; }
 .gg-timeline .gg-clip-video { background: #3b2b55; }
+.gg-timeline .gg-clip.gg-in-scene { box-shadow: inset 0 3px 0 hsl(var(--gg-grp, 200) 50% 42% / .85); }
+.gg-timeline .gg-scene-band { position: absolute; left: 0; right: 0; top: 0; z-index: 2; font-size: 9px; padding: 1px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: hsl(var(--gg-grp, 200) 45% 32% / .92); pointer-events: none; }
+.gg-timeline .gg-scene-start .gg-clip-label { top: 14px; }
 .gg-timeline .gg-clip.gg-moved { box-shadow: inset 0 -3px 0 #4bb3f2; }
 .gg-timeline .gg-clip.gg-on { outline: 2px solid var(--gg-acc); outline-offset: -2px; z-index: 1; }
 .gg-timeline .gg-clip.gg-play { box-shadow: inset 0 0 0 2px #6ee07a; }

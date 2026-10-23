@@ -232,6 +232,8 @@ def list_projects() -> dict:
 
 EDITS_DIR = PACK_DIR / "edits"                                # pack-local edit decisions (never the data root)
 PID_RE = re.compile(r"^[A-Za-z0-9_-]{2,64}$")
+GID_RE = re.compile(r"^[A-Za-z0-9_-]{2,64}$")
+SCENE_NAME_MAX = 40
 IMG_MIN, IMG_MAX = 0.5, 60.0
 VID_MIN = 0.2
 _dur_cache: dict = {}
@@ -315,6 +317,89 @@ def load_edit(pid: str) -> dict | None:
         return None
 
 
+def _atomic_edit_write(pid: str, data: dict) -> None:
+    f = _edit_file(pid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(f)
+
+
+def _scene_id_of(cut: dict) -> str:
+    if not cut.get("scene"):
+        return ""
+    sid = cut.get("scene_id") or ""
+    return sid if isinstance(sid, str) and sid else f"L{cut.get('id', '')}"
+
+
+def default_groups_from_cuts(src_cuts: list) -> list:
+    """Initial scene groups from 공간쉐어 cut.scene / cut.scene_id (consecutive runs)."""
+    groups: list = []
+    cur: dict | None = None
+    for c in src_cuts:
+        sid = _scene_id_of(c)
+        cid = c.get("id")
+        if not sid or not cid:
+            cur = None
+            continue
+        title = str(c.get("scene") or "").strip()[:SCENE_NAME_MAX] or "씬"
+        if cur and cur["id"] == sid:
+            cur["cut_ids"].append(cid)
+        else:
+            cur = {"id": sid, "name": title, "cut_ids": [cid], "collapsed": False}
+            groups.append(cur)
+    return groups
+
+
+def _sort_cut_ids(cut_ids: list, order: list) -> list:
+    rank = {cid: i for i, cid in enumerate(order)}
+    return sorted(cut_ids, key=lambda x: rank.get(x, 10**9))
+
+
+def _parse_groups(raw, valid_cut_ids: set, order: list) -> list | None:
+    if not isinstance(raw, list):
+        return None
+    seen: set = set()
+    out: list = []
+    for g in raw:
+        if not isinstance(g, dict):
+            continue
+        gid = str(g.get("id") or "").strip()
+        if not GID_RE.fullmatch(gid):
+            continue
+        name = str(g.get("name") or "").strip()[:SCENE_NAME_MAX] or "씬"
+        cut_ids = []
+        for cid in g.get("cut_ids") or []:
+            if isinstance(cid, str) and cid in valid_cut_ids and cid not in seen:
+                cut_ids.append(cid)
+                seen.add(cid)
+        if not cut_ids:
+            continue
+        out.append({
+            "id": gid,
+            "name": name,
+            "cut_ids": _sort_cut_ids(cut_ids, order),
+            "collapsed": bool(g.get("collapsed")),
+        })
+    return out
+
+
+def effective_groups(pid: str, proj: dict | None, edit: dict | None, timeline_order: list) -> list:
+    src_cuts = (proj or {}).get("cuts") or []
+    valid = {c.get("id") for c in src_cuts if c.get("id")}
+    if edit and isinstance(edit.get("groups"), list):
+        parsed = _parse_groups(edit["groups"], valid, timeline_order)
+        return parsed if parsed is not None else []
+    base = default_groups_from_cuts(src_cuts)
+    for g in base:
+        g["cut_ids"] = _sort_cut_ids(g["cut_ids"], timeline_order)
+    return base
+
+
+def groups_customized(edit: dict | None) -> bool:
+    return bool(edit and isinstance(edit.get("groups"), list))
+
+
 def _find_project(pid: str):
     d = user_dir()
     ws = _load_workspace(d)
@@ -371,17 +456,24 @@ def timeline(pid: str) -> dict | None:
     order = [x for x in (edit.get("order") or []) if x in by_id]
     seen = set(order)
     order += [c["id"] for c in base if c["id"] not in seen]   # new cuts in 공간쉐어 go to the end
+    groups = effective_groups(pid, proj, edit, order)
+    cut_to_group = {cid: g["id"] for g in groups for cid in g["cut_ids"]}
     cuts = []
     at = 0.0
     for pos, cid in enumerate(dict.fromkeys(order)):
         c = by_id[cid]
         c["pos"] = pos
         c["start"] = _round(at)
+        gid = cut_to_group.get(cid) or ""
+        g = next((x for x in groups if x["id"] == gid), None)
+        c["group_id"] = gid
+        c["group_name"] = g["name"] if g else ""
         at += c["sec"]
         cuts.append(c)
     return {"ok": True, "project": {"id": proj.get("id"), "name": proj.get("name") or "",
                                     "logline": proj.get("logline") or ""},
-            "cuts": cuts, "total_sec": _round(at),
+            "cuts": cuts, "groups": groups, "groups_customized": groups_customized(edit),
+            "total_sec": _round(at),
             "edited": bool(edit), "edit_updated_at": edit.get("updated_at")}
 
 
@@ -411,13 +503,48 @@ def save_edit(pid: str, order, clips) -> dict | None:
             src_dur = media_duration(_all_media(user_dir()).get(pick))
         i, sec = clamp_clip(kind, e.get("in", c["in"]), e.get("sec", c["sec"]), src_dur)
         out_clips[cid] = {"in": i, "sec": sec, **({"pick": pick} if pick else {})}
+    old = load_edit(pid) or {}
     data = {"version": 1, "pid": pid, "order": order, "clips": out_clips, "updated_at": time.time()}
-    f = _edit_file(pid)
-    f.parent.mkdir(parents=True, exist_ok=True)
-    tmp = f.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(f)
+    if isinstance(old.get("groups"), list):
+        data["groups"] = old["groups"]
+    _atomic_edit_write(pid, data)
     return timeline(pid)
+
+
+def save_groups(pid: str, groups) -> dict | None:
+    """Persist scene/cut groups in edits/edit_<pid>.json (does not change timeline order/trims)."""
+    import time
+    d, proj = _find_project(pid)
+    if not proj:
+        return None
+    valid = {c.get("id") for c in (proj.get("cuts") or []) if c.get("id")}
+    tl = timeline(pid)
+    if tl is None:
+        return None
+    order = [c["id"] for c in tl["cuts"]]
+    parsed = _parse_groups(groups, valid, order)
+    if parsed is None:
+        raise ValueError("groups must be a list")
+    old = load_edit(pid) or {}
+    clips = old.get("clips") if isinstance(old.get("clips"), dict) else {}
+    if not clips:
+        clips = {c["id"]: {"in": c["in"], "sec": c["sec"], **({"pick": c["pick"]} if c.get("pick") else {})}
+                 for c in tl["cuts"]}
+    ord_saved = old.get("order") if isinstance(old.get("order"), list) else order
+    ord_saved = [x for x in ord_saved if x in valid]
+    ord_saved += [cid for cid in order if cid not in ord_saved]
+    data = {
+        "version": 1, "pid": pid, "order": ord_saved, "clips": clips,
+        "groups": parsed, "updated_at": time.time(),
+    }
+    _atomic_edit_write(pid, data)
+    return timeline(pid)
+
+
+def new_group_id() -> str:
+    import secrets
+    import time
+    return f"s{int(time.time() * 1000)}_{secrets.token_hex(3)}"
 
 
 def reset_edit(pid: str) -> dict | None:
