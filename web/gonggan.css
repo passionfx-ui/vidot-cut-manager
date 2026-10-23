@@ -110,6 +110,17 @@
 .gg-shots .gg-cutpanel { border-top: 1px solid var(--gg-line); padding: 8px; flex: 0 0 auto; max-height: 45%; overflow-y: auto; background: #1f2228; }
 .gg-shots .gg-panel-empty, .gg-root .gg-dim { color: var(--gg-dim); font-size: 11px; }
 .gg-shots .gg-panel-title { font-weight: 600; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gg-shots .gg-panel-preview { margin-bottom: 8px; border-radius: 4px; overflow: hidden; background: #000; max-height: 160px; }
+.gg-shots .gg-panel-preview-empty { padding: 12px 8px; text-align: center; color: var(--gg-dim); font-size: 11px; background: repeating-linear-gradient(45deg, #2a2d33 0 6px, #24272c 6px 12px); }
+.gg-shots .gg-panel-img, .gg-shots .gg-panel-vid { display: block; width: 100%; max-height: 160px; object-fit: contain; }
+.gg-toast-host { position: fixed; right: 12px; bottom: 12px; z-index: 10000; max-width: min(420px, calc(100vw - 24px)); pointer-events: none; }
+.gg-toast-host[hidden] { display: none !important; }
+.gg-toast { padding: 10px 12px; border-radius: 6px; background: #2a2f38; border: 1px solid var(--gg-line); color: var(--gg-fg); font: 12px/1.35 system-ui, "Segoe UI", "Malgun Gothic", sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.45); }
+.gg-toast-sum { display: block; font-weight: 600; color: var(--gg-acc); margin-bottom: 2px; }
+.gg-toast-detail { display: block; color: #d8dce2; word-break: break-word; }
+.gg-toast-ok { border-color: #3d6b42; }
+.gg-toast-warn { border-color: #8a6b3d; }
+.gg-toast-warn .gg-toast-sum { color: #f2b84b; }
 .gg-shots .gg-vers { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
 .gg-shots .gg-ver { position: relative; width: 64px; height: 36px; padding: 0; border: 1px solid var(--gg-line); border-radius: 3px; overflow: hidden; background: #000; cursor: pointer; }
 .gg-shots .gg-ver img { width: 100%; height: 100%; object-fit: cover; display: block; }

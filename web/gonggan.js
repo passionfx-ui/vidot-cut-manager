@@ -81,8 +81,72 @@ function selectProject(pid) {
   loadTimeline();
 }
 
+let wfLoadGen = 0;
+let ggToastTimer = 0;
+
+function ggToast(summary, detail, kind = "info") {
+  let host = document.getElementById("gg-toast-host");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "gg-toast-host";
+    host.className = "gg-toast-host";
+    document.body.appendChild(host);
+  }
+  clearTimeout(ggToastTimer);
+  host.innerHTML = `<div class="gg-toast gg-toast-${kind}"><span class="gg-toast-sum">${esc(summary)}</span><span class="gg-toast-detail">${esc(detail)}</span></div>`;
+  host.hidden = false;
+  ggToastTimer = setTimeout(() => { host.hidden = true; }, 4500);
+}
+
+function cutById(cutId) {
+  const tl = state.timeline;
+  return tl ? tl.cuts.find((c) => c.id === cutId) : null;
+}
+
+function shotTitle(c) {
+  if (!c) return "";
+  return `${(c.pos ?? c.index) + 1}. ${c.name || "(untitled)"}`;
+}
+
+function panelPreviewHtml(c) {
+  if (!c || !c.media) return `<div class="gg-panel-preview gg-panel-preview-empty">No media for this shot yet.</div>`;
+  const url = esc(mediaUrl(c.media.id));
+  if (c.media.kind === "video") {
+    return `<div class="gg-panel-preview"><video class="gg-panel-vid" src="${url}" poster="${esc(posterUrl(c.media.id))}" controls muted playsinline preload="metadata"></video></div>`;
+  }
+  return `<div class="gg-panel-preview"><img class="gg-panel-img" src="${url}" alt="" decoding="async" /></div>`;
+}
+
+async function loadCutWorkflow(cutId, cut) {
+  const tl = state.timeline;
+  if (!tl || !cutId) return;
+  const gen = ++wfLoadGen;
+  const title = shotTitle(cut || cutById(cutId));
+  try {
+    const q = `/gonggan/workflow?pid=${encodeURIComponent(tl.project.id)}&cut_id=${encodeURIComponent(cutId)}`;
+    const d = await getJson(q);
+    if (gen !== wfLoadGen) return;
+    const label = `gonggan-cut-${d.cut_no || cutId}.json`;
+    if (app.extensionManager?.workflow?.activeWorkflow?.isModified && !confirm("Current workflow has unsaved changes. Load this shot's workflow anyway?")) return;
+    if (typeof app.loadApiJson === "function") app.loadApiJson(d.workflow, label);
+    else if (typeof app.loadGraphData === "function") await app.loadGraphData(d.workflow, true, true, label);
+    sdk.msg = `Canvas: ${d.cut_no}. ${d.cut_name} · ${d.model} · seed ${d.seed}`;
+    bus.dispatchEvent(new Event("sdk"));
+    ggToast("Shot", `${title} — asset + workflow on canvas`, "ok");
+  } catch (e) {
+    if (gen !== wfLoadGen) return;
+    const hasMedia = cut && cut.media;
+    sdk.msg = hasMedia
+      ? `Shot: ${title} (preview — no workflow: ${e.message})`
+      : `Shot: ${title} — ${e.message}`;
+    bus.dispatchEvent(new Event("sdk"));
+    ggToast("Shot", hasMedia ? `${title} — preview only (${e.message})` : `${title} — ${e.message}`, "warn");
+  }
+}
+
 function selectCut(cutId, opts) {
   const multi = opts && opts.multi;
+  const cut = cutById(cutId);
   if (multi) {
     if (state.cutSel.has(cutId)) state.cutSel.delete(cutId);
     else state.cutSel.add(cutId);
@@ -92,7 +156,11 @@ function selectCut(cutId, opts) {
   state.cutId = cutId;
   bus.dispatchEvent(new Event("select"));
   const i = state.timeline ? state.timeline.cuts.findIndex((c) => c.id === cutId) : -1;
-  if (i >= 0 && typeof seek === "function" && !play.on) seek(startOf(i) + 0.001);
+  if (i >= 0 && typeof seek === "function" && !play.on) {
+    play.idx = -1;
+    seek(startOf(i) + 0.001);
+  }
+  if (!multi) loadCutWorkflow(cutId, cut);
 }
 
 function cutSelIds() {
@@ -333,6 +401,7 @@ function cutPanelHtml(c) {
     </button>`).join("");
   return `
     <div class="gg-panel-title"><span class="gg-no">${c.pos + 1}</span>${esc(c.name)}</div>
+    ${panelPreviewHtml(c)}
     <div class="gg-vers">${vers || '<span class="gg-dim">no versions yet</span>'}</div>
     <div class="gg-scene-actions">
       <button class="gg-btn gg-scene-new" type="button" title="선택한 샷을 새 씬(Scene)으로 묶기">+ 씬</button>
@@ -976,7 +1045,17 @@ function mountTimeline(el) {
   };
   const onTimeline = () => { if (!ed.dragging) paintTrack(); };
   const onDirty = () => paintRuler(root);
-  const onSel = () => paintSelection(root);
+  const onSel = () => {
+    paintSelection(root);
+    if (!play.on && state.cutId) {
+      const idx = cutsNow().findIndex((c) => c.id === state.cutId);
+      if (idx >= 0) {
+        play.idx = -1;
+        play.t = startOf(idx) + 0.001;
+        showFrame(true);
+      }
+    }
+  };
   const onProjects = () => { stopPlay(); play.t = 0; };
   bus.addEventListener("timeline", onTimeline);
   bus.addEventListener("projects", onProjects);
