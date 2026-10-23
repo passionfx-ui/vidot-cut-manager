@@ -8,6 +8,7 @@ from aiohttp import web
 from server import PromptServer
 
 from . import gg_data
+from . import gg_template
 
 routes = PromptServer.instance.routes
 log = logging.getLogger("gonggan-cut")
@@ -201,6 +202,40 @@ def _notify_regen(job: dict) -> None:
 
 
 gg_sdk._notify = _notify_regen
+
+
+@routes.get("/gonggan/template")
+async def gg_template_get(request):
+    pid = request.query.get("pid", "")
+    if not pid:
+        return _err(400, "pid required")
+    try:
+        wf = await asyncio.to_thread(gg_template.get_template, pid)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] template get failed")
+        return _err(500, str(ex))
+    return web.json_response({"ok": True, "exists": wf is not None, "workflow": wf})
+
+
+@routes.post("/gonggan/template")
+async def gg_template_post(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    workflow = data.get("workflow")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    if not isinstance(workflow, dict):
+        return _err(400, "workflow required")
+    try:
+        path = await asyncio.to_thread(gg_template.save_template, pid, workflow)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] template save failed")
+        return _err(500, str(ex))
+    return web.json_response({"ok": True, "path": str(path)})
 
 
 @routes.get("/gonggan/workflow")

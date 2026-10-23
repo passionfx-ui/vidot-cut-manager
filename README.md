@@ -18,6 +18,17 @@ Copy `gonggan_settings.default.json` to `gonggan_settings.json` (gitignored) and
 
 All routes are also available under `/api/gonggan/*`.
 
+## Project workflow template (0.3.0)
+Each project can store one ComfyUI workflow under the pack folder `templates/<project_id>.json` (gitignored in normal use).
+
+- In the **Shots** header: **Save canvas as template** writes `app.graph.serialize()` for the selected project; **Load template file** imports a `.json` (UI graph or API-format workflow).
+- A small dot next to the project picker lights up when a template exists.
+- Clicking a shot loads that cut's draft workflow when the cut has a prompt; if the cut is empty (no prompt, `/gonggan/workflow` 400) and the project has a template, the template opens on the shared `gonggan-shot` tab instead (toast: `template`).
+
+Routes:
+- `GET /gonggan/template?pid=<project id>` → `{ok, exists, workflow}`
+- `POST /gonggan/template` `{pid, workflow}` → `{ok, path}`
+
 ## Install (dev)
 `mklink /J C:\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-gonggan-cut C:\dev\comfyui-gonggan-cut`
 
@@ -46,6 +57,7 @@ Tested with Python 3.13.6, comfy-sdk 0.5.0, comfy-api-proxy 0.1.6.
 
 ## Changelog
 
+- **0.3.0** — Per-project workflow template (save canvas / load JSON, indicator dot). Empty cuts fall back to the project template on shot click (ordered resolver; cut workflow always wins when available).
 - **0.2.2** — Shot click reuses one gonggan workflow tab (no tab pile-up); debounced. Closing the Shots panel also closes the Timeline panel.
 - **0.2.1** — Promote save-failure rollback + warn toast; wider trim hit zones at clip edges.
 - **0.2.0** — Integration: shot click → canvas, scenes/groups, Shots → Timeline tab, promote (대표), trim cursors.

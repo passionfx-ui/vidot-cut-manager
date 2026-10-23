@@ -81,6 +81,7 @@ function selectProject(pid) {
   wfLastLoadedCutId = "";
   localStorage.setItem(PID_KEY, pid);
   bus.dispatchEvent(new Event("projects"));
+  refreshProjectTemplateFlag();
   loadTimeline();
 }
 
@@ -123,20 +124,34 @@ async function ensureDedicatedShotWorkflowTab() {
   return null;
 }
 
-async function loadShotApiIntoDedicatedTab(apiJson) {
+function isUiWorkflowGraph(wf) {
+  return wf && Array.isArray(wf.nodes);
+}
+
+async function loadWorkflowIntoDedicatedTab(workflow) {
   let wf = await ensureDedicatedShotWorkflowTab();
   if (wf?.isModified && !confirm("Gonggan shot tab has unsaved changes. Load this shot's workflow anyway?")) {
     return false;
   }
   const target = wf ?? GG_SHOT_WF_FILE;
-  if (typeof app.loadApiJson === "function") {
-    await app.loadApiJson(apiJson, target, { deferWarnings: true });
+  if (isUiWorkflowGraph(workflow)) {
+    if (typeof app.loadGraphData === "function") {
+      await app.loadGraphData(workflow, true, true, target, { deferWarnings: true });
+    } else {
+      return false;
+    }
+  } else if (typeof app.loadApiJson === "function") {
+    await app.loadApiJson(workflow, target, { deferWarnings: true });
   } else if (typeof app.loadGraphData === "function") {
-    await app.loadGraphData(apiJson, true, true, target, { deferWarnings: true });
+    await app.loadGraphData(workflow, true, true, target, { deferWarnings: true });
   } else {
     return false;
   }
   return true;
+}
+
+async function loadShotApiIntoDedicatedTab(apiJson) {
+  return loadWorkflowIntoDedicatedTab(apiJson);
 }
 
 function ggToast(summary, detail, kind = "info") {
@@ -172,30 +187,127 @@ function panelPreviewHtml(c) {
   return `<div class="gg-panel-preview"><img class="gg-panel-img" src="${url}" alt="" decoding="async" /></div>`;
 }
 
+async function fetchCutWorkflowPayload(cutId) {
+  const tl = state.timeline;
+  const q = `/gonggan/workflow?pid=${encodeURIComponent(tl.project.id)}&cut_id=${encodeURIComponent(cutId)}`;
+  const res = await api.fetchApi(q);
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok && data.ok !== false, status: res.status, data, message: data.message || `HTTP ${res.status}` };
+}
+
+async function fetchProjectTemplatePayload() {
+  const tl = state.timeline;
+  const d = await getJson(`/gonggan/template?pid=${encodeURIComponent(tl.project.id)}`);
+  return d.exists && d.workflow ? d.workflow : null;
+}
+
+/** Ordered workflow sources for shot click (prepend new sources here). */
+const CUT_WORKFLOW_SOURCES = [
+  {
+    id: "cut",
+    async resolve(cutId) {
+      const hit = await fetchCutWorkflowPayload(cutId);
+      if (!hit.ok) {
+        const err = new Error(hit.message);
+        err.status = hit.status;
+        throw err;
+      }
+      return { workflow: hit.data.workflow, sdkMsg: `Canvas: ${hit.data.cut_no}. ${hit.data.cut_name} · ${hit.data.model} · seed ${hit.data.seed}`, toastKind: "ok", toastDetail: "asset + workflow on canvas" };
+    },
+  },
+  {
+    id: "template",
+    async resolve(cutId) {
+      const wf = await fetchProjectTemplatePayload();
+      if (!wf) throw new Error("no project template");
+      const c = cutById(cutId);
+      const title = shotTitle(c);
+      return { workflow: wf, sdkMsg: `Canvas: ${title} (project template)`, toastKind: "ok", toastDetail: "template", toastSummary: "template" };
+    },
+  },
+];
+
 async function loadCutWorkflow(cutId, cut) {
   const tl = state.timeline;
   if (!tl || !cutId) return;
   if (cutId === wfLastLoadedCutId) return;
   const gen = ++wfLoadGen;
   const title = shotTitle(cut || cutById(cutId));
+  let lastErr = null;
+  for (const src of CUT_WORKFLOW_SOURCES) {
+    try {
+      const hit = await src.resolve(cutId);
+      if (gen !== wfLoadGen) return;
+      const loaded = await loadWorkflowIntoDedicatedTab(hit.workflow);
+      if (gen !== wfLoadGen || !loaded) return;
+      wfLastLoadedCutId = cutId;
+      sdk.msg = hit.sdkMsg;
+      bus.dispatchEvent(new Event("sdk"));
+      const sum = hit.toastSummary || "Shot";
+      const detail = hit.toastDetail === "template" ? `${title} — project template on canvas` : `${title} — ${hit.toastDetail}`;
+      ggToast(sum, detail, hit.toastKind);
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (src.id === "cut" && e.status === 400) continue;
+      break;
+    }
+  }
+  if (gen !== wfLoadGen) return;
+  const msg = lastErr ? lastErr.message : "workflow unavailable";
+  const hasMedia = cut && cut.media;
+  sdk.msg = hasMedia ? `Shot: ${title} (preview — no workflow: ${msg})` : `Shot: ${title} — ${msg}`;
+  bus.dispatchEvent(new Event("sdk"));
+  ggToast("Shot", hasMedia ? `${title} — preview only (${msg})` : `${title} — ${msg}`, "warn");
+}
+
+let projectHasTemplate = false;
+
+async function refreshProjectTemplateFlag() {
+  if (!state.pid) {
+    projectHasTemplate = false;
+    bus.dispatchEvent(new Event("template"));
+    return;
+  }
   try {
-    const q = `/gonggan/workflow?pid=${encodeURIComponent(tl.project.id)}&cut_id=${encodeURIComponent(cutId)}`;
-    const d = await getJson(q);
-    if (gen !== wfLoadGen) return;
-    const loaded = await loadShotApiIntoDedicatedTab(d.workflow);
-    if (gen !== wfLoadGen || !loaded) return;
-    wfLastLoadedCutId = cutId;
-    sdk.msg = `Canvas: ${d.cut_no}. ${d.cut_name} · ${d.model} · seed ${d.seed}`;
-    bus.dispatchEvent(new Event("sdk"));
-    ggToast("Shot", `${title} — asset + workflow on canvas`, "ok");
+    const d = await getJson(`/gonggan/template?pid=${encodeURIComponent(state.pid)}`);
+    projectHasTemplate = !!d.exists;
+  } catch (_) {
+    projectHasTemplate = false;
+  }
+  bus.dispatchEvent(new Event("template"));
+}
+
+async function saveCanvasAsTemplate() {
+  if (!state.pid) {
+    ggToast("Template", "Select a project first", "warn");
+    return;
+  }
+  if (!app.graph || typeof app.graph.serialize !== "function") {
+    ggToast("Template", "No canvas graph to save", "warn");
+    return;
+  }
+  try {
+    const workflow = app.graph.serialize();
+    await postJson("/gonggan/template", { pid: state.pid, workflow });
+    projectHasTemplate = true;
+    bus.dispatchEvent(new Event("template"));
+    ggToast("Template", "Saved current canvas as project template", "ok");
   } catch (e) {
-    if (gen !== wfLoadGen) return;
-    const hasMedia = cut && cut.media;
-    sdk.msg = hasMedia
-      ? `Shot: ${title} (preview — no workflow: ${e.message})`
-      : `Shot: ${title} — ${e.message}`;
-    bus.dispatchEvent(new Event("sdk"));
-    ggToast("Shot", hasMedia ? `${title} — preview only (${e.message})` : `${title} — ${e.message}`, "warn");
+    ggToast("Template", e.message, "warn");
+  }
+}
+
+async function uploadTemplateJsonFile(file) {
+  if (!state.pid || !file) return;
+  try {
+    const workflow = JSON.parse(await file.text());
+    await postJson("/gonggan/template", { pid: state.pid, workflow });
+    projectHasTemplate = true;
+    bus.dispatchEvent(new Event("template"));
+    ggToast("Template", `Loaded ${file.name} as project template`, "ok");
+  } catch (e) {
+    ggToast("Template", e.message, "warn");
   }
 }
 
@@ -682,9 +794,15 @@ function mountShots(el) {
         <ol class="gg-cutlist"${collapsed ? " hidden" : ""}>${sec.cuts.map(cutRowHtml).join("")}</ol>
       </section>`;
     }).join("");
+    const tplMark = projectHasTemplate ? "gg-tpl-on" : "";
+    const tplTitle = projectHasTemplate ? "This project has a saved workflow template" : "No workflow template for this project";
     root.innerHTML = `
       <div class="gg-head">
         <select class="gg-proj" title="Project">${opts}</select>
+        <span class="gg-tpl-dot ${tplMark}" title="${esc(tplTitle)}" aria-label="template indicator"></span>
+        <button class="gg-btn gg-tpl-save" type="button" title="Save the current ComfyUI canvas as this project's workflow template">Save canvas as template</button>
+        <button class="gg-btn gg-tpl-load" type="button" title="Load a .json workflow file as this project's template">Load template file</button>
+        <input type="file" class="gg-tpl-file" accept=".json,application/json" hidden />
         <span class="gg-sdk-slot"></span>
         <button class="gg-btn gg-scene-add" type="button" title="새 씬 만들기">+ 씬</button>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
@@ -695,7 +813,15 @@ function mountShots(el) {
       <div class="gg-grp-wrap">${listHtml}</div>
       <div class="gg-cutpanel"></div>`;
     root.querySelector(".gg-proj")?.addEventListener("change", (e) => selectProject(e.target.value));
-    root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); });
+    root.querySelector(".gg-tpl-save")?.addEventListener("click", () => saveCanvasAsTemplate());
+    const tplInput = root.querySelector(".gg-tpl-file");
+    root.querySelector(".gg-tpl-load")?.addEventListener("click", () => tplInput?.click());
+    tplInput?.addEventListener("change", () => {
+      const f = tplInput.files && tplInput.files[0];
+      tplInput.value = "";
+      if (f) uploadTemplateJsonFile(f);
+    });
+    root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); refreshProjectTemplateFlag(); });
     root.querySelector(".gg-scene-add")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-group")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-ungroup")?.addEventListener("click", () => ungroupCuts(cutSelIds()));
@@ -718,12 +844,15 @@ function mountShots(el) {
     fit();
   };
   const onSel = () => { paintSelection(root); paintPanel(); fit(); };
+  const onTemplate = () => paint();
   bus.addEventListener("projects", paint);
   bus.addEventListener("timeline", paint);
+  bus.addEventListener("template", onTemplate);
   bus.addEventListener("select", onSel);
   bus.addEventListener("sdk", paintPanel);
   paint();
   if (!state.projects.length) loadProjects();
+  refreshProjectTemplateFlag();
   refreshSdk(false);
   const timer = setInterval(() => refreshSdk(false), 20000);
   return () => {
@@ -732,6 +861,7 @@ function mountShots(el) {
     clearInterval(timer);
     bus.removeEventListener("projects", paint);
     bus.removeEventListener("timeline", paint);
+    bus.removeEventListener("template", onTemplate);
     bus.removeEventListener("select", onSel);
     bus.removeEventListener("sdk", paintPanel);
     extraCleanup.forEach((fn) => fn());
