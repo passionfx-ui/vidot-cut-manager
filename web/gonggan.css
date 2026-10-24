@@ -23,6 +23,7 @@
 .gg-shots .gg-grp-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .gg-shots .gg-grp-meta { color: var(--gg-dim); font-variant-numeric: tabular-nums; }
 .gg-shots .gg-selbar { margin: 0 8px 4px; padding: 4px 6px; border-radius: 4px; background: #2c2a22; border: 1px solid var(--gg-acc); font-size: 11px; }
+.gg-shots .gg-selbar[hidden] { display: none !important; }
 .gg-shots .gg-cutlist { list-style: none; margin: 0; padding: 0 6px 6px; }
 .gg-shots .gg-cut.gg-sel { outline: 2px solid var(--gg-acc); background: #3a3528; box-shadow: inset 0 0 0 1px rgba(242, 184, 75, 0.35); }
 .gg-shots .gg-scene-actions { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 0 6px; }
@@ -119,8 +120,8 @@
 .gg-toast-host { position: fixed; right: 12px; bottom: 12px; z-index: 10000; max-width: min(420px, calc(100vw - 24px)); pointer-events: none; }
 .gg-toast-host[hidden] { display: none !important; }
 
-.gg-ctx { position: fixed; z-index: 10050; min-width: 10rem; padding: 4px 0; border-radius: 6px; border: 1px solid var(--gg-line); background: var(--gg-panel); box-shadow: 0 8px 24px rgba(0,0,0,.45); }
-.gg-ctx-item { display: block; width: 100%; text-align: left; padding: 6px 12px; border: none; background: transparent; color: var(--gg-fg); font: inherit; cursor: pointer; }
+.gg-ctx { position: fixed; z-index: 10050; min-width: 7rem; padding: 3px 0; border-radius: 4px; border: 1px solid var(--gg-line); background: var(--comfy-menu-bg, #2b2b2b); box-shadow: 0 6px 17px rgba(0,0,0,.45); font-size: 0.7em; }
+.gg-ctx-item { display: block; width: 100%; text-align: left; padding: 4px 8px; border: none; background: transparent; color: var(--gg-fg); font: inherit; cursor: pointer; line-height: 1.35; }
 .gg-ctx-item:hover:not(:disabled) { background: #2c2f38; color: var(--gg-acc); }
 .gg-ctx-item:disabled { opacity: 0.45; cursor: default; }
 .gg-ctx-item.gg-ctx-danger { color: #ffb4b4; }

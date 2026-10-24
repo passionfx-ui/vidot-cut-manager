@@ -82,6 +82,7 @@ Tested with Python 3.13.6, comfy-sdk 0.5.0, comfy-api-proxy 0.1.6.
 
 ## Changelog
 
+- **0.5.1** — Shots multi-select bar: shown only for 2+ cuts (original styling); context menus opaque Comfy background at ~70% scale; empty Shots panel right-click (**Add Cut**, **New Scene** when cuts are selected); plugin UI strings in English.
 - **0.5.0** — Shots multi-select (Ctrl/Shift), context menus, soft delete + trash restore APIs; hidden cuts excluded from timeline/export.
 - **0.4.1** — Template is a ComfyUI saved-workflow ref; Shots template dropdown; pack-local **+ Cut** with `local_cuts` and optional `initial.workflow.json` from template.
 - **0.4.0** — Per-version workflow JSON under `workflows/`; generation-time save; PNG metadata backfill; `cut-source-workflow` resolver (stored → template → draft).
