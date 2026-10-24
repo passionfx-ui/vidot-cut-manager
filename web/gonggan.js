@@ -17,6 +17,7 @@ import {
   formatMinSecDot,
   versionIndexFromList,
 } from "./gg_cuts_core.js";
+import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -367,6 +368,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut) {
     return false;
   }
   adoptGongganShotWorkflow(fileName);
+  scheduleLoadImageScan({ debounceMs: 200 });
   return true;
 }
 
@@ -2983,6 +2985,8 @@ app.registerExtension({
     { id: TIMELINE_TAB, title: "Timeline", type: "custom", icon: "pi pi-video", render: (el) => mountTimeline(el) },
   ],
   async setup() {
+    bindLoadImageUi({ ggToast });
+    installLoadImageQueueGuard();
     loadPersistedJobs();
     if (!api._ggQueuePatched) {
       api._ggQueuePatched = true;
