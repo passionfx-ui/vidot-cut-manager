@@ -4,7 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from gg_data import clamp_clip, media_duration
+try:
+    from ..gg_data import clamp_clip, media_duration
+except ImportError:  # unittest / plain script
+    from gg_data import clamp_clip, media_duration  # type: ignore
 
 _IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _VID_EXT = {".mp4", ".webm"}
