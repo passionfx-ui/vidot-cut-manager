@@ -570,3 +570,143 @@ class LocalStore:
         if not doc or doc.get("deleted_at"):
             return None
         return build_timeline(self.root, doc)
+
+    def apply_timeline_edit(self, pid: str, order: list[str], clips: dict) -> dict:
+        """Reorder cuts and update per-cut trim + pick_version_id (validated against versions)."""
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                raise FileNotFoundError(pid)
+            active = self._active_cut_ids(doc)
+            order = [x for x in dict.fromkeys(order) if isinstance(x, str) and x in active]
+            order += [cid for cid in active if cid not in order]
+            if set(order) != active:
+                raise ValueError("order must list all active cuts exactly once")
+            cuts_map = self._cuts_map(doc)
+            for cid, e in (clips or {}).items():
+                if not isinstance(cid, str) or cid not in active or not isinstance(e, dict):
+                    continue
+                c = cuts_map[cid]
+                if "sec" in e and isinstance(e.get("sec"), (int, float)):
+                    c["sec"] = float(e["sec"])
+                if "in" in e and isinstance(e.get("in"), (int, float)):
+                    c["in"] = float(e["in"])
+                pick = e.get("pick")
+                if pick is None or pick == "":
+                    pass
+                elif isinstance(pick, str):
+                    vers = self.list_versions(pid, cid)
+                    if any(v.get("id") == pick for v in vers):
+                        c["pick_version_id"] = pick
+                    else:
+                        c["pick_version_id"] = None
+                bump_entity(c)
+            self._apply_timeline_order(doc, order)
+            self._bump_project(doc)
+            self._save_project_doc(pid, doc, "edit", pid)
+            return doc
+
+    def sync_scene_groups(self, pid: str, groups: list[dict]) -> dict:
+        """Replace scene groups from UI {id, name, cut_ids, collapsed} list."""
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                raise FileNotFoundError(pid)
+            active = self._active_cut_ids(doc)
+            order = timeline_order(doc)
+            seen_gids: set[str] = set()
+            assigned: set[str] = set()
+            parsed: list[dict] = []
+            for g in groups or []:
+                if not isinstance(g, dict):
+                    continue
+                gid = str(g.get("id") or "").strip()
+                if not gid or gid in seen_gids:
+                    continue
+                seen_gids.add(gid)
+                name = str(g.get("name") or "").strip()[:40] or "Scene"
+                cut_ids = []
+                for cid in g.get("cut_ids") or []:
+                    if isinstance(cid, str) and cid in active and cid not in assigned:
+                        cut_ids.append(cid)
+                        assigned.add(cid)
+                if not cut_ids:
+                    continue
+                rank = {cid: i for i, cid in enumerate(order)}
+                cut_ids.sort(key=lambda x: rank.get(x, 10**9))
+                parsed.append({
+                    "id": gid,
+                    "name": name,
+                    "cut_ids": cut_ids,
+                    "collapsed": bool(g.get("collapsed")),
+                })
+            old_scenes = {s["id"]: s for s in self._active_scenes(doc)}
+            new_scenes: list[dict] = []
+            cuts_map = self._cuts_map(doc)
+            for g in parsed:
+                scene = old_scenes.get(g["id"])
+                if scene:
+                    scene = dict(scene)
+                else:
+                    scene = new_scene(g["name"])
+                    scene["id"] = g["id"]
+                scene["name"] = g["name"]
+                scene["collapsed"] = g["collapsed"]
+                scene["cut_order"] = list(g["cut_ids"])
+                bump_entity(scene)
+                new_scenes.append(scene)
+                for cid in g["cut_ids"]:
+                    c = cuts_map.get(cid)
+                    if c:
+                        c["scene_id"] = g["id"]
+                        bump_entity(c)
+            grouped = assigned
+            loose = [cid for cid in order if cid in active and cid not in grouped]
+            for cid in active:
+                if cid not in grouped and cid not in loose:
+                    loose.append(cid)
+            for cid in active:
+                c = cuts_map.get(cid)
+                if not c:
+                    continue
+                if cid not in grouped:
+                    c["scene_id"] = None
+                    bump_entity(c)
+            doc["scenes"] = new_scenes
+            doc["loose_order"] = loose
+            self._bump_project(doc)
+            self._save_project_doc(pid, doc, "sync_groups", pid)
+            return doc
+
+    def find_version_asset(self, version_id: str) -> tuple[str, Path] | None:
+        """Return (pid, absolute media path) for a native version id."""
+        if not isinstance(version_id, str) or not version_id:
+            return None
+        for row in self.list_projects(include_deleted=True):
+            pid = row.get("id")
+            if not isinstance(pid, str):
+                continue
+            pdir = self._project_dir(pid) / "versions"
+            if not pdir.is_dir():
+                continue
+            for cut_dir in pdir.iterdir():
+                if not cut_dir.is_dir():
+                    continue
+                for vf in cut_dir.glob("*.json"):
+                    try:
+                        data = _read_json(vf)
+                    except (OSError, ValueError):
+                        continue
+                    if isinstance(data, dict) and data.get("id") == version_id and not data.get("deleted_at"):
+                        asset = data.get("asset") or {}
+                        rel = asset.get("path")
+                        if not isinstance(rel, str):
+                            continue
+                        path = (self._project_dir(pid) / rel).resolve()
+                        try:
+                            path.relative_to(self._project_dir(pid).resolve())
+                        except ValueError:
+                            continue
+                        if path.is_file():
+                            return pid, path
+        return None
