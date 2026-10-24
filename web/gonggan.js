@@ -332,52 +332,102 @@ async function loadCutWorkflow(cutId, cut) {
 }
 
 let projectHasTemplate = false;
+let projectTemplateRef = "";
+let userWorkflowPaths = [];
+
+async function fetchUserWorkflowPaths() {
+  try {
+    const res = await api.fetchApi("/api/userdata?dir=workflows&recurse=true&split=false");
+    const data = await res.json().catch(() => ({}));
+    const paths = [];
+    if (data && typeof data === "object" && !Array.isArray(data)) {
+      for (const k of Object.keys(data)) {
+        const rel = String(k).replace(/^workflows\//, "");
+        if (rel.toLowerCase().endsWith(".json")) paths.push(rel);
+      }
+    }
+    paths.sort((a, b) => a.localeCompare(b));
+    userWorkflowPaths = paths;
+  } catch (_) {
+    userWorkflowPaths = [];
+  }
+  return userWorkflowPaths;
+}
+
+function templateSelectOptionsHtml() {
+  const opts = [`<option value="">(none)</option>`];
+  const cur = projectTemplateRef || "";
+  for (const p of userWorkflowPaths) {
+    opts.push(`<option value="${esc(p)}"${p === cur ? " selected" : ""}>${esc(p)}</option>`);
+  }
+  if (cur && !userWorkflowPaths.includes(cur)) {
+    opts.push(`<option value="${esc(cur)}" selected>${esc(cur)}</option>`);
+  }
+  return opts.join("");
+}
 
 async function refreshProjectTemplateFlag() {
   if (!state.pid) {
     projectHasTemplate = false;
+    projectTemplateRef = "";
     bus.dispatchEvent(new Event("template"));
     return;
   }
   try {
     const d = await getJson(`/gonggan/template?pid=${encodeURIComponent(state.pid)}`);
     projectHasTemplate = !!d.exists;
+    projectTemplateRef = d.ref || "";
   } catch (_) {
     projectHasTemplate = false;
+    projectTemplateRef = "";
   }
   bus.dispatchEvent(new Event("template"));
 }
 
-async function saveCanvasAsTemplate() {
+async function setProjectTemplateRef(ref) {
   if (!state.pid) {
     ggToast("Template", "Select a project first", "warn");
     return;
   }
-  if (!app.graph || typeof app.graph.serialize !== "function") {
-    ggToast("Template", "No canvas graph to save", "warn");
-    return;
-  }
   try {
-    const workflow = app.graph.serialize();
-    await postJson("/gonggan/template", { pid: state.pid, workflow });
-    projectHasTemplate = true;
+    await postJson("/gonggan/template", { pid: state.pid, ref: ref || "" });
+    projectTemplateRef = ref || "";
+    projectHasTemplate = !!ref;
     bus.dispatchEvent(new Event("template"));
-    ggToast("Template", "Saved current canvas as project template", "ok");
+    ggToast("Template", ref ? `Linked ${ref}` : "Template cleared", "ok");
   } catch (e) {
     ggToast("Template", e.message, "warn");
   }
 }
 
-async function uploadTemplateJsonFile(file) {
-  if (!state.pid || !file) return;
+async function addLocalCut() {
+  if (!state.pid) {
+    ggToast("Cut", "Select a project first", "warn");
+    return;
+  }
+  const active = state.cutId ? cutById(state.cutId) : null;
+  const body = { pid: state.pid };
+  if (active && active.group_id) body.group = active.group_id;
+  if (state.cutId) body.after = state.cutId;
   try {
-    const workflow = JSON.parse(await file.text());
-    await postJson("/gonggan/template", { pid: state.pid, workflow });
-    projectHasTemplate = true;
-    bus.dispatchEvent(new Event("template"));
-    ggToast("Template", `Loaded ${file.name} as project template`, "ok");
+    const d = await postJson("/gonggan/cut/add", body);
+    if (d.timeline) {
+      state.timeline = d.timeline;
+      bus.dispatchEvent(new Event("timeline"));
+    } else {
+      await loadTimeline();
+    }
+    if (d.cut && d.cut.id) {
+      wfLastLoadedCutId = "";
+      selectCut(d.cut.id);
+    }
+    if (d.template_copied) {
+      ggToast("Cut", `Added ${d.cut.name}`, "ok");
+    } else {
+      ggToast("Cut", `${d.cut.name} — no project template (empty workflow)`, "warn");
+    }
   } catch (e) {
-    ggToast("Template", e.message, "warn");
+    ggToast("Cut", e.message, "warn");
   }
 }
 
@@ -864,16 +914,15 @@ function mountShots(el) {
         <ol class="gg-cutlist"${collapsed ? " hidden" : ""}>${sec.cuts.map(cutRowHtml).join("")}</ol>
       </section>`;
     }).join("");
-    const tplMark = projectHasTemplate ? "gg-tpl-on" : "";
-    const tplTitle = projectHasTemplate ? "This project has a saved workflow template" : "No workflow template for this project";
     root.innerHTML = `
       <div class="gg-head">
         <select class="gg-proj" title="Project">${opts}</select>
-        <span class="gg-tpl-dot ${tplMark}" title="${esc(tplTitle)}" aria-label="template indicator"></span>
-        <button class="gg-btn gg-tpl-save" type="button" title="Save the current ComfyUI canvas as this project's workflow template">Save canvas as template</button>
-        <button class="gg-btn gg-tpl-load" type="button" title="Load a .json workflow file as this project's template">Load template file</button>
-        <input type="file" class="gg-tpl-file" accept=".json,application/json" hidden />
+        <label class="gg-tpl-wrap" title="ComfyUI saved workflow used as this project's template">
+          <span class="gg-tpl-label">Template:</span>
+          <select class="gg-tpl-select">${templateSelectOptionsHtml()}</select>
+        </label>
         <span class="gg-sdk-slot"></span>
+        <button class="gg-btn gg-cut-add" type="button" title="Add a local cut to this project">+ Cut</button>
         <button class="gg-btn gg-scene-add" type="button" title="새 씬 만들기">+ 씬</button>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
       </div>
@@ -883,14 +932,16 @@ function mountShots(el) {
       <div class="gg-grp-wrap">${listHtml}</div>
       <div class="gg-cutpanel"></div>`;
     root.querySelector(".gg-proj")?.addEventListener("change", (e) => selectProject(e.target.value));
-    root.querySelector(".gg-tpl-save")?.addEventListener("click", () => saveCanvasAsTemplate());
-    const tplInput = root.querySelector(".gg-tpl-file");
-    root.querySelector(".gg-tpl-load")?.addEventListener("click", () => tplInput?.click());
-    tplInput?.addEventListener("change", () => {
-      const f = tplInput.files && tplInput.files[0];
-      tplInput.value = "";
-      if (f) uploadTemplateJsonFile(f);
+    const tplSel = root.querySelector(".gg-tpl-select");
+    tplSel?.addEventListener("focus", () => {
+      fetchUserWorkflowPaths().then(() => {
+        const cur = tplSel.value;
+        tplSel.innerHTML = templateSelectOptionsHtml();
+        tplSel.value = cur || projectTemplateRef || "";
+      });
     });
+    tplSel?.addEventListener("change", (e) => setProjectTemplateRef(e.target.value));
+    root.querySelector(".gg-cut-add")?.addEventListener("click", () => addLocalCut());
     root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); refreshProjectTemplateFlag(); });
     root.querySelector(".gg-scene-add")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-group")?.addEventListener("click", () => createSceneGroup(cutSelIds()));

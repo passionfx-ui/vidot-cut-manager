@@ -1,6 +1,7 @@
 """Tests for per-project workflow templates (stdlib unittest only)."""
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -41,6 +42,25 @@ class TemplateTests(unittest.TestCase):
         self.assertTrue(path.is_file())
         loaded = gt.get_template("proj1")
         self.assertEqual(loaded["nodes"][0]["type"], "KSampler")
+
+    def test_workflow_ref_resolves_from_user_dir(self):
+        wf_root = Path(self._tmp.name) / "user" / "default" / "workflows"
+        sub = wf_root / "sub"
+        sub.mkdir(parents=True)
+        (sub / "mine.json").write_text(json.dumps(UI_WF), encoding="utf-8")
+        with mock.patch.object(gt, "user_workflows_dir", lambda: wf_root):
+            gt.save_template_ref("refproj", "sub/mine.json")
+            info = gt.get_template_info("refproj")
+            self.assertEqual(info["ref"], "sub/mine.json")
+            self.assertTrue(info["exists"])
+            self.assertEqual(info["workflow"]["nodes"][0]["type"], "KSampler")
+
+    def test_legacy_full_graph_still_loads(self):
+        gt.save_template("legacy", UI_WF)
+        info = gt.get_template_info("legacy")
+        self.assertTrue(info["exists"])
+        self.assertIsNone(info["ref"])
+        self.assertEqual(info["workflow"]["nodes"][0]["type"], "KSampler")
 
     def test_save_and_get_api(self):
         gt.save_template("p2", API_WF)
