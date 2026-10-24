@@ -251,6 +251,63 @@ async def gg_template_post(request):
     return web.json_response({"ok": True, "path": str(path)})
 
 
+@routes.post("/gonggan/cut/delete")
+async def gg_cut_delete(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    cuts = data.get("cuts")
+    if not isinstance(cuts, list) or not cuts:
+        return _err(400, "cuts required")
+    try:
+        tl = await asyncio.to_thread(gg_data.delete_cuts, pid, cuts)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] cut delete failed")
+        return _err(500, str(ex))
+    if tl is None:
+        return _err(404, "project not found")
+    return web.json_response({"ok": True, "timeline": tl})
+
+
+@routes.post("/gonggan/cut/restore")
+async def gg_cut_restore(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    cuts = data.get("cuts")
+    if cuts is not None and not isinstance(cuts, list):
+        return _err(400, "cuts must be a list")
+    try:
+        tl = await asyncio.to_thread(gg_data.restore_cuts, pid, cuts)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] cut restore failed")
+        return _err(500, str(ex))
+    if tl is None:
+        return _err(404, "project not found")
+    return web.json_response({"ok": True, "timeline": tl})
+
+
+@routes.get("/gonggan/trash")
+async def gg_trash_list(request):
+    pid = request.query.get("pid", "")
+    if not pid:
+        return _err(400, "pid required")
+    try:
+        items = await asyncio.to_thread(gg_data.list_trash, pid)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] trash list failed")
+        return _err(500, str(ex))
+    return web.json_response({"ok": True, "items": items})
+
+
 @routes.post("/gonggan/cut/add")
 async def gg_cut_add(request):
     data = await _json_body(request)
