@@ -81,7 +81,6 @@ export function captureWorkflowEdits(wf) {
   if (typeof wf.prepareForSave === "function") wf.prepareForSave();
   wf.changeTracker?.captureCanvasState?.();
   wf.changeTracker?.prepareForSave?.();
-  wf.changeTracker?.checkState?.();
 }
 
 /**
@@ -100,7 +99,11 @@ export async function autosaveWorkflow(wf, deps) {
 
   let desired = defaultDesiredPath(wf);
 
-  if (wf.isTemporary) {
+  const owned =
+    typeof deps.isGongganOwned === "function" ? deps.isGongganOwned(wf) : !!wf?.ggGongganOwned;
+  const needsFreePath = !!wf.isTemporary || !owned;
+
+  if (needsFreePath) {
     if (typeof deps.renameWorkflow !== "function") {
       throw new Error("renameWorkflow unavailable");
     }
@@ -109,6 +112,7 @@ export async function autosaveWorkflow(wf, deps) {
       throw new Error("listExistingPaths failed");
     }
     const isTaken = (p) => {
+      if (typeof deps.isPathGongganOwned === "function" && deps.isPathGongganOwned(p)) return false;
       if (pathCollides(p, existing, { caseInsensitive: deps.caseInsensitive })) return true;
       if (typeof deps.getWorkflowByPath === "function") {
         const other = deps.getWorkflowByPath(p);
@@ -124,6 +128,7 @@ export async function autosaveWorkflow(wf, deps) {
     });
     await deps.renameWorkflow(wf, freePath);
     desired = normalizeWorkflowPath(wf.path || freePath);
+    if (typeof deps.markPathGongganOwned === "function") deps.markPathGongganOwned(wf, desired);
   }
 
   await deps.saveWorkflow(wf);

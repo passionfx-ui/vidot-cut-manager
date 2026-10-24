@@ -93,8 +93,8 @@ describe("autosaveModifiedTabs", () => {
     assert.equal(r.saved[0].path, "workflows/shot.json");
   });
 
-  it("persisted tab saved in place without rename", async () => {
-    const wf = mockTab({ isTemporary: false, path: "workflows/saved.json" });
+  it("persisted Gonggan-owned tab saved in place without rename", async () => {
+    const wf = mockTab({ isTemporary: false, path: "workflows/saved.json", ggGongganOwned: true });
     let renamed = false;
     const deps = {
       listExistingPaths: async () => ["workflows/other.json"],
@@ -104,11 +104,38 @@ describe("autosaveModifiedTabs", () => {
       saveWorkflow: async (w) => {
         w.isModified = false;
       },
+      isGongganOwned: (w) => !!w.ggGongganOwned,
     };
     const r = await autosaveModifiedTabs([wf], deps);
     assert.equal(r.ok, true);
     assert.equal(renamed, false);
     assert.equal(r.saved[0].path, "workflows/saved.json");
+  });
+
+  it("persisted non-owned tab renames to free path before save", async () => {
+    const wf = mockTab({ isTemporary: false, path: "workflows/cut2.json" });
+    let renamedTo = "";
+    const deps = {
+      caseInsensitive: true,
+      isGongganOwned: () => false,
+      isPathGongganOwned: () => false,
+      listExistingPaths: async () => ["workflows/cut2.json"],
+      getWorkflowByPath: () => null,
+      renameWorkflow: async (w, p) => {
+        renamedTo = p;
+        w.path = p;
+      },
+      saveWorkflow: async (w) => {
+        w.isModified = false;
+      },
+      markPathGongganOwned: (w, p) => {
+        w.path = p;
+        w.ggGongganOwned = true;
+      },
+    };
+    const r = await autosaveModifiedTabs([wf], deps);
+    assert.equal(r.ok, true);
+    assert.equal(renamedTo, "workflows/cut2 (2).json");
   });
 
   it("save throws -> ok false, later tabs untouched", async () => {
@@ -136,8 +163,9 @@ describe("autosaveModifiedTabs", () => {
   });
 
   it("still modified after save -> failure", async () => {
-    const wf = mockTab({ isTemporary: false });
+    const wf = mockTab({ isTemporary: false, ggGongganOwned: true });
     const deps = {
+      isGongganOwned: () => true,
       saveWorkflow: async () => {},
     };
     await assert.rejects(() => autosaveWorkflow(wf, deps), /still modified/);
