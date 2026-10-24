@@ -10,3 +10,5 @@ workflows/
 templates/
 trash/
 projects/
+tests/e2e/node_modules/
+tests/screens/
