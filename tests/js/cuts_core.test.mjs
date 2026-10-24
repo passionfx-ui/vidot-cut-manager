@@ -5,11 +5,16 @@ import {
   computeEffectiveSec,
   lengthWarning,
   moveCut,
+  moveCuts,
+  shotsDropTarget,
   finalCutList,
   filterCuts,
   fileBaseName,
   sanitizeNamePart,
   projectCompletion,
+  formatDueDisplay,
+  formatMinSecDot,
+  versionIndexFromList,
 } from "../../web/gg_cuts_core.js";
 
 describe("formatCutNumber", () => {
@@ -132,5 +137,56 @@ describe("projectCompletion", () => {
     const r = projectCompletion(timeline, new Date("2026-11-01T12:00:00Z"));
     assert.equal(r.overdue, true);
     assert.ok(r.daysLeft < 0);
+  });
+});
+
+describe("moveCuts", () => {
+  const groups = [
+    { id: "g1", name: "A", cut_ids: ["a", "b"], collapsed: false },
+    { id: "g2", name: "B", cut_ids: ["c"], collapsed: false },
+  ];
+  const order = ["a", "b", "c"];
+
+  it("moves multi-selection together", () => {
+    const r = moveCuts(order, groups, ["a", "b"], { toIndex: 1, toGroupId: "g2" });
+    assert.deepEqual(r.order, ["c", "a", "b"]);
+    assert.deepEqual(r.groups[1].cut_ids, ["c", "a", "b"]);
+  });
+});
+
+describe("shotsDropTarget", () => {
+  it("inserts before row when above midpoint", () => {
+    const order = ["a", "b"];
+    const rows = [
+      { id: "a", top: 0, bottom: 20, groupId: "g1" },
+      { id: "b", top: 20, bottom: 40, groupId: "g1" },
+    ];
+    const t = shotsDropTarget(order, rows, 5);
+    assert.equal(t.toIndex, 0);
+    assert.equal(t.toGroupId, "g1");
+  });
+});
+
+describe("formatDueDisplay + formatMinSecDot", () => {
+  it("due label with days left", () => {
+    const c = projectCompletion(
+      { project: { due_date: "2026-10-30" }, cuts: [] },
+      new Date("2026-10-24T12:00:00Z"),
+    );
+    const d = formatDueDisplay(c);
+    assert.match(d.text, /Due Oct 30/);
+    assert.match(d.text, /6 days left/);
+  });
+
+  it("duration m:ss.s", () => {
+    assert.equal(formatMinSecDot(65.5), "1:05.5");
+  });
+});
+
+describe("versionIndexFromList", () => {
+  it("creation order index", () => {
+    const list = [{ id: "a", created: 2 }, { id: "b", created: 1 }];
+    assert.equal(versionIndexFromList(list, "b"), 1);
+    assert.equal(versionIndexFromList(list, "a"), 2);
   });
 });

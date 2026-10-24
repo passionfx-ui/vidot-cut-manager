@@ -73,6 +73,46 @@
 .gg-shots .gg-cut-text { min-width: 0; }
 .gg-shots .gg-cut-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gg-shots .gg-cut-sub { color: var(--gg-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gg-shots .gg-num { font-variant-numeric: tabular-nums; color: var(--gg-acc); margin-right: 4px; font-size: 11px; }
+.gg-shots .gg-cut-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; font-size: 9px; }
+.gg-shots .gg-len-badge { color: var(--gg-dim); }
+.gg-shots .gg-warn3 { color: #ffb347; background: #3d3020; border-radius: 3px; padding: 0 4px; cursor: help; }
+.gg-shots .gg-endcard-badge { color: #b8c8ff; background: #2a3048; border-radius: 3px; padding: 0 4px; }
+.gg-shots .gg-redo-badge { color: #ff9a9a; background: #3d2020; border-radius: 3px; padding: 0 4px; }
+.gg-shots .gg-cut.gg-moving { opacity: 0.55; outline: 1px dashed var(--gg-acc); }
+.gg-shots .gg-grp-wrap { position: relative; }
+.gg-shots .gg-drag-ind { position: absolute; left: 6px; right: 6px; height: 2px; background: var(--gg-acc); pointer-events: none; z-index: 6; box-shadow: 0 0 4px rgba(242, 184, 75, 0.8); }
+.gg-shots .gg-complete-row { display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; }
+.gg-shots .gg-complete-bar { flex: 1; height: 5px; border-radius: 3px; background: #1a1c20; overflow: hidden; }
+.gg-shots .gg-complete-fill { height: 100%; width: 0; background: linear-gradient(90deg, #4caf6a, #6ee07a); transition: width 0.2s ease; }
+.gg-shots .gg-complete-pct { font-size: 9px; color: var(--gg-dim); min-width: 2.5em; text-align: right; }
+.gg-shots .gg-due-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 10px; margin-top: 2px; }
+.gg-shots .gg-due-label { color: var(--gg-dim); }
+.gg-shots .gg-due-input { font-size: 10px; }
+.gg-shots .gg-due-text { color: var(--gg-dim); }
+.gg-shots .gg-due-text.gg-due-over { color: #ff8a8a; }
+.gg-shots .gg-shots-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--gg-line); }
+.gg-shots .gg-view-toggle { display: flex; gap: 2px; }
+.gg-shots .gg-view-toggle .gg-btn { font-size: 10px; padding: 2px 6px; }
+.gg-shots .gg-view-toggle .gg-btn.gg-on { background: var(--gg-acc); color: #1a1a1a; }
+.gg-shots .gg-filter-redo { font-size: 10px; color: var(--gg-dim); cursor: pointer; user-select: none; }
+.gg-shots .gg-final-list { padding: 6px 8px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+.gg-shots .gg-final-items { list-style: none; margin: 0; padding: 0; }
+.gg-shots .gg-final-item { display: flex; gap: 8px; align-items: center; padding: 4px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
+.gg-shots .gg-final-item:hover { background: var(--gg-panel); }
+.gg-shots .gg-final-thumb { width: 64px; height: 36px; flex-shrink: 0; border-radius: 4px; overflow: hidden; background: #000; }
+.gg-shots .gg-final-meta { min-width: 0; flex: 1; }
+.gg-shots .gg-final-name { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gg-shots .gg-final-sub { font-size: 10px; color: var(--gg-dim); }
+.gg-shots .gg-final-total { font-size: 10px; margin-top: 8px; color: var(--gg-fg); font-variant-numeric: tabular-nums; }
+.gg-shots .gg-final-miss { font-size: 10px; color: var(--gg-dim); margin-top: 4px; }
+.gg-shots .gg-cut-fields { display: grid; gap: 6px; margin: 6px 0; font-size: 11px; }
+.gg-shots .gg-cut-fields label { display: flex; flex-direction: column; gap: 2px; color: var(--gg-dim); }
+.gg-shots .gg-field-end, .gg-shots .gg-field-redo { flex-direction: row; align-items: center; gap: 6px; }
+.gg-shots .gg-len-input { width: 5em; }
+.gg-shots .gg-notes { resize: vertical; min-height: 2.5em; font: inherit; }
+.gg-shots .gg-fname-row { display: flex; align-items: center; gap: 6px; }
+.gg-shots .gg-fname { font-family: ui-monospace, monospace; font-size: 10px; color: var(--gg-fg); }
 
 /* Timeline bottom panel: viewer (left) + editor (right) */
 .gg-timeline { display: flex; flex-direction: row; background: var(--gg-bg); outline: none; min-height: 220px; }
