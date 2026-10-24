@@ -10,9 +10,8 @@
 /* Shots sidebar */
 .gg-shots { display: flex; flex-direction: column; overflow: hidden; }
 .gg-shots .gg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; border-bottom: 1px solid var(--gg-line); }
-.gg-shots .gg-tpl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gg-line); flex-shrink: 0; }
-.gg-shots .gg-tpl-dot.gg-tpl-on { background: var(--gg-acc); box-shadow: 0 0 0 1px color-mix(in srgb, var(--gg-acc) 40%, transparent); }
-.gg-shots .gg-tpl-save, .gg-shots .gg-tpl-load { font-size: 11px; padding: 2px 6px; }
+.gg-shots .gg-tpl-wrap { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--gg-muted, #888); }
+.gg-shots .gg-tpl-select { max-width: 11rem; font-size: 11px; padding: 2px 4px; }
 .gg-shots .gg-proj { flex: 1; min-width: 0; background: var(--gg-panel); color: var(--gg-fg); border: 1px solid var(--gg-line); border-radius: 4px; padding: 3px 4px; }
 .gg-shots .gg-meta { padding: 4px 10px; color: var(--gg-dim); }
 .gg-shots .gg-grp-wrap { overflow-y: auto; flex: 1 1 auto; min-height: 0; padding: 0 4px 6px; }

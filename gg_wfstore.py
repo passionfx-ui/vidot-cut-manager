@@ -40,6 +40,10 @@ def _workflow_path(pid: str, cut_id: str, vid: str) -> Path:
     return WORKFLOWS_DIR / pid / cut_id / f"{vid}.workflow.json"
 
 
+def _initial_workflow_path(pid: str, cut_id: str) -> Path:
+    return WORKFLOWS_DIR / pid / cut_id / "initial.workflow.json"
+
+
 def _parse_json_maybe(raw: str) -> dict | None:
     raw = (raw or "").strip()
     if not raw:
@@ -192,13 +196,50 @@ def _list_cut_vids(pid: str, cut_id: str) -> list[str]:
     return sorted(vids, key=lambda v: (_version_media_mtime(d, v), v), reverse=True)
 
 
+def get_initial_workflow(pid: str, cut_id: str) -> dict | None:
+    pid = _check_pid(pid)
+    cut_id = _check_cut(cut_id)
+    path = _initial_workflow_path(pid, cut_id)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def save_initial_workflow(pid: str, cut_id: str, workflow: dict, source: str = "template") -> Path:
+    """Copy a template (or other) graph for a new local cut."""
+    try:
+        from . import gg_template
+    except ImportError:
+        import gg_template  # type: ignore
+
+    pid = _check_pid(pid)
+    cut_id = _check_cut(cut_id)
+    if source not in ("template",):
+        raise ValueError("invalid initial workflow source")
+    wf = gg_template.validate_workflow(workflow)
+    if gg_template._is_ui_workflow(wf):
+        rec = {"workflow": wf, "prompt": None, "source": source, "created": time.time()}
+    else:
+        rec = {"workflow": None, "prompt": wf, "source": source, "created": time.time()}
+    dest = _initial_workflow_path(pid, cut_id)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".tmp.json")
+    tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(dest)
+    return dest
+
+
 def latest_cut_workflow(pid: str, cut_id: str) -> dict | None:
     """Stored workflow for the cut's pick version, else the newest version with a store file."""
     pid = _check_pid(pid)
     cut_id = _check_cut(cut_id)
     vids = _list_cut_vids(pid, cut_id)
     if not vids:
-        return None
+        return get_initial_workflow(pid, cut_id)
     edit = load_edit(pid) or {}
     clip = (edit.get("clips") or {}).get(cut_id) or {}
     pick = clip.get("pick") if isinstance(clip.get("pick"), str) else None
