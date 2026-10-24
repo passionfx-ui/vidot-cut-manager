@@ -18,6 +18,7 @@ import {
   versionIndexFromList,
 } from "./gg_cuts_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
+import { autosaveModifiedTabs, normalizeWorkflowPath } from "./gg_autosave_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -240,6 +241,7 @@ let wfLoadDebounce = 0;
 let wfLastLoadedCutId = "";
 /** ComfyWorkflow tab last opened by Gonggan shot load (never user workflows). */
 let ggOwnedShotWorkflow = null;
+let ggCutSwitchAutosaveBlocked = false;
 let ggToastTimer = 0;
 
 function ggWorkflowStore() {
@@ -288,10 +290,68 @@ async function closeGongganOwnedTab(wf) {
   if (ggOwnedShotWorkflow === wf) ggOwnedShotWorkflow = null;
 }
 
+async function listWorkflowPathsForAutosave() {
+  const res = await api.fetchApi("/userdata?dir=workflows&recurse=true&split=false");
+  if (!res.ok) throw new Error(`workflow list HTTP ${res.status}`);
+  const data = await res.json().catch(() => null);
+  if (!data || typeof data !== "object") throw new Error("invalid workflow listing");
+  const paths = [];
+  const keys = Array.isArray(data)
+    ? data.map((x) => (Array.isArray(x) ? x[0] : (x && x.path) || x))
+    : Object.keys(data);
+  for (const k of keys) {
+    const rel = normalizeWorkflowPath(String(k).replace(/^workflows\//, ""));
+    if (rel.toLowerCase().endsWith(".json")) paths.push(rel);
+  }
+  const ws = ggWorkflowStore();
+  for (const w of ws?.openWorkflows || []) {
+    if (w?.path && !w.isTemporary) {
+      const rel = normalizeWorkflowPath(String(w.path).replace(/^workflows\//, ""));
+      if (rel) paths.push(rel);
+    }
+  }
+  const seen = new Set();
+  const out = [];
+  for (const p of paths) {
+    const key = p.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+  return out;
+}
+
+function buildAutosaveDeps() {
+  const ws = ggWorkflowStore();
+  return {
+    caseInsensitive: true,
+    saveWorkflow: ws && typeof ws.saveWorkflow === "function" ? (wf) => ws.saveWorkflow(wf) : null,
+    renameWorkflow: ws && typeof ws.renameWorkflow === "function" ? (wf, p) => ws.renameWorkflow(wf, p) : null,
+    getWorkflowByPath:
+      ws && typeof ws.getWorkflowByPath === "function" ? (p) => ws.getWorkflowByPath(p) : null,
+    listExistingPaths: listWorkflowPathsForAutosave,
+  };
+}
+
 async function prepareGongganShotTabReplace() {
   const tabs = collectGongganShotTabs();
-  if (tabs.some((w) => w.isModified) && !confirm("Gonggan shot tab has unsaved changes. Replace it?")) {
-    return false;
+  if (tabs.some((w) => w.isModified)) {
+    const deps = buildAutosaveDeps();
+    if (typeof deps.saveWorkflow !== "function") {
+      ggCutSwitchAutosaveBlocked = true;
+      ggToast("Auto-save failed. Switch cancelled.", "saveWorkflow unavailable", "warn");
+      return false;
+    }
+    const result = await autosaveModifiedTabs(tabs, deps);
+    if (!result.ok) {
+      ggCutSwitchAutosaveBlocked = true;
+      ggToast("Auto-save failed. Switch cancelled.", result.failed?.error || "save failed", "warn");
+      return false;
+    }
+    for (const s of result.saved) {
+      const detail = s.name || s.path.replace(/^.*\//, "") || "workflow";
+      ggToast("Saved", detail, "ok");
+    }
   }
   for (const w of tabs) await closeGongganOwnedTab(w);
   return true;
@@ -501,6 +561,7 @@ async function loadCutWorkflow(cutId, cut) {
   const tl = state.timeline;
   if (!tl || !cutId) return;
   if (shouldSkipWorkflowReload(cutId)) return;
+  ggCutSwitchAutosaveBlocked = false;
   const gen = ++wfLoadGen;
   const cutRec = cut || cutById(cutId);
   const title = shotTitle(cutRec);
@@ -511,6 +572,7 @@ async function loadCutWorkflow(cutId, cut) {
       if (gen !== wfLoadGen) return;
       const loaded = await loadWorkflowIntoDedicatedTab(hit.workflow, cutRec);
       if (gen !== wfLoadGen) return;
+      if (ggCutSwitchAutosaveBlocked) return;
       if (!loaded) {
         lastErr = new Error("workflow load failed");
         continue;
@@ -532,6 +594,7 @@ async function loadCutWorkflow(cutId, cut) {
             if (gen !== wfLoadGen) return;
             const loaded = await loadWorkflowIntoDedicatedTab(hit.workflow, cutRec);
             if (gen !== wfLoadGen) return;
+            if (ggCutSwitchAutosaveBlocked) return;
             if (!loaded) {
               lastErr = new Error("workflow load failed");
               continue;
@@ -2985,6 +3048,7 @@ app.registerExtension({
     { id: TIMELINE_TAB, title: "Timeline", type: "custom", icon: "pi pi-video", render: (el) => mountTimeline(el) },
   ],
   async setup() {
+    globalThis.__gongganCutAutosaveOnSwitch = "0.8.1";
     bindLoadImageUi({ ggToast });
     installLoadImageQueueGuard();
     loadPersistedJobs();
