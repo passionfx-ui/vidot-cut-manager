@@ -3,6 +3,21 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { createProgressTracker, cutStage, projectSummary, formatSummary } from "./gg_progress_core.js";
+import {
+  formatCutNumber,
+  computeEffectiveSec,
+  lengthWarning,
+  moveCuts,
+  shotsDropTarget,
+  finalCutList,
+  filterCuts,
+  fileBaseName,
+  projectCompletion,
+  formatDueDisplay,
+  formatMinSecDot,
+  versionIndexFromList,
+} from "./gg_cuts_core.js";
+import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -10,6 +25,9 @@ const TIMELINE_TAB = "gg-timeline";
 const SHOTS_TAB = "gg-shots";
 const bus = new EventTarget();
 const state = { projects: [], pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
+const shotsUi = { view: "cuts", needsRedoOnly: false, dragSession: null };
+const cutFieldUi = { timer: 0, pending: null };
+const projectFieldUi = { timer: 0 };
 const JOBS_KEY = "gonggan.jobs";
 const progressTracker = createProgressTracker();
 const progUi = { paintTimer: 0, statusDebounce: 0, timelineReloadTimer: 0, wired: false, handlers: {} };
@@ -350,6 +368,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut) {
     return false;
   }
   adoptGongganShotWorkflow(fileName);
+  scheduleLoadImageScan({ debounceMs: 200 });
   return true;
 }
 
@@ -821,9 +840,12 @@ function openCutContextMenu(e, cutId) {
   const ids = cutSelIds();
   const c = cutById(cutId);
   const inScene = !!(c && c.group_id);
+  const nat = isNativeProject();
+  const redoLabel = c?.needs_redo ? "Clear needs redo" : "Mark needs redo";
   showCtxMenu(e.clientX, e.clientY, [
     { label: "Group into Scene", action: () => createSceneGroup(ids) },
     { label: "Remove from Scene", disabled: !inScene && !ids.some((id) => cutById(id)?.group_id), action: () => ungroupCuts(ids) },
+    { label: redoLabel, disabled: !nat, title: nat ? "" : NATIVE_READONLY_TIP, action: () => toggleNeedsRedo(cutId) },
     { label: "Add Cut", action: () => addCutAfter(cutId) },
     { label: "Delete", danger: true, action: () => deleteSelectedCuts() },
   ]);
@@ -1102,9 +1124,12 @@ function applyProgressToThumb(li, cut) {
 }
 
 function paintProjectSummary(root) {
-  const cuts = state.timeline?.cuts || [];
+  const tl = state.timeline;
+  const cuts = tl?.cuts || [];
   const sum = projectSummary(cuts);
   const text = formatSummary(sum);
+  const comp = projectCompletion(tl || { cuts: [] });
+  const due = formatDueDisplay(comp);
   const hosts = [];
   if (root) hosts.push(root);
   else document.querySelectorAll(".gg-root.gg-shots").forEach((el) => hosts.push(el));
@@ -1121,6 +1146,27 @@ function paintProjectSummary(root) {
       if (segVideo) segVideo.style.flex = `${sum.video} 0 0`;
       if (segImage) segImage.style.flex = `${sum.image} 0 0`;
       bar.hidden = sum.total === 0;
+    }
+    const cbar = host.querySelector?.(".gg-complete-bar");
+    const cpct = host.querySelector?.(".gg-complete-pct");
+    if (cbar) {
+      const fill = cbar.querySelector(".gg-complete-fill");
+      if (fill) fill.style.width = `${comp.percent}%`;
+      cbar.title = `Best set on ${comp.done} of ${comp.total} cuts`;
+    }
+    if (cpct) cpct.textContent = comp.total ? `${comp.percent}%` : "";
+    const dueIn = host.querySelector?.(".gg-due-input");
+    const dueTxt = host.querySelector?.(".gg-due-text");
+    const nat = isNativeProject();
+    if (dueIn) {
+      dueIn.value = comp.dueDate || "";
+      dueIn.disabled = !nat;
+      dueIn.title = nat ? "Project due date" : NATIVE_READONLY_TIP;
+    }
+    if (dueTxt) {
+      dueTxt.textContent = due.text;
+      dueTxt.classList.toggle("gg-due-over", due.overdue);
+      dueTxt.title = due.text;
     }
   }
 }
@@ -1299,7 +1345,368 @@ function syncProgressWireState() {
   else unwireProgressListeners();
 }
 
+function effectiveLenLabel(c) {
+  const sec = computeEffectiveSec(c);
+  const s = Number.isInteger(sec) ? String(sec) : sec.toFixed(1);
+  return `${s}s`;
+}
+
+function applyOrderGroupsLocally(order, groups) {
+  const tl = state.timeline;
+  if (!tl) return;
+  const byId = new Map(tl.cuts.map((c) => [c.id, c]));
+  const gById = new Map((groups || []).map((g) => [g.id, g]));
+  const membership = new Map();
+  for (const g of groups || []) {
+    for (const id of g.cut_ids || []) membership.set(id, g.id);
+  }
+  tl.groups = groups;
+  tl.cuts = order.map((id) => byId.get(id)).filter(Boolean);
+  let globalNum = 0;
+  const scenePos = {};
+  tl.cuts.forEach((c, pos) => {
+    globalNum += 1;
+    c.number = globalNum;
+    c.pos = pos;
+    const gid = membership.get(c.id) || "";
+    c.group_id = gid;
+    const g = gById.get(gid);
+    c.group_name = g ? g.name : "";
+    if (gid) {
+      scenePos[gid] = (scenePos[gid] || 0) + 1;
+      c.cut_in_scene = scenePos[gid];
+    } else {
+      c.cut_in_scene = globalNum;
+    }
+  });
+  recomputeCutStarts();
+}
+
+async function persistShotsReorder(order, groups) {
+  const tl = state.timeline;
+  if (!tl || !isNativeProject()) return;
+  applyOrderGroupsLocally(order, groups);
+  bus.dispatchEvent(new Event("timeline"));
+  try {
+    const body = {
+      pid: tl.project.id,
+      order,
+      clips: Object.fromEntries(tl.cuts.map((c) => [c.id, { in: c.in, sec: c.sec, pick: c.pick || null }])),
+    };
+    const res = await api.fetchApi("/gonggan/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
+    const gRes = await api.fetchApi("/gonggan/groups", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pid: tl.project.id, groups }),
+    });
+    const gData = await gRes.json();
+    if (!gRes.ok || gData.ok === false) throw new Error(gData.message || `HTTP ${gRes.status}`);
+    state.timeline = gData;
+    state.error = "";
+  } catch (e) {
+    state.error = "Reorder failed: " + e.message;
+    ggToast("Reorder failed", e.message, "warn");
+    await loadTimeline();
+    return;
+  }
+  bus.dispatchEvent(new Event("timeline"));
+}
+
+function collectShotRowRects(wrap) {
+  const wrapRect = wrap.getBoundingClientRect();
+  const rows = [];
+  wrap.querySelectorAll(".gg-cut").forEach((li) => {
+    const sec = li.closest(".gg-grp-sec");
+    const gid = sec?.dataset?.groupId || null;
+    const r = li.getBoundingClientRect();
+    rows.push({
+      id: li.dataset.cutId,
+      top: r.top - wrapRect.top + wrap.scrollTop,
+      bottom: r.bottom - wrapRect.top + wrap.scrollTop,
+      groupId: gid,
+    });
+  });
+  return rows;
+}
+
+function bindShotsReorder(root) {
+  if (!isNativeProject()) return;
+  const wrap = root.querySelector(".gg-grp-wrap");
+  if (!wrap) return;
+  let indicator = wrap.querySelector(".gg-drag-ind");
+  if (!indicator) {
+    indicator = document.createElement("div");
+    indicator.className = "gg-drag-ind";
+    indicator.hidden = true;
+    wrap.appendChild(indicator);
+  }
+  root.querySelectorAll(".gg-cut").forEach((el) => {
+    el.addEventListener("pointerdown", (e) => {
+      if (!isNativeProject() || e.button || e.target.closest("input, textarea, button, select, a")) return;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const cutId = el.dataset.cutId;
+      let active = false;
+      let drop = { toIndex: 0, toGroupId: null, lineY: 0 };
+      const movingIds = () => {
+        if (state.cutSel.size >= 2 && state.cutSel.has(cutId)) return cutSelIds();
+        return [cutId];
+      };
+      const cancel = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+        indicator.hidden = true;
+        el.classList.remove("gg-moving");
+        root.querySelectorAll(".gg-cut.gg-moving").forEach((n) => n.classList.remove("gg-moving"));
+        shotsUi.dragSession = null;
+        ed.dragging = false;
+      };
+      const move = (ev) => {
+        if (!active && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
+        if (!active) {
+          active = true;
+          ed.dragging = true;
+          el.classList.add("gg-moving");
+          movingIds().forEach((id) => {
+            root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(id)}"]`)?.classList.add("gg-moving");
+          });
+          try { el.setPointerCapture(e.pointerId); } catch (_) {}
+        }
+        const tl = state.timeline;
+        if (!tl) return;
+        const order = tl.cuts.map((c) => c.id);
+        const rows = collectShotRowRects(wrap);
+        drop = shotsDropTarget(order, rows, ev.clientY);
+        indicator.hidden = false;
+        indicator.style.top = `${drop.lineY}px`;
+      };
+      const up = async () => {
+        const wasActive = active;
+        cancel();
+        if (!wasActive) return;
+        const tl = state.timeline;
+        if (!tl) return;
+        const order0 = tl.cuts.map((c) => c.id);
+        const ids = movingIds();
+        const r = moveCuts(order0, groupsClone(), ids, { toIndex: drop.toIndex, toGroupId: drop.toGroupId });
+        const same =
+          r.order.length === order0.length &&
+          r.order.every((id, i) => id === order0[i]) &&
+          JSON.stringify(r.groups) === JSON.stringify(tl.groups || []);
+        if (same) return;
+        await persistShotsReorder(r.order, r.groups);
+      };
+      shotsUi.dragSession = { cancel };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    });
+  });
+}
+
+async function saveCutFields(cutId, fields) {
+  if (!isNativeProject() || !state.pid) return;
+  try {
+    const data = await postJson("/gonggan/cut/update", { pid: state.pid, cut_id: cutId, fields });
+    if (data.timeline) {
+      state.timeline = data.timeline;
+      state.error = "";
+      bus.dispatchEvent(new Event("timeline"));
+    }
+  } catch (e) {
+    ggToast("Save failed", e.message, "warn");
+  }
+}
+
+function scheduleCutFieldSave(cutId, fields) {
+  clearTimeout(cutFieldUi.timer);
+  cutFieldUi.pending = { cutId, fields: { ...(cutFieldUi.pending?.cutId === cutId ? cutFieldUi.pending.fields : {}), ...fields } };
+  cutFieldUi.timer = setTimeout(() => {
+    const p = cutFieldUi.pending;
+    cutFieldUi.pending = null;
+    cutFieldUi.timer = 0;
+    if (p) saveCutFields(p.cutId, p.fields);
+  }, 400);
+}
+
+async function saveProjectDue(value) {
+  if (!isNativeProject() || !state.pid) return;
+  try {
+    const data = await postJson("/gonggan/project/update", { pid: state.pid, fields: { due_date: value || null } });
+    if (data.timeline) state.timeline = data.timeline;
+    if (data.projects) state.projects = data.projects;
+    state.error = "";
+    bus.dispatchEvent(new Event("projects"));
+    bus.dispatchEvent(new Event("timeline"));
+    paintProjectSummary(null);
+  } catch (e) {
+    ggToast("Due date", e.message, "warn");
+  }
+}
+
+function toggleNeedsRedo(cutId) {
+  const c = cutByIdTimeline(cutId);
+  if (!c || !isNativeProject()) return;
+  const next = !c.needs_redo;
+  c.needs_redo = next;
+  scheduleCutFieldSave(cutId, { needs_redo: next });
+  bus.dispatchEvent(new Event("timeline"));
+}
+
+function finalCutListHtml(tl) {
+  const r = finalCutList(tl);
+  const items = r.items.map((it) => {
+    const cut = tl.cuts.find((c) => c.id === it.cutId) || {};
+    const warn = lengthWarning(cut);
+    const fname = fileBaseName(cut, null, versionIndexFromList(cut.versions_list, it.versionId));
+    return `
+      <li class="gg-final-item" data-cut-id="${esc(it.cutId)}">
+        <span class="gg-num">${formatCutNumber(it.number)}</span>
+        <div class="gg-final-thumb">${thumbHtml(cut.media, "gg-thumb")}</div>
+        <div class="gg-final-meta">
+          <div class="gg-final-name">${esc(it.name)}</div>
+          <div class="gg-final-sub">${esc(it.sceneName || "—")} · ${effectiveLenLabel(cut)} · ${esc(fname)} · ${esc(it.versionLabel)}</div>
+          ${warn ? `<span class="gg-warn3" title="${esc(warn.message)}">&gt; 3s</span>` : ""}
+        </div>
+      </li>`;
+  }).join("");
+  const miss = r.missingBest.length
+    ? `<div class="gg-final-miss">${r.missingBest.length} cut${r.missingBest.length === 1 ? "" : "s"} have no Best yet</div>`
+    : "";
+  return `
+    <div class="gg-final-list">
+      <ol class="gg-final-items">${items || '<li class="gg-dim">No cuts with Best set yet.</li>'}</ol>
+      <footer class="gg-final-total">Total: ${formatMinSecDot(r.totalSec)} (${r.items.length} cut${r.items.length === 1 ? "" : "s"})</footer>
+      ${miss}
+    </div>`;
+}
+
+function bindCutPanelFields(panel, c) {
+  if (!c || !panel) return;
+  const nat = isNativeProject();
+  const roTip = NATIVE_READONLY_TIP;
+  const lenIn = panel.querySelector(".gg-len-input");
+  const notes = panel.querySelector(".gg-notes");
+  const endChk = panel.querySelector("input.gg-endcard-chk");
+  const redoChk = panel.querySelector("input.gg-redo-chk");
+  const fnameEl = panel.querySelector(".gg-fname");
+  const copyBtn = panel.querySelector(".gg-fname-copy");
+  const rep = repIdOf(c);
+  const vIdx = rep ? versionIndexFromList(c.versions_list, rep) : 1;
+  const fname = fileBaseName(c, { scene_index: c.scene_index }, vIdx);
+  if (fnameEl) fnameEl.textContent = fname;
+  if (copyBtn) {
+    copyBtn.disabled = !fname;
+    copyBtn.title = nat ? "Copy suggested file base name" : roTip;
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard?.writeText(fname).then(() => ggToast("Copied", fname, "ok")).catch(() => {});
+    });
+  }
+  const planned = c.planned_sec;
+  if (lenIn) {
+    lenIn.value = planned != null && Number.isFinite(planned) ? String(planned) : "";
+    lenIn.disabled = !nat;
+    lenIn.title = nat ? "Planned length (seconds)" : roTip;
+    const onLen = () => {
+      const raw = lenIn.value.trim();
+      const val = raw === "" ? null : Number(raw);
+      if (raw !== "" && (!Number.isFinite(val) || val < 0.5 || val > 600)) return;
+      c.planned_sec = val;
+      scheduleCutFieldSave(c.id, { planned_sec: val });
+      refreshCutRowBadges(c.id);
+    };
+    lenIn.addEventListener("change", onLen);
+    lenIn.addEventListener("blur", onLen);
+  }
+  if (notes) {
+    notes.value = c.notes || "";
+    notes.disabled = !nat;
+    notes.title = nat ? "Cut notes" : roTip;
+    const onNotes = () => {
+      c.notes = notes.value;
+      scheduleCutFieldSave(c.id, { notes: notes.value });
+    };
+    notes.addEventListener("change", onNotes);
+    notes.addEventListener("blur", onNotes);
+  }
+  if (endChk) {
+    endChk.checked = !!c.end_card;
+    endChk.disabled = !nat;
+    endChk.title = nat ? "End card (no length warning)" : roTip;
+    endChk.addEventListener("change", () => {
+      c.end_card = endChk.checked;
+      scheduleCutFieldSave(c.id, { end_card: endChk.checked });
+      refreshCutRowBadges(c.id);
+      bus.dispatchEvent(new Event("timeline"));
+    });
+  }
+  if (redoChk) {
+    redoChk.checked = !!c.needs_redo;
+    redoChk.disabled = !nat;
+    redoChk.title = nat ? "Flag for redo" : roTip;
+    redoChk.addEventListener("change", () => {
+      c.needs_redo = redoChk.checked;
+      scheduleCutFieldSave(c.id, { needs_redo: redoChk.checked });
+      refreshCutRowBadges(c.id);
+      bus.dispatchEvent(new Event("timeline"));
+    });
+  }
+}
+
+function refreshCutRowBadges(cutId) {
+  const c = cutByIdTimeline(cutId);
+  if (!c) return;
+  document.querySelectorAll(`.gg-cut[data-cut-id="${CSS.escape(cutId)}"]`).forEach((li) => {
+    const num = li.querySelector(".gg-num");
+    if (num) num.textContent = formatCutNumber(c.number ?? (c.pos ?? 0) + 1);
+    const len = li.querySelector(".gg-len-badge");
+    if (len) len.textContent = effectiveLenLabel(c);
+    const warn = lengthWarning(c);
+    let wEl = li.querySelector(".gg-warn3");
+    if (warn) {
+      if (!wEl) {
+        wEl = document.createElement("span");
+        wEl.className = "gg-warn3";
+        li.querySelector(".gg-cut-badges")?.appendChild(wEl);
+      }
+      wEl.hidden = false;
+      wEl.textContent = "> 3s";
+      wEl.title = warn.message;
+    } else if (wEl) wEl.hidden = true;
+    let ec = li.querySelector(".gg-endcard-badge");
+    if (c.end_card) {
+      if (!ec) {
+        ec = document.createElement("span");
+        ec.className = "gg-endcard-badge";
+        li.querySelector(".gg-cut-badges")?.appendChild(ec);
+      }
+      ec.hidden = false;
+      ec.textContent = "End card";
+    } else if (ec) ec.hidden = true;
+    let rd = li.querySelector(".gg-redo-badge");
+    if (c.needs_redo) {
+      if (!rd) {
+        rd = document.createElement("span");
+        rd.className = "gg-redo-badge";
+        li.querySelector(".gg-cut-badges")?.appendChild(rd);
+      }
+      rd.hidden = false;
+      rd.textContent = "Needs redo";
+    } else if (rd) rd.hidden = true;
+  });
+}
+
 function cutRowHtml(c) {
+  const warn = lengthWarning(c);
+  const badges = [
+    `<span class="gg-len-badge">${effectiveLenLabel(c)}</span>`,
+    warn ? `<span class="gg-warn3" title="${esc(warn.message)}">&gt; 3s</span>` : "",
+    c.end_card ? `<span class="gg-endcard-badge">End card</span>` : "",
+    c.needs_redo ? `<span class="gg-redo-badge">Needs redo</span>` : "",
+  ].filter(Boolean).join("");
   return `
     <li class="gg-cut${state.cutSel.has(c.id) ? " gg-sel" : ""}" data-cut-id="${esc(c.id)}" title="${esc(c.story || c.prompt)}">
       <div class="gg-cut-thumb-col">
@@ -1315,8 +1722,9 @@ function cutRowHtml(c) {
         </div>
       </div>
       <div class="gg-cut-text">
-        <div class="gg-cut-name"><span class="gg-no">${(c.pos ?? c.index) + 1}</span>${esc(c.name || "(untitled)")}</div>
-        <div class="gg-cut-sub">${c.group_name ? esc(c.group_name) + " · " : ""}${c.sec.toFixed(1)}s${c.versions > 1 ? ` · v${c.versions}` : ""}</div>
+        <div class="gg-cut-name"><span class="gg-num">${formatCutNumber(c.number ?? (c.pos ?? c.index ?? 0) + 1)}</span>${esc(c.name || "(untitled)")}</div>
+        <div class="gg-cut-sub">${c.group_name ? esc(c.group_name) + " · " : ""}${c.sec.toFixed(1)}s tl${c.versions > 1 ? ` · v${c.versions}` : ""}</div>
+        <div class="gg-cut-badges">${badges}</div>
       </div>
     </li>`;
 }
@@ -1575,9 +1983,29 @@ function cutPanelHtml(c) {
       <button type="button" class="gg-btn gg-promote${on ? " gg-on" : ""}" ${on ? "disabled" : ""} title="${on ? "Timeline representative version" : "Set as timeline representative"}">${on ? "Rep" : "Set rep"}</button>
     </div>`;
   }).join("");
+  const planned = c.planned_sec;
+  const lenVal = planned != null && Number.isFinite(planned) ? String(planned) : "";
+  const vIdx = rep ? versionIndexFromList(c.versions_list, rep) : 1;
+  const fname = fileBaseName(c, { scene_index: c.scene_index }, vIdx);
+  const metaDisabled = nat ? "" : " disabled";
+  const metaTip = nat ? "" : ` title="${esc(NATIVE_READONLY_TIP)}"`;
   return `
-    <div class="gg-panel-title"><span class="gg-no">${c.pos + 1}</span>${esc(c.name)}</div>
+    <div class="gg-panel-title"><span class="gg-num">${formatCutNumber(c.number ?? c.pos + 1)}</span>${esc(c.name)}</div>
     ${panelPreviewHtml(c)}
+    <div class="gg-cut-fields">
+      <label class="gg-field-len"${metaTip}>Length (sec)
+        <input type="number" class="gg-len-input" min="0.5" max="600" step="0.1" value="${esc(lenVal)}"${metaDisabled} />
+      </label>
+      <label class="gg-field-end"${metaTip}><input type="checkbox" class="gg-endcard-chk"${c.end_card ? " checked" : ""}${metaDisabled} /> End card</label>
+      <label class="gg-field-redo"${metaTip}><input type="checkbox" class="gg-redo-chk"${c.needs_redo ? " checked" : ""}${metaDisabled} /> Needs redo</label>
+      <label class="gg-field-notes"${metaTip}>Notes
+        <textarea class="gg-notes" rows="2" placeholder="Notes…"${metaDisabled}>${esc(c.notes || "")}</textarea>
+      </label>
+      <div class="gg-fname-row">
+        <span class="gg-fname" title="Suggested export base name (read-only)">${esc(fname)}</span>
+        <button type="button" class="gg-btn gg-fname-copy"${nat ? "" : ` disabled title="${esc(NATIVE_READONLY_TIP)}"`}>Copy</button>
+      </div>
+    </div>
     <div class="gg-vers">${vers || '<span class="gg-dim">no versions yet</span>'}</div>
     <div class="gg-scene-actions">
       <button class="gg-btn gg-scene-new" type="button" title="Group selected shots into a new scene">+ Scene</button>
@@ -1640,14 +2068,18 @@ function mountShots(el) {
     panel.querySelector(".gg-scene-new")?.addEventListener("click", () => createSceneGroup([c.id]));
     panel.querySelector(".gg-scene-split")?.addEventListener("click", () => splitSceneHere(c.id));
     panel.querySelector(".gg-scene-off")?.addEventListener("click", () => ungroupCuts([c.id]));
+    if (c) bindCutPanelFields(panel, c);
   };
   const paint = () => {
+    if (shotsUi.dragSession) return;
     const tl = state.timeline;
     const opts = state.projects.map((p) =>
       `<option value="${esc(p.id)}"${p.id === state.pid ? " selected" : ""}>${esc(projectOptionLabel(p))}</option>`).join("");
-    const cuts = tl ? tl.cuts : [];
+    let cuts = tl ? tl.cuts : [];
+    if (shotsUi.needsRedoOnly) cuts = filterCuts(cuts, { needsRedoOnly: true });
     const groups = tl ? tl.groups || [] : [];
     const sections = shotsSections(cuts, groups);
+    const viewFinal = shotsUi.view === "final";
     const listHtml = sections.map((sec) => {
       if (sec.type === "ungrouped") {
         return `<section class="gg-grp-sec gg-grp-loose"><header class="gg-grp-head">Ungrouped <span class="gg-grp-meta">${sec.cuts.length}</span></header><ol class="gg-cutlist">${sec.cuts.map(cutRowHtml).join("")}</ol></section>`;
@@ -1679,14 +2111,30 @@ function mountShots(el) {
       </div>
       ${state.error ? `<div class="gg-error">${esc(state.error)}</div>` : ""}
       <div class="gg-shot-summary">
-        <div class="gg-summary-line"><span class="gg-summary-text">${esc(tl ? formatSummary(projectSummary(cuts)) : "")}</span></div>
-        <div class="gg-summary-bar"${cuts.length ? "" : " hidden"}><span class="gg-seg gg-seg-done"></span><span class="gg-seg gg-seg-video"></span><span class="gg-seg gg-seg-image"></span></div>
+        <div class="gg-summary-line"><span class="gg-summary-text">${esc(tl ? formatSummary(projectSummary(tl.cuts || [])) : "")}</span></div>
+        <div class="gg-summary-bar"${(tl?.cuts?.length || 0) ? "" : " hidden"}><span class="gg-seg gg-seg-done"></span><span class="gg-seg gg-seg-video"></span><span class="gg-seg gg-seg-image"></span></div>
+        <div class="gg-complete-row">
+          <div class="gg-complete-bar" title="Best set progress"><div class="gg-complete-fill"></div></div>
+          <span class="gg-complete-pct"></span>
+        </div>
+        <div class="gg-due-row">
+          <label class="gg-due-label">Due <input type="date" class="gg-due-input" /></label>
+          <span class="gg-due-text"></span>
+        </div>
       </div>
-      <div class="gg-meta">${tl ? `${cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</div>
+      <div class="gg-shots-toolbar">
+        <div class="gg-view-toggle">
+          <button type="button" class="gg-btn gg-view-cuts${viewFinal ? "" : " gg-on"}" data-view="cuts">Cuts</button>
+          <button type="button" class="gg-btn gg-view-final${viewFinal ? " gg-on" : ""}" data-view="final">Final cut list</button>
+        </div>
+        <label class="gg-filter-redo" title="Show only cuts flagged needs redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Needs redo only</label>
+      </div>
+      <div class="gg-meta">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</div>
       <div class="gg-selbar" hidden>
         <span class="gg-sel-count">0</span> selected · <button type="button" class="gg-btn gg-sel-group">Group</button> · <button type="button" class="gg-btn gg-sel-ungroup">Ungroup</button> · <button type="button" class="gg-btn gg-sel-x">×</button>
       </div>
-      <div class="gg-grp-wrap">${listHtml}</div>
+      <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${listHtml}</div>
+      <div class="gg-final-wrap"${viewFinal ? "" : " hidden"}>${viewFinal && tl ? finalCutListHtml(tl) : ""}</div>
       <div class="gg-cutpanel"></div>`;
     const projSel = root.querySelector(".gg-proj");
     projSel?.addEventListener("change", (e) => selectProject(e.target.value));
@@ -1705,6 +2153,31 @@ function mountShots(el) {
     tplSel?.addEventListener("change", (e) => setProjectTemplateRef(e.target.value));
     root.querySelector(".gg-cut-add")?.addEventListener("click", () => addLocalCut());
     root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); refreshProjectTemplateFlag(); });
+    root.querySelectorAll(".gg-view-toggle .gg-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        shotsUi.view = btn.dataset.view === "final" ? "final" : "cuts";
+        paint();
+      });
+    });
+    const redoFilter = root.querySelector(".gg-filter-redo input");
+    redoFilter?.addEventListener("change", (e) => {
+      shotsUi.needsRedoOnly = !!e.target.checked;
+      paint();
+    });
+    const dueIn = root.querySelector(".gg-due-input");
+    dueIn?.addEventListener("change", (e) => {
+      clearTimeout(projectFieldUi.timer);
+      const v = e.target.value;
+      projectFieldUi.timer = setTimeout(() => saveProjectDue(v), 300);
+    });
+    root.querySelectorAll(".gg-final-item").forEach((li) => {
+      li.addEventListener("click", () => {
+        selectCut(li.dataset.cutId);
+        openTimelinePanel();
+        paintSelection(root);
+        paintPanel();
+      });
+    });
     root.querySelector(".gg-scene-add")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-group")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-ungroup")?.addEventListener("click", () => ungroupCuts(cutSelIds()));
@@ -1743,8 +2216,10 @@ function mountShots(el) {
       head.addEventListener("contextmenu", (e) => openSceneContextMenu(e, gid));
     });
     bindHoverPlay(root);
+    bindShotsReorder(root);
     paintSelection(root);
     paintPanel();
+    paintProjectSummary(root);
     paintAllCutProgress();
     syncProgressWireState();
     fit();
@@ -1766,6 +2241,10 @@ function mountShots(el) {
     const tag = (e.target && e.target.tagName) || "";
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable) return;
     if (e.key === "Escape") {
+      if (shotsUi.dragSession) {
+        shotsUi.dragSession.cancel();
+        return;
+      }
       closeCtxMenu();
       if (state.cutSel.size) {
         state.cutSel.clear();
@@ -2506,6 +2985,8 @@ app.registerExtension({
     { id: TIMELINE_TAB, title: "Timeline", type: "custom", icon: "pi pi-video", render: (el) => mountTimeline(el) },
   ],
   async setup() {
+    bindLoadImageUi({ ggToast });
+    installLoadImageQueueGuard();
     loadPersistedJobs();
     if (!api._ggQueuePatched) {
       api._ggQueuePatched = true;

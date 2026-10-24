@@ -122,12 +122,36 @@ Pure stage helpers and the live tracker live in `web/gg_progress_core.js` (`cutS
 
 ### JS tests (no npm)
 ```
-node --test tests/js/progress_core.test.mjs tests/js/cut_stage.test.mjs
+node --test tests/js/progress_core.test.mjs tests/js/cut_stage.test.mjs tests/js/cuts_core.test.mjs tests/js/loadimage_core.test.mjs
 ```
 Also run `node --check web/gonggan.js` and `node --check web/gg_progress_core.js` after UI edits.
 
+## Cut management (0.8.0)
+Shots and Timeline add lightweight production tracking on top of the existing scene/cut model (English UI labels).
+
+- **Drag reorder** in the Shots list with **auto cut numbers** (`001`, `002`, …) after drops.
+- **Per-cut fields**: planned length (`planned_sec`), notes, **End card** flag (exempt from the short-form length rule).
+- **3-second rule warning** when effective length is over 3 s (uses `planned_sec` when set, else media `sec`); End card cuts are exempt.
+- **Final cut list** view: ordered picks with **total length**, copyable **file naming** display `S01_003_v02` (computed label only — pack files are never renamed).
+- **Needs redo** flag per cut plus **filter** to show only flagged cuts.
+- **Project due date** and **completion %** in the Shots header (`due_date` on native projects; share projects when present in timeline payload).
+- Routes: `POST /gonggan/cut/update` `{pid, cut_id, fields}` · `POST /gonggan/project/update` `{pid, fields}` (Python route changes need a ComfyUI restart).
+
+Pure helpers: `web/gg_cuts_core.js`. Headless UI checks: `tests/e2e/cut_mgmt_test.mjs` (not run automatically).
+
+### Missing Load Image guard (0.8.0)
+When a workflow is loaded (including shot workflow load), **Load Image** / **Load Image Mask** nodes are checked against the combo file list and, if needed, `GET`/`HEAD` `/api/view?filename=…&type=input`. Missing files get a **red canvas outline** (not serialized) and toast `Missing image: <file> (node <title>)`. **Queue** is blocked with `Cannot queue: missing image …`, the node is selected, and the canvas centers on it. No auto-replace of filenames. Logic: `web/gg_loadimage_core.js`; wiring: `web/gg_loadimage.js`. E2E: `tests/e2e/loadimage_test.mjs`.
+
+## Tests
+```
+python -m unittest discover -s tests -p test_*.py
+node --test tests/js/cut_stage.test.mjs tests/js/progress_core.test.mjs tests/js/cuts_core.test.mjs tests/js/loadimage_core.test.mjs
+```
+Headless Chrome scenarios live under `tests/e2e/` (manual / CI optional).
+
 ## Changelog
 
+- **0.8.0** — Cut management UI (drag reorder, auto numbers, length/notes, 3 s rule + End card, Final list + total, Needs redo filter, `S01_003_v02` naming display, due date + completion %); `POST /gonggan/cut/update`, `/gonggan/project/update`; missing Load Image scan + queue guard (`gg_loadimage_core.js`, `gg_loadimage.js`); tests `cuts_core`, `loadimage_core`, e2e `cut_mgmt_test`, `loadimage_test`.
 - **0.7.0** — Per-cut work stages (Image/Video/Best pills, project summary bar), live run chip, timeline stage dots; `gg_progress_core.js`; JS tests `tests/js/progress_core.test.mjs`, `tests/js/cut_stage.test.mjs`.
 - **0.6.0** — Native projects stored under `projects/` with full timeline/edit/scene/cut/template APIs; Gonggan-share list unchanged (read-only); project CRUD UI; send-last-output for native cuts; tests in `tests/test_project_routes.py`.
 - **0.5.2** — Shot click loads API/stored workflows with a string filename (`loadApiJson` / `loadGraphData`); one Gonggan-owned canvas tab per session, renamed per cut (closes the previous tab). Reloads after the tab was closed; surfaces load errors in toast/console. Removed the "+ Cut" / "+ Scene" header buttons (use empty-area right-click Add Cut, and Group from the selection bar or menu).
