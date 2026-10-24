@@ -88,6 +88,123 @@ function selectProject(pid) {
   loadTimeline();
 }
 
+const NATIVE_READONLY_TIP = "Not available for Gonggan-share (read-only) projects";
+const NATIVE_ONLY_TIP = "Native projects only";
+
+function currentProject() {
+  return state.projects.find((p) => p.id === state.pid) || null;
+}
+
+function isNativePid(pid) {
+  return typeof pid === "string" && pid.includes("-");
+}
+
+function isNativeProject() {
+  const p = currentProject();
+  if (p && typeof p.native === "boolean") return p.native;
+  return isNativePid(state.pid);
+}
+
+function projectOptionLabel(p) {
+  const prefix = p.native ? "[Native] " : "";
+  const suffix = p.native ? "" : " (read-only)";
+  return `${prefix}${p.name || p.id} (${p.cut_count ?? 0})${suffix}`;
+}
+
+let projectModalEl = null;
+
+function closeProjectModal() {
+  if (projectModalEl) {
+    projectModalEl.remove();
+    projectModalEl = null;
+  }
+}
+
+function openNewProjectModal() {
+  closeProjectModal();
+  const wrap = document.createElement("div");
+  wrap.className = "gg-modal-backdrop";
+  wrap.innerHTML = `
+    <form class="gg-modal" role="dialog" aria-label="New project">
+      <h3 class="gg-modal-title">New Project</h3>
+      <label class="gg-modal-field">Name <input type="text" class="gg-modal-name" required maxlength="120" /></label>
+      <label class="gg-modal-field">Template
+        <select class="gg-modal-tpl"><option value="">(none)</option></select>
+      </label>
+      <div class="gg-modal-actions">
+        <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
+        <button type="submit" class="gg-btn gg-primary">Create</button>
+      </div>
+    </form>`;
+  document.body.appendChild(wrap);
+  projectModalEl = wrap;
+  const form = wrap.querySelector("form");
+  const nameIn = wrap.querySelector(".gg-modal-name");
+  const tplSel = wrap.querySelector(".gg-modal-tpl");
+  fetchUserWorkflowPaths().then(() => {
+    tplSel.innerHTML = `<option value="">(none)</option>${userWorkflowPaths.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("")}`;
+  });
+  wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeProjectModal(); });
+  wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", closeProjectModal);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = nameIn.value.trim();
+    if (!name) return;
+    const template_ref = tplSel.value || undefined;
+    try {
+      const d = await postJson("/gonggan/project/create", { name, template_ref });
+      closeProjectModal();
+      await loadProjects();
+      if (d.project?.id) selectProject(d.project.id);
+      ggToast("Project", `Created "${name}"`, "ok");
+    } catch (err) {
+      ggToast("Project", err.message, "warn");
+    }
+  });
+  nameIn.focus();
+}
+
+async function renameNativeProject() {
+  if (!isNativeProject()) return;
+  const p = currentProject();
+  const cur = p?.name || "";
+  const name = prompt("Project name", cur);
+  if (name === null || !name.trim()) return;
+  try {
+    await postJson("/gonggan/project/rename", { pid: state.pid, name: name.trim() });
+    await loadProjects();
+    ggToast("Project", "Renamed", "ok");
+  } catch (e) {
+    ggToast("Project", e.message, "warn");
+  }
+}
+
+async function deleteNativeProject() {
+  if (!isNativeProject()) return;
+  const p = currentProject();
+  const label = p?.name || state.pid;
+  if (!confirm(`Delete project "${label}"? It will be moved to trash.`)) return;
+  try {
+    await postJson("/gonggan/project/delete", { pid: state.pid });
+    state.pid = "";
+    await loadProjects();
+    ggToast("Project", "Project moved to trash", "ok");
+  } catch (e) {
+    ggToast("Project", e.message, "warn");
+  }
+}
+
+function openProjectContextMenu(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const nat = isNativeProject();
+  showCtxMenu(e.clientX, e.clientY, [
+    { label: "New Project…", action: () => openNewProjectModal() },
+    { label: "Rename Project…", disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => renameNativeProject() },
+    { label: "Delete Project", danger: true, disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => deleteNativeProject() },
+  ]);
+}
+
 const GG_LEGACY_SHOT_WF_FILE = "gonggan-shot.json";
 const GG_LEGACY_SHOT_WF_PATH = "workflows/gonggan-shot.json";
 const WF_LOAD_DEBOUNCE_MS = 250;
@@ -604,6 +721,7 @@ function showCtxMenu(x, y, items) {
     btn.className = "gg-ctx-item" + (it.danger ? " gg-ctx-danger" : "");
     btn.textContent = it.label;
     btn.disabled = !!it.disabled;
+    if (it.title) btn.title = it.title;
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       closeCtxMenu();
@@ -1094,6 +1212,11 @@ api.addEventListener("gonggan.regen", (e) => {
 
 function cutPanelHtml(c) {
   if (!c) return `<div class="gg-panel-empty">Select a cut for versions and actions.</div>`;
+  const nat = isNativeProject();
+  const regenOff = nat || sdk.busy || !(sdk.st && sdk.st.ok);
+  const regenTip = nat
+    ? "Not available for native projects yet"
+    : "Draft re-render through Comfy SDK → comfy-api-proxy → ComfyUI. Shows the job and asks before queueing.";
   const rep = repIdOf(c);
   const vers = (c.versions_list || []).map((v) => {
     const on = v.id === rep;
@@ -1118,7 +1241,7 @@ function cutPanelHtml(c) {
       <button class="gg-btn gg-scene-off" type="button" title="Remove selected shots from their scene (ungrouped)">Remove from scene</button>
     </div>
     <div class="gg-actions">
-      <button class="gg-btn gg-regen" ${sdk.busy || !(sdk.st && sdk.st.ok) ? "disabled" : ""} title="Draft re-render through Comfy SDK → comfy-api-proxy → ComfyUI. Shows the job and asks before queueing.">Regenerate (new version)</button>
+      <button class="gg-btn gg-regen" ${regenOff ? "disabled" : ""} title="${esc(regenTip)}">Regenerate (new version)</button>
       <button class="gg-btn gg-send" ${sdk.busy ? "disabled" : ""} title="Copy ComfyUI's last output (from /history, else newest file in output/) into this cut as a new version">Send last ComfyUI output</button>
     </div>
     <div class="gg-sdk-msg">${esc(sdk.msg)}</div>`;
@@ -1177,7 +1300,7 @@ function mountShots(el) {
   const paint = () => {
     const tl = state.timeline;
     const opts = state.projects.map((p) =>
-      `<option value="${esc(p.id)}"${p.id === state.pid ? " selected" : ""}>${esc(p.name)} (${p.cut_count})</option>`).join("");
+      `<option value="${esc(p.id)}"${p.id === state.pid ? " selected" : ""}>${esc(projectOptionLabel(p))}</option>`).join("");
     const cuts = tl ? tl.cuts : [];
     const groups = tl ? tl.groups || [] : [];
     const sections = shotsSections(cuts, groups);
@@ -1216,7 +1339,11 @@ function mountShots(el) {
       </div>
       <div class="gg-grp-wrap">${listHtml}</div>
       <div class="gg-cutpanel"></div>`;
-    root.querySelector(".gg-proj")?.addEventListener("change", (e) => selectProject(e.target.value));
+    const projSel = root.querySelector(".gg-proj");
+    projSel?.addEventListener("change", (e) => selectProject(e.target.value));
+    root.querySelector(".gg-head")?.addEventListener("contextmenu", (e) => {
+      if (e.target.closest(".gg-proj") || e.target.closest(".gg-head")) openProjectContextMenu(e);
+    });
     const tplSel = root.querySelector(".gg-tpl-select");
     tplSel?.addEventListener("focus", () => {
       fetchUserWorkflowPaths().then(() => {
@@ -1334,6 +1461,7 @@ function mountShots(el) {
     bus.removeEventListener("template", onTemplate);
     bus.removeEventListener("select", onSel);
     bus.removeEventListener("sdk", paintPanel);
+    closeProjectModal();
     extraCleanup.forEach((fn) => fn());
   };
 }
@@ -1858,19 +1986,23 @@ function mountTimeline(el) {
       }
     }
   };
-  const onProjects = () => { stopPlay(); play.t = 0; };
+  const onProjects = () => { stopPlay(); play.t = 0; paintTimelineNativeLocks(); };
   bus.addEventListener("timeline", onTimeline);
   bus.addEventListener("projects", onProjects);
+  const onTimelineLocks = () => paintTimelineNativeLocks();
+  bus.addEventListener("timeline", onTimelineLocks);
   bus.addEventListener("dirty", onDirty);
   bus.addEventListener("select", onSel);
   paintTrack();
   paintExport();
+  paintTimelineNativeLocks();
   refreshExport();
   if (!state.projects.length) loadProjects();
   return () => {
     stopPlay();
     if (ro) ro.disconnect();
     bus.removeEventListener("timeline", onTimeline);
+    bus.removeEventListener("timeline", onTimelineLocks);
     bus.removeEventListener("projects", onProjects);
     bus.removeEventListener("dirty", onDirty);
     bus.removeEventListener("select", onSel);
@@ -1898,9 +2030,29 @@ async function refreshExport() {
   try { const d = await getJson("/gonggan/export/status"); onExportJob(d.job); } catch (_) {}
 }
 
+function paintTimelineNativeLocks() {
+  const nat = isNativeProject();
+  const tip = "Not available for native projects yet";
+  document.querySelectorAll(".gg-timeline .gg-export").forEach((btn) => {
+    btn.disabled = nat;
+    btn.title = nat ? tip : "Render the timeline to one mp4 (CPU, ffmpeg)";
+  });
+  document.querySelectorAll(".gg-timeline .gg-reset").forEach((btn) => {
+    btn.disabled = nat;
+    btn.title = nat ? tip : "Reset to Gonggan order and lengths";
+  });
+  document.querySelectorAll(".gg-timeline .gg-ex-preset, .gg-timeline .gg-ex-sound").forEach((el) => {
+    el.disabled = nat;
+  });
+}
+
 async function startExport(preset, sound) {
   const tl = state.timeline;
   if (!tl || !tl.cuts.length) return;
+  if (isNativeProject()) {
+    ggToast("Export", "Not available for native projects yet", "warn");
+    return;
+  }
   clearTimeout(ed.saveTimer);
   if (ed.saving || ed.saveTimer) await saveEdit();   // export what is on screen
   stopPlay();
