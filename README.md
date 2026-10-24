@@ -109,8 +109,26 @@ Routes (in addition to existing `/gonggan/*`):
 - `POST /gonggan/project/delete` `{pid}` · `POST /gonggan/project/restore` `{pid}`
 - `GET /gonggan/projects` — share projects plus native (`native: true|false`)
 
+## Work stages & progress (0.7.0)
+Each shot shows **Image / Video / Best** stage pills (from `versions_list` kinds and `pick`). The Shots header shows a summary line (`Done N/T · Video … · Image …`) and a segmented bar. **Timeline** clips show a small stage dot (gray / blue / purple / green).
+
+**Live run chip** (only for jobs linked to a cut): pulsing dot + percent while running, `Queued #n` in queue, red **Failed** on error. Stage pills stay visible; the live chip hides when the run ends and the UI reloads timeline data (throttled **GET** `/gonggan/timeline`). Jobs started from the Gonggan shot workflow tab are linked via `api.queuePrompt` and `localStorage` key `gonggan.jobs` (max 200). Unmapped ComfyUI jobs appear as **Other job running** / **Other jobs: N running, M queued** in the Shots header (read-only).
+
+Events (read-only sync): Comfy `api` WebSocket types `status`, `execution_start`, `execution_cached`, `executing`, `progress`, `progress_state`, `executed`, `execution_success`, `execution_error`, `execution_interrupted`; plus **GET** `/queue` (on panel open and debounced on `status`) and **GET** `/history?max_items=30` on open. Never writes to `/queue` or `/history`.
+
+Pure stage helpers and the live tracker live in `web/gg_progress_core.js` (`cutStage`, `projectSummary`, `formatSummary`, `createProgressTracker`).
+
+**Runner event contract** (for a future Comfy Cloud runner): `{ promptId, cutId, projectId, state, percent, node, queuePos, error, ts }` with `state` in `queued|running|done|failed|interrupted`. Emit the same objects into `createProgressTracker().emit(evt)`.
+
+### JS tests (no npm)
+```
+node --test tests/js/progress_core.test.mjs tests/js/cut_stage.test.mjs
+```
+Also run `node --check web/gonggan.js` and `node --check web/gg_progress_core.js` after UI edits.
+
 ## Changelog
 
+- **0.7.0** — Per-cut work stages (Image/Video/Best pills, project summary bar), live run chip, timeline stage dots; `gg_progress_core.js`; JS tests `tests/js/progress_core.test.mjs`, `tests/js/cut_stage.test.mjs`.
 - **0.6.0** — Native projects stored under `projects/` with full timeline/edit/scene/cut/template APIs; Gonggan-share list unchanged (read-only); project CRUD UI; send-last-output for native cuts; tests in `tests/test_project_routes.py`.
 - **0.5.2** — Shot click loads API/stored workflows with a string filename (`loadApiJson` / `loadGraphData`); one Gonggan-owned canvas tab per session, renamed per cut (closes the previous tab). Reloads after the tab was closed; surfaces load errors in toast/console. Removed the "+ Cut" / "+ Scene" header buttons (use empty-area right-click Add Cut, and Group from the selection bar or menu).
 - **0.5.1** — Shots multi-select bar: shown only for 2+ cuts (original styling); context menus opaque Comfy background at ~70% scale; empty Shots panel right-click (**Add Cut**, **New Scene** when cuts are selected); plugin UI strings in English. Fix: template dropdown now lists ComfyUI saved workflows (fetchApi path double /api and array response).
