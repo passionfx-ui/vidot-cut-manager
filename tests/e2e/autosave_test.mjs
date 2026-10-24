@@ -293,6 +293,8 @@ async function modifyWorkflowViaWidget(page, marker) {
     window.app.graph?.setDirtyCanvas?.(true, true);
     if (typeof window.app.graph?.change === "function") window.app.graph.change();
     const wf = window.app.extensionManager.workflow.activeWorkflow;
+    // graph.change() alone does not run the ChangeTracker diff; the UI calls checkState() on pointer/key events.
+    wf?.changeTracker?.checkState?.();
     return {
       ok: !!wf?.isModified,
       err: wf?.isModified ? "" : "isModified still false after widget change",
