@@ -2,6 +2,7 @@
 // Day 1: static render of real Gonggan projects/cuts (read-only). Trim/reorder come next.
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { createProgressTracker, cutStage, projectSummary, formatSummary } from "./gg_progress_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -9,6 +10,13 @@ const TIMELINE_TAB = "gg-timeline";
 const SHOTS_TAB = "gg-shots";
 const bus = new EventTarget();
 const state = { projects: [], pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
+const JOBS_KEY = "gonggan.jobs";
+const progressTracker = createProgressTracker();
+const progUi = { paintTimer: 0, statusDebounce: 0, timelineReloadTimer: 0, wired: false, handlers: {} };
+const PROGRESS_API_EVENTS = [
+  "status", "execution_start", "execution_cached", "executing", "progress", "progress_state",
+  "executed", "execution_success", "execution_error", "execution_interrupted",
+];
 let cutSelAnchor = "";
 const ctxUi = { el: null, onDoc: null, onKey: null };
 
@@ -489,6 +497,7 @@ async function loadCutWorkflow(cutId, cut) {
         continue;
       }
       wfLastLoadedCutId = cutId;
+      markGraphGongganCut(cutId);
       sdk.msg = hit.sdkMsg;
       bus.dispatchEvent(new Event("sdk"));
       const sum = hit.toastSummary || "Shot";
@@ -509,6 +518,7 @@ async function loadCutWorkflow(cutId, cut) {
               continue;
             }
             wfLastLoadedCutId = cutId;
+            markGraphGongganCut(cutId);
             sdk.msg = hit.sdkMsg;
             bus.dispatchEvent(new Event("sdk"));
             const sum = hit.toastSummary || "Shot";
@@ -968,10 +978,342 @@ function shotsSections(cuts, groups) {
   return secs;
 }
 
+function markGraphGongganCut(cutId) {
+  try {
+    if (!app.graph) return;
+    app.graph.extra = app.graph.extra || {};
+    app.graph.extra.gonggan = { pid: state.pid, cutId };
+  } catch (_) {}
+}
+
+function loadPersistedJobs() {
+  try {
+    const raw = localStorage.getItem(JOBS_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(list)) return;
+    for (const j of list.slice(0, 200)) {
+      if (j?.promptId && j?.cutId && j?.projectId) {
+        progressTracker.registerPrompt(j.promptId, j.cutId, j.projectId);
+      }
+    }
+  } catch (_) {}
+}
+
+function persistJob(promptId, cutId, projectId) {
+  let list = [];
+  try {
+    list = JSON.parse(localStorage.getItem(JOBS_KEY) || "[]");
+    if (!Array.isArray(list)) list = [];
+  } catch (_) {
+    list = [];
+  }
+  list.unshift({ promptId, cutId, projectId, ts: Date.now() });
+  const seen = new Set();
+  list = list.filter((x) => {
+    if (!x?.promptId || seen.has(x.promptId)) return false;
+    seen.add(x.promptId);
+    return true;
+  }).slice(0, 200);
+  localStorage.setItem(JOBS_KEY, JSON.stringify(list));
+}
+
+function progressPanelsActive() {
+  if (document.hidden) return false;
+  if (shotsSidebarActive()) return true;
+  if (timelineBottomTabActive()) return true;
+  const tl = document.querySelector(".gg-timeline");
+  return !!(tl && tl.isConnected && tl.offsetParent);
+}
+
+function cutByIdTimeline(cutId) {
+  const cuts = state.timeline?.cuts || [];
+  return cuts.find((c) => c.id === cutId) || null;
+}
+
+function liveProgressView(cut) {
+  const st = state.pid && cut ? progressTracker.getCutStatus(state.pid, cut.id) : null;
+  if (!st) return { show: false, text: "", pct: 0, tip: "", mode: "" };
+  if (st.state === "queued") {
+    const q = st.queuePos != null ? `Queued #${st.queuePos}` : "Queued";
+    return { show: true, text: q, pct: 0, tip: "", mode: "queued" };
+  }
+  if (st.state === "running") {
+    const pct = st.percent != null ? Math.round(st.percent) : 0;
+    return { show: true, text: `${pct}%`, pct, tip: st.node || "", mode: "running" };
+  }
+  if (st.state === "failed") {
+    return { show: true, text: "Failed", pct: st.percent ?? 0, tip: st.error || "Failed", mode: "failed" };
+  }
+  return { show: false, text: "", pct: 0, tip: "", mode: "" };
+}
+
+function stagePillTip(kind, met) {
+  if (kind === "image") return met ? "Image registered" : "No image yet";
+  if (kind === "video") return met ? "Video registered" : "No video yet";
+  return met ? "Best cut selected" : "No best cut yet";
+}
+
+function firstUnmetStage(s) {
+  if (!s.image) return "image";
+  if (!s.video) return "video";
+  if (!s.best) return "best";
+  return null;
+}
+
+function applyStageToCutRow(li, cut) {
+  if (!li || !cut) return;
+  const s = cutStage(cut);
+  const next = firstUnmetStage(s);
+  const row = li.querySelector(".gg-stage-row");
+  if (!row) return;
+  row.classList.toggle("gg-stage-all-done", s.stage === "done");
+  const glow = row.querySelector(".gg-done-glow");
+  if (glow) glow.hidden = s.stage !== "done";
+  if (s.stage === "done") row.title = "Done — best cut selected";
+  else row.removeAttribute("title");
+  for (const pill of row.querySelectorAll(".gg-stage-pill")) {
+    const k = pill.dataset.k;
+    const met = k === "image" ? s.image : k === "video" ? s.video : s.best;
+    pill.classList.toggle("gg-on", met);
+    pill.classList.toggle("gg-off", !met);
+    pill.classList.toggle("gg-next", k === next);
+    pill.title = stagePillTip(k, met);
+  }
+}
+
+function applyLiveChipToRow(li, cut) {
+  const chip = li?.querySelector(".gg-live-chip");
+  if (!chip || !cut) return;
+  const v = liveProgressView(cut);
+  chip.hidden = !v.show;
+  chip.classList.toggle("gg-live-run", v.mode === "running");
+  chip.classList.toggle("gg-live-queue", v.mode === "queued");
+  chip.classList.toggle("gg-live-failed", v.mode === "failed");
+  const text = chip.querySelector(".gg-live-text");
+  if (text) text.textContent = v.text;
+  if (v.tip) chip.title = v.tip;
+  else chip.removeAttribute("title");
+}
+
+function applyProgressToThumb(li, cut) {
+  if (!li || !cut) return;
+  applyStageToCutRow(li, cut);
+  applyLiveChipToRow(li, cut);
+}
+
+function paintProjectSummary(root) {
+  const cuts = state.timeline?.cuts || [];
+  const sum = projectSummary(cuts);
+  const text = formatSummary(sum);
+  const hosts = [];
+  if (root) hosts.push(root);
+  else document.querySelectorAll(".gg-root.gg-shots").forEach((el) => hosts.push(el));
+  for (const host of hosts) {
+    const line = host.querySelector?.(".gg-summary-text");
+    const bar = host.querySelector?.(".gg-summary-bar");
+    if (line) line.textContent = text;
+    if (bar) {
+      const t = sum.total || 1;
+      const segDone = bar.querySelector(".gg-seg-done");
+      const segVideo = bar.querySelector(".gg-seg-video");
+      const segImage = bar.querySelector(".gg-seg-image");
+      if (segDone) segDone.style.flex = `${sum.done} 0 0`;
+      if (segVideo) segVideo.style.flex = `${sum.video} 0 0`;
+      if (segImage) segImage.style.flex = `${sum.image} 0 0`;
+      bar.hidden = sum.total === 0;
+    }
+  }
+}
+
+function paintAllCutProgress() {
+  document.querySelectorAll(".gg-shots .gg-cut").forEach((li) => {
+    const cut = cutByIdTimeline(li.dataset.cutId);
+    applyProgressToThumb(li, cut);
+  });
+  document.querySelectorAll(".gg-timeline .gg-clip").forEach((el) => {
+    const cut = cutByIdTimeline(el.dataset.cutId);
+    applyProgressToClip(el, cut);
+  });
+  paintProjectSummary(null);
+  updateOtherJobsChip();
+}
+
+function clipStageDotClass(stage) {
+  if (stage === "done") return "gg-dot-done";
+  if (stage === "video") return "gg-dot-video";
+  if (stage === "image") return "gg-dot-image";
+  return "gg-dot-empty";
+}
+
+function applyProgressToClip(el, cut) {
+  if (!el || !cut) return;
+  const s = cutStage(cut);
+  const dot = el.querySelector(".gg-clip-dot");
+  if (dot) {
+    dot.className = `gg-clip-dot ${clipStageDotClass(s.stage)}`;
+    dot.title = s.stage === "done" ? "Done — best cut selected" : "";
+  }
+  const wrap = el.querySelector(".gg-clip-prog");
+  const v = liveProgressView(cut);
+  const running = v.show && v.mode === "running";
+  if (wrap) {
+    wrap.hidden = !running;
+    wrap.classList.toggle("gg-prog-run", running);
+    const fill = wrap.querySelector(".gg-prog-fill");
+    if (fill) fill.style.width = `${Math.max(0, Math.min(100, v.pct))}%`;
+    if (v.tip) wrap.title = v.tip;
+    else wrap.removeAttribute("title");
+  }
+}
+
+function scheduleProgressPaint(cutId) {
+  if (cutId) progUi.pending = progUi.pending || new Set();
+  if (cutId) progUi.pending.add(cutId);
+  if (progUi.paintTimer) return;
+  progUi.paintTimer = setTimeout(() => {
+    progUi.paintTimer = 0;
+    const pending = progUi.pending;
+    progUi.pending = null;
+    if (pending && pending.size) {
+      for (const id of pending) {
+        document.querySelectorAll(`.gg-cut[data-cut-id="${CSS.escape(id)}"]`).forEach((li) => {
+          applyProgressToThumb(li, cutByIdTimeline(id));
+        });
+        document.querySelectorAll(`.gg-clip[data-cut-id="${CSS.escape(id)}"]`).forEach((el) => {
+          applyProgressToClip(el, cutByIdTimeline(id));
+        });
+      }
+    }
+    updateOtherJobsChip();
+  }, 250);
+}
+
+function updateOtherJobsChip() {
+  const { running, pending } = progressTracker.getOther();
+  const chips = document.querySelectorAll(".gg-other-chip");
+  let text = "";
+  if (running === 1 && pending === 0) text = "Other job running";
+  else if (running > 0 || pending > 0) {
+    const parts = [];
+    if (running) parts.push(`${running} running`);
+    if (pending) parts.push(`${pending} queued`);
+    text = `Other jobs: ${parts.join(", ")}`;
+  }
+  chips.forEach((el) => {
+    el.hidden = !text;
+    el.textContent = text;
+    el.title = "Not started from a Gonggan cut";
+  });
+}
+
+function scheduleTimelineReload() {
+  if (progUi.timelineReloadTimer) return;
+  progUi.timelineReloadTimer = setTimeout(() => {
+    progUi.timelineReloadTimer = 0;
+    if (state.pid) loadTimeline();
+  }, 600);
+}
+
+function onProgressTrackerEvent(evt) {
+  if (!progressPanelsActive()) return;
+  if (evt.cutId && evt.projectId) {
+    if (evt.state === "done" || evt.state === "failed" || evt.state === "interrupted") {
+      scheduleTimelineReload();
+    }
+    scheduleProgressPaint(evt.cutId);
+  } else {
+    updateOtherJobsChip();
+  }
+}
+
+async function syncProgressQueue() {
+  try {
+    const res = await api.fetchApi("/queue");
+    const data = await res.json().catch(() => ({}));
+    progressTracker.syncQueue(data);
+    scheduleProgressPaint();
+    paintAllCutProgress();
+  } catch (_) {}
+}
+
+async function syncProgressHistory() {
+  try {
+    const res = await api.fetchApi("/history?max_items=30");
+    const data = await res.json().catch(() => ({}));
+    progressTracker.syncHistory(data);
+    scheduleProgressPaint();
+    paintAllCutProgress();
+  } catch (_) {}
+}
+
+function onProgressStatusEvent(e) {
+  progressTracker.handleEvent("status", e.detail);
+  if (progUi.statusDebounce) clearTimeout(progUi.statusDebounce);
+  progUi.statusDebounce = setTimeout(() => {
+    progUi.statusDebounce = 0;
+    if (progressPanelsActive()) syncProgressQueue();
+  }, 1500);
+}
+
+progressTracker.on((evt) => {
+  if (progUi.wired) onProgressTrackerEvent(evt);
+});
+
+function wireProgressListeners() {
+  if (progUi.wired || !progressPanelsActive()) return;
+  progUi.wired = true;
+  for (const typ of PROGRESS_API_EVENTS) {
+    progUi.handlers[typ] = (e) => {
+      if (typ === "status") onProgressStatusEvent(e);
+      else progressTracker.handleEvent(typ, e.detail);
+    };
+    api.addEventListener(typ, progUi.handlers[typ]);
+  }
+  document.addEventListener("visibilitychange", syncProgressWireState);
+  syncProgressQueue();
+  syncProgressHistory();
+  paintAllCutProgress();
+}
+
+function unwireProgressListeners() {
+  if (!progUi.wired) return;
+  progUi.wired = false;
+  for (const typ of PROGRESS_API_EVENTS) {
+    const fn = progUi.handlers[typ];
+    if (fn) api.removeEventListener(typ, fn);
+    delete progUi.handlers[typ];
+  }
+  document.removeEventListener("visibilitychange", syncProgressWireState);
+  if (progUi.statusDebounce) {
+    clearTimeout(progUi.statusDebounce);
+    progUi.statusDebounce = 0;
+  }
+  if (progUi.paintTimer) {
+    clearTimeout(progUi.paintTimer);
+    progUi.paintTimer = 0;
+  }
+}
+
+function syncProgressWireState() {
+  if (progressPanelsActive()) wireProgressListeners();
+  else unwireProgressListeners();
+}
+
 function cutRowHtml(c) {
   return `
     <li class="gg-cut${state.cutSel.has(c.id) ? " gg-sel" : ""}" data-cut-id="${esc(c.id)}" title="${esc(c.story || c.prompt)}">
-      <div class="gg-cut-thumb">${thumbHtml(c.media, "gg-thumb")}${c.media && c.media.kind === "video" ? '<span class="gg-badge">▶</span>' : ""}${c.media && c.media.source && c.media.source !== "gonggan" ? `<span class="gg-badge gg-badge-l gg-src-${esc(c.media.source)}">${esc(fmtSrc(c.media.source))}</span>` : ""}</div>
+      <div class="gg-cut-thumb-col">
+        <div class="gg-cut-thumb">${thumbHtml(c.media, "gg-thumb")}${c.media && c.media.kind === "video" ? '<span class="gg-badge">▶</span>' : ""}${c.media && c.media.source && c.media.source !== "gonggan" ? `<span class="gg-badge gg-badge-l gg-src-${esc(c.media.source)}">${esc(fmtSrc(c.media.source))}</span>` : ""}</div>
+        <div class="gg-stage-row">
+          <span class="gg-done-glow" hidden></span>
+          <div class="gg-stage-pills">
+            <span class="gg-stage-pill gg-off" data-k="image">Image</span>
+            <span class="gg-stage-pill gg-off" data-k="video">Video</span>
+            <span class="gg-stage-pill gg-off" data-k="best">Best</span>
+          </div>
+          <div class="gg-live-chip" hidden><span class="gg-live-dot"></span><span class="gg-live-text"></span></div>
+        </div>
+      </div>
       <div class="gg-cut-text">
         <div class="gg-cut-name"><span class="gg-no">${(c.pos ?? c.index) + 1}</span>${esc(c.name || "(untitled)")}</div>
         <div class="gg-cut-sub">${c.group_name ? esc(c.group_name) + " · " : ""}${c.sec.toFixed(1)}s${c.versions > 1 ? ` · v${c.versions}` : ""}</div>
@@ -1015,8 +1357,10 @@ function bindShotsTabActivated(hostEl, onCleanup) {
     if (!hostEl.isConnected) return;
     const r = hostEl.getBoundingClientRect();
     const shown = r.width > 0 && r.height > 0 && hostEl.offsetParent !== null;
-    if (shown && !wasShown) openTimelinePanel();
-    else if (wasShown && !shown && !shotsSidebarActive()) closeTimelinePanel();
+    if (shown && !wasShown) {
+      openTimelinePanel();
+      syncProgressWireState();
+    } else if (wasShown && !shown && !shotsSidebarActive()) closeTimelinePanel();
     wasShown = shown;
   };
   const io = new IntersectionObserver(() => syncDom(), { threshold: 0.01 });
@@ -1330,9 +1674,14 @@ function mountShots(el) {
           <select class="gg-tpl-select">${templateSelectOptionsHtml()}</select>
         </label>
         <span class="gg-sdk-slot"></span>
+        <span class="gg-other-chip" hidden title="Not started from a Gonggan cut"></span>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
       </div>
       ${state.error ? `<div class="gg-error">${esc(state.error)}</div>` : ""}
+      <div class="gg-shot-summary">
+        <div class="gg-summary-line"><span class="gg-summary-text">${esc(tl ? formatSummary(projectSummary(cuts)) : "")}</span></div>
+        <div class="gg-summary-bar"${cuts.length ? "" : " hidden"}><span class="gg-seg gg-seg-done"></span><span class="gg-seg gg-seg-video"></span><span class="gg-seg gg-seg-image"></span></div>
+      </div>
       <div class="gg-meta">${tl ? `${cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</div>
       <div class="gg-selbar" hidden>
         <span class="gg-sel-count">0</span> selected · <button type="button" class="gg-btn gg-sel-group">Group</button> · <button type="button" class="gg-btn gg-sel-ungroup">Ungroup</button> · <button type="button" class="gg-btn gg-sel-x">×</button>
@@ -1396,6 +1745,8 @@ function mountShots(el) {
     bindHoverPlay(root);
     paintSelection(root);
     paintPanel();
+    paintAllCutProgress();
+    syncProgressWireState();
     fit();
   };
   const onSel = () => { paintSelection(root); paintPanel(); fit(); };
@@ -1463,6 +1814,7 @@ function mountShots(el) {
     bus.removeEventListener("sdk", paintPanel);
     closeProjectModal();
     extraCleanup.forEach((fn) => fn());
+    syncProgressWireState();
   };
 }
 
@@ -1957,9 +2309,11 @@ function mountTimeline(el) {
            title="${esc(tip)}">
         ${run ? `<div class="gg-scene-band">Scene · ${esc(c.group_name)}</div>` : ""}
         ${thumbHtml(c.media, "gg-clip-thumb")}
+        <span class="gg-clip-dot gg-dot-empty"></span>
         <div class="gg-clip-label"><span class="gg-no">${c.pos + 1}</span>${esc(c.name)}</div>
         <div class="gg-clip-in">${kindOf(c) === "video" && c.in > 0 ? `in ${c.in.toFixed(1)}` : ""}</div>
         <div class="gg-clip-dur">${c.sec.toFixed(1)}s</div>
+        <div class="gg-clip-prog" hidden><div class="gg-prog-bar"><div class="gg-prog-fill"></div></div></div>
         <div class="gg-edge gg-edge-l${i > 0 ? " gg-edge-split" : ""}" data-side="l" title="Trim in"></div>
         <div class="gg-edge gg-edge-r${i < cuts.length - 1 ? " gg-edge-split" : ""}" data-side="r" title="Trim out"></div>
       </div>`;
@@ -1969,6 +2323,8 @@ function mountTimeline(el) {
     bindReorder(root);
     paintSelection(root);
     paintButtons();
+    paintAllCutProgress();
+    syncProgressWireState();
     if (play.t > totalSec()) play.t = totalSec();
     play.idx = -1;
     showFrame(true);
@@ -2007,6 +2363,7 @@ function mountTimeline(el) {
     bus.removeEventListener("dirty", onDirty);
     bus.removeEventListener("select", onSel);
     if (viewer && viewer.box === root) viewer = null;
+    syncProgressWireState();
   };
 }
 
@@ -2149,6 +2506,22 @@ app.registerExtension({
     { id: TIMELINE_TAB, title: "Timeline", type: "custom", icon: "pi pi-video", render: (el) => mountTimeline(el) },
   ],
   async setup() {
+    loadPersistedJobs();
+    if (!api._ggQueuePatched) {
+      api._ggQueuePatched = true;
+      const origQueue = api.queuePrompt.bind(api);
+      api.queuePrompt = async (...args) => {
+        const res = await origQueue(...args);
+        try {
+          if (res?.prompt_id && wfLastLoadedCutId && state.pid && isGongganShotTabOpenAndActive()) {
+            progressTracker.registerPrompt(res.prompt_id, wfLastLoadedCutId, state.pid);
+            persistJob(res.prompt_id, wfLastLoadedCutId, state.pid);
+            syncProgressWireState();
+          }
+        } catch (_) {}
+        return res;
+      };
+    }
     app.extensionManager.registerSidebarTab({
       id: SHOTS_TAB,
       icon: "pi pi-images",
