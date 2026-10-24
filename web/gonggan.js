@@ -24,6 +24,11 @@ import {
   pickFreeWorkflowPath,
   pathCollides,
 } from "./gg_autosave_core.js";
+import {
+  shotWorkflowRelPath,
+  shouldSkipShotWorkflowReload,
+  gongganExtraProjectId,
+} from "./gg_shot_names.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -114,6 +119,7 @@ function selectProject(pid) {
   state.cutSel.clear();
   cutSelAnchor = "";
   wfLastLoadedCutId = "";
+  wfLastLoadedProjectId = "";
   localStorage.setItem(PID_KEY, pid);
   bus.dispatchEvent(new Event("projects"));
   refreshProjectTemplateFlag();
@@ -245,10 +251,11 @@ const WF_LOAD_DEBOUNCE_MS = 250;
 let wfLoadToken = 0;
 let wfLoadDebounce = 0;
 let wfLastLoadedCutId = "";
+let wfLastLoadedProjectId = "";
 /** ComfyWorkflow tab last opened by Gonggan shot load (never user workflows). */
 let ggOwnedShotWorkflow = null;
-/** Paths Gonggan created/renamed this session (lowercase); never overwrite unrelated userdata files. */
-const ggOwnedWorkflowPaths = new Set();
+/** Paths Gonggan created/renamed this session (lowercase) -> { projectId, cutId }. */
+const ggOwnedWorkflowMeta = new Map();
 let ggCutSwitchAutosaveBlocked = false;
 let ggToastTimer = 0;
 
@@ -267,15 +274,22 @@ function normalizeWorkflowBasename(name) {
 }
 
 function isPathGongganOwned(relPath) {
-  const p = normalizeWorkflowPath(relPath).toLowerCase();
-  return ggOwnedWorkflowPaths.has(p);
+  const p = normalizeWorkflowPath(relPath).replace(/^workflows\//, "").toLowerCase();
+  return ggOwnedWorkflowMeta.has(p);
 }
 
-function markWorkflowGongganOwned(wf, storagePath) {
+function markWorkflowGongganOwned(wf, storagePath, meta) {
   if (!wf) return;
   wf.ggGongganOwned = true;
-  const p = normalizeWorkflowPath(storagePath || wf.path || "");
-  if (p) ggOwnedWorkflowPaths.add(p.toLowerCase());
+  const p = normalizeWorkflowPath(storagePath || wf.path || "").replace(/^workflows\//, "");
+  if (p) {
+    const key = p.toLowerCase();
+    if (meta?.projectId && meta?.cutId) {
+      ggOwnedWorkflowMeta.set(key, { projectId: String(meta.projectId), cutId: String(meta.cutId) });
+    } else if (!ggOwnedWorkflowMeta.has(key)) {
+      ggOwnedWorkflowMeta.set(key, {});
+    }
+  }
 }
 
 function isGongganOwnedWorkflow(wf) {
@@ -413,31 +427,31 @@ async function prepareGongganShotTabReplace() {
   return true;
 }
 
-function shotWorkflowFilename(cut) {
+function shotWorkflowRelPathForCut(cut) {
+  const proj = currentProject();
   const pos = cut?.pos ?? cut?.index;
-  let base = "";
-  if (cut?.name && String(cut.name).trim()) {
-    base = String(cut.name)
-      .trim()
-      .replace(/[^\w.-]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-  }
-  if (!base && pos != null) base = `cut${pos + 1}`;
-  if (!base) base = "shot";
-  if (!base.toLowerCase().endsWith(".json")) base += ".json";
-  return base.slice(0, 120);
+  return shotWorkflowRelPath({
+    projectName: proj?.name || state.timeline?.project?.name || "",
+    projectId: state.pid,
+    cutName: cut?.name,
+    cutNumber: pos != null ? pos + 1 : undefined,
+  });
 }
 
-function adoptGongganShotWorkflow(fileName) {
+function adoptGongganShotWorkflow(relPath) {
   const ws = ggWorkflowStore();
   if (!ws) return null;
-  const target = normalizeWorkflowBasename(fileName);
+  const norm = normalizeWorkflowPath(String(relPath).replace(/^workflows\//, ""));
+  const normKey = norm.toLowerCase();
   const active = ws.activeWorkflow;
-  if (active && normalizeWorkflowBasename(workflowBasename(active)) === target) {
-    ggOwnedShotWorkflow = active;
-    return active;
+  if (active) {
+    const ap = normalizeWorkflowPath(String(active.path || "").replace(/^workflows\//, ""));
+    if (ap.toLowerCase() === normKey) {
+      ggOwnedShotWorkflow = active;
+      return active;
+    }
   }
-  for (const p of [fileName, `workflows/${fileName}`]) {
+  for (const p of [norm, `workflows/${norm}`]) {
     const w = ws.getWorkflowByPath?.(p);
     if (w) {
       ggOwnedShotWorkflow = w;
@@ -445,15 +459,16 @@ function adoptGongganShotWorkflow(fileName) {
     }
   }
   const found =
-    (ws.openWorkflows || []).find((w) => normalizeWorkflowBasename(workflowBasename(w)) === target) ??
-    null;
+    (ws.openWorkflows || []).find((w) => {
+      const wp = normalizeWorkflowPath(String(w.path || "").replace(/^workflows\//, ""));
+      return wp.toLowerCase() === normKey;
+    }) ?? null;
   ggOwnedShotWorkflow = found;
   return found;
 }
 
-async function resolveShotWorkflowStoragePath(fileName) {
-  const base = fileName.includes("/") ? fileName : `workflows/${fileName}`;
-  const desired = normalizeWorkflowPath(base);
+async function resolveShotWorkflowStoragePath(relPath) {
+  const desired = normalizeWorkflowPath(String(relPath).replace(/^workflows\//, ""));
   const existing = await listWorkflowPathsForAutosave();
   const isTaken = (p) => {
     if (isPathGongganOwned(p)) return false;
@@ -476,10 +491,16 @@ function isGongganShotTabOpenAndActive() {
 }
 
 function shouldSkipWorkflowReload(cutId) {
-  if (cutId !== wfLastLoadedCutId || !isGongganShotTabOpenAndActive()) return false;
   try {
     const g = app.graph?.extra?.gonggan;
-    return g?.cutId === cutId && g?.pid === state.pid;
+    return shouldSkipShotWorkflowReload({
+      cutId,
+      projectId: state.pid,
+      lastCutId: wfLastLoadedCutId,
+      lastProjectId: wfLastLoadedProjectId,
+      graphExtra: g,
+      tabActive: isGongganShotTabOpenAndActive(),
+    });
   } catch {
     return false;
   }
@@ -490,9 +511,10 @@ function isUiWorkflowGraph(wf) {
 }
 
 async function loadWorkflowIntoDedicatedTab(workflow, cut) {
-  const fileName = shotWorkflowFilename(cut);
-  const storagePath = await resolveShotWorkflowStoragePath(fileName);
+  const relPath = shotWorkflowRelPathForCut(cut);
+  const storagePath = await resolveShotWorkflowStoragePath(relPath);
   const loadName = storagePath.replace(/^workflows\//, "");
+  const shotMeta = { projectId: state.pid, cutId: cut?.id || "" };
   if (!(await prepareGongganShotTabReplace())) return false;
   const ws = ggWorkflowStore();
   if (
@@ -524,7 +546,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut) {
     return false;
   }
   adoptGongganShotWorkflow(loadName);
-  markWorkflowGongganOwned(ggOwnedShotWorkflow, storagePath);
+  markWorkflowGongganOwned(ggOwnedShotWorkflow, storagePath, shotMeta);
   scheduleLoadImageScan({ debounceMs: 200 });
   return true;
 }
@@ -675,6 +697,7 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
         continue;
       }
       wfLastLoadedCutId = cutId;
+      wfLastLoadedProjectId = state.pid;
       markGraphGongganCut(cutId);
       sdk.msg = hit.sdkMsg;
       bus.dispatchEvent(new Event("sdk"));
@@ -697,6 +720,7 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
               continue;
             }
             wfLastLoadedCutId = cutId;
+            wfLastLoadedProjectId = state.pid;
             markGraphGongganCut(cutId);
             sdk.msg = hit.sdkMsg;
             bus.dispatchEvent(new Event("sdk"));
@@ -813,6 +837,7 @@ async function addLocalCut() {
     }
     if (d.cut && d.cut.id) {
       wfLastLoadedCutId = "";
+      wfLastLoadedProjectId = "";
       selectCut(d.cut.id);
     }
     if (d.template_copied) {
@@ -882,8 +907,10 @@ function selectCut(cutId, opts) {
     clearTimeout(wfLoadDebounce);
     try {
       const g = app.graph?.extra?.gonggan;
-      if (g?.cutId !== cutId || (state.pid && g?.pid !== state.pid)) {
+      const gp = gongganExtraProjectId(g);
+      if (g?.cutId !== cutId || (state.pid && gp && gp !== state.pid)) {
         wfLastLoadedCutId = "";
+        wfLastLoadedProjectId = "";
       }
     } catch (_) {}
     const loadToken = ++wfLoadToken;
@@ -963,6 +990,7 @@ async function deleteSelectedCuts() {
     if (ids.includes(state.cutId)) {
       state.cutId = state.timeline?.cuts?.[0]?.id || "";
       wfLastLoadedCutId = "";
+      wfLastLoadedProjectId = "";
     }
     state.error = "";
     bus.dispatchEvent(new Event("timeline"));
@@ -986,6 +1014,7 @@ async function addCutAfter(cutId) {
     } else await loadTimeline();
     if (d.cut?.id) {
       wfLastLoadedCutId = "";
+      wfLastLoadedProjectId = "";
       selectCut(d.cut.id);
     }
     ggToast("Cut", d.template_copied ? `Added ${d.cut.name}` : `${d.cut.name} — no template`, d.template_copied ? "ok" : "warn");
@@ -1171,7 +1200,7 @@ function markGraphGongganCut(cutId) {
   try {
     if (!app.graph) return;
     app.graph.extra = app.graph.extra || {};
-    app.graph.extra.gonggan = { pid: state.pid, cutId };
+    app.graph.extra.gonggan = { pid: state.pid, projectId: state.pid, cutId };
   } catch (_) {}
 }
 
@@ -3152,7 +3181,8 @@ app.registerExtension({
     { id: TIMELINE_TAB, title: "Timeline", type: "custom", icon: "pi pi-video", render: (el) => mountTimeline(el) },
   ],
   async setup() {
-    globalThis.__gongganCutAutosaveOnSwitch = "0.8.1";
+    globalThis.__gongganCutAutosaveOnSwitch = "0.8.2";
+    globalThis.__gongganProjectFolders = "0.8.2";
     bindLoadImageUi({ ggToast });
     installLoadImageQueueGuard();
     loadPersistedJobs();
