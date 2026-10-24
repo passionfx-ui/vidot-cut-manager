@@ -340,11 +340,12 @@ let userWorkflowPaths = [];
 
 async function fetchUserWorkflowPaths() {
   try {
-    const res = await api.fetchApi("/api/userdata?dir=workflows&recurse=true&split=false");
+    const res = await api.fetchApi("/userdata?dir=workflows&recurse=true&split=false");
     const data = await res.json().catch(() => ({}));
     const paths = [];
-    if (data && typeof data === "object" && !Array.isArray(data)) {
-      for (const k of Object.keys(data)) {
+    if (data && typeof data === "object") {
+      const keys = Array.isArray(data) ? data.map((x) => (Array.isArray(x) ? x[0] : (x && x.path) || x)) : Object.keys(data);
+      for (const k of keys) {
         const rel = String(k).replace(/^workflows\//, "");
         if (rel.toLowerCase().endsWith(".json")) paths.push(rel);
       }
@@ -1142,6 +1143,7 @@ function mountShots(el) {
         tplSel.value = cur || projectTemplateRef || "";
       });
     });
+    if (tplSel) fetchUserWorkflowPaths().then(() => { tplSel.innerHTML = templateSelectOptionsHtml(); tplSel.value = projectTemplateRef || ""; });
     tplSel?.addEventListener("change", (e) => setProjectTemplateRef(e.target.value));
     root.querySelector(".gg-cut-add")?.addEventListener("click", () => addLocalCut());
     root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); refreshProjectTemplateFlag(); });
