@@ -90,7 +90,12 @@ async function postJson(page, route, body) {
 async function getJson(page, route) {
   return page.evaluate(async (r) => {
     const res = await fetch(r.startsWith("http") ? r : `${location.origin}${r}`);
-    return { ok: res.ok, status: res.status, data: await res.json().catch(() => null), text: await res.text().catch(() => "") };
+    const text = await res.text().catch(() => "");
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch (_) {}
+    return { ok: res.ok, status: res.status, data, text };
   }, route);
 }
 
@@ -104,6 +109,32 @@ async function fetchWorkflowPaths(page) {
   }
   if (data && typeof data === "object") return Object.keys(data);
   return [];
+}
+
+function pickTemplateRef(paths) {
+  const norm = (p) => String(p).replace(/^\/+/, "");
+  const base = (p) => norm(p).replace(/^.*\//, "").toLowerCase();
+  return (
+    paths.find((p) => base(p).startsWith("zz") && base(p).endsWith(".json")) ||
+    paths.find((p) => !/^cut\d+\.json$/i.test(base(p)) && base(p).endsWith(".json")) ||
+    paths.find((p) => base(p).endsWith(".json")) ||
+    ""
+  );
+}
+
+function shotWorkflowFilename(cut) {
+  const pos = cut?.pos ?? cut?.index;
+  let base = "";
+  if (cut?.name && String(cut.name).trim()) {
+    base = String(cut.name)
+      .trim()
+      .replace(/[^\w.-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  }
+  if (!base && pos != null) base = `cut${pos + 1}`;
+  if (!base) base = "shot";
+  if (!base.toLowerCase().endsWith(".json")) base += ".json";
+  return base.slice(0, 120);
 }
 
 async function deleteWorkflowFile(page, relPath) {
@@ -222,11 +253,6 @@ async function rightClickEmptyShots(page) {
   await page.mouse.click(box.x, box.y, { button: "right" });
 }
 
-async function clickCut(page, index) {
-  const cuts = await page.$$(".gg-root.gg-shots .gg-cut");
-  await cuts[index].click();
-}
-
 async function clickCutById(page, cutId) {
   const sel = `.gg-root.gg-shots .gg-cut[data-cut-id="${cutId}"]`;
   await page.waitForSelector(sel, { timeout: 15000 });
@@ -244,59 +270,61 @@ async function waitForGraphNodes(page) {
   await page.waitForFunction(() => (window.app.graph?._nodes?.length || 0) > 0, { timeout: 60000 });
 }
 
-async function markWorkflowModified(page) {
+async function waitForCutLoaded(page, cutId) {
+  await page.waitForFunction(
+    (id) => window.app.graph?.extra?.gonggan?.cutId === id,
+    { timeout: 90000 },
+    cutId
+  );
+  await sleep(400);
+}
+
+async function modifyWorkflowViaWidget(page, marker) {
   await waitForGraphNodes(page);
   const ok = await page.evaluate((marker) => {
     const nodes = window.app.graph?._nodes || [];
-    const n = nodes[0];
+    const n =
+      nodes.find((x) => x.type === "PrimitiveStringMultiline" && x.widgets?.length) ||
+      nodes.find((x) => x.widgets?.length) ||
+      nodes[0];
     if (!n) return { ok: false, err: "no graph nodes" };
-    n.title = marker;
-    n.properties = { ...(n.properties || {}), gg_autosave_marker: marker };
-    if (typeof n.onPropertyChanged === "function") n.onPropertyChanged("title", marker);
-    const w0 = n.widgets?.[0];
-    if (w0) {
-      w0.value = typeof w0.value === "number" ? w0.value + 1 : `${w0.value ?? ""}_zz`;
-      w0.callback?.(w0.value);
-    }
+    const w = n.widgets?.find((x) => x.name === "value" || x.type === "text") || n.widgets[0];
+    if (!w) return { ok: false, err: "no widgets" };
+    const prev = w.value;
+    const next = typeof prev === "string" ? `${marker}\n${prev}`.slice(0, 8000) : marker;
+    w.value = next;
+    if (typeof w.callback === "function") w.callback(next);
     window.app.graph?.setDirtyCanvas?.(true, true);
     if (typeof window.app.graph?.change === "function") window.app.graph.change();
     const wf = window.app.extensionManager.workflow.activeWorkflow;
-    if (!wf) return { ok: false, err: "no active workflow" };
-    const ct = wf.changeTracker;
-    let serialized = null;
-    if (typeof window.app.graph?.serialize === "function") {
-      serialized = window.app.graph.serialize();
-      const sn = serialized?.nodes?.find((x) => x.id === n.id) || serialized?.nodes?.[0];
-      if (sn) sn.title = marker;
-      if (ct) ct.activeState = serialized;
-    }
-    if (ct?.captureCanvasState) ct.captureCanvasState();
-    else ct?.checkState?.();
-    ct?.prepareForSave?.();
-    if (typeof wf.prepareForSave === "function") wf.prepareForSave();
-    wf.isModified = true;
-    if (serialized && typeof wf.content === "string") {
-      try {
-        wf.content = JSON.stringify(serialized);
-      } catch (_) {}
-    }
     return {
-      ok: !!wf.isModified,
-      err: wf.isModified
-        ? ""
-        : `isModified still false (tracker=${!!ct}, nodes=${nodes.length}, wf=${wf.path || wf.filename})`,
+      ok: !!wf?.isModified,
+      err: wf?.isModified ? "" : "isModified still false after widget change",
+      nodeType: n.type,
     };
-  }, MARKER);
-  if (!ok.ok) throw new Error(ok.err || "failed to mark modified");
+  }, marker);
+  if (!ok.ok) throw new Error(ok.err || "failed to modify workflow");
 }
 
-async function getActiveWorkflowBasename(page) {
+async function getActiveWorkflowInfo(page) {
   return page.evaluate(() => {
     const wf = window.app.extensionManager.workflow.activeWorkflow;
     const p = wf?.path || wf?.filename || "";
-    const slash = p.lastIndexOf("/");
-    return slash >= 0 ? p.slice(slash + 1) : p;
+    return {
+      path: p,
+      basename: p.replace(/^.*\//, ""),
+      isTemporary: wf?.isTemporary,
+      isPersisted: wf?.isPersisted,
+      isModified: wf?.isModified,
+      cutId: window.app.graph?.extra?.gonggan?.cutId,
+    };
   });
+}
+
+async function readUserdataText(page, relPath) {
+  const enc = encodeURIComponent(relPath.replace(/^\/+/, ""));
+  const saved = await getJson(page, `/api/userdata/${enc}`);
+  return saved.text || JSON.stringify(saved.data || "");
 }
 
 async function getToastText(page) {
@@ -385,16 +413,19 @@ async function main() {
   await waitForComfy(page);
   const feat = await page.evaluate(() => globalThis.__gongganCutAutosaveOnSwitch || "");
   if (feat !== "0.8.1") {
-    throw new Error(`gonggan-cut 0.8.1 autosave not loaded (got "${feat}"); reload ComfyUI or hard-refresh`);
+    throw new Error(`gonggan-cut 0.8.1 autosave not loaded (got "${feat}"); hard-refresh ComfyUI (Ctrl+Shift+R)`);
   }
   await openShotsTab(page);
   workflowPathsBefore = await fetchWorkflowPaths(page);
 
   const paths = await fetchWorkflowPaths(page);
-  const templateRef = paths[0] || "";
+  const templateRef = pickTemplateRef(paths);
   const projectName = `${TEST_PREFIX} ${runStamp}`;
   let pid = "";
-  let cutIds = [];
+  let cutA = null;
+  let cutB = null;
+  let wfNameA = "";
+  let wfNameB = "";
 
   await runScenario("01", "auto-save on cut switch", async () => {
     dialogCount = 0;
@@ -409,58 +440,59 @@ async function main() {
     await sleep(800);
 
     const sorted = await timelineCutsSorted(page, pid);
-    if (sorted.length < 2) throw new Error("expected 2 cuts");
-    cutIds = [sorted[0].id, sorted[1].id];
+    if (sorted.length < 3) throw new Error(`expected 3 cuts (seed + 2 added), got ${sorted.length}`);
+    cutA = sorted[0];
+    cutB = sorted[1];
+    wfNameA = shotWorkflowFilename(cutA);
+    wfNameB = shotWorkflowFilename(cutB);
 
-    await clickCutById(page, cutIds[0]);
-    await sleep(2500);
+    await clickCutById(page, cutA.id);
+    await waitForCutLoaded(page, cutA.id);
     await waitForGraphNodes(page);
-    await markWorkflowModified(page);
+    const activeA = await getActiveWorkflowInfo(page);
+
+    await modifyWorkflowViaWidget(page, MARKER);
 
     dialogCount = 0;
-    await clickCutById(page, cutIds[1]);
-    await sleep(3000);
+    await clickCutById(page, cutB.id);
+    await waitForCutLoaded(page, cutB.id);
+    await sleep(1500);
 
     if (dialogCount !== 0) throw new Error(`expected 0 dialogs, got ${dialogCount}`);
 
-    const activeBase = await getActiveWorkflowBasename(page);
-    if (!/^cut2\.json$/i.test(activeBase)) {
-      throw new Error(`active tab should be cut B workflow (cut2.json), got "${activeBase}"`);
+    const activeB = await getActiveWorkflowInfo(page);
+    if (activeB.cutId !== cutB.id) {
+      throw new Error(`after switch: active cut ${activeB.cutId} !== cut B ${cutB.id}`);
     }
 
     const afterPaths = await fetchWorkflowPaths(page);
     const beforeSet = new Set(workflowPathsBefore);
+    const stemA = wfNameA.replace(/\.json$/i, "");
     const candidates = [
-      "workflows/cut1.json",
-      "cut1.json",
-      "workflows/cut2.json",
-      "cut2.json",
-      ...afterPaths.filter((p) => !beforeSet.has(p)),
+      activeA.path,
+      `workflows/${wfNameA}`,
+      wfNameA,
+      ...afterPaths.filter((p) => !beforeSet.has(p) && p.toLowerCase().includes(stemA.toLowerCase())),
     ];
-    let foundMarker = false;
+    let savedPath = "";
     for (const rel of [...new Set(candidates)]) {
-      const enc = encodeURIComponent(rel.replace(/^\/+/, ""));
-      const saved = await getJson(page, `/api/userdata/${enc}`);
-      const blob = saved.text || JSON.stringify(saved.data || "");
+      const blob = await readUserdataText(page, rel);
       if (blob.includes(MARKER)) {
-        foundMarker = true;
+        savedPath = rel;
         break;
       }
     }
-    if (!foundMarker) throw new Error(`saved workflow missing marker (checked ${candidates.length} paths)`);
+    if (!savedPath) throw new Error(`saved workflow missing marker (checked ${candidates.length} paths)`);
   });
 
   await runScenario("02", "failure path keeps tab and shows toast", async () => {
-    if (!pid || cutIds.length < 2) throw new Error("scenario 01 setup required");
+    if (!pid || !cutA || !cutB) throw new Error("scenario 01 setup required");
 
     dialogCount = 0;
-    await clickCutById(page, cutIds[0]);
-    await sleep(3000);
+    await clickCutById(page, cutA.id);
+    await waitForCutLoaded(page, cutA.id);
     await waitForGraphNodes(page);
-    const setupBase = await getActiveWorkflowBasename(page);
-    if (!/^cut1\.json$/i.test(setupBase)) {
-      throw new Error(`setup: expected cut1.json active before failure test, got "${setupBase}"`);
-    }
+    const setup = await getActiveWorkflowInfo(page);
 
     await page.evaluate(() => {
       const ws = window.app.extensionManager.workflow;
@@ -470,17 +502,20 @@ async function main() {
       };
     });
 
-    await markWorkflowModified(page);
-    const beforeBase = await getActiveWorkflowBasename(page);
+    await modifyWorkflowViaWidget(page, MARKER);
+    const before = await getActiveWorkflowInfo(page);
 
-    await clickCutById(page, cutIds[1]);
+    await clickCutById(page, cutB.id);
     await sleep(2500);
 
     if (dialogCount !== 0) throw new Error(`expected 0 dialogs on failure path, got ${dialogCount}`);
 
-    const afterBase = await getActiveWorkflowBasename(page);
-    if (!/^cut1\.json$/i.test(afterBase)) {
-      throw new Error(`tab should stay on cut A (cut1.json), got "${afterBase}" (before "${beforeBase}")`);
+    const after = await getActiveWorkflowInfo(page);
+    if (after.cutId !== cutA.id) {
+      throw new Error(`tab should stay on cut A (${cutA.id}), got cut ${after.cutId}`);
+    }
+    if (before.path && after.path !== before.path) {
+      throw new Error(`tab path changed on failed switch: ${before.path} -> ${after.path}`);
     }
 
     const stillMod = await page.evaluate(() => window.app.extensionManager.workflow.activeWorkflow?.isModified);
