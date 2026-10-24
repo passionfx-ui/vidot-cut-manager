@@ -129,6 +129,9 @@ Also run `node --check web/gonggan.js` and `node --check web/gg_progress_core.js
 ## Auto-save on cut switch (0.8.1)
 Switching to another shot while the Gonggan workflow tab has unsaved edits **auto-saves** via ComfyUI’s workflow store (same as Ctrl+S) instead of a blocking confirm. If save fails, the switch is cancelled and the tab is left unchanged. Logic: `web/gg_autosave_core.js`.
 
+## Shot workflow paths (0.8.2)
+Gonggan saves each shot’s ComfyUI workflow under `workflows/gonggan/<project-folder>/<cut-name>.json` (tab title stays the cut filename only). Project folder names are sanitized from the project title, with an id-based fallback when the title has no ASCII word characters. Logic: `web/gg_shot_names.js`.
+
 ## Cut management (0.8.0)
 Shots and Timeline add lightweight production tracking on top of the existing scene/cut model (English UI labels).
 
