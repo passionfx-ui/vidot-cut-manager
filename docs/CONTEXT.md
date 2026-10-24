@@ -34,6 +34,7 @@
 - 저장소: 이 비공개 저장소는 개발용(전체 기록 + 맥락). 공개는 **새 공개 저장소에 깨끗한 코드만 한 커밋으로**.
 - 팩/저장소 이름은 아직 임시. 10/26 이전(README·데모 전)에 확정 예정. 바꿀 때 저장소·폴더·탭 이름을 함께 바꿀 것.
 - 2026-10-24: **Shot(샷) = 선택된 버전의 결과 에셋(이미지/영상) + 그 컷을 뽑는 드래프트 워크플로**를 한 단위로 본다. Shots 탭에서 컷을 클릭하면 미리보기·타임라인 선택/시크와 캔버스 워크플로 로드를 함께 한다. 프롬프트가 없어 워크플로를 못 만들면 에셋만 보여 주고 토스트로 알린다(큐/생성 없음).
+- 2026-10-24: **0.8.0 컷 관리 UI** — Shots 드래그 재정렬 + 자동 번호(001…), 컷별 길이(`planned_sec`)/노트/End card, 3초 초과 경고(End card 제외), Final cut 리스트·총 길이, Needs redo 플래그·필터, 파일명 표시 `S01_003_v02`(표시만, 실제 파일명 변경 없음), 프로젝트 마감일·완료 %. `POST /gonggan/cut/update`, `POST /gonggan/project/update`(라우트 반영은 ComfyUI 재시작 필요). **Load Image 누락 가드** — 워크플로 로드·샷 워크플로 로드 후 `LoadImage`/`LoadImageMask` 파일 존재 검사(콤보 목록 → `/api/view` HEAD/GET), 누락 시 비직렬화 빨간 테두리 + 토스트, 큐 전 `app.queuePrompt` 래핑으로 차단·노드 선택·캔버스 센터(자동 대체 없음). JS: `gg_cuts_core.js`, `gg_loadimage_core.js`, `gg_loadimage.js`.
 
 ## 4. 절대 규칙
 1. ComfyUI 본체(코드, 기본 UI) 수정 금지. 공식 확장 API만.
@@ -97,6 +98,7 @@ ComfyUI(팩 라우트) -> .venv-sdk python sdk_runner.py -> comfy-sdk (COMFY_BAS
 - `mvp-day5-prequeue` SDK venv 러너, 프록시, 재생성 드라이런/확인, send-last-output, 버전 선택
 - `mvp-day5` (6633427) 프롬프트 정리(None/null/빈 조각 제거), 러너 타임아웃+취소, 렌더 시간 기록
   - 승인된 테스트 렌더 1회 성공: 프로젝트 "박 속의 이름", 컷 1 "제비와 흥부", 시드 1053860076, 672×384, ComfyUI 실행 46.7초(첫 모델 로딩 포함), 제출→저장 51.3초. 타임라인에 컷 1 v5(SDK 배지)로 표시.
+- **0.8.0 (feat/cut-management, 2026-10-24)** — PART 1 `f97e948` 데이터·라우트(`cut/update`, `project/update` 등), PART 2 `abab06b` Shots/Timeline 컷 관리 UI. PART 3: `__version__` 0.8.0, README/CONTEXT, missing Load Image 가드 + `tests/js/loadimage_core.test.mjs`, e2e `loadimage_test.mjs`. 단위: `python -m unittest discover -s tests -p test_*.py`; `node --test` on `cut_stage`, `progress_core`, `cuts_core`, `loadimage_core`.
 
 ## 8. 알려진 문제 / 다음 할 일
 - 새 버전의 이미지 크기가 타임라인 데이터에 안 나옴 → 안정화 때 수정.
