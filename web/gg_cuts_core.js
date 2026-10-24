@@ -71,6 +71,98 @@ export function moveCut(order, groups, cutId, target) {
   return { order: ord, groups: grps };
 }
 
+/**
+ * @param {string[]} order
+ * @param {{ id: string, name?: string, cut_ids: string[], collapsed?: boolean }[]} groups
+ * @param {string[]} cutIds ids to move (timeline order)
+ * @param {{ toIndex: number, toGroupId?: string|null }} target
+ */
+export function moveCuts(order, groups, cutIds, target) {
+  const moveSet = new Set(cutIds);
+  const moving = order.filter((id) => moveSet.has(id));
+  if (!moving.length) {
+    return { order: [...order], groups: groups.map((g) => ({ ...g, cut_ids: [...g.cut_ids] })) };
+  }
+  const rest = order.filter((id) => !moveSet.has(id));
+  const insertAt = Math.max(0, Math.min(target.toIndex, rest.length));
+  const newOrder = [...rest.slice(0, insertAt), ...moving, ...rest.slice(insertAt)];
+
+  const grps = groups.map((g) => ({ ...g, cut_ids: [...g.cut_ids] }));
+  const membership = new Map();
+  for (const g of grps) {
+    for (const id of g.cut_ids) membership.set(id, g.id);
+  }
+  const toGroupId = target.toGroupId;
+  for (const id of moving) {
+    if (toGroupId == null || toGroupId === "") membership.delete(id);
+    else membership.set(id, toGroupId);
+  }
+  for (const g of grps) {
+    g.cut_ids = newOrder.filter((id) => membership.get(id) === g.id);
+  }
+  return { order: newOrder, groups: grps };
+}
+
+/**
+ * @param {string[]} order
+ * @param {{ id: string, top: number, bottom: number, groupId: string|null }[]} rows
+ * @param {number} clientY
+ */
+export function shotsDropTarget(order, rows, clientY) {
+  if (!rows.length) return { toIndex: 0, toGroupId: null, lineY: 0 };
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const mid = (r.top + r.bottom) / 2;
+    if (clientY < mid) {
+      const idx = order.indexOf(r.id);
+      return { toIndex: idx < 0 ? 0 : idx, toGroupId: r.groupId, lineY: r.top };
+    }
+  }
+  const last = rows[rows.length - 1];
+  const idx = order.indexOf(last.id);
+  return {
+    toIndex: idx < 0 ? order.length : idx + 1,
+    toGroupId: last.groupId,
+    lineY: last.bottom,
+  };
+}
+
+/** @param {number} sec */
+export function formatMinSecDot(sec) {
+  const t = Math.max(0, Number(sec) || 0);
+  const m = Math.floor(t / 60);
+  const s = t - m * 60;
+  const whole = Math.floor(s);
+  const tenth = Math.round((s - whole) * 10) % 10;
+  const sStr = m > 0 ? String(whole).padStart(2, "0") : String(whole);
+  return `${m}:${sStr}.${tenth}`;
+}
+
+const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * @param {{ dueDate?: string|null, daysLeft?: number|null, overdue?: boolean }} comp
+ */
+export function formatDueDisplay(comp) {
+  if (!comp?.dueDate) return { text: "", overdue: false };
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(comp.dueDate).trim());
+  if (!m) return { text: String(comp.dueDate), overdue: !!comp.overdue };
+  const mon = MONTH_SHORT[Number(m[2]) - 1] || m[2];
+  const day = Number(m[3]);
+  const label = `Due ${mon} ${day}`;
+  if (comp.daysLeft == null) return { text: label, overdue: false };
+  if (comp.overdue) {
+    const d = Math.abs(comp.daysLeft);
+    return { text: `${label} · Overdue by ${d} day${d === 1 ? "" : "s"}`, overdue: true };
+  }
+  const d = comp.daysLeft;
+  return { text: `${label} (${d} day${d === 1 ? "" : "s"} left)`, overdue: false };
+}
+
+export function versionIndexFromList(versionsList, versionId) {
+  return versionIndexByCreation(versionsList, versionId);
+}
+
 function versionIndexByCreation(versionsList, versionId) {
   const list = Array.isArray(versionsList) ? [...versionsList] : [];
   list.sort((a, b) => {
