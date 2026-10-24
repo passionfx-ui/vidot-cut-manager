@@ -134,6 +134,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "collapsed": bool(scene.get("collapsed")),
         })
     cut_to_group = {cid: g["id"] for g in groups for cid in g["cut_ids"]}
+    scene_index_by_id = {g["id"]: idx for idx, g in enumerate(groups, start=1)}
     base: list[dict[str, Any]] = []
     for i, cid in enumerate(order):
         cut = active.get(cid)
@@ -168,6 +169,8 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
         ]
         scene_id = cut.get("scene_id") or ""
         scene = scenes.get(scene_id) if scene_id else None
+        gid = cut_to_group.get(cid) or ""
+        scene_idx = scene_index_by_id.get(gid, 0) if gid else 0
         base.append({
             "index": i,
             "id": cid,
@@ -188,21 +191,37 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "versions_list": vers_list,
             "pick": pick if job and pick == job["id"] else None,
             "prompt_aspect": "",
+            "planned_sec": cut.get("planned_sec") if isinstance(cut.get("planned_sec"), (int, float)) else None,
+            "end_card": bool(cut.get("end_card")),
+            "needs_redo": bool(cut.get("needs_redo")),
+            "notes": cut.get("notes") if isinstance(cut.get("notes"), str) else "",
+            "scene_index": scene_idx,
+            "cut_in_scene": 0,
+            "number": 0,
         })
     by_id = {c["id"]: c for c in base}
     cuts: list[dict[str, Any]] = []
     at = 0.0
+    global_num = 0
+    scene_pos: dict[str, int] = {}
     for pos, cid in enumerate(order):
         c = by_id.get(cid)
         if not c:
             continue
         c = dict(c)
+        global_num += 1
+        c["number"] = global_num
         c["pos"] = pos
         c["start"] = _round(at)
         gid = cut_to_group.get(cid) or ""
         g = next((x for x in groups if x["id"] == gid), None)
         c["group_id"] = gid
         c["group_name"] = g["name"] if g else ""
+        if gid:
+            scene_pos[gid] = scene_pos.get(gid, 0) + 1
+            c["cut_in_scene"] = scene_pos[gid]
+        else:
+            c["cut_in_scene"] = global_num
         at += c["sec"]
         cuts.append(c)
     return {
@@ -211,6 +230,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "id": project.get("id"),
             "name": project.get("name") or "",
             "logline": "",
+            "due_date": project.get("due_date") if isinstance(project.get("due_date"), str) else None,
         },
         "cuts": cuts,
         "groups": groups,
