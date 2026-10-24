@@ -132,6 +132,20 @@ class LocalStoreTests(unittest.TestCase):
         fresh = self.store.get_project(pid)
         self.assertEqual(fresh["cuts"][cut_id]["pick_version_id"], ver["id"])
 
+    def test_add_version_does_not_override_existing_pick(self):
+        doc = self.store.create_project("Pick")
+        pid = doc["id"]
+        cut_id = self._first_cut(doc)["id"]
+        src1 = Path(self._tmp.name) / "a.png"
+        src2 = Path(self._tmp.name) / "b.png"
+        src1.write_bytes(b"\x89PNG\r\n\x1a\n" + b"a" * 20)
+        src2.write_bytes(b"\x89PNG\r\n\x1a\n" + b"b" * 20)
+        v1 = self.store.add_version(pid, cut_id, src1)
+        v2 = self.store.add_version(pid, cut_id, src2)
+        self.assertNotEqual(v1["id"], v2["id"])
+        fresh = self.store.get_project(pid)
+        self.assertEqual(fresh["cuts"][cut_id]["pick_version_id"], v1["id"])
+
     def test_conflict_error(self):
         doc = self.store.create_project("C")
         pid = doc["id"]
