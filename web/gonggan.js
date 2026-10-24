@@ -88,73 +88,148 @@ function selectProject(pid) {
   loadTimeline();
 }
 
-const GG_SHOT_WF_FILE = "gonggan-shot.json";
-const GG_SHOT_WF_PATH = "workflows/gonggan-shot.json";
+const GG_LEGACY_SHOT_WF_FILE = "gonggan-shot.json";
+const GG_LEGACY_SHOT_WF_PATH = "workflows/gonggan-shot.json";
 const WF_LOAD_DEBOUNCE_MS = 250;
 
 let wfLoadGen = 0;
 let wfLoadDebounce = 0;
 let wfLastLoadedCutId = "";
+/** ComfyWorkflow tab last opened by Gonggan shot load (never user workflows). */
+let ggOwnedShotWorkflow = null;
 let ggToastTimer = 0;
 
 function ggWorkflowStore() {
   return app.extensionManager?.workflow;
 }
 
-function findDedicatedShotWorkflow() {
-  const ws = ggWorkflowStore();
-  if (!ws) return null;
-  const byPath = ws.getWorkflowByPath?.(GG_SHOT_WF_PATH);
-  if (byPath) return byPath;
-  const open = ws.openWorkflows || [];
-  return open.find(
-    (w) =>
-      w.path === GG_SHOT_WF_PATH ||
-      w.filename === GG_SHOT_WF_FILE ||
-      w.path?.endsWith(`/${GG_SHOT_WF_FILE}`) ||
-      w.path?.endsWith(GG_SHOT_WF_FILE)
-  ) ?? null;
+function workflowBasename(wf) {
+  if (!wf) return "";
+  return wf.filename || String(wf.path || "").replace(/^.*\//, "");
 }
 
-async function ensureDedicatedShotWorkflowTab() {
+function isLegacyGongganShotTab(wf) {
+  if (!wf) return false;
+  return (
+    wf.path === GG_LEGACY_SHOT_WF_PATH ||
+    workflowBasename(wf) === GG_LEGACY_SHOT_WF_FILE ||
+    wf.path?.endsWith(`/${GG_LEGACY_SHOT_WF_FILE}`)
+  );
+}
+
+function collectGongganShotTabs() {
+  const ws = ggWorkflowStore();
+  if (!ws) return [];
+  const out = [];
+  const seen = new Set();
+  const add = (w) => {
+    if (!w || seen.has(w)) return;
+    seen.add(w);
+    out.push(w);
+  };
+  add(ggOwnedShotWorkflow);
+  for (const w of ws.openWorkflows || []) {
+    if (w === ggOwnedShotWorkflow || isLegacyGongganShotTab(w)) add(w);
+  }
+  return out;
+}
+
+async function closeGongganOwnedTab(wf) {
+  const ws = ggWorkflowStore();
+  if (!ws || !wf) return;
+  try {
+    await ws.closeWorkflow(wf, { warnIfUnsaved: false });
+  } catch (e) {
+    console.warn("[gonggan] close shot tab failed", e);
+  }
+  if (ggOwnedShotWorkflow === wf) ggOwnedShotWorkflow = null;
+}
+
+async function prepareGongganShotTabReplace() {
+  const tabs = collectGongganShotTabs();
+  if (tabs.some((w) => w.isModified) && !confirm("Gonggan shot tab has unsaved changes. Replace it?")) {
+    return false;
+  }
+  for (const w of tabs) await closeGongganOwnedTab(w);
+  return true;
+}
+
+function shotWorkflowFilename(cut) {
+  const pos = cut?.pos ?? cut?.index;
+  let base = "";
+  if (cut?.name && String(cut.name).trim()) {
+    base = String(cut.name)
+      .trim()
+      .replace(/[^\w.-]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  }
+  if (!base && pos != null) base = `cut${pos + 1}`;
+  if (!base) base = "shot";
+  if (!base.toLowerCase().endsWith(".json")) base += ".json";
+  return base.slice(0, 120);
+}
+
+function adoptGongganShotWorkflow(fileName) {
   const ws = ggWorkflowStore();
   if (!ws) return null;
-  let wf = findDedicatedShotWorkflow();
-  if (wf) {
-    if (!ws.isActive?.(wf)) await ws.openWorkflow(wf);
-    return wf;
+  const active = ws.activeWorkflow;
+  if (active && workflowBasename(active) === fileName) {
+    ggOwnedShotWorkflow = active;
+    return active;
   }
-  return null;
+  for (const p of [fileName, `workflows/${fileName}`]) {
+    const w = ws.getWorkflowByPath?.(p);
+    if (w) {
+      ggOwnedShotWorkflow = w;
+      return w;
+    }
+  }
+  const found = (ws.openWorkflows || []).find((w) => workflowBasename(w) === fileName) ?? null;
+  ggOwnedShotWorkflow = found;
+  return found;
+}
+
+function isGongganShotTabOpenAndActive() {
+  const ws = ggWorkflowStore();
+  const wf = ggOwnedShotWorkflow;
+  if (!ws || !wf) return false;
+  if (!(ws.openWorkflows || []).includes(wf)) return false;
+  return ws.isActive?.(wf) ?? false;
+}
+
+function shouldSkipWorkflowReload(cutId) {
+  return cutId === wfLastLoadedCutId && isGongganShotTabOpenAndActive();
 }
 
 function isUiWorkflowGraph(wf) {
   return wf && Array.isArray(wf.nodes);
 }
 
-async function loadWorkflowIntoDedicatedTab(workflow) {
-  let wf = await ensureDedicatedShotWorkflowTab();
-  if (wf?.isModified && !confirm("Gonggan shot tab has unsaved changes. Load this shot's workflow anyway?")) {
-    return false;
-  }
-  const target = wf ?? GG_SHOT_WF_FILE;
-  if (isUiWorkflowGraph(workflow)) {
-    if (typeof app.loadGraphData === "function") {
-      await app.loadGraphData(workflow, true, true, target, { deferWarnings: true });
+async function loadWorkflowIntoDedicatedTab(workflow, cut) {
+  const fileName = shotWorkflowFilename(cut);
+  if (!(await prepareGongganShotTabReplace())) return false;
+  try {
+    if (isUiWorkflowGraph(workflow)) {
+      if (typeof app.loadGraphData !== "function") return false;
+      await app.loadGraphData(workflow, true, true, fileName, { deferWarnings: true });
+    } else if (typeof app.loadApiJson === "function") {
+      await app.loadApiJson(workflow, fileName, { deferWarnings: true });
+    } else if (typeof app.loadGraphData === "function") {
+      await app.loadGraphData(workflow, true, true, fileName, { deferWarnings: true });
     } else {
       return false;
     }
-  } else if (typeof app.loadApiJson === "function") {
-    await app.loadApiJson(workflow, target, { deferWarnings: true });
-  } else if (typeof app.loadGraphData === "function") {
-    await app.loadGraphData(workflow, true, true, target, { deferWarnings: true });
-  } else {
+  } catch (e) {
+    console.warn("[gonggan] load failed", e);
+    ggToast("Workflow", e?.message || String(e), "warn");
     return false;
   }
+  adoptGongganShotWorkflow(fileName);
   return true;
 }
 
-async function loadShotApiIntoDedicatedTab(apiJson) {
-  return loadWorkflowIntoDedicatedTab(apiJson);
+async function loadShotApiIntoDedicatedTab(apiJson, cut) {
+  return loadWorkflowIntoDedicatedTab(apiJson, cut);
 }
 
 function ggToast(summary, detail, kind = "info") {
@@ -281,16 +356,21 @@ const CUT_WORKFLOW_SOURCES = [
 async function loadCutWorkflow(cutId, cut) {
   const tl = state.timeline;
   if (!tl || !cutId) return;
-  if (cutId === wfLastLoadedCutId) return;
+  if (shouldSkipWorkflowReload(cutId)) return;
   const gen = ++wfLoadGen;
-  const title = shotTitle(cut || cutById(cutId));
+  const cutRec = cut || cutById(cutId);
+  const title = shotTitle(cutRec);
   let lastErr = null;
   for (const src of CUT_WORKFLOW_SOURCES) {
     try {
       const hit = await src.resolve(cutId);
       if (gen !== wfLoadGen) return;
-      const loaded = await loadWorkflowIntoDedicatedTab(hit.workflow);
-      if (gen !== wfLoadGen || !loaded) return;
+      const loaded = await loadWorkflowIntoDedicatedTab(hit.workflow, cutRec);
+      if (gen !== wfLoadGen) return;
+      if (!loaded) {
+        lastErr = new Error("workflow load failed");
+        continue;
+      }
       wfLastLoadedCutId = cutId;
       sdk.msg = hit.sdkMsg;
       bus.dispatchEvent(new Event("sdk"));
@@ -305,8 +385,12 @@ async function loadCutWorkflow(cutId, cut) {
           try {
             const hit = await leg.resolve(cutId);
             if (gen !== wfLoadGen) return;
-            const loaded = await loadWorkflowIntoDedicatedTab(hit.workflow);
-            if (gen !== wfLoadGen || !loaded) return;
+            const loaded = await loadWorkflowIntoDedicatedTab(hit.workflow, cutRec);
+            if (gen !== wfLoadGen) return;
+            if (!loaded) {
+              lastErr = new Error("workflow load failed");
+              continue;
+            }
             wfLastLoadedCutId = cutId;
             sdk.msg = hit.sdkMsg;
             bus.dispatchEvent(new Event("sdk"));
@@ -1123,8 +1207,6 @@ function mountShots(el) {
           <select class="gg-tpl-select">${templateSelectOptionsHtml()}</select>
         </label>
         <span class="gg-sdk-slot"></span>
-        <button class="gg-btn gg-cut-add" type="button" title="Add a local cut to this project">+ Cut</button>
-        <button class="gg-btn gg-scene-add" type="button" title="New scene from selection">+ Scene</button>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
       </div>
       ${state.error ? `<div class="gg-error">${esc(state.error)}</div>` : ""}
