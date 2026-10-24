@@ -8,6 +8,7 @@ from aiohttp import web
 from server import PromptServer
 
 from . import gg_data
+from . import gg_native_api
 from . import gg_template
 from . import gg_wfstore
 
@@ -33,10 +34,73 @@ async def gg_settings(request):
 @routes.get("/gonggan/projects")
 async def gg_projects(request):
     try:
-        return web.json_response(await asyncio.to_thread(gg_data.list_projects))
+        data = await asyncio.to_thread(gg_data.list_projects)
+        return web.json_response(await asyncio.to_thread(gg_native_api.merge_projects_list, data))
     except Exception as ex:  # noqa: BLE001
         log.exception("[gonggan-cut] projects failed")
         return _err(500, str(ex))
+
+
+@routes.post("/gonggan/project/create")
+async def gg_project_create(request):
+    data = await _json_body(request)
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return _err(400, "name required")
+    ref = data.get("template_ref")
+    if ref is not None and not isinstance(ref, str):
+        return _err(400, "template_ref must be a string")
+    try:
+        res = await asyncio.to_thread(gg_native_api.create_native_project, name.strip(), ref or None)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] project create failed")
+        return _err(500, str(ex))
+    return web.json_response(res)
+
+
+@routes.post("/gonggan/project/rename")
+async def gg_project_rename(request):
+    data = await _json_body(request)
+    pid, name = data.get("pid"), data.get("name")
+    if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid required")
+    if not isinstance(name, str) or not name.strip():
+        return _err(400, "name required")
+    try:
+        res = await asyncio.to_thread(gg_native_api.rename_native_project, pid, name.strip())
+    except FileNotFoundError:
+        return _err(404, "project not found")
+    except ValueError as ex:
+        return _err(400, str(ex))
+    return web.json_response(res)
+
+
+@routes.post("/gonggan/project/delete")
+async def gg_project_delete(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid required")
+    try:
+        res = await asyncio.to_thread(gg_native_api.delete_native_project, pid)
+    except FileNotFoundError:
+        return _err(404, "project not found")
+    return web.json_response(res)
+
+
+@routes.post("/gonggan/project/restore")
+async def gg_project_restore(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid required")
+    try:
+        res = await asyncio.to_thread(gg_native_api.restore_native_project, pid)
+    except FileNotFoundError:
+        return _err(404, "project not found")
+    return web.json_response(res)
 
 
 @routes.get("/gonggan/timeline")
@@ -45,7 +109,10 @@ async def gg_timeline(request):
     if not pid:
         return _err(400, "pid required")
     try:
-        data = await asyncio.to_thread(gg_data.timeline, pid)
+        if gg_native_api.is_native_pid(pid):
+            data = await asyncio.to_thread(gg_native_api.native_timeline, pid)
+        else:
+            data = await asyncio.to_thread(gg_data.timeline, pid)
     except Exception as ex:  # noqa: BLE001
         log.exception("[gonggan-cut] timeline failed")
         return _err(500, str(ex))
@@ -56,8 +123,11 @@ async def gg_timeline(request):
 
 @routes.get("/gonggan/media")
 async def gg_media(request):
+    mid = request.query.get("id", "")
     try:
-        path = await asyncio.to_thread(gg_data.media_path, request.query.get("id", ""))
+        path = await asyncio.to_thread(gg_native_api.native_media_path, mid)
+        if path is None:
+            path = await asyncio.to_thread(gg_data.media_path, mid)
     except Exception as ex:  # noqa: BLE001
         return _err(500, str(ex))
     if path is None:
@@ -73,8 +143,11 @@ async def gg_media(request):
 
 @routes.get("/gonggan/poster")
 async def gg_poster(request):
+    mid = request.query.get("id", "")
     try:
-        path = await asyncio.to_thread(gg_data.poster_path, request.query.get("id", ""))
+        path = await asyncio.to_thread(gg_native_api.native_poster_path, mid)
+        if path is None:
+            path = await asyncio.to_thread(gg_data.poster_path, mid)
     except Exception as ex:  # noqa: BLE001
         return _err(500, str(ex))
     if path is None:
@@ -100,7 +173,12 @@ async def gg_edit(request):
     if not isinstance(pid, str) or not pid:
         return _err(400, "pid required")
     try:
-        tl = await asyncio.to_thread(gg_data.save_edit, pid, data.get("order"), data.get("clips"))
+        if gg_native_api.is_native_pid(pid):
+            tl = await asyncio.to_thread(
+                gg_native_api.native_save_edit, pid, data.get("order"), data.get("clips"),
+            )
+        else:
+            tl = await asyncio.to_thread(gg_data.save_edit, pid, data.get("order"), data.get("clips"))
     except ValueError as ex:
         return _err(400, str(ex))
     except Exception as ex:  # noqa: BLE001
@@ -120,7 +198,10 @@ async def gg_groups(request):
     if "groups" not in data:
         return _err(400, "groups required")
     try:
-        tl = await asyncio.to_thread(gg_data.save_groups, pid, data.get("groups"))
+        if gg_native_api.is_native_pid(pid):
+            tl = await asyncio.to_thread(gg_native_api.native_save_groups, pid, data.get("groups"))
+        else:
+            tl = await asyncio.to_thread(gg_data.save_groups, pid, data.get("groups"))
     except ValueError as ex:
         return _err(400, str(ex))
     except Exception as ex:  # noqa: BLE001
@@ -166,6 +247,8 @@ async def gg_export_start(request):
     pid = data.get("pid")
     if not isinstance(pid, str) or not pid:
         return _err(400, "pid required")
+    if gg_native_api.is_native_pid(pid):
+        return _err(400, gg_native_api.NATIVE_UNAVAILABLE)
     try:
         res = await asyncio.to_thread(
             gg_export.start, pid, str(data.get("preset") or "720p"), data.get("width"), data.get("height"),
@@ -211,7 +294,10 @@ async def gg_template_get(request):
     if not pid:
         return _err(400, "pid required")
     try:
-        info = await asyncio.to_thread(gg_template.get_template_info, pid)
+        if gg_native_api.is_native_pid(pid):
+            info = await asyncio.to_thread(gg_native_api.native_template_info, pid)
+        else:
+            info = await asyncio.to_thread(gg_template.get_template_info, pid)
     except ValueError as ex:
         return _err(400, str(ex))
     except Exception as ex:  # noqa: BLE001
@@ -231,7 +317,10 @@ async def gg_template_post(request):
         if ref is not None and not isinstance(ref, str):
             return _err(400, "ref must be a string")
         try:
-            path = await asyncio.to_thread(gg_template.save_template_ref, pid, ref or "")
+            if gg_native_api.is_native_pid(pid):
+                path = await asyncio.to_thread(gg_native_api.native_set_template_ref, pid, ref or "")
+            else:
+                path = await asyncio.to_thread(gg_template.save_template_ref, pid, ref or "")
         except ValueError as ex:
             return _err(400, str(ex))
         except Exception as ex:  # noqa: BLE001
@@ -242,7 +331,10 @@ async def gg_template_post(request):
     if not isinstance(workflow, dict):
         return _err(400, "ref or workflow required")
     try:
-        path = await asyncio.to_thread(gg_template.save_template, pid, workflow)
+        if gg_native_api.is_native_pid(pid):
+            path = await asyncio.to_thread(gg_native_api.native_set_template_workflow, pid, workflow)
+        else:
+            path = await asyncio.to_thread(gg_template.save_template, pid, workflow)
     except ValueError as ex:
         return _err(400, str(ex))
     except Exception as ex:  # noqa: BLE001
@@ -261,6 +353,11 @@ async def gg_cut_delete(request):
     if not isinstance(cuts, list) or not cuts:
         return _err(400, "cuts required")
     try:
+        if gg_native_api.is_native_pid(pid):
+            res = await asyncio.to_thread(gg_native_api.native_delete_cuts, pid, cuts)
+            if res is None:
+                return _err(404, "project not found")
+            return web.json_response(res)
         tl = await asyncio.to_thread(gg_data.delete_cuts, pid, cuts)
     except ValueError as ex:
         return _err(400, str(ex))
@@ -282,6 +379,11 @@ async def gg_cut_restore(request):
     if cuts is not None and not isinstance(cuts, list):
         return _err(400, "cuts must be a list")
     try:
+        if gg_native_api.is_native_pid(pid):
+            res = await asyncio.to_thread(gg_native_api.native_restore_cuts, pid, cuts)
+            if res is None:
+                return _err(404, "project not found")
+            return web.json_response(res)
         tl = await asyncio.to_thread(gg_data.restore_cuts, pid, cuts)
     except ValueError as ex:
         return _err(400, str(ex))
@@ -321,6 +423,10 @@ async def gg_cut_add(request):
     if after is not None and not isinstance(after, str):
         return _err(400, "after must be a string")
     try:
+        if gg_native_api.is_native_pid(pid):
+            return web.json_response(await asyncio.to_thread(
+                gg_native_api.native_add_cut, pid, group or None, after or None,
+            ))
         cut = await asyncio.to_thread(gg_data.add_local_cut, pid, group or None, after or None)
         tpl = await asyncio.to_thread(gg_template.get_template, pid)
         copied = False
@@ -346,6 +452,11 @@ async def gg_version_workflow(request):
     if not pid or not cut or not vid:
         return _err(400, "pid, cut, and vid required")
     try:
+        if gg_native_api.is_native_pid(pid):
+            rec = await asyncio.to_thread(gg_native_api.native_version_workflow, pid, cut, vid)
+            if rec is None:
+                return _err(404, "workflow not found")
+            return web.json_response({"ok": True, **rec})
         rec = await asyncio.to_thread(gg_wfstore.get_version_workflow, pid, cut, vid)
     except ValueError as ex:
         return _err(400, str(ex))
@@ -364,7 +475,10 @@ async def gg_cut_source_workflow(request):
     if not pid or not cut:
         return _err(400, "pid and cut required")
     try:
-        data = await asyncio.to_thread(gg_wfstore.cut_source_workflow, pid, cut)
+        if gg_native_api.is_native_pid(pid):
+            data = await asyncio.to_thread(gg_native_api.native_cut_source_workflow, pid, cut)
+        else:
+            data = await asyncio.to_thread(gg_wfstore.cut_source_workflow, pid, cut)
     except ValueError as ex:
         return _err(400, str(ex))
     except Exception as ex:  # noqa: BLE001
@@ -397,6 +511,8 @@ async def gg_workflow(request):
     cid = request.query.get("cut_id", "")
     if not pid or not cid:
         return _err(400, "pid and cut_id required")
+    if gg_native_api.is_native_pid(pid):
+        return _err(400, gg_native_api.NATIVE_UNAVAILABLE)
     seed = request.query.get("seed")
     try:
         seed = int(seed) if seed not in (None, "") else None
@@ -434,6 +550,8 @@ async def gg_regen(request):
     pid, cid = data.get("pid"), data.get("cut_id")
     if not isinstance(pid, str) or not isinstance(cid, str):
         return _err(400, "pid and cut_id required")
+    if gg_native_api.is_native_pid(pid):
+        return _err(400, gg_native_api.NATIVE_UNAVAILABLE)
     seed = data.get("seed")
     try:
         seed = int(seed) if seed is not None else None
@@ -467,7 +585,10 @@ async def gg_send_output(request):
     if not isinstance(pid, str) or not isinstance(cid, str):
         return _err(400, "pid and cut_id required")
     try:
-        res = await asyncio.to_thread(gg_sdk.send_last_output, pid, cid)
+        if gg_native_api.is_native_pid(pid):
+            res = await asyncio.to_thread(gg_native_api.native_send_last_output, pid, cid)
+        else:
+            res = await asyncio.to_thread(gg_sdk.send_last_output, pid, cid)
     except ValueError as ex:
         return _err(400, str(ex))
     return web.json_response(res, status=200 if res.get("ok") else 404)

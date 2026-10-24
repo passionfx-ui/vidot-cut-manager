@@ -80,8 +80,38 @@ Tested with Python 3.13.6, comfy-sdk 0.5.0, comfy-api-proxy 0.1.6.
 - `POST /gonggan/send-output {pid, cut_id}` - copies ComfyUI's last output (in-memory `/history`, else newest file in `output/`) into the cut.
 - New takes are stored in the pack's `versions/<pid>/<cut_id>/` (gitignored), never in 공간쉐어 data, and become the cut's pick in `edits/edit_<pid>.json`.
 
+## Native projects (0.6.0)
+Native projects live entirely in the pack folder (no 공간쉐어 `_workspace.json` writes). Gonggan-share projects stay **read-only** in the project list.
+
+- **Shots** header: native projects appear first with a `[Native]` prefix; Gonggan-share entries show `(read-only)`.
+- Right-click the project row (selector area): **New Project…**, **Rename Project…**, **Delete Project** (rename/delete only for native projects).
+- Native projects support scenes, add cut, template dropdown, timeline edit, **Send last ComfyUI output**, and shot workflow load via `cut-source-workflow`. SDK **Regenerate** and timeline **Export mp4** are disabled for native projects (for now).
+
+### Storage layout (native)
+Under the pack directory (gitignored):
+
+```
+projects/
+  index.json
+  <project-uuid>/
+    project.json          # scenes, cuts, trims, template_ref
+    journal.ndjson
+    workflows/<sha>.json  # deduped workflow blobs
+    assets/<cut-id>/<version-id>.png|mp4|…
+    versions/<cut-id>/<version-id>.json
+trash/projects/<project-uuid>_<stamp>/   # deleted native projects
+```
+
+Routes (in addition to existing `/gonggan/*`):
+
+- `POST /gonggan/project/create` `{name, template_ref?}`
+- `POST /gonggan/project/rename` `{pid, name}`
+- `POST /gonggan/project/delete` `{pid}` · `POST /gonggan/project/restore` `{pid}`
+- `GET /gonggan/projects` — share projects plus native (`native: true|false`)
+
 ## Changelog
 
+- **0.6.0** — Native projects stored under `projects/` with full timeline/edit/scene/cut/template APIs; Gonggan-share list unchanged (read-only); project CRUD UI; send-last-output for native cuts; tests in `tests/test_project_routes.py`.
 - **0.5.2** — Shot click loads API/stored workflows with a string filename (`loadApiJson` / `loadGraphData`); one Gonggan-owned canvas tab per session, renamed per cut (closes the previous tab). Reloads after the tab was closed; surfaces load errors in toast/console. Removed the "+ Cut" / "+ Scene" header buttons (use empty-area right-click Add Cut, and Group from the selection bar or menu).
 - **0.5.1** — Shots multi-select bar: shown only for 2+ cuts (original styling); context menus opaque Comfy background at ~70% scale; empty Shots panel right-click (**Add Cut**, **New Scene** when cuts are selected); plugin UI strings in English. Fix: template dropdown now lists ComfyUI saved workflows (fetchApi path double /api and array response).
 - **0.5.0** — Shots multi-select (Ctrl/Shift), context menus, soft delete + trash restore APIs; hidden cuts excluded from timeline/export.
