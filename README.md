@@ -18,6 +18,15 @@ Copy `gonggan_settings.default.json` to `gonggan_settings.json` (gitignored) and
 
 All routes are also available under `/api/gonggan/*`.
 
+## Shots selection & context menu (0.5.0)
+In the **Shots** list: click selects one cut (preview + workflow load, debounced). **Ctrl/Cmd+click** toggles multi-select; **Shift+click** selects a range in on-screen scene order. **Right-click** a cut or scene header for actions (group, ungroup, add local cut, soft delete). **Delete** / menu **Delete** hides cuts from Shots, Timeline, and export; pack-local cuts move to `trash/<pid>/<stamp>/<cut_id>/` with `manifest.json` (공간쉐어 files are never touched).
+
+- `POST /gonggan/cut/delete` `{pid, cuts:[...]}` → `{ok, timeline}`
+- `POST /gonggan/cut/restore` `{pid, cuts?}` → `{ok, timeline}` (omit `cuts` to restore all hidden)
+- `GET /gonggan/trash?pid=` → `{ok, items}`
+
+Hidden cut ids live in `edits/edit_<pid>.json` as `"hidden": [...]`; `save_edit` keeps `hidden` and `local_cuts`.
+
 ## Project workflow template (0.4.1)
 Each project links one of ComfyUI’s saved user workflows. The pack stores only a reference in `templates/<project_id>.json`:
 
@@ -73,6 +82,7 @@ Tested with Python 3.13.6, comfy-sdk 0.5.0, comfy-api-proxy 0.1.6.
 
 ## Changelog
 
+- **0.5.0** — Shots multi-select (Ctrl/Shift), context menus, soft delete + trash restore APIs; hidden cuts excluded from timeline/export.
 - **0.4.1** — Template is a ComfyUI saved-workflow ref; Shots template dropdown; pack-local **+ Cut** with `local_cuts` and optional `initial.workflow.json` from template.
 - **0.4.0** — Per-version workflow JSON under `workflows/`; generation-time save; PNG metadata backfill; `cut-source-workflow` resolver (stored → template → draft).
 - **0.3.0** — Per-project workflow template (save canvas / load JSON, indicator dot). Empty cuts fall back to the project template on shot click (ordered resolver; cut workflow always wins when available).
