@@ -4,9 +4,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from gg_data import PACK_DIR, clamp_clip
-from gg_project import LocalStore
-from gg_project.timeline import timeline_order
+try:
+    from .gg_data import PACK_DIR, clamp_clip
+    from .gg_project import LocalStore
+    from .gg_project.timeline import timeline_order
+except ImportError:  # unittest / plain script
+    from gg_data import PACK_DIR, clamp_clip  # type: ignore
+    from gg_project import LocalStore  # type: ignore
+    from gg_project.timeline import timeline_order  # type: ignore
 
 try:
     from . import gg_template
@@ -290,7 +295,10 @@ _MEDIA_KIND = {".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "ima
 
 
 def _poster_for_file(media_id: str, src: Path) -> Path | None:
-    import gg_data as gd
+    try:
+        from . import gg_data as gd
+    except ImportError:
+        import gg_data as gd  # type: ignore
 
     out = gd.CACHE_DIR / "posters" / f"{media_id}.jpg"
     if out.is_file() and out.stat().st_mtime >= src.stat().st_mtime:
