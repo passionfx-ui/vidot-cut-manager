@@ -9,6 +9,8 @@ const TIMELINE_TAB = "gg-timeline";
 const SHOTS_TAB = "gg-shots";
 const bus = new EventTarget();
 const state = { projects: [], pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
+let cutSelAnchor = "";
+const ctxUi = { el: null, onDoc: null, onKey: null };
 
 (function loadCss() {
   if (document.getElementById("gg-css")) return;
@@ -78,6 +80,7 @@ function selectProject(pid) {
   state.pid = pid;
   state.cutId = "";
   state.cutSel.clear();
+  cutSelAnchor = "";
   wfLastLoadedCutId = "";
   localStorage.setItem(PID_KEY, pid);
   bus.dispatchEvent(new Event("projects"));
@@ -431,14 +434,51 @@ async function addLocalCut() {
   }
 }
 
+function displayedCutIds() {
+  const cuts = state.timeline ? state.timeline.cuts : [];
+  const groups = state.timeline ? state.timeline.groups || [] : [];
+  const out = [];
+  for (const sec of shotsSections(cuts, groups)) {
+    for (const c of sec.cuts) out.push(c.id);
+  }
+  return out;
+}
+
+function selectCutRange(fromId, toId) {
+  const order = displayedCutIds();
+  const i = order.indexOf(fromId);
+  const j = order.indexOf(toId);
+  if (i < 0 || j < 0) return;
+  const lo = Math.min(i, j);
+  const hi = Math.max(i, j);
+  state.cutSel.clear();
+  for (let k = lo; k <= hi; k++) state.cutSel.add(order[k]);
+  state.cutId = toId;
+  cutSelAnchor = fromId;
+  bus.dispatchEvent(new Event("select"));
+  const idx = state.timeline ? state.timeline.cuts.findIndex((c) => c.id === toId) : -1;
+  if (idx >= 0 && typeof seek === "function" && !play.on) {
+    play.idx = -1;
+    seek(startOf(idx) + 0.001);
+  }
+}
+
 function selectCut(cutId, opts) {
+  const range = opts && opts.range;
   const multi = opts && opts.multi;
+  if (range) {
+    const anchor = cutSelAnchor || state.cutId || cutId;
+    selectCutRange(anchor, cutId);
+    return;
+  }
   const cut = cutById(cutId);
   if (multi) {
     if (state.cutSel.has(cutId)) state.cutSel.delete(cutId);
     else state.cutSel.add(cutId);
+    cutSelAnchor = cutId;
   } else {
     state.cutSel.clear();
+    cutSelAnchor = cutId;
   }
   state.cutId = cutId;
   bus.dispatchEvent(new Event("select"));
@@ -447,10 +487,146 @@ function selectCut(cutId, opts) {
     play.idx = -1;
     seek(startOf(i) + 0.001);
   }
-  if (!multi) {
+  if (!multi && !range) {
     clearTimeout(wfLoadDebounce);
     wfLoadDebounce = setTimeout(() => loadCutWorkflow(cutId, cut), WF_LOAD_DEBOUNCE_MS);
   }
+}
+
+function closeCtxMenu() {
+  if (ctxUi.el) {
+    ctxUi.el.remove();
+    ctxUi.el = null;
+  }
+  if (ctxUi.onDoc) {
+    document.removeEventListener("mousedown", ctxUi.onDoc, true);
+    ctxUi.onDoc = null;
+  }
+  if (ctxUi.onKey) {
+    document.removeEventListener("keydown", ctxUi.onKey, true);
+    ctxUi.onKey = null;
+  }
+}
+
+function showCtxMenu(x, y, items) {
+  closeCtxMenu();
+  const menu = document.createElement("div");
+  menu.className = "gg-ctx";
+  menu.setAttribute("role", "menu");
+  items.forEach((it) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "gg-ctx-item" + (it.danger ? " gg-ctx-danger" : "");
+    btn.textContent = it.label;
+    btn.disabled = !!it.disabled;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeCtxMenu();
+      if (!it.disabled && it.action) it.action();
+    });
+    menu.appendChild(btn);
+  });
+  document.body.appendChild(menu);
+  ctxUi.el = menu;
+  const pad = 6;
+  const rect = menu.getBoundingClientRect();
+  let left = x;
+  let top = y;
+  if (left + rect.width > window.innerWidth - pad) left = window.innerWidth - rect.width - pad;
+  if (top + rect.height > window.innerHeight - pad) top = window.innerHeight - rect.height - pad;
+  menu.style.left = `${Math.max(pad, left)}px`;
+  menu.style.top = `${Math.max(pad, top)}px`;
+  ctxUi.onDoc = (e) => {
+    if (!menu.contains(e.target)) closeCtxMenu();
+  };
+  ctxUi.onKey = (e) => {
+    if (e.key === "Escape") closeCtxMenu();
+  };
+  document.addEventListener("mousedown", ctxUi.onDoc, true);
+  document.addEventListener("keydown", ctxUi.onKey, true);
+}
+
+function cutsForDelete() {
+  const ids = cutSelIds();
+  return ids.length ? ids : (state.cutId ? [state.cutId] : []);
+}
+
+async function deleteSelectedCuts() {
+  const ids = cutsForDelete();
+  if (!ids.length || !state.pid) return;
+  const msg = `${ids.length}개 컷을 지울까요?`;
+  if (!confirm(msg)) return;
+  try {
+    const d = await postJson("/gonggan/cut/delete", { pid: state.pid, cuts: ids });
+    if (d.timeline) state.timeline = d.timeline;
+    state.cutSel.clear();
+    cutSelAnchor = "";
+    if (ids.includes(state.cutId)) {
+      state.cutId = state.timeline?.cuts?.[0]?.id || "";
+      wfLastLoadedCutId = "";
+    }
+    state.error = "";
+    bus.dispatchEvent(new Event("timeline"));
+    bus.dispatchEvent(new Event("select"));
+    ggToast("Delete", `${ids.length} cut(s) hidden`, "ok");
+  } catch (e) {
+    ggToast("Delete", e.message, "warn");
+  }
+}
+
+async function addCutAfter(cutId) {
+  if (!state.pid) return;
+  const c = cutById(cutId);
+  const body = { pid: state.pid, after: cutId };
+  if (c && c.group_id) body.group = c.group_id;
+  try {
+    const d = await postJson("/gonggan/cut/add", body);
+    if (d.timeline) {
+      state.timeline = d.timeline;
+      bus.dispatchEvent(new Event("timeline"));
+    } else await loadTimeline();
+    if (d.cut?.id) {
+      wfLastLoadedCutId = "";
+      selectCut(d.cut.id);
+    }
+    ggToast("Cut", d.template_copied ? `Added ${d.cut.name}` : `${d.cut.name} — no template`, d.template_copied ? "ok" : "warn");
+  } catch (e) {
+    ggToast("Cut", e.message, "warn");
+  }
+}
+
+function openCutContextMenu(e, cutId) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (!state.cutSel.has(cutId)) {
+    state.cutSel.clear();
+    state.cutSel.add(cutId);
+    cutSelAnchor = cutId;
+    state.cutId = cutId;
+    bus.dispatchEvent(new Event("select"));
+  }
+  const ids = cutSelIds();
+  const c = cutById(cutId);
+  const inScene = !!(c && c.group_id);
+  showCtxMenu(e.clientX, e.clientY, [
+    { label: "Group into scene", action: () => createSceneGroup(ids) },
+    { label: "Remove from scene", disabled: !inScene && !ids.some((id) => cutById(id)?.group_id), action: () => ungroupCuts(ids) },
+    { label: "Add cut", action: () => addCutAfter(cutId) },
+    { label: "Delete", danger: true, action: () => deleteSelectedCuts() },
+  ]);
+}
+
+function openSceneContextMenu(e, groupId) {
+  e.preventDefault();
+  e.stopPropagation();
+  showCtxMenu(e.clientX, e.clientY, [
+    { label: "Rename", action: () => renameSceneGroup(groupId) },
+    { label: "Ungroup scene", action: () => ungroupSceneGroup(groupId) },
+  ]);
+}
+
+async function ungroupSceneGroup(groupId) {
+  await persistGroups(groupsClone().filter((g) => g.id !== groupId));
 }
 
 function cutSelIds() {
@@ -946,19 +1122,34 @@ function mountShots(el) {
     root.querySelector(".gg-scene-add")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-group")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-ungroup")?.addEventListener("click", () => ungroupCuts(cutSelIds()));
-    root.querySelector(".gg-sel-x")?.addEventListener("click", () => { state.cutSel.clear(); paint(); });
+    root.querySelector(".gg-sel-x")?.addEventListener("click", () => { state.cutSel.clear(); cutSelAnchor = ""; paint(); });
     root.querySelectorAll(".gg-grp-sec[data-group-id]").forEach((sec) => {
       const gid = sec.dataset.groupId;
       sec.querySelector(".gg-grp-fold")?.addEventListener("click", (e) => { e.stopPropagation(); toggleGroupCollapsed(gid); });
       sec.querySelector(".gg-grp-ren")?.addEventListener("click", (e) => { e.stopPropagation(); renameSceneGroup(gid); });
       sec.querySelector(".gg-grp-del")?.addEventListener("click", (e) => { e.stopPropagation(); deleteSceneGroup(gid); });
     });
-    root.querySelectorAll(".gg-cut").forEach((li) => li.addEventListener("click", (e) => {
-      selectCut(li.dataset.cutId, { multi: e.ctrlKey || e.metaKey });
-      openTimelinePanel();
-      paintSelection(root);
-      paintPanel();
-    }));
+    root.querySelectorAll(".gg-cut").forEach((li) => {
+      li.addEventListener("click", (e) => {
+        const id = li.dataset.cutId;
+        if (e.shiftKey) selectCut(id, { range: true });
+        else selectCut(id, { multi: e.ctrlKey || e.metaKey });
+        openTimelinePanel();
+        paintSelection(root);
+        paintPanel();
+      });
+      li.addEventListener("contextmenu", (e) => {
+        openCutContextMenu(e, li.dataset.cutId);
+        paintSelection(root);
+        paintPanel();
+      });
+    });
+    root.querySelectorAll(".gg-grp-sec[data-group-id] .gg-grp-head").forEach((head) => {
+      const sec = head.closest(".gg-grp-sec");
+      const gid = sec?.dataset?.groupId;
+      if (!gid) return;
+      head.addEventListener("contextmenu", (e) => openSceneContextMenu(e, gid));
+    });
     bindHoverPlay(root);
     paintSelection(root);
     paintPanel();
@@ -976,10 +1167,32 @@ function mountShots(el) {
   refreshProjectTemplateFlag();
   refreshSdk(false);
   const timer = setInterval(() => refreshSdk(false), 20000);
+  const onShotsKey = (e) => {
+    if (!shotsSidebarActive() && !root.isConnected) return;
+    const tag = (e.target && e.target.tagName) || "";
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable) return;
+    if (e.key === "Escape") {
+      closeCtxMenu();
+      if (state.cutSel.size) {
+        state.cutSel.clear();
+        cutSelAnchor = "";
+        paintSelection(root);
+        paint();
+      }
+      return;
+    }
+    if (e.key === "Delete" && cutsForDelete().length) {
+      e.preventDefault();
+      deleteSelectedCuts();
+    }
+  };
+  document.addEventListener("keydown", onShotsKey);
   return () => {
     ro.disconnect();
     window.removeEventListener("resize", fit);
     clearInterval(timer);
+    document.removeEventListener("keydown", onShotsKey);
+    closeCtxMenu();
     bus.removeEventListener("projects", paint);
     bus.removeEventListener("timeline", paint);
     bus.removeEventListener("template", onTemplate);
