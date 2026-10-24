@@ -126,6 +126,9 @@ node --test tests/js/progress_core.test.mjs tests/js/cut_stage.test.mjs tests/js
 ```
 Also run `node --check web/gonggan.js` and `node --check web/gg_progress_core.js` after UI edits.
 
+## Auto-save on cut switch (0.8.1)
+Switching to another shot while the Gonggan workflow tab has unsaved edits **auto-saves** via ComfyUI’s workflow store (same as Ctrl+S) instead of a blocking confirm. If save fails, the switch is cancelled and the tab is left unchanged. Logic: `web/gg_autosave_core.js`.
+
 ## Cut management (0.8.0)
 Shots and Timeline add lightweight production tracking on top of the existing scene/cut model (English UI labels).
 
