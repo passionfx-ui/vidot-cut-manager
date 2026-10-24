@@ -1,5 +1,5 @@
 // comfyui-gonggan-cut — "Shots" sidebar tab + "Timeline" bottom panel tab.
-// Day 1: static render of real 공간쉐어 projects/cuts (read-only). Trim/reorder come next.
+// Day 1: static render of real Gonggan projects/cuts (read-only). Trim/reorder come next.
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
@@ -554,7 +554,7 @@ function cutsForDelete() {
 async function deleteSelectedCuts() {
   const ids = cutsForDelete();
   if (!ids.length || !state.pid) return;
-  const msg = `${ids.length}개 컷을 지울까요?`;
+  const msg = ids.length === 1 ? "Delete 1 cut?" : `Delete ${ids.length} cuts?`;
   if (!confirm(msg)) return;
   try {
     const d = await postJson("/gonggan/cut/delete", { pid: state.pid, cuts: ids });
@@ -609,9 +609,9 @@ function openCutContextMenu(e, cutId) {
   const c = cutById(cutId);
   const inScene = !!(c && c.group_id);
   showCtxMenu(e.clientX, e.clientY, [
-    { label: "Group into scene", action: () => createSceneGroup(ids) },
-    { label: "Remove from scene", disabled: !inScene && !ids.some((id) => cutById(id)?.group_id), action: () => ungroupCuts(ids) },
-    { label: "Add cut", action: () => addCutAfter(cutId) },
+    { label: "Group into Scene", action: () => createSceneGroup(ids) },
+    { label: "Remove from Scene", disabled: !inScene && !ids.some((id) => cutById(id)?.group_id), action: () => ungroupCuts(ids) },
+    { label: "Add Cut", action: () => addCutAfter(cutId) },
     { label: "Delete", danger: true, action: () => deleteSelectedCuts() },
   ]);
 }
@@ -621,8 +621,17 @@ function openSceneContextMenu(e, groupId) {
   e.stopPropagation();
   showCtxMenu(e.clientX, e.clientY, [
     { label: "Rename", action: () => renameSceneGroup(groupId) },
-    { label: "Ungroup scene", action: () => ungroupSceneGroup(groupId) },
+    { label: "Ungroup", action: () => ungroupSceneGroup(groupId) },
   ]);
+}
+
+function openShotsPanelContextMenu(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const items = [{ label: "Add Cut", action: () => addLocalCut() }];
+  const ids = cutSelIds();
+  if (ids.length) items.push({ label: "New Scene", action: () => createSceneGroup(ids) });
+  showCtxMenu(e.clientX, e.clientY, items);
 }
 
 async function ungroupSceneGroup(groupId) {
@@ -665,24 +674,26 @@ async function createSceneGroup(cutIds) {
   let ids = orderCutIds(cutIds && cutIds.length ? cutIds : cutSelIds());
   if (!ids.length && state.cutId) ids = [state.cutId];
   if (!ids.length) return;
-  const title = prompt("씬 제목 (Scene)", "씬 " + ((state.timeline?.groups?.length || 0) + 1));
+  const title = prompt("Scene name", "Scene " + ((state.timeline?.groups?.length || 0) + 1));
   if (title === null || !title.trim()) return;
   let groups = stripCutsFromGroups(groupsClone(), ids);
   groups.push({ id: "s" + Date.now(), name: title.trim().slice(0, 40), cut_ids: ids, collapsed: false });
-  await persistGroups(groups);
   state.cutSel.clear();
+  cutSelAnchor = "";
+  await persistGroups(groups);
 }
 
 async function ungroupCuts(cutIds) {
   const ids = cutIds && cutIds.length ? cutIds : cutSelIds();
-  await persistGroups(stripCutsFromGroups(groupsClone(), ids));
   state.cutSel.clear();
+  cutSelAnchor = "";
+  await persistGroups(stripCutsFromGroups(groupsClone(), ids));
 }
 
 async function renameSceneGroup(groupId) {
   const g = (state.timeline?.groups || []).find((x) => x.id === groupId);
   if (!g) return;
-  const title = prompt("씬 이름 (Scene)", g.name || "씬");
+  const title = prompt("Scene name", g.name || "Scene");
   if (title === null || !title.trim()) return;
   const groups = groupsClone();
   const hit = groups.find((x) => x.id === groupId);
@@ -691,7 +702,7 @@ async function renameSceneGroup(groupId) {
 }
 
 async function deleteSceneGroup(groupId) {
-  if (!confirm("이 씬을 삭제할까요? (컷은 미분류로 남습니다)")) return;
+  if (!confirm("Delete this scene? (Cuts become ungrouped)")) return;
   await persistGroups(groupsClone().filter((g) => g.id !== groupId));
 }
 
@@ -709,8 +720,9 @@ async function assignCutsToGroup(groupId, cutIds) {
   const g = groups.find((x) => x.id === groupId);
   if (!g) return;
   g.cut_ids = orderCutIds([...(g.cut_ids || []), ...ids]);
-  await persistGroups(groups);
   state.cutSel.clear();
+  cutSelAnchor = "";
+  await persistGroups(groups);
 }
 
 async function splitSceneHere(cutId) {
@@ -720,7 +732,7 @@ async function splitSceneHere(cutId) {
   const idx = cuts.findIndex((c) => c.id === cutId);
   if (idx < 0) return;
   const gid = cuts[idx].group_id;
-  const title = prompt("새 씬 제목 (이 샷부터)", cuts[idx].group_name || "씬");
+  const title = prompt("Scene name", cuts[idx].group_name || "Scene");
   if (title === null || !title.trim()) return;
   const moveIds = [];
   for (let i = idx; i < cuts.length; i++) {
@@ -828,6 +840,18 @@ function bindShotsTabActivated(hostEl, onCleanup) {
   }
 }
 
+function updateSelectionBar(root) {
+  if (!root) return;
+  const bar = root.querySelector(".gg-selbar");
+  if (!bar) return;
+  const n = state.cutSel.size;
+  const show = n >= 2;
+  bar.hidden = !show;
+  bar.style.display = show ? "" : "none";
+  const countEl = bar.querySelector(".gg-sel-count");
+  if (countEl) countEl.textContent = String(n);
+}
+
 function paintSelection(root) {
   root.querySelectorAll("[data-cut-id]").forEach((el) => {
     el.classList.toggle("gg-on", el.dataset.cutId === state.cutId);
@@ -835,6 +859,7 @@ function paintSelection(root) {
   });
   const on = root.querySelector(`[data-cut-id="${CSS.escape(state.cutId)}"]`);
   if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
+  updateSelectionBar(root);
 }
 
 // ---------------- Shots (sidebar) ----------------
@@ -856,7 +881,7 @@ function sdkBadge() {
   return `<span class="gg-sdk ${st.ok ? "gg-sdk-ok" : "gg-sdk-bad"}" title="${esc(tip)}">● SDK${st.ok ? "" : " off"}</span>`;
 }
 
-const fmtSrc = (s) => ({ gonggan: "공간쉐어", "local-sdk": "SDK", "comfy-history": "Comfy", "comfy-output-folder": "Comfy" }[s] || s || "");
+const fmtSrc = (s) => ({ gonggan: "Gonggan", "local-sdk": "SDK", "comfy-history": "Comfy", "comfy-output-folder": "Comfy" }[s] || s || "");
 
 async function postJson(route, body) {
   const res = await api.fetchApi(route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -931,7 +956,7 @@ async function setPick(cutId, vid) {
   bus.dispatchEvent(new Event("timeline"));
   bus.dispatchEvent(new Event("select"));
   const msg = (state.error || "").replace(/^Save failed:\s*/, "") || "unknown error";
-  ggToast("대표 저장 실패", `이전 버전으로 되돌림: ${msg}`, "warn");
+  ggToast("Promote failed", `Reverted to the previous version: ${msg}`, "warn");
 }
 
 async function regenCut(cutId) {
@@ -993,9 +1018,9 @@ function cutPanelHtml(c) {
       <div class="gg-ver" title="${esc(tip)}">
         <img src="${esc(posterUrl(v.id))}" loading="lazy" alt="" />
         <span class="gg-ver-src gg-src-${esc(v.source)}">${esc(fmtSrc(v.source))}</span>
-        ${on ? '<span class="gg-ver-rep">대표</span>' : ""}
+        ${on ? '<span class="gg-ver-rep">Rep</span>' : ""}
       </div>
-      <button type="button" class="gg-btn gg-promote${on ? " gg-on" : ""}" ${on ? "disabled" : ""} title="${on ? "타임라인에 쓰는 대표 버전" : "이 버전을 타임라인 대표로"}">${on ? "대표" : "대표로"}</button>
+      <button type="button" class="gg-btn gg-promote${on ? " gg-on" : ""}" ${on ? "disabled" : ""} title="${on ? "Timeline representative version" : "Set as timeline representative"}">${on ? "Rep" : "Set rep"}</button>
     </div>`;
   }).join("");
   return `
@@ -1003,9 +1028,9 @@ function cutPanelHtml(c) {
     ${panelPreviewHtml(c)}
     <div class="gg-vers">${vers || '<span class="gg-dim">no versions yet</span>'}</div>
     <div class="gg-scene-actions">
-      <button class="gg-btn gg-scene-new" type="button" title="선택한 샷을 새 씬(Scene)으로 묶기">+ 씬</button>
-      <button class="gg-btn gg-scene-split" type="button" title="이 샷부터 새 씬으로 나누기">씬 나누기</button>
-      <button class="gg-btn gg-scene-off" type="button" title="선택 샷을 씬에서 빼기 (미분류)">씬 해제</button>
+      <button class="gg-btn gg-scene-new" type="button" title="Group selected shots into a new scene">+ Scene</button>
+      <button class="gg-btn gg-scene-split" type="button" title="Start a new scene from this shot">Split scene</button>
+      <button class="gg-btn gg-scene-off" type="button" title="Remove selected shots from their scene (ungrouped)">Remove from scene</button>
     </div>
     <div class="gg-actions">
       <button class="gg-btn gg-regen" ${sdk.busy || !(sdk.st && sdk.st.ok) ? "disabled" : ""} title="Draft re-render through Comfy SDK → comfy-api-proxy → ComfyUI. Shows the job and asks before queueing.">Regenerate (new version)</button>
@@ -1070,22 +1095,21 @@ function mountShots(el) {
       `<option value="${esc(p.id)}"${p.id === state.pid ? " selected" : ""}>${esc(p.name)} (${p.cut_count})</option>`).join("");
     const cuts = tl ? tl.cuts : [];
     const groups = tl ? tl.groups || [] : [];
-    const selN = state.cutSel.size;
     const sections = shotsSections(cuts, groups);
     const listHtml = sections.map((sec) => {
       if (sec.type === "ungrouped") {
-        return `<section class="gg-grp-sec gg-grp-loose"><header class="gg-grp-head">미분류 <span class="gg-grp-meta">${sec.cuts.length}</span></header><ol class="gg-cutlist">${sec.cuts.map(cutRowHtml).join("")}</ol></section>`;
+        return `<section class="gg-grp-sec gg-grp-loose"><header class="gg-grp-head">Ungrouped <span class="gg-grp-meta">${sec.cuts.length}</span></header><ol class="gg-cutlist">${sec.cuts.map(cutRowHtml).join("")}</ol></section>`;
       }
       const g = sec.group;
       const hue = groupColor(g.id);
       const collapsed = !!g.collapsed;
       return `<section class="gg-grp-sec" data-group-id="${esc(g.id)}" style="--gg-grp:${hue}">
         <header class="gg-grp-head">
-          <button type="button" class="gg-grp-fold" title="접기/펼치기">${collapsed ? "▸" : "▾"}</button>
-          <span class="gg-grp-title">씬 · ${esc(g.name)}</span>
+          <button type="button" class="gg-grp-fold" title="Collapse or expand">${collapsed ? "▸" : "▾"}</button>
+          <span class="gg-grp-title">Scene · ${esc(g.name)}</span>
           <span class="gg-grp-meta">${sec.cuts.length}</span>
-          <button type="button" class="gg-grp-ren" title="이름 바꾸기">✎</button>
-          <button type="button" class="gg-grp-del" title="씬 삭제 (컷은 미분류)">×</button>
+          <button type="button" class="gg-grp-ren" title="Rename scene">✎</button>
+          <button type="button" class="gg-grp-del" title="Delete scene (cuts become ungrouped)">×</button>
         </header>
         <ol class="gg-cutlist"${collapsed ? " hidden" : ""}>${sec.cuts.map(cutRowHtml).join("")}</ol>
       </section>`;
@@ -1099,12 +1123,14 @@ function mountShots(el) {
         </label>
         <span class="gg-sdk-slot"></span>
         <button class="gg-btn gg-cut-add" type="button" title="Add a local cut to this project">+ Cut</button>
-        <button class="gg-btn gg-scene-add" type="button" title="새 씬 만들기">+ 씬</button>
+        <button class="gg-btn gg-scene-add" type="button" title="New scene from selection">+ Scene</button>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
       </div>
       ${state.error ? `<div class="gg-error">${esc(state.error)}</div>` : ""}
       <div class="gg-meta">${tl ? `${cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</div>
-      ${selN ? `<div class="gg-selbar">${selN} selected · <button type="button" class="gg-btn gg-sel-group">씬으로 묶기</button> · <button type="button" class="gg-btn gg-sel-ungroup">씬 해제</button> · <button type="button" class="gg-btn gg-sel-x">×</button></div>` : ""}
+      <div class="gg-selbar" hidden>
+        <span class="gg-sel-count">0</span> selected · <button type="button" class="gg-btn gg-sel-group">Group</button> · <button type="button" class="gg-btn gg-sel-ungroup">Ungroup</button> · <button type="button" class="gg-btn gg-sel-x">×</button>
+      </div>
       <div class="gg-grp-wrap">${listHtml}</div>
       <div class="gg-cutpanel"></div>`;
     root.querySelector(".gg-proj")?.addEventListener("change", (e) => selectProject(e.target.value));
@@ -1122,7 +1148,13 @@ function mountShots(el) {
     root.querySelector(".gg-scene-add")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-group")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-ungroup")?.addEventListener("click", () => ungroupCuts(cutSelIds()));
-    root.querySelector(".gg-sel-x")?.addEventListener("click", () => { state.cutSel.clear(); cutSelAnchor = ""; paint(); });
+    root.querySelector(".gg-sel-x")?.addEventListener("click", () => {
+      state.cutSel.clear();
+      cutSelAnchor = "";
+      updateSelectionBar(root);
+      paintSelection(root);
+      bus.dispatchEvent(new Event("select"));
+    });
     root.querySelectorAll(".gg-grp-sec[data-group-id]").forEach((sec) => {
       const gid = sec.dataset.groupId;
       sec.querySelector(".gg-grp-fold")?.addEventListener("click", (e) => { e.stopPropagation(); toggleGroupCollapsed(gid); });
@@ -1176,8 +1208,9 @@ function mountShots(el) {
       if (state.cutSel.size) {
         state.cutSel.clear();
         cutSelAnchor = "";
+        updateSelectionBar(root);
         paintSelection(root);
-        paint();
+        bus.dispatchEvent(new Event("select"));
       }
       return;
     }
@@ -1186,11 +1219,30 @@ function mountShots(el) {
       deleteSelectedCuts();
     }
   };
+  const onShotsEmptyClick = (e) => {
+    if (!root.contains(e.target)) return;
+    if (e.target.closest(".gg-cut") || e.target.closest(".gg-selbar") || e.target.closest(".gg-ctx")) return;
+    if (!state.cutSel.size) return;
+    state.cutSel.clear();
+    cutSelAnchor = "";
+    updateSelectionBar(root);
+    paintSelection(root);
+    bus.dispatchEvent(new Event("select"));
+  };
+  const onShotsPanelContextMenu = (e) => {
+    if (!root.contains(e.target) || !e.target.closest(".gg-grp-wrap")) return;
+    if (e.target.closest(".gg-cut") || e.target.closest(".gg-grp-sec[data-group-id] .gg-grp-head")) return;
+    openShotsPanelContextMenu(e);
+  };
+  root.addEventListener("mousedown", onShotsEmptyClick);
+  root.addEventListener("contextmenu", onShotsPanelContextMenu);
   document.addEventListener("keydown", onShotsKey);
   return () => {
     ro.disconnect();
     window.removeEventListener("resize", fit);
     clearInterval(timer);
+    root.removeEventListener("mousedown", onShotsEmptyClick);
+    root.removeEventListener("contextmenu", onShotsPanelContextMenu);
     document.removeEventListener("keydown", onShotsKey);
     closeCtxMenu();
     bus.removeEventListener("projects", paint);
@@ -1280,7 +1332,7 @@ async function saveEdit() {
 async function resetEdit() {
   const tl = state.timeline;
   if (!tl) return;
-  if (!confirm("Reset this timeline to the 공간쉐어 order and lengths? (the current edit is kept as a backup file)")) return;
+  if (!confirm("Reset this timeline to the Gonggan order and lengths? (the current edit is kept as a backup file)")) return;
   stopPlay();
   try {
     const res = await api.fetchApi("/gonggan/edit/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pid: tl.project.id }) });
@@ -1318,7 +1370,7 @@ function showFrame(force) {
     play.idx = i;
     document.querySelectorAll(".gg-timeline .gg-clip").forEach((el) => el.classList.toggle("gg-play", c && el.dataset.cutId === c.id));
     if (!c) { img.hidden = vid.hidden = true; blank.hidden = false; blank.textContent = ""; label.textContent = ""; return; }
-    label.textContent = c.group_name ? `씬 · ${c.group_name} — ${c.pos + 1}. ${c.name}` : `${c.pos + 1}. ${c.name}`;
+    label.textContent = c.group_name ? `Scene · ${c.group_name} — ${c.pos + 1}. ${c.name}` : `${c.pos + 1}. ${c.name}`;
     if (c.media && c.media.kind === "video") {
       img.hidden = true; blank.hidden = true; vid.hidden = false;
       const url = mediaUrl(c.media.id);
@@ -1597,7 +1649,7 @@ function mountTimeline(el) {
         <button class="gg-btn gg-snap" title="Snap: 1 s steps (off = 0.1 s)">Snap</button>
         <button class="gg-btn gg-zoom-out" title="Zoom out">−</button>
         <button class="gg-btn gg-zoom-in" title="Zoom in">+</button>
-        <button class="gg-btn gg-reset" title="Reset to 공간쉐어 order and lengths">Reset</button>
+        <button class="gg-btn gg-reset" title="Reset to Gonggan order and lengths">Reset</button>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
         <span class="gg-sep"></span>
         <select class="gg-ex-preset" title="Export size">
@@ -1686,12 +1738,12 @@ function mountTimeline(el) {
     $r(".gg-track").innerHTML = cuts.map((c, i) => {
       const run = c.group_id && (i === 0 || cuts[i - 1].group_id !== c.group_id);
       const hue = c.group_id ? groupColor(c.group_id) : 0;
-      const tip = `${c.group_name ? `씬 · ${c.group_name}\n` : ""}${c.pos + 1}. ${c.name}  ${c.sec.toFixed(1)}s${c.src_dur ? ` (src ${c.src_dur}s)` : ""}`;
+      const tip = `${c.group_name ? `Scene · ${c.group_name}\n` : ""}${c.pos + 1}. ${c.name}  ${c.sec.toFixed(1)}s${c.src_dur ? ` (src ${c.src_dur}s)` : ""}`;
       return `
       <div class="gg-clip${c.media ? "" : " gg-clip-empty"}${kindOf(c) === "video" ? " gg-clip-video" : ""}${c.pos !== c.index ? " gg-moved" : ""}${c.group_id ? " gg-in-scene" : ""}${run ? " gg-scene-start" : ""}"
            data-cut-id="${esc(c.id)}" style="width:${c.sec * ed.px}px;${c.group_id ? `--gg-grp:${hue}` : ""}"
            title="${esc(tip)}">
-        ${run ? `<div class="gg-scene-band">씬 · ${esc(c.group_name)}</div>` : ""}
+        ${run ? `<div class="gg-scene-band">Scene · ${esc(c.group_name)}</div>` : ""}
         ${thumbHtml(c.media, "gg-clip-thumb")}
         <div class="gg-clip-label"><span class="gg-no">${c.pos + 1}</span>${esc(c.name)}</div>
         <div class="gg-clip-in">${kindOf(c) === "video" && c.in > 0 ? `in ${c.in.toFixed(1)}` : ""}</div>
@@ -1865,7 +1917,7 @@ app.registerExtension({
       id: SHOTS_TAB,
       icon: "pi pi-images",
       title: "Shots",
-      tooltip: "공간쉐어 shot list",
+      tooltip: "Gonggan shot list",
       type: "custom",
       render: (el) => mountShots(el),
     });
