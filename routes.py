@@ -211,24 +211,36 @@ async def gg_template_get(request):
     if not pid:
         return _err(400, "pid required")
     try:
-        wf = await asyncio.to_thread(gg_template.get_template, pid)
+        info = await asyncio.to_thread(gg_template.get_template_info, pid)
     except ValueError as ex:
         return _err(400, str(ex))
     except Exception as ex:  # noqa: BLE001
         log.exception("[gonggan-cut] template get failed")
         return _err(500, str(ex))
-    return web.json_response({"ok": True, "exists": wf is not None, "workflow": wf})
+    return web.json_response({"ok": True, **info})
 
 
 @routes.post("/gonggan/template")
 async def gg_template_post(request):
     data = await _json_body(request)
     pid = data.get("pid")
-    workflow = data.get("workflow")
     if not isinstance(pid, str) or not pid:
         return _err(400, "pid required")
+    if "ref" in data:
+        ref = data.get("ref")
+        if ref is not None and not isinstance(ref, str):
+            return _err(400, "ref must be a string")
+        try:
+            path = await asyncio.to_thread(gg_template.save_template_ref, pid, ref or "")
+        except ValueError as ex:
+            return _err(400, str(ex))
+        except Exception as ex:  # noqa: BLE001
+            log.exception("[gonggan-cut] template save failed")
+            return _err(500, str(ex))
+        return web.json_response({"ok": True, "path": str(path) if path else None})
+    workflow = data.get("workflow")
     if not isinstance(workflow, dict):
-        return _err(400, "workflow required")
+        return _err(400, "ref or workflow required")
     try:
         path = await asyncio.to_thread(gg_template.save_template, pid, workflow)
     except ValueError as ex:
@@ -237,6 +249,36 @@ async def gg_template_post(request):
         log.exception("[gonggan-cut] template save failed")
         return _err(500, str(ex))
     return web.json_response({"ok": True, "path": str(path)})
+
+
+@routes.post("/gonggan/cut/add")
+async def gg_cut_add(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    group = data.get("group")
+    after = data.get("after")
+    if group is not None and not isinstance(group, str):
+        return _err(400, "group must be a string")
+    if after is not None and not isinstance(after, str):
+        return _err(400, "after must be a string")
+    try:
+        cut = await asyncio.to_thread(gg_data.add_local_cut, pid, group or None, after or None)
+        tpl = await asyncio.to_thread(gg_template.get_template, pid)
+        copied = False
+        if tpl:
+            await asyncio.to_thread(gg_wfstore.save_initial_workflow, pid, cut["id"], tpl, "template")
+            copied = True
+        tl = await asyncio.to_thread(gg_data.timeline, pid)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] cut add failed")
+        return _err(500, str(ex))
+    if tl is None:
+        return _err(404, "project not found")
+    return web.json_response({"ok": True, "cut": cut, "template_copied": copied, "timeline": tl})
 
 
 @routes.get("/gonggan/version-workflow")
