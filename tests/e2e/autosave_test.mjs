@@ -1,6 +1,7 @@
 /**
- * Headless Chrome: auto-save modified shot tab on cut switch (0.8.1).
+ * Headless Chrome: auto-save modified shot tab on cut switch (0.8.2 paths).
  */
+import { shotWorkflowRelPath, shotProjectFolder } from "../../web/gg_shot_names.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -122,19 +123,14 @@ function pickTemplateRef(paths) {
   );
 }
 
-function shotWorkflowFilename(cut) {
+function expectedShotWorkflowRel(pid, projectName, cut) {
   const pos = cut?.pos ?? cut?.index;
-  let base = "";
-  if (cut?.name && String(cut.name).trim()) {
-    base = String(cut.name)
-      .trim()
-      .replace(/[^\w.-]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-  }
-  if (!base && pos != null) base = `cut${pos + 1}`;
-  if (!base) base = "shot";
-  if (!base.toLowerCase().endsWith(".json")) base += ".json";
-  return base.slice(0, 120);
+  return shotWorkflowRelPath({
+    projectName,
+    projectId: pid,
+    cutName: cut?.name,
+    cutNumber: pos != null ? pos + 1 : undefined,
+  });
 }
 
 async function deleteWorkflowFile(page, relPath) {
@@ -344,14 +340,31 @@ async function cleanupProjects(page) {
 async function cleanupNewWorkflows(page) {
   const after = new Set(await fetchWorkflowPaths(page));
   const before = new Set(workflowPathsBefore);
+  const created = [];
   for (const p of after) {
-    if (!before.has(p)) {
-      try {
-        await deleteWorkflowFile(page, p);
-      } catch (e) {
-        console.warn(`workflow cleanup ${p}:`, e.message);
-      }
+    if (!before.has(p)) created.push(p);
+  }
+  for (const p of created.sort((a, b) => b.length - a.length)) {
+    try {
+      await deleteWorkflowFile(page, p);
+    } catch (e) {
+      console.warn(`workflow cleanup ${p}:`, e.message);
     }
+  }
+  const dirs = new Set();
+  for (const p of created) {
+    const norm = p.replace(/^\/+/, "");
+    const parts = norm.split("/");
+    for (let i = 1; i < parts.length; i++) {
+      dirs.add(parts.slice(0, i).join("/"));
+    }
+  }
+  for (const d of [...dirs].sort((a, b) => b.length - a.length)) {
+    if (!d.startsWith("gonggan/")) continue;
+    const enc = encodeURIComponent(d);
+    await page.evaluate(async (pathEnc) => {
+      await fetch(`${location.origin}/api/userdata/${pathEnc}`, { method: "DELETE" });
+    }, enc);
   }
 }
 
@@ -411,9 +424,9 @@ async function main() {
   trackDialogs(page);
 
   await waitForComfy(page);
-  const feat = await page.evaluate(() => globalThis.__gongganCutAutosaveOnSwitch || "");
-  if (feat !== "0.8.1") {
-    throw new Error(`gonggan-cut 0.8.1 autosave not loaded (got "${feat}"); hard-refresh ComfyUI (Ctrl+Shift+R)`);
+  const folders = await page.evaluate(() => globalThis.__gongganProjectFolders || "");
+  if (folders !== "0.8.2") {
+    throw new Error(`gonggan-cut 0.8.2 project folders not loaded (got "${folders}"); hard-refresh ComfyUI (Ctrl+Shift+R)`);
   }
   await openShotsTab(page);
   workflowPathsBefore = await fetchWorkflowPaths(page);
@@ -424,8 +437,9 @@ async function main() {
   let pid = "";
   let cutA = null;
   let cutB = null;
-  let wfNameA = "";
-  let wfNameB = "";
+  let wfRelA = "";
+  let wfRelB = "";
+  let wfBasenameA = "";
 
   await runScenario("01", "auto-save on cut switch", async () => {
     dialogCount = 0;
@@ -443,13 +457,17 @@ async function main() {
     if (sorted.length < 3) throw new Error(`expected 3 cuts (seed + 2 added), got ${sorted.length}`);
     cutA = sorted[0];
     cutB = sorted[1];
-    wfNameA = shotWorkflowFilename(cutA);
-    wfNameB = shotWorkflowFilename(cutB);
+    wfRelA = expectedShotWorkflowRel(pid, projectName, cutA);
+    wfRelB = expectedShotWorkflowRel(pid, projectName, cutB);
+    wfBasenameA = wfRelA.replace(/^.*\//, "");
 
     await clickCutById(page, cutA.id);
     await waitForCutLoaded(page, cutA.id);
     await waitForGraphNodes(page);
     const activeA = await getActiveWorkflowInfo(page);
+    if (activeA.basename !== wfBasenameA) {
+      throw new Error(`tab label should be cut basename "${wfBasenameA}", got "${activeA.basename}"`);
+    }
 
     await modifyWorkflowViaWidget(page, MARKER);
 
@@ -465,24 +483,29 @@ async function main() {
       throw new Error(`after switch: active cut ${activeB.cutId} !== cut B ${cutB.id}`);
     }
 
+    const projFolder = shotProjectFolder({ projectName, projectId: pid });
+    const expectedSaved = `workflows/${wfRelA}`;
     const afterPaths = await fetchWorkflowPaths(page);
     const beforeSet = new Set(workflowPathsBefore);
-    const stemA = wfNameA.replace(/\.json$/i, "");
     const candidates = [
+      expectedSaved,
+      wfRelA,
       activeA.path,
-      `workflows/${wfNameA}`,
-      wfNameA,
-      ...afterPaths.filter((p) => !beforeSet.has(p) && p.toLowerCase().includes(stemA.toLowerCase())),
+      ...afterPaths.filter((p) => !beforeSet.has(p) && p.includes(`gonggan/${projFolder}/`)),
     ];
     let savedPath = "";
     for (const rel of [...new Set(candidates)]) {
       const blob = await readUserdataText(page, rel);
       if (blob.includes(MARKER)) {
-        savedPath = rel;
+        savedPath = rel.replace(/^\/+/, "");
         break;
       }
     }
     if (!savedPath) throw new Error(`saved workflow missing marker (checked ${candidates.length} paths)`);
+    const normSaved = savedPath.replace(/^workflows\//, "");
+    if (normSaved !== wfRelA) {
+      throw new Error(`expected save at ${wfRelA}, got ${normSaved}`);
+    }
   });
 
   await runScenario("02", "failure path keeps tab and shows toast", async () => {
