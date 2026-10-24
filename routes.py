@@ -410,6 +410,77 @@ async def gg_trash_list(request):
     return web.json_response({"ok": True, "items": items})
 
 
+@routes.post("/gonggan/cut/update")
+async def gg_cut_update(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    if not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid required")
+    cut_id = data.get("cut_id")
+    fields = data.get("fields")
+    if not isinstance(cut_id, str) or not cut_id:
+        return _err(400, "cut_id required")
+    if not isinstance(fields, dict) or not fields:
+        return _err(400, "fields required")
+    expected_rev = data.get("expected_rev")
+    if expected_rev is not None and not isinstance(expected_rev, int):
+        return _err(400, "expected_rev must be an integer")
+    try:
+        from gg_project import ConflictError
+
+        res = await asyncio.to_thread(
+            gg_native_api.native_update_cut, pid, cut_id, fields, expected_rev,
+        )
+    except FileNotFoundError:
+        return _err(404, "project not found")
+    except ConflictError as ex:
+        return _err(409, str(ex))
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] cut update failed")
+        return _err(500, str(ex))
+    if res is None:
+        return _err(404, "project not found")
+    return web.json_response(res)
+
+
+@routes.post("/gonggan/project/update")
+async def gg_project_update(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    if not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid required")
+    fields = data.get("fields")
+    if not isinstance(fields, dict) or not fields:
+        return _err(400, "fields required")
+    expected_rev = data.get("expected_rev")
+    if expected_rev is not None and not isinstance(expected_rev, int):
+        return _err(400, "expected_rev must be an integer")
+    try:
+        from gg_project import ConflictError
+
+        res = await asyncio.to_thread(
+            gg_native_api.native_update_project, pid, fields, expected_rev,
+        )
+    except FileNotFoundError:
+        return _err(404, "project not found")
+    except ConflictError as ex:
+        return _err(409, str(ex))
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] project update failed")
+        return _err(500, str(ex))
+    if res is None:
+        return _err(404, "project not found")
+    return web.json_response(res)
+
+
 @routes.post("/gonggan/cut/add")
 async def gg_cut_add(request):
     data = await _json_body(request)

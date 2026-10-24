@@ -220,6 +220,7 @@ class LocalStore:
             doc.update({
                 "name": name,
                 "template_ref": template_ref,
+                "due_date": None,
                 "settings": default_settings(),
                 "scenes": [scene],
                 "loose_order": [],
@@ -394,6 +395,101 @@ class LocalStore:
             self._insert_cut_in_order(doc, cut["id"], sid, after)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "add_cut", cut["id"])
+            return doc
+
+    _CUT_UPDATE_FIELDS = frozenset({"planned_sec", "notes", "end_card", "needs_redo"})
+    _DUE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+    def _validate_planned_sec(self, value: Any) -> float | None:
+        if value is None:
+            return None
+        if not isinstance(value, (int, float)):
+            raise ValueError("planned_sec must be a number or null")
+        sec = float(value)
+        if sec < 0.2 or sec > 600:
+            raise ValueError("planned_sec must be between 0.2 and 600 seconds")
+        return round(sec, 2)
+
+    def _validate_due_date(self, value: Any) -> str | None:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str):
+            raise ValueError("due_date must be YYYY-MM-DD or null")
+        s = value.strip()
+        if not self._DUE_DATE_RE.match(s):
+            raise ValueError("due_date must be YYYY-MM-DD")
+        y, m, d = (int(x) for x in s.split("-"))
+        if m < 1 or m > 12 or d < 1 or d > 31:
+            raise ValueError("due_date must be a valid calendar date")
+        return s
+
+    def _check_cut_rev(self, cut: dict[str, Any], expected_rev: int | None) -> None:
+        if expected_rev is None:
+            return
+        if int(cut.get("rev") or 0) != int(expected_rev):
+            raise ConflictError(f"cut rev {cut.get('rev')} != expected {expected_rev}")
+
+    def update_cut(
+        self,
+        pid: str,
+        cut_id: str,
+        fields: dict[str, Any],
+        expected_rev: int | None = None,
+    ) -> dict[str, Any]:
+        if not isinstance(fields, dict) or not fields:
+            raise ValueError("fields required")
+        unknown = set(fields) - self._CUT_UPDATE_FIELDS
+        if unknown:
+            raise ValueError(f"unsupported cut fields: {', '.join(sorted(unknown))}")
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                raise FileNotFoundError(pid)
+            c = self._cuts_map(doc).get(cut_id)
+            if not c or c.get("deleted_at"):
+                raise ValueError("cut not found")
+            self._check_cut_rev(c, expected_rev)
+            if "planned_sec" in fields:
+                c["planned_sec"] = self._validate_planned_sec(fields["planned_sec"])
+            if "notes" in fields:
+                notes = fields["notes"]
+                if notes is not None and not isinstance(notes, str):
+                    raise ValueError("notes must be a string")
+                c["notes"] = notes if notes is not None else ""
+            if "end_card" in fields:
+                if not isinstance(fields["end_card"], bool):
+                    raise ValueError("end_card must be a boolean")
+                c["end_card"] = fields["end_card"]
+            if "needs_redo" in fields:
+                if not isinstance(fields["needs_redo"], bool):
+                    raise ValueError("needs_redo must be a boolean")
+                c["needs_redo"] = fields["needs_redo"]
+            bump_entity(c)
+            self._bump_project(doc)
+            self._save_project_doc(pid, doc, "update_cut", cut_id)
+            return doc
+
+    def update_project(
+        self,
+        pid: str,
+        fields: dict[str, Any],
+        expected_rev: int | None = None,
+    ) -> dict[str, Any]:
+        if not isinstance(fields, dict) or not fields:
+            raise ValueError("fields required")
+        allowed = {"due_date"}
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"unsupported project fields: {', '.join(sorted(unknown))}")
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                raise FileNotFoundError(pid)
+            self._check_rev(doc, expected_rev)
+            if "due_date" in fields:
+                doc["due_date"] = self._validate_due_date(fields["due_date"])
+            self._bump_project(doc)
+            self._save_project_doc(pid, doc, "update_project", pid)
             return doc
 
     def rename_cut(self, pid: str, cut_id: str, name: str) -> dict[str, Any]:
