@@ -30,10 +30,46 @@
 .gg-shots .gg-cut { display: flex; gap: 8px; align-items: center; padding: 4px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
 .gg-shots .gg-cut:hover { background: var(--gg-panel); }
 .gg-shots .gg-cut.gg-on { border-color: var(--gg-acc); background: #2c2a22; }
-.gg-shots .gg-cut-thumb { position: relative; flex: 0 0 96px; height: 54px; border-radius: 4px; overflow: hidden; background: #000; }
+.gg-shots .gg-cut-thumb-col { flex: 0 0 96px; min-width: 0; }
+.gg-shots .gg-cut-thumb { position: relative; width: 96px; height: 54px; border-radius: 4px; overflow: hidden; background: #000; }
+.gg-shots .gg-stage-row { position: relative; margin-top: 3px; pointer-events: none; }
+.gg-shots .gg-stage-pills { display: flex; gap: 2px; flex-wrap: nowrap; }
+.gg-shots .gg-stage-pill { flex: 1 1 0; font-size: 7px; line-height: 1.25; text-align: center; padding: 1px 2px; border-radius: 3px; border: 1px solid var(--gg-line); color: var(--gg-dim); background: #1e2128; }
+.gg-shots .gg-stage-pill.gg-on { color: #dce8ff; border-color: #5a7ab0; background: #2a3d58; }
+.gg-shots .gg-stage-pill.gg-off.gg-next { opacity: 0.45; }
+.gg-shots .gg-stage-row.gg-stage-all-done .gg-stage-pill { color: #c8f5ce; border-color: #3d8f4a; background: #1e3d28; }
+.gg-shots .gg-done-glow { position: absolute; left: -2px; top: 50%; width: 6px; height: 6px; margin-top: -3px; border-radius: 50%; background: #5fe07a; box-shadow: 0 0 6px 2px rgba(95, 224, 122, 0.65); }
+.gg-shots .gg-live-chip { display: flex; align-items: center; gap: 3px; margin-top: 2px; font-size: 8px; line-height: 1.2; color: #e8e8e8; }
+.gg-shots .gg-live-dot { width: 5px; height: 5px; border-radius: 50%; background: #7aa2d6; flex-shrink: 0; }
+.gg-shots .gg-live-chip.gg-live-run .gg-live-dot { background: #6ee07a; animation: gg-live-pulse 1s ease-in-out infinite; }
+.gg-shots .gg-live-chip.gg-live-failed { color: #ff8a8a; }
+.gg-shots .gg-live-chip.gg-live-failed .gg-live-dot { background: #e85c5c; animation: none; }
+@keyframes gg-live-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.85); } }
+.gg-shots .gg-shot-summary { padding: 2px 10px 4px; border-bottom: 1px solid var(--gg-line); }
+.gg-shots .gg-summary-line { font-size: 10px; color: var(--gg-fg); font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+.gg-shots .gg-summary-bar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: #1a1c20; gap: 1px; }
+.gg-shots .gg-summary-bar[hidden] { display: none !important; }
+.gg-shots .gg-seg { min-width: 0; height: 100%; }
+.gg-shots .gg-seg-done { background: #4caf6a; }
+.gg-shots .gg-seg-video { background: #9b6ed4; }
+.gg-shots .gg-seg-image { background: #5a8fd4; }
 .gg-shots .gg-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gg-root .gg-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--gg-dim); font-size: 10px; width: 100%; height: 100%; background: repeating-linear-gradient(45deg, #2a2d33 0 6px, #24272c 6px 12px); }
 .gg-shots .gg-badge { position: absolute; right: 3px; bottom: 2px; font-size: 9px; background: rgba(0,0,0,.6); border-radius: 3px; padding: 0 3px; }
+.gg-clip-prog { position: absolute; left: 0; right: 0; bottom: 0; pointer-events: none; z-index: 2; }
+.gg-prog-bar { height: 3px; background: rgba(0,0,0,.45); }
+.gg-prog-fill { height: 100%; width: 0; background: var(--gg-acc, #c9a227); transition: width 0.15s linear; }
+.gg-prog-run .gg-prog-fill { background: #6ee07a; }
+.gg-prog-queue .gg-prog-fill { background: #7aa2d6; width: 0 !important; }
+.gg-prog-failed .gg-prog-badge { color: #ff8a8a; }
+.gg-clip-prog { display: flex; flex-direction: column; justify-content: flex-end; }
+.gg-clip-prog .gg-prog-bar { height: 2px; }
+.gg-timeline .gg-clip-dot { position: absolute; left: 4px; top: 4px; z-index: 3; width: 6px; height: 6px; border-radius: 50%; pointer-events: none; border: 1px solid rgba(0,0,0,.5); }
+.gg-timeline .gg-dot-empty { background: #6a707a; }
+.gg-timeline .gg-dot-image { background: #5a8fd4; }
+.gg-timeline .gg-dot-video { background: #9b6ed4; }
+.gg-timeline .gg-dot-done { background: #5fe07a; box-shadow: 0 0 4px 1px rgba(95, 224, 122, 0.5); }
+.gg-shots .gg-other-chip { font-size: 10px; color: var(--gg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
 .gg-shots .gg-cut-text { min-width: 0; }
 .gg-shots .gg-cut-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gg-shots .gg-cut-sub { color: var(--gg-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
