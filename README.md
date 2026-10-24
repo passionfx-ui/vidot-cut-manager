@@ -18,11 +18,17 @@ Copy `gonggan_settings.default.json` to `gonggan_settings.json` (gitignored) and
 
 All routes are also available under `/api/gonggan/*`.
 
-## Project workflow template (0.3.0)
-Each project can store one ComfyUI workflow under the pack folder `templates/<project_id>.json` (gitignored in normal use).
+## Project workflow template (0.4.1)
+Each project links one of ComfyUI’s saved user workflows. The pack stores only a reference in `templates/<project_id>.json`:
 
-- In the **Shots** header: **Save canvas as template** writes `app.graph.serialize()` for the selected project; **Load template file** imports a `.json` (UI graph or API-format workflow).
-- A small dot next to the project picker lights up when a template exists.
+```json
+{"workflow_ref": "sub/my-flow.json", "updated": 1730000000.0}
+```
+
+Older files that contain a full workflow graph still load. The graph is read from ComfyUI `user/default/workflows/` (same files as **GET** `/api/userdata?dir=workflows&recurse=true&split=false`).
+
+- In the **Shots** header, **Template:** dropdown lists saved workflows; choosing one saves immediately. Pick **(none)** to clear.
+- **+ Cut** adds a pack-local shot (stored in `edits/edit_<pid>.json` as `local_cuts`, never in 공간쉐어 data). If the project has a template, the graph is copied to `workflows/<pid>/<cut_id>/initial.workflow.json` for that cut.
 
 ## Per-version workflow store (0.4.0)
 Each pack version under `versions/<pid>/<cut_id>/` can have a sidecar workflow file at `workflows/<pid>/<cut_id>/<vid>.workflow.json` (gitignored). It stores the UI graph and/or API prompt used for that take (`source`: `generated` or `png-backfill`). New SDK/send-output versions save automatically; existing PNGs can be backfilled without modifying the PNG bytes.
@@ -32,8 +38,9 @@ CLI (no server): `python -m gg_wfstore backfill [--dry-run] [--pid <project id>]
 Shot click workflow load order: **stored version** → **project template** → **draft** (`/gonggan/workflow`). Toast shows which source was used. If the server has not been restarted yet (new routes 404), the UI falls back to the pre-0.4.0 draft→template chain.
 
 Routes:
-- `GET /gonggan/template?pid=<project id>` → `{ok, exists, workflow}`
-- `POST /gonggan/template` `{pid, workflow}` → `{ok, path}`
+- `GET /gonggan/template?pid=<project id>` → `{ok, ref, exists, workflow}`
+- `POST /gonggan/template` `{pid, ref}` (`ref` `""` clears; legacy `{pid, workflow}` still writes a full graph)
+- `POST /gonggan/cut/add` `{pid, group?, after?}` → `{ok, cut, template_copied, timeline}`
 - `GET /gonggan/version-workflow?pid=&cut=&vid=` → stored record for one version
 - `GET /gonggan/cut-source-workflow?pid=&cut=` → `{ok, source, workflow, kind}` (`stored`|`template`|`draft`|null)
 - `POST /gonggan/wfstore/backfill` `{pid?, dry_run?}` → `{ok, counts}`
@@ -66,6 +73,7 @@ Tested with Python 3.13.6, comfy-sdk 0.5.0, comfy-api-proxy 0.1.6.
 
 ## Changelog
 
+- **0.4.1** — Template is a ComfyUI saved-workflow ref; Shots template dropdown; pack-local **+ Cut** with `local_cuts` and optional `initial.workflow.json` from template.
 - **0.4.0** — Per-version workflow JSON under `workflows/`; generation-time save; PNG metadata backfill; `cut-source-workflow` resolver (stored → template → draft).
 - **0.3.0** — Per-project workflow template (save canvas / load JSON, indicator dot). Empty cuts fall back to the project template on shot click (ordered resolver; cut workflow always wins when available).
 - **0.2.2** — Shot click reuses one gonggan workflow tab (no tab pile-up); debounced. Closing the Shots panel also closes the Timeline panel.
