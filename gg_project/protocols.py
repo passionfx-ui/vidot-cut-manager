@@ -44,6 +44,21 @@ class ProjectStore(Protocol):
 
     def rename_cut(self, pid: str, cut_id: str, name: str) -> dict[str, Any]: ...
 
+    def update_cut(
+        self,
+        pid: str,
+        cut_id: str,
+        fields: dict[str, Any],
+        expected_rev: int | None = None,
+    ) -> dict[str, Any]: ...
+
+    def update_project(
+        self,
+        pid: str,
+        fields: dict[str, Any],
+        expected_rev: int | None = None,
+    ) -> dict[str, Any]: ...
+
     def delete_cuts(self, pid: str, ids: list[str]) -> dict[str, Any]: ...
 
     def restore_cuts(self, pid: str, ids: list[str] | None = None) -> dict[str, Any]: ...

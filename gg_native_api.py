@@ -191,6 +191,46 @@ def native_restore_cuts(pid: str, cut_ids: list | None) -> dict | None:
     return {"ok": True, "timeline": store.to_timeline(pid)}
 
 
+def native_update_cut(
+    pid: str,
+    cut_id: str,
+    fields: dict,
+    expected_rev: int | None = None,
+) -> dict | None:
+    store = native_store()
+    if store.get_project(pid) is None:
+        return None
+    if not isinstance(cut_id, str) or not cut_id:
+        raise ValueError("cut_id required")
+    if not isinstance(fields, dict) or not fields:
+        raise ValueError("fields required")
+    store.update_cut(pid, cut_id, fields, expected_rev=expected_rev)
+    return {"ok": True, "timeline": store.to_timeline(pid)}
+
+
+def native_update_project(
+    pid: str,
+    fields: dict,
+    expected_rev: int | None = None,
+) -> dict | None:
+    store = native_store()
+    if store.get_project(pid) is None:
+        return None
+    if not isinstance(fields, dict) or not fields:
+        raise ValueError("fields required")
+    store.update_project(pid, fields, expected_rev=expected_rev)
+    try:
+        from . import gg_data
+    except ImportError:
+        import gg_data  # type: ignore
+    projects_payload = merge_projects_list(gg_data.list_projects())
+    return {
+        "ok": True,
+        "projects": projects_payload.get("projects") or [],
+        "timeline": store.to_timeline(pid),
+    }
+
+
 def native_template_info(pid: str) -> dict:
     doc = native_store().get_project(pid)
     if not doc:
