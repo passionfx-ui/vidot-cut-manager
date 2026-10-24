@@ -45,6 +45,14 @@ describe("pickFreeWorkflowPath", () => {
     );
     assert.equal(pathCollides("workflows/foo.json", existing, { caseInsensitive: true }), true);
   });
+
+  it("collision numbering stays inside gonggan project subfolder", () => {
+    const existing = ["gonggan/demo/cut1.json", "gonggan/demo/cut1 (2).json"];
+    assert.equal(
+      pickFreeWorkflowPath("gonggan/demo/cut1.json", existing, { caseInsensitive: true }),
+      "gonggan/demo/cut1 (3).json"
+    );
+  });
 });
 
 describe("autosaveModifiedTabs", () => {
