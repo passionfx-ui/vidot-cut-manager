@@ -46,6 +46,7 @@ import {
   shouldDeferRepaint,
   applyFieldOverrides,
   classifySaveFailure,
+  autoHeightPx,
 } from "./gg_story_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
@@ -2168,15 +2169,19 @@ function cutRowHtml(c) {
   const nat = isNativeProject();
   const notesTip = nat ? "Cut notes (same as Notes in the cut panel)" : NATIVE_READONLY_TIP;
   const storyArea = storyMode
-    ? `<textarea class="gg-story-text" rows="2" placeholder="Notes…"${nat ? "" : " disabled"} title="${esc(notesTip)}">${esc(c.notes || "")}</textarea>`
+    ? `<textarea class="gg-story-text" rows="3" placeholder="Notes…"${nat ? "" : " disabled"} title="${esc(notesTip)}">${esc(c.notes || "")}</textarea>`
     : "";
   const warn = lengthWarning(c);
+  const lenBadge = `<span class="gg-len-badge${storyMode ? " gg-len-inline" : ""}">${effectiveLenLabel(c)}</span>`;
   const badges = [
-    `<span class="gg-len-badge">${effectiveLenLabel(c)}</span>`,
+    ...(storyMode ? [] : [lenBadge]),
     warn ? `<span class="gg-warn3" title="${esc(warn.message)}">&gt; 3s</span>` : "",
     c.end_card ? `<span class="gg-endcard-badge">End card</span>` : "",
     c.needs_redo ? `<span class="gg-redo-badge">Needs redo</span>` : "",
   ].filter(Boolean).join("");
+  const cutName = storyMode
+    ? `<div class="gg-cut-name"><span class="gg-num">${formatCutNumber(c.number ?? (c.pos ?? c.index ?? 0) + 1)}</span><span class="gg-cut-title">${esc(c.name || "(untitled)")}</span>${lenBadge}</div>`
+    : `<div class="gg-cut-name"><span class="gg-num">${formatCutNumber(c.number ?? (c.pos ?? c.index ?? 0) + 1)}</span>${esc(c.name || "(untitled)")}</div>`;
   return `
     <li class="gg-cut${state.cutSel.has(c.id) ? " gg-sel" : ""}" data-cut-id="${esc(c.id)}" title="${esc(c.story || c.prompt)}">
       <div class="gg-cut-thumb-col">
@@ -2192,7 +2197,7 @@ function cutRowHtml(c) {
         </div>
       </div>
       <div class="gg-cut-text">
-        <div class="gg-cut-name"><span class="gg-num">${formatCutNumber(c.number ?? (c.pos ?? c.index ?? 0) + 1)}</span>${esc(c.name || "(untitled)")}</div>
+        ${cutName}
         <div class="gg-cut-sub">${c.group_name ? esc(c.group_name) + " · " : ""}${c.sec.toFixed(1)}s tl${c.versions > 1 ? ` · v${c.versions}` : ""}</div>
         ${storyArea}
         <div class="gg-cut-badges">${badges}</div>
@@ -2636,9 +2641,57 @@ function mountShots(el) {
       ta.setSelectionRange(cap.selectionStart, cap.selectionEnd);
     } catch (_) {}
     ta.scrollTop = cap.scrollTop;
+    autoSizeStoryTextarea(ta);
   }
 
   let repaintAfterCompose = () => {};
+  let listSizeRo = null;
+  let listSizeRoRaf = 0;
+
+  function storyTextMinMaxPx(ta) {
+    const cs = getComputedStyle(ta);
+    const fs = parseFloat(cs.fontSize) || 11;
+    const lh = parseFloat(cs.lineHeight) || fs * 1.3;
+    const pad =
+      (parseFloat(cs.paddingTop) || 0) +
+      (parseFloat(cs.paddingBottom) || 0) +
+      (parseFloat(cs.borderTopWidth) || 0) +
+      (parseFloat(cs.borderBottomWidth) || 0);
+    const minPx = lh * 3 + pad;
+    const maxPx = window.innerHeight * 0.45;
+    return { minPx, maxPx };
+  }
+
+  function autoSizeStoryTextarea(ta) {
+    if (!ta || !ta.isConnected) return;
+    ta.style.height = "auto";
+    const { minPx, maxPx } = storyTextMinMaxPx(ta);
+    ta.style.height = `${autoHeightPx({ scrollHeight: ta.scrollHeight, minPx, maxPx })}px`;
+  }
+
+  function autoSizeAllStoryTextareas() {
+    if (normalizeListMode(shotsUi.listMode) !== "story") return;
+    root.querySelectorAll(".gg-story-text").forEach(autoSizeStoryTextarea);
+  }
+
+  function observeListWrapForStoryHeight() {
+    if (typeof ResizeObserver === "undefined") return;
+    listSizeRo?.disconnect();
+    const wrap = root.querySelector(".gg-grp-wrap");
+    if (!wrap) return;
+    listSizeRo = new ResizeObserver(() => {
+      cancelAnimationFrame(listSizeRoRaf);
+      listSizeRoRaf = requestAnimationFrame(() => {
+        if (normalizeListMode(shotsUi.listMode) !== "story") return;
+        const w = root.querySelector(".gg-grp-wrap");
+        if (!w) return;
+        const st = w.scrollTop;
+        autoSizeAllStoryTextareas();
+        w.scrollTop = st;
+      });
+    });
+    listSizeRo.observe(wrap);
+  }
 
   function bindStoryTextareas() {
     root.querySelectorAll(".gg-story-text").forEach((ta) => {
@@ -2661,6 +2714,7 @@ function mountShots(el) {
         if (c) c.notes = ta.value;
         scheduleCutFieldSave(id, { notes: ta.value });
         syncNotesViews(id, ta.value, ta);
+        autoSizeStoryTextarea(ta);
       });
     });
     refreshStoryUnsavedClasses();
@@ -2874,6 +2928,8 @@ function mountShots(el) {
     bindShotsReorder(root);
     bindStoryTextareas();
     restoreStoryFocus(storyCap);
+    autoSizeAllStoryTextareas();
+    observeListWrapForStoryHeight();
     paintSelection(root);
     paintPanel();
     paintProjectSummary(root);
@@ -2950,6 +3006,9 @@ function mountShots(el) {
   return () => {
     shotsUi.composing = false;
     shotsUi.paintDeferred = false;
+    listSizeRo?.disconnect();
+    listSizeRo = null;
+    cancelAnimationFrame(listSizeRoRaf);
     ro.disconnect();
     window.removeEventListener("resize", fit);
     clearInterval(timer);
@@ -3673,6 +3732,7 @@ app.registerExtension({
     globalThis.__gongganTabLabel = "0.8.4";
     globalThis.__gongganStoryToggle = "0.9.0";
     globalThis.__gongganInfoPanelTidy = "0.9.1";
+    globalThis.__gongganStoryLayout = "0.9.2";
     globalThis.__gongganTabLabelRefresh = applyTabLabels;
     globalThis.__gongganReloadShotsData = () => loadProjects();
     setupTabLabels();
