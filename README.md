@@ -135,6 +135,9 @@ Gonggan saves each shot’s ComfyUI workflow under `workflows/gonggan/<project-f
 ## Timeline selection without tab switch (0.8.3)
 Clicking a **Timeline** clip updates the selected cut and preview seek only; it does **not** load or switch the Gonggan shot workflow tab. **Shots** list clicks still open the cut workflow as before. When the canvas tab is a different cut than the selection, the Shots list shows a small **Open** marker on the open cut (`web/gg_cut_select_core.js`).
 
+## Single shot tab and tab label (0.8.4)
+Switching shots in the **Shots** list reuses **one** Gonggan-owned workflow tab: after a successful load the previous owned tab is closed (auto-save first; unsaved tabs that could not be saved are kept with a warning toast). The ComfyUI tab bar shows a **display-only** label `Project / Cut` for Gonggan shot tabs (`workflow.filename` and saved paths are unchanged). Pure helpers: `web/gg_tab_close_core.js`, `web/gg_tab_label_core.js`.
+
 ## Cut management (0.8.0)
 Shots and Timeline add lightweight production tracking on top of the existing scene/cut model (English UI labels).
 
@@ -160,6 +163,7 @@ Headless Chrome scenarios live under `tests/e2e/` (manual / CI optional).
 
 ## Changelog
 
+- **0.8.4** — One Gonggan shot workflow tab per session (close previous owned tab after cut switch); display-only `Project / Cut` tab labels; `gg_tab_close_core.js`, `gg_tab_label_core.js`, `tests/js/tab_close_core.test.mjs`, `tests/js/tab_label_core.test.mjs`, e2e `tab_label_test.mjs`.
 - **0.8.3** — Timeline clip click follows selection/seek only (no workflow tab switch); **Open** marker on the Shots card whose workflow is on canvas; `gg_cut_select_core.js`, `tests/js/cut_select_core.test.mjs`.
 - **0.8.0** — Cut management UI (drag reorder, auto numbers, length/notes, 3 s rule + End card, Final list + total, Needs redo filter, `S01_003_v02` naming display, due date + completion %); `POST /gonggan/cut/update`, `/gonggan/project/update`; missing Load Image scan + queue guard (`gg_loadimage_core.js`, `gg_loadimage.js`); tests `cuts_core`, `loadimage_core`, e2e `cut_mgmt_test`, `loadimage_test`.
 - **0.7.0** — Per-cut work stages (Image/Video/Best pills, project summary bar), live run chip, timeline stage dots; `gg_progress_core.js`; JS tests `tests/js/progress_core.test.mjs`, `tests/js/cut_stage.test.mjs`.
