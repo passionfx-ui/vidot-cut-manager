@@ -67,6 +67,7 @@ def new_cut(
     c["pick_version_id"] = None
     c["prompt"] = ""
     c["notes"] = ""
+    c["caption"] = ""
     c["planned_sec"] = None
     c["end_card"] = False
     c["needs_redo"] = False

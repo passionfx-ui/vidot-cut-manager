@@ -397,7 +397,8 @@ class LocalStore:
             self._save_project_doc(pid, doc, "add_cut", cut["id"])
             return doc
 
-    _CUT_UPDATE_FIELDS = frozenset({"planned_sec", "notes", "end_card", "needs_redo"})
+    _CUT_UPDATE_FIELDS = frozenset({"planned_sec", "notes", "caption", "end_card", "needs_redo"})
+    _CAPTION_MAX_LEN = 4000
     _DUE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
     def _validate_planned_sec(self, value: Any) -> float | None:
@@ -456,6 +457,14 @@ class LocalStore:
                 if notes is not None and not isinstance(notes, str):
                     raise ValueError("notes must be a string")
                 c["notes"] = notes if notes is not None else ""
+            if "caption" in fields:
+                caption = fields["caption"]
+                if caption is not None and not isinstance(caption, str):
+                    raise ValueError("caption must be a string")
+                cap = caption if caption is not None else ""
+                if len(cap) > self._CAPTION_MAX_LEN:
+                    raise ValueError(f"caption must be at most {self._CAPTION_MAX_LEN} characters")
+                c["caption"] = cap
             if "end_card" in fields:
                 if not isinstance(fields["end_card"], bool):
                     raise ValueError("end_card must be a boolean")
