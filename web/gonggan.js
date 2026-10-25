@@ -48,6 +48,7 @@ import {
   classifySaveFailure,
 } from "./gg_story_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
+import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -785,15 +786,6 @@ function shotTitle(c) {
   return `${(c.pos ?? c.index) + 1}. ${c.name || "(untitled)"}`;
 }
 
-function panelPreviewHtml(c) {
-  if (!c || !c.media) return `<div class="gg-panel-preview gg-panel-preview-empty">No media for this shot yet.</div>`;
-  const url = esc(mediaUrl(c.media.id));
-  if (c.media.kind === "video") {
-    return `<div class="gg-panel-preview"><video class="gg-panel-vid" src="${url}" poster="${esc(posterUrl(c.media.id))}" controls muted playsinline preload="metadata"></video></div>`;
-  }
-  return `<div class="gg-panel-preview"><img class="gg-panel-img" src="${url}" alt="" decoding="async" /></div>`;
-}
-
 async function fetchCutWorkflowPayload(cutId) {
   const tl = state.timeline;
   const q = `/gonggan/workflow?pid=${encodeURIComponent(tl.project.id)}&cut_id=${encodeURIComponent(cutId)}`;
@@ -1264,6 +1256,7 @@ function openCutContextMenu(e, cutId) {
   const redoLabel = c?.needs_redo ? "Clear needs redo" : "Mark needs redo";
   showCtxMenu(e.clientX, e.clientY, [
     { label: "Group into Scene", action: () => createSceneGroup(ids) },
+    { label: "Split scene", disabled: !inScene, action: () => splitSceneHere(cutId) },
     { label: "Remove from Scene", disabled: !inScene && !ids.some((id) => cutById(id)?.group_id), action: () => ungroupCuts(ids) },
     { label: redoLabel, disabled: !nat, title: nat ? "" : NATIVE_READONLY_TIP, action: () => toggleNeedsRedo(cutId) },
     { label: "Add Cut", action: () => addCutAfter(cutId) },
@@ -1567,14 +1560,11 @@ function paintProjectSummary(root) {
       if (segImage) segImage.style.flex = `${sum.image} 0 0`;
       bar.hidden = sum.total === 0;
     }
-    const cbar = host.querySelector?.(".gg-complete-bar");
     const cpct = host.querySelector?.(".gg-complete-pct");
-    if (cbar) {
-      const fill = cbar.querySelector(".gg-complete-fill");
-      if (fill) fill.style.width = `${comp.percent}%`;
-      cbar.title = `Best set on ${comp.done} of ${comp.total} cuts`;
+    if (cpct) {
+      cpct.textContent = comp.total ? `${comp.percent}%` : "";
+      cpct.title = comp.total ? `Best set on ${comp.done} of ${comp.total} cuts` : "";
     }
-    if (cpct) cpct.textContent = comp.total ? `${comp.percent}%` : "";
     const dueIn = host.querySelector?.(".gg-due-input");
     const dueTxt = host.querySelector?.(".gg-due-text");
     const nat = isNativeProject();
@@ -1665,10 +1655,11 @@ function updateOtherJobsChip() {
     if (pending) parts.push(`${pending} queued`);
     text = `Other jobs: ${parts.join(", ")}`;
   }
+  const total = running + pending;
   chips.forEach((el) => {
     el.hidden = !text;
-    el.textContent = text;
-    el.title = "Not started from a Gonggan cut";
+    el.textContent = text ? `● ${total}` : "";
+    el.title = text || "Not started from a Gonggan cut";
   });
 }
 
@@ -2496,10 +2487,10 @@ api.addEventListener("gonggan.regen", (e) => {
 function cutPanelHtml(c) {
   if (!c) return `<div class="gg-panel-empty">Select a cut for versions and actions.</div>`;
   const nat = isNativeProject();
-  const regenOff = nat || sdk.busy || !(sdk.st && sdk.st.ok);
-  const regenTip = nat
-    ? "Not available for native projects yet"
-    : "Draft re-render through Comfy SDK → comfy-api-proxy → ComfyUI. Shows the job and asks before queueing.";
+  const panelOpen = loadPanelOpen(localStorage);
+  const regenOff = sdk.busy || !(sdk.st && sdk.st.ok);
+  const regenTip = "Draft re-render through Comfy SDK → comfy-api-proxy → ComfyUI. Shows the job and asks before queueing.";
+  const sendTip = "Copy ComfyUI's last output (from /history, else newest file in output/) into this cut as a new version";
   const rep = repIdOf(c);
   const vers = (c.versions_list || []).map((v) => {
     const on = v.id === rep;
@@ -2520,34 +2511,44 @@ function cutPanelHtml(c) {
   const fname = fileBaseName(c, { scene_index: c.scene_index }, vIdx);
   const metaDisabled = nat ? "" : " disabled";
   const metaTip = nat ? "" : ` title="${esc(NATIVE_READONLY_TIP)}"`;
+  const dotEnd = c.end_card ? '<span class="gg-panel-dot gg-panel-dot-end" title="End card">●</span>' : "";
+  const dotRedo = c.needs_redo ? '<span class="gg-panel-dot gg-panel-dot-redo" title="Needs redo">●</span>' : "";
+  const regenBtn = nat
+    ? ""
+    : `<button type="button" class="gg-btn gg-regen" ${regenOff ? "disabled" : ""} title="${esc(regenTip)}">Regen</button>`;
+  const sdkMsg = sdk.msg || "";
   return `
-    <div class="gg-panel-title"><span class="gg-num">${formatCutNumber(c.number ?? c.pos + 1)}</span>${esc(c.name)}</div>
-    ${panelPreviewHtml(c)}
-    <div class="gg-cut-fields">
-      <label class="gg-field-len"${metaTip}>Length (sec)
-        <input type="number" class="gg-len-input" min="0.5" max="600" step="0.1" value="${esc(lenVal)}"${metaDisabled} />
-      </label>
-      <label class="gg-field-end"${metaTip}><input type="checkbox" class="gg-endcard-chk"${c.end_card ? " checked" : ""}${metaDisabled} /> End card</label>
-      <label class="gg-field-redo"${metaTip}><input type="checkbox" class="gg-redo-chk"${c.needs_redo ? " checked" : ""}${metaDisabled} /> Needs redo</label>
-      <label class="gg-field-notes"${metaTip}>Notes
-        <textarea class="gg-notes" rows="2" placeholder="Notes…"${metaDisabled}>${esc(c.notes || "")}</textarea>
-      </label>
-      <div class="gg-fname-row">
-        <span class="gg-fname" title="Suggested export base name (read-only)">${esc(fname)}</span>
-        <button type="button" class="gg-btn gg-fname-copy"${nat ? "" : ` disabled title="${esc(NATIVE_READONLY_TIP)}"`}>Copy</button>
+    <header class="gg-panel-head">
+      <button type="button" class="gg-panel-fold" title="Collapse or expand panel">${panelOpen ? "▾" : "▸"}</button>
+      <span class="gg-num">${formatCutNumber(c.number ?? c.pos + 1)}</span>
+      <span class="gg-panel-name">${esc(c.name)}</span>
+      <span class="gg-panel-len">${esc(effectiveLenLabel(c))}</span>
+      <span class="gg-panel-dots">${dotEnd}${dotRedo}</span>
+      <div class="gg-panel-tools">
+        ${regenBtn}
+        <button type="button" class="gg-btn gg-send" ${sdk.busy ? "disabled" : ""} title="${esc(sendTip)}">Send last output</button>
       </div>
+    </header>
+    <div class="gg-panel-body"${panelOpen ? "" : " hidden"}>
+      <div class="gg-cut-fields">
+        <div class="gg-cut-meta-row">
+          <label class="gg-field-len"${metaTip}>Length (sec)
+            <input type="number" class="gg-len-input" min="0.5" max="600" step="0.1" value="${esc(lenVal)}"${metaDisabled} />
+          </label>
+          <label class="gg-field-end"${metaTip}><input type="checkbox" class="gg-endcard-chk"${c.end_card ? " checked" : ""}${metaDisabled} /> End card</label>
+          <label class="gg-field-redo"${metaTip}><input type="checkbox" class="gg-redo-chk"${c.needs_redo ? " checked" : ""}${metaDisabled} /> Needs redo</label>
+        </div>
+        <label class="gg-field-notes"${metaTip}>Notes
+          <textarea class="gg-notes" rows="2" placeholder="Notes…"${metaDisabled}>${esc(c.notes || "")}</textarea>
+        </label>
+        <div class="gg-fname-row">
+          <span class="gg-fname" title="Suggested export base name (read-only)">${esc(fname)}</span>
+          <button type="button" class="gg-btn gg-fname-copy"${nat ? "" : ` disabled title="${esc(NATIVE_READONLY_TIP)}"`}>Copy</button>
+        </div>
+      </div>
+      <div class="gg-vers">${vers || '<span class="gg-dim">no versions yet</span>'}</div>
     </div>
-    <div class="gg-vers">${vers || '<span class="gg-dim">no versions yet</span>'}</div>
-    <div class="gg-scene-actions">
-      <button class="gg-btn gg-scene-new" type="button" title="Group selected shots into a new scene">+ Scene</button>
-      <button class="gg-btn gg-scene-split" type="button" title="Start a new scene from this shot">Split scene</button>
-      <button class="gg-btn gg-scene-off" type="button" title="Remove selected shots from their scene (ungrouped)">Remove from scene</button>
-    </div>
-    <div class="gg-actions">
-      <button class="gg-btn gg-regen" ${regenOff ? "disabled" : ""} title="${esc(regenTip)}">Regenerate (new version)</button>
-      <button class="gg-btn gg-send" ${sdk.busy ? "disabled" : ""} title="Copy ComfyUI's last output (from /history, else newest file in output/) into this cut as a new version">Send last ComfyUI output</button>
-    </div>
-    <div class="gg-sdk-msg">${esc(sdk.msg)}</div>`;
+    <div class="gg-sdk-msg"${sdkMsg ? ` title="${esc(sdkMsg)}"` : ""}>${esc(sdkMsg)}</div>`;
 }
 
 function mountShots(el) {
@@ -2596,9 +2597,15 @@ function mountShots(el) {
     }));
     panel.querySelector(".gg-regen")?.addEventListener("click", () => regenCut(c.id));
     panel.querySelector(".gg-send")?.addEventListener("click", () => sendLastOutput(c.id));
-    panel.querySelector(".gg-scene-new")?.addEventListener("click", () => createSceneGroup([c.id]));
-    panel.querySelector(".gg-scene-split")?.addEventListener("click", () => splitSceneHere(c.id));
-    panel.querySelector(".gg-scene-off")?.addEventListener("click", () => ungroupCuts([c.id]));
+    panel.querySelector(".gg-panel-fold")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = !loadPanelOpen(localStorage);
+      savePanelOpen(localStorage, open);
+      const body = panel.querySelector(".gg-panel-body");
+      const fold = panel.querySelector(".gg-panel-fold");
+      if (body) body.hidden = !open;
+      if (fold) fold.textContent = open ? "▾" : "▸";
+    });
     if (c) bindCutPanelFields(panel, c);
   };
   function captureStoryFocus() {
@@ -2749,16 +2756,13 @@ function mountShots(el) {
       </div>
       ${state.error ? `<div class="gg-error">${esc(state.error)}</div>` : ""}
       <div class="gg-shot-summary">
-        <div class="gg-summary-line"><span class="gg-summary-text">${esc(tl ? formatSummary(projectSummary(tl.cuts || [])) : "")}</span></div>
-        <div class="gg-summary-bar"${(tl?.cuts?.length || 0) ? "" : " hidden"}><span class="gg-seg gg-seg-done"></span><span class="gg-seg gg-seg-video"></span><span class="gg-seg gg-seg-image"></span></div>
-        <div class="gg-complete-row">
-          <div class="gg-complete-bar" title="Best set progress"><div class="gg-complete-fill"></div></div>
+        <div class="gg-summary-top">
+          <span class="gg-summary-text">${esc(tl ? formatSummary(projectSummary(tl.cuts || [])) : "")}</span>
           <span class="gg-complete-pct"></span>
-        </div>
-        <div class="gg-due-row">
           <label class="gg-due-label">Due <input type="date" class="gg-due-input" /></label>
           <span class="gg-due-text"></span>
         </div>
+        <div class="gg-summary-bar"${(tl?.cuts?.length || 0) ? "" : " hidden"}><span class="gg-seg gg-seg-done"></span><span class="gg-seg gg-seg-video"></span><span class="gg-seg gg-seg-image"></span></div>
       </div>
       <div class="gg-shots-toolbar">
         <div class="gg-view-toggle">
@@ -3668,6 +3672,7 @@ app.registerExtension({
     globalThis.__gongganTimelineNoTabSwitch = "0.8.3";
     globalThis.__gongganTabLabel = "0.8.4";
     globalThis.__gongganStoryToggle = "0.9.0";
+    globalThis.__gongganInfoPanelTidy = "0.9.1";
     globalThis.__gongganTabLabelRefresh = applyTabLabels;
     globalThis.__gongganReloadShotsData = () => loadProjects();
     setupTabLabels();
