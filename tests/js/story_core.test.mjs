@@ -11,12 +11,15 @@ import {
   shouldDeferRepaint,
   applyFieldOverrides,
   classifySaveFailure,
+  isCaptionSaveRejected,
+  isSilentFieldSave,
   autoHeightPx,
 } from "../../web/gg_story_core.js";
 
 describe("normalizeListMode", () => {
-  it("accepts story", () => {
-    assert.equal(normalizeListMode("story"), "story");
+  it("accepts caption and legacy story", () => {
+    assert.equal(normalizeListMode("caption"), "caption");
+    assert.equal(normalizeListMode("story"), "caption");
   });
   it("maps unknown to info", () => {
     assert.equal(normalizeListMode("x"), "info");
@@ -33,22 +36,24 @@ describe("loadListMode / saveListMode", () => {
       setItem: (k, v) => m.set(k, v),
     };
     assert.equal(loadListMode(storage), "info");
+    saveListMode(storage, "caption");
+    assert.equal(m.get(LIST_MODE_KEY), "caption");
+    assert.equal(loadListMode(storage), "caption");
     saveListMode(storage, "story");
-    assert.equal(m.get(LIST_MODE_KEY), "story");
-    assert.equal(loadListMode(storage), "story");
+    assert.equal(loadListMode(storage), "caption");
     saveListMode(storage, "bogus");
     assert.equal(loadListMode(storage), "info");
   });
 
   it("never throws on null or throwing storage", () => {
     assert.equal(loadListMode(null), "info");
-    saveListMode(null, "story");
+    saveListMode(null, "caption");
     const bad = {
       getItem: () => { throw new Error("fail"); },
       setItem: () => { throw new Error("fail"); },
     };
     assert.equal(loadListMode(bad), "info");
-    saveListMode(bad, "story");
+    saveListMode(bad, "caption");
   });
 });
 
@@ -140,7 +145,7 @@ describe("shouldDeferRepaint", () => {
 });
 
 describe("shouldFollowPlayback", () => {
-  it("highlight only in story with cut id", () => {
+  it("highlight only in caption with cut id", () => {
     assert.deepEqual(
       shouldFollowPlayback({
         mode: "info",
@@ -153,7 +158,7 @@ describe("shouldFollowPlayback", () => {
     );
     assert.deepEqual(
       shouldFollowPlayback({
-        mode: "story",
+        mode: "caption",
         cutId: "",
         lastCutId: "",
         typingInStory: false,
@@ -163,7 +168,7 @@ describe("shouldFollowPlayback", () => {
     );
     assert.deepEqual(
       shouldFollowPlayback({
-        mode: "story",
+        mode: "caption",
         cutId: "x",
         lastCutId: "",
         typingInStory: false,
@@ -176,7 +181,7 @@ describe("shouldFollowPlayback", () => {
   it("no scroll when same cut, typing, or collapsed", () => {
     assert.deepEqual(
       shouldFollowPlayback({
-        mode: "story",
+        mode: "caption",
         cutId: "x",
         lastCutId: "x",
         typingInStory: false,
@@ -186,7 +191,7 @@ describe("shouldFollowPlayback", () => {
     );
     assert.deepEqual(
       shouldFollowPlayback({
-        mode: "story",
+        mode: "caption",
         cutId: "x",
         lastCutId: "y",
         typingInStory: true,
@@ -196,7 +201,7 @@ describe("shouldFollowPlayback", () => {
     );
     assert.deepEqual(
       shouldFollowPlayback({
-        mode: "story",
+        mode: "caption",
         cutId: "x",
         lastCutId: "y",
         typingInStory: false,
@@ -222,11 +227,12 @@ describe("applyFieldOverrides", () => {
       ],
     };
     applyFieldOverrides(tl, {
-      a: { notes: "new", planned_sec: 2, extra: "x" },
+      a: { notes: "new", planned_sec: 2, caption: "c", extra: "x" },
       missing: { notes: "z" },
     });
     assert.equal(tl.cuts[0].notes, "new");
     assert.equal(tl.cuts[0].planned_sec, 2);
+    assert.equal(tl.cuts[0].caption, "c");
     assert.equal(tl.cuts[0].extra, undefined);
     assert.equal(tl.cuts[1].notes, "b");
   });
@@ -236,6 +242,23 @@ describe("applyFieldOverrides", () => {
     applyFieldOverrides(tl, { a: { end_card: true, needs_redo: true } });
     assert.equal(tl.cuts[0].end_card, true);
     assert.equal(tl.cuts[0].needs_redo, true);
+  });
+});
+
+describe("isSilentFieldSave", () => {
+  it("notes and caption only", () => {
+    assert.equal(isSilentFieldSave({ notes: "a" }), true);
+    assert.equal(isSilentFieldSave({ caption: "b" }), true);
+    assert.equal(isSilentFieldSave({ notes: "a", caption: "b" }), true);
+    assert.equal(isSilentFieldSave({ needs_redo: true }), false);
+  });
+});
+
+describe("isCaptionSaveRejected", () => {
+  it("detects caption in 400 message", () => {
+    assert.equal(isCaptionSaveRejected(400, "unsupported cut fields: caption"), true);
+    assert.equal(isCaptionSaveRejected(400, "caption must be a string"), true);
+    assert.equal(isCaptionSaveRejected(404, "caption"), false);
   });
 });
 

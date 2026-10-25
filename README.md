@@ -138,11 +138,11 @@ Clicking a **Timeline** clip updates the selected cut and preview seek only; it 
 ## Info panel tidy (0.9.1)
 The selected-cut panel at the bottom of **Shots** is denser: one-line header (collapse, title, length, flags, Regen/Send), inline Length/End card/Needs redo, compact version strip, and project summary on one row (completion % + due date; stage bar only). Large in-panel preview and scene action buttons removed (**Split scene** moved to the cut context menu). Collapse state persists in `gg.panelOpen`. Pure helper: `web/gg_panel_core.js`; tests `tests/js/panel_core.test.mjs`.
 
-## Story layout (0.9.2)
-In **Story** mode the per-cut length label sits beside the cut number/name; the **Notes** textarea uses the full row width and auto-grows with content and panel size (scrolls when long, up to ~45vh) for dialogue as well as notes. **Info** mode layout is unchanged. Helper: `autoHeightPx` in `web/gg_story_core.js`.
+## Cut header & captions (0.9.3)
+Each cut row shows a single compact header (number, name, picked version summary, base vs trimmed length, Image/Video/Best dots). **Info** mode: per-cut **Notes** (`notes`, synced with the cut panel). **Caption** mode: per-cut **Dialogue / caption** (`caption`, separate field for Premiere). **Export captions (.srt)** on the Final cut list uses timeline order and each cut's `sec`. In Premiere: **File > Import** (then choose Captions). Saving `caption` needs a one-time ComfyUI restart (Python); the UI keeps unsaved caption text until reload if the server is older. Helpers: `web/gg_caption_core.js`, `web/gg_playback_core.js`; tests `tests/js/caption_core.test.mjs`, `tests/js/playback_core.test.mjs`, `tests/test_cut_caption.py`.
 
-## Story toggle (0.9.0)
-Shots cut list **Info | Story** toggle: Story mode shows a compact per-cut **Notes** field (same `notes` data as the cut panel) without changing Info layout. Timeline playback highlights the active cut in Story mode and scrolls the list (no workflow tab switch). **Send last ComfyUI output** attaches to the cut that queued the job when known. Pure helpers: `web/gg_story_core.js`, `web/gg_send_target_core.js`; tests `tests/js/story_core.test.mjs`, `tests/js/send_target_core.test.mjs`.
+## Caption toggle (0.9.0–0.9.2)
+Shots **Info | Caption** toggle (legacy localStorage `story` → Caption). Caption mode highlights the active cut during timeline playback. **Send last ComfyUI output** attaches to the cut that queued the job when known. Pure helpers: `web/gg_story_core.js`, `web/gg_send_target_core.js`; tests `tests/js/story_core.test.mjs`, `tests/js/send_target_core.test.mjs`.
 
 ## Single shot tab and tab label (0.8.4)
 Switching shots in the **Shots** list reuses **one** Gonggan-owned workflow tab: after a successful load the previous owned tab is closed (auto-save first; unsaved tabs that could not be saved are kept with a warning toast). The ComfyUI tab bar shows a **display-only** label `Project / Cut` for Gonggan shot tabs (`workflow.filename` and saved paths are unchanged). Pure helpers: `web/gg_tab_close_core.js`, `web/gg_tab_label_core.js`.
@@ -172,6 +172,7 @@ Headless Chrome scenarios live under `tests/e2e/` (manual / CI optional).
 
 ## Changelog
 
+- **0.9.3** — Compact cut header + traffic-light dots; Info notes vs Caption field; SRT export; video sync/error handling; native media id guard; `caption` on `POST /gonggan/cut/update` (restart); `gg_caption_core.js`, `gg_playback_core.js`, tests `caption_core`, `playback_core`, `test_cut_caption.py`, `test_native_media_guard.py`.
 - **0.9.2** — Story mode: length label beside cut name; Notes textarea full width with content/viewport auto-height and scroll; `autoHeightPx` in `gg_story_core.js`.
 - **0.9.1** — Denser Shots cut info panel (collapsible header, compact summary row, smaller version strip); removed in-panel preview and scene button row; **Split scene** in cut context menu; `gg_panel_core.js`, `tests/js/panel_core.test.mjs`.
 - **0.9.0** — Shots **Info | Story** list toggle (reuses cut `notes`, playback follow + highlight); send-last-output targets the cut that queued the prompt; `gg_story_core.js`, `gg_send_target_core.js`, `tests/js/story_core.test.mjs`, `tests/js/send_target_core.test.mjs`.

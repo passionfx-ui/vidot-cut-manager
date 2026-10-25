@@ -1,11 +1,12 @@
-/** Pure helpers for Shots list Info | Story mode (no DOM). */
+/** Pure helpers for Shots list Info | Caption mode (no DOM). */
 
 export const LIST_MODE_KEY = "gg.listMode";
 
-const FIELD_KEYS = ["notes", "planned_sec", "end_card", "needs_redo"];
+const FIELD_KEYS = ["notes", "caption", "planned_sec", "end_card", "needs_redo"];
 
 export function normalizeListMode(v) {
-  return v === "story" ? "story" : "info";
+  if (v === "caption" || v === "story") return "caption";
+  return "info";
 }
 
 export function loadListMode(storage) {
@@ -61,10 +62,11 @@ export function shouldDeferRepaint({ composing }) {
   return !!composing;
 }
 
+/** Highlight + scroll follow only in Caption mode (not Info). */
 export function shouldFollowPlayback({ mode, cutId, lastCutId, typingInStory, groupCollapsed }) {
   const m = normalizeListMode(mode);
   const id = cutId || "";
-  const highlight = m === "story" && id !== "";
+  const highlight = m === "caption" && id !== "";
   const scroll =
     highlight &&
     id !== (lastCutId || "") &&
@@ -92,6 +94,21 @@ export function classifySaveFailure(status) {
   const s = Number(status);
   if (s === 404 || s === 405) return "route-missing";
   return "error";
+}
+
+/** Server rejected an unknown or invalid `caption` field (pre-restart or validation). */
+export function isCaptionSaveRejected(status, message) {
+  const s = Number(status);
+  if (s !== 400) return false;
+  const msg = String(message || "");
+  return msg.includes("caption");
+}
+
+/** Timeline reload can be skipped when only notes/caption were saved. */
+export function isSilentFieldSave(fields) {
+  const keys = Object.keys(fields || {});
+  if (!keys.length) return true;
+  return keys.every((k) => k === "notes" || k === "caption");
 }
 
 /** Clamp textarea content height (px) between min and max; safe for bad inputs. */

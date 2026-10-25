@@ -16,6 +16,8 @@ import {
   formatDueDisplay,
   formatMinSecDot,
   versionIndexFromList,
+  formatCutHeaderLengths,
+  formatPickedVersionInfo,
 } from "./gg_cuts_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import {
@@ -46,8 +48,12 @@ import {
   shouldDeferRepaint,
   applyFieldOverrides,
   classifySaveFailure,
+  isCaptionSaveRejected,
+  isSilentFieldSave,
   autoHeightPx,
 } from "./gg_story_core.js";
+import { buildSrt, srtFileName } from "./gg_caption_core.js";
+import { decideVideoSync } from "./gg_playback_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
 
@@ -66,9 +72,10 @@ const shotsUi = {
   composing: false,
   paintDeferred: false,
 };
-const cutFieldUi = { timer: 0, pending: null, unsaved: {}, routeMissing: false };
+const cutFieldUi = { timer: 0, pending: null, unsaved: {}, routeMissing: false, captionDegraded: false };
 let cutFieldSaveFailToastAt = 0;
 let routeMissingToastShown = false;
+let captionDegradeToastShown = false;
 let lastPlayCutAnnounced = "";
 let playCutScrollId = "";
 const projectFieldUi = { timer: 0 };
@@ -105,9 +112,29 @@ function thumbHtml(media, cls) {
   const url = esc(mediaUrl(media.id));
   if (media.kind === "video") {
     // poster from the pack cache; the video itself loads only on hover (preload=none)
-    return `<video class="${cls}" src="${url}" poster="${esc(posterUrl(media.id))}" muted playsinline preload="none"></video>`;
+    return `<video class="${cls} gg-thumb-vid" src="${url}" poster="${esc(posterUrl(media.id))}" muted playsinline preload="none"></video>`;
   }
-  return `<img class="${cls}" src="${esc(posterUrl(media.id))}" loading="lazy" decoding="async" alt="" />`;
+  return `<img class="${cls} gg-thumb-img" src="${esc(posterUrl(media.id))}" loading="lazy" decoding="async" alt="" />`;
+}
+
+function bindThumbFallbacks(root) {
+  if (!root) return;
+  root.querySelectorAll("video.gg-thumb-vid").forEach((v) => {
+    if (v._ggThumbErr) return;
+    v._ggThumbErr = true;
+    v.addEventListener("error", () => {
+      v.classList.add("gg-thumb-broken");
+      if (v.preload === "none") v.preload = "metadata";
+    });
+  });
+  root.querySelectorAll("img.gg-thumb-img").forEach((im) => {
+    if (im._ggThumbErr) return;
+    im._ggThumbErr = true;
+    im.addEventListener("error", () => {
+      im.classList.add("gg-thumb-broken");
+      im.removeAttribute("src");
+    });
+  });
 }
 
 async function getJson(route) {
@@ -1502,18 +1529,17 @@ function applyStageToCutRow(li, cut) {
   const next = firstUnmetStage(s);
   const row = li.querySelector(".gg-stage-row");
   if (!row) return;
+  li.classList.toggle("gg-stage-all-done", s.stage === "done");
   row.classList.toggle("gg-stage-all-done", s.stage === "done");
-  const glow = row.querySelector(".gg-done-glow");
-  if (glow) glow.hidden = s.stage !== "done";
   if (s.stage === "done") row.title = "Done — best cut selected";
   else row.removeAttribute("title");
-  for (const pill of row.querySelectorAll(".gg-stage-pill")) {
-    const k = pill.dataset.k;
+  for (const dot of row.querySelectorAll(".gg-stage-dot")) {
+    const k = dot.dataset.k;
     const met = k === "image" ? s.image : k === "video" ? s.video : s.best;
-    pill.classList.toggle("gg-on", met);
-    pill.classList.toggle("gg-off", !met);
-    pill.classList.toggle("gg-next", k === next);
-    pill.title = stagePillTip(k, met);
+    dot.classList.toggle("gg-on", met);
+    dot.classList.toggle("gg-off", !met);
+    dot.classList.toggle("gg-next", k === next);
+    dot.title = stagePillTip(k, met);
   }
 }
 
@@ -1919,45 +1945,71 @@ function bindShotsReorder(root) {
   });
 }
 
-function refreshStoryUnsavedClasses() {
-  const route = cutFieldUi.routeMissing;
-  document.querySelectorAll(".gg-shots .gg-story-text").forEach((ta) => {
+function refreshFieldTextUnsavedClasses() {
+  const notesRoute = cutFieldUi.routeMissing;
+  const capDegraded = cutFieldUi.captionDegraded;
+  document.querySelectorAll(".gg-shots .gg-info-notes, .gg-shots .gg-caption-text").forEach((ta) => {
     const id = ta.closest(".gg-cut")?.dataset?.cutId;
     const pending = id && (cutFieldUi.unsaved[id] || (cutFieldUi.pending?.cutId === id ? cutFieldUi.pending.fields : null));
-    const unsaved = route || (pending && Object.keys(pending).length);
-    ta.classList.toggle("gg-story-unsaved", !!unsaved);
-    if (route) ta.title = "Not saved yet – server restart needed";
+    const isCap = ta.classList.contains("gg-caption-text");
+    const degraded = isCap ? capDegraded : notesRoute;
+    const unsaved = degraded || (pending && Object.keys(pending).length);
+    ta.classList.toggle("gg-field-unsaved", !!unsaved);
+    if (degraded) {
+      ta.title = isCap
+        ? "Not saved yet – server restart needed"
+        : "Not saved yet – server restart needed";
+    }
   });
 }
 
 function syncNotesViews(cutId, value, exceptEl) {
   const panel = document.querySelector(".gg-shots .gg-cutpanel .gg-notes");
   if (panel && panel !== exceptEl && state.cutId === cutId) panel.value = value;
-  document.querySelectorAll(".gg-shots .gg-story-text").forEach((ta) => {
+  document.querySelectorAll(".gg-shots .gg-info-notes").forEach((ta) => {
     const li = ta.closest(".gg-cut");
     if (li?.dataset?.cutId === cutId && ta !== exceptEl) ta.value = value;
   });
 }
 
+function showCaptionDegradeToast() {
+  if (captionDegradeToastShown) return;
+  captionDegradeToastShown = true;
+  ggToast(
+    "Captions can't be saved yet",
+    "The server needs a one-time ComfyUI restart to enable captions. Your text stays in this page until you reload.",
+    "warn",
+  );
+}
+
 async function saveCutFields(cutId, fields) {
   if (!isNativeProject() || !state.pid) return;
   cutFieldUi.unsaved[cutId] = { ...(cutFieldUi.unsaved[cutId] || {}), ...fields };
-  refreshStoryUnsavedClasses();
-  if (cutFieldUi.routeMissing) return;
+  refreshFieldTextUnsavedClasses();
+  if (cutFieldUi.routeMissing && !fields.caption) return;
+  if (cutFieldUi.captionDegraded && Object.keys(fields).length > 0 && Object.keys(fields).every((k) => k === "caption")) return;
   try {
     const data = await postJson("/gonggan/cut/update", { pid: state.pid, cut_id: cutId, fields });
     if (data.timeline) {
+      const row = (data.timeline.cuts || []).find((c) => c.id === cutId);
+      if (fields.caption != null && row && !Object.prototype.hasOwnProperty.call(row, "caption")) {
+        cutFieldUi.captionDegraded = true;
+        showCaptionDegradeToast();
+      }
       state.timeline = adoptServerTimeline(data.timeline);
       state.error = "";
       const keys = Object.keys(fields);
-      const notesOnly = keys.length === 1 && keys[0] === "notes";
-      if (!notesOnly) bus.dispatchEvent(new Event("timeline"));
+      if (!isSilentFieldSave(fields)) bus.dispatchEvent(new Event("timeline"));
       const bucket = cutFieldUi.unsaved[cutId];
       if (bucket) {
-        for (const k of keys) delete bucket[k];
+        for (const k of keys) {
+          if (k === "caption" && cutFieldUi.captionDegraded) continue;
+          if (k === "notes" && cutFieldUi.routeMissing) continue;
+          delete bucket[k];
+        }
         if (!Object.keys(bucket).length) delete cutFieldUi.unsaved[cutId];
       }
-      refreshStoryUnsavedClasses();
+      refreshFieldTextUnsavedClasses();
     }
   } catch (e) {
     const kind = classifySaveFailure(e.status);
@@ -1971,7 +2023,13 @@ async function saveCutFields(cutId, fields) {
           "warn",
         );
       }
-      refreshStoryUnsavedClasses();
+      refreshFieldTextUnsavedClasses();
+      return;
+    }
+    if (fields.caption != null && isCaptionSaveRejected(e.status, e.message)) {
+      cutFieldUi.captionDegraded = true;
+      showCaptionDegradeToast();
+      refreshFieldTextUnsavedClasses();
       return;
     }
     const now = Date.now();
@@ -1984,7 +2042,7 @@ async function saveCutFields(cutId, fields) {
 
 function scheduleCutFieldSave(cutId, fields) {
   cutFieldUi.unsaved[cutId] = { ...(cutFieldUi.unsaved[cutId] || {}), ...fields };
-  refreshStoryUnsavedClasses();
+  refreshFieldTextUnsavedClasses();
   clearTimeout(cutFieldUi.timer);
   cutFieldUi.pending = { cutId, fields: { ...(cutFieldUi.pending?.cutId === cutId ? cutFieldUi.pending.fields : {}), ...fields } };
   cutFieldUi.timer = setTimeout(() => {
@@ -2008,6 +2066,24 @@ async function saveProjectDue(value) {
   } catch (e) {
     ggToast("Due date", e.message, "warn");
   }
+}
+
+function exportCaptionsSrt() {
+  const tl = state.timeline;
+  if (!tl) return;
+  const srt = buildSrt(tl.cuts || []);
+  if (!srt.trim()) {
+    ggToast("No captions to export", "Add Caption text to at least one cut first.", "warn");
+    return;
+  }
+  const name = srtFileName(tl.project?.name || "captions");
+  const blob = new Blob([srt], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function toggleNeedsRedo(cutId) {
@@ -2041,6 +2117,9 @@ function finalCutListHtml(tl) {
     : "";
   return `
     <div class="gg-final-list">
+      <div class="gg-final-head">
+        <button type="button" class="gg-btn gg-export-srt" title="Download an .srt of the Caption texts, timed from the current cut order and lengths. In Premiere: File &gt; Import.">Export captions (.srt)</button>
+      </div>
       <ol class="gg-final-items">${items || '<li class="gg-dim">No cuts with Best set yet.</li>'}</ol>
       <footer class="gg-final-total">Total: ${formatMinSecDot(r.totalSec)} (${r.items.length} cut${r.items.length === 1 ? "" : "s"})</footer>
       ${miss}
@@ -2127,15 +2206,19 @@ function refreshCutRowBadges(cutId) {
   document.querySelectorAll(`.gg-cut[data-cut-id="${CSS.escape(cutId)}"]`).forEach((li) => {
     const num = li.querySelector(".gg-num");
     if (num) num.textContent = formatCutNumber(c.number ?? (c.pos ?? 0) + 1);
-    const len = li.querySelector(".gg-len-badge");
-    if (len) len.textContent = effectiveLenLabel(c);
+    const len = li.querySelector(".gg-cut-len");
+    if (len) {
+      const liInfo = formatCutHeaderLengths(c);
+      len.textContent = liInfo.text;
+      len.title = liInfo.title;
+    }
     const warn = lengthWarning(c);
     let wEl = li.querySelector(".gg-warn3");
     if (warn) {
       if (!wEl) {
         wEl = document.createElement("span");
         wEl.className = "gg-warn3";
-        li.querySelector(".gg-cut-badges")?.appendChild(wEl);
+        li.querySelector(".gg-cut-header-badges")?.appendChild(wEl);
       }
       wEl.hidden = false;
       wEl.textContent = "> 3s";
@@ -2146,7 +2229,7 @@ function refreshCutRowBadges(cutId) {
       if (!ec) {
         ec = document.createElement("span");
         ec.className = "gg-endcard-badge";
-        li.querySelector(".gg-cut-badges")?.appendChild(ec);
+        li.querySelector(".gg-cut-header-badges")?.appendChild(ec);
       }
       ec.hidden = false;
       ec.textContent = "End card";
@@ -2156,7 +2239,7 @@ function refreshCutRowBadges(cutId) {
       if (!rd) {
         rd = document.createElement("span");
         rd.className = "gg-redo-badge";
-        li.querySelector(".gg-cut-badges")?.appendChild(rd);
+        li.querySelector(".gg-cut-header-badges")?.appendChild(rd);
       }
       rd.hidden = false;
       rd.textContent = "Needs redo";
@@ -2165,42 +2248,40 @@ function refreshCutRowBadges(cutId) {
 }
 
 function cutRowHtml(c) {
-  const storyMode = normalizeListMode(shotsUi.listMode) === "story";
+  const captionMode = normalizeListMode(shotsUi.listMode) === "caption";
   const nat = isNativeProject();
   const notesTip = nat ? "Cut notes (same as Notes in the cut panel)" : NATIVE_READONLY_TIP;
-  const storyArea = storyMode
-    ? `<textarea class="gg-story-text" rows="3" placeholder="Notes…"${nat ? "" : " disabled"} title="${esc(notesTip)}">${esc(c.notes || "")}</textarea>`
-    : "";
+  const capTip = nat ? "Dialogue / caption for export" : NATIVE_READONLY_TIP;
+  const bodyArea = captionMode
+    ? `<textarea class="gg-caption-text" rows="3" placeholder="Dialogue / caption"${nat ? "" : " disabled"} title="${esc(capTip)}">${esc(c.caption || "")}</textarea>`
+    : `<textarea class="gg-info-notes" rows="2" placeholder="Notes…"${nat ? "" : " disabled"} title="${esc(notesTip)}">${esc(c.notes || "")}</textarea>`;
   const warn = lengthWarning(c);
-  const lenBadge = `<span class="gg-len-badge${storyMode ? " gg-len-inline" : ""}">${effectiveLenLabel(c)}</span>`;
-  const badges = [
-    ...(storyMode ? [] : [lenBadge]),
+  const lenInfo = formatCutHeaderLengths(c);
+  const verInfo = formatPickedVersionInfo(c);
+  const grpTip = c.group_name ? `${c.group_name} · ` : "";
+  const nameTitle = `${grpTip}${c.story || c.prompt || c.name || ""}`.trim();
+  const headerBadges = [
     warn ? `<span class="gg-warn3" title="${esc(warn.message)}">&gt; 3s</span>` : "",
     c.end_card ? `<span class="gg-endcard-badge">End card</span>` : "",
     c.needs_redo ? `<span class="gg-redo-badge">Needs redo</span>` : "",
   ].filter(Boolean).join("");
-  const cutName = storyMode
-    ? `<div class="gg-cut-name"><span class="gg-num">${formatCutNumber(c.number ?? (c.pos ?? c.index ?? 0) + 1)}</span><span class="gg-cut-title">${esc(c.name || "(untitled)")}</span>${lenBadge}</div>`
-    : `<div class="gg-cut-name"><span class="gg-num">${formatCutNumber(c.number ?? (c.pos ?? c.index ?? 0) + 1)}</span>${esc(c.name || "(untitled)")}</div>`;
+  const stageDots = `<span class="gg-stage-dot gg-off" data-k="image"></span><span class="gg-stage-dot gg-off" data-k="video"></span><span class="gg-stage-dot gg-off" data-k="best"></span>`;
   return `
-    <li class="gg-cut${state.cutSel.has(c.id) ? " gg-sel" : ""}" data-cut-id="${esc(c.id)}" title="${esc(c.story || c.prompt)}">
+    <li class="gg-cut${state.cutSel.has(c.id) ? " gg-sel" : ""}" data-cut-id="${esc(c.id)}">
       <div class="gg-cut-thumb-col">
         <div class="gg-cut-thumb">${thumbHtml(c.media, "gg-thumb")}${c.media && c.media.kind === "video" ? '<span class="gg-badge">▶</span>' : ""}${c.media && c.media.source && c.media.source !== "gonggan" ? `<span class="gg-badge gg-badge-l gg-src-${esc(c.media.source)}">${esc(fmtSrc(c.media.source))}</span>` : ""}</div>
-        <div class="gg-stage-row">
-          <span class="gg-done-glow" hidden></span>
-          <div class="gg-stage-pills">
-            <span class="gg-stage-pill gg-off" data-k="image">Image</span>
-            <span class="gg-stage-pill gg-off" data-k="video">Video</span>
-            <span class="gg-stage-pill gg-off" data-k="best">Best</span>
-          </div>
-          <div class="gg-live-chip" hidden><span class="gg-live-dot"></span><span class="gg-live-text"></span></div>
-        </div>
+        <div class="gg-live-chip" hidden><span class="gg-live-dot"></span><span class="gg-live-text"></span></div>
       </div>
       <div class="gg-cut-text">
-        ${cutName}
-        <div class="gg-cut-sub">${c.group_name ? esc(c.group_name) + " · " : ""}${c.sec.toFixed(1)}s tl${c.versions > 1 ? ` · v${c.versions}` : ""}</div>
-        ${storyArea}
-        <div class="gg-cut-badges">${badges}</div>
+        <div class="gg-cut-header" title="${esc(nameTitle)}">
+          <span class="gg-num">${formatCutNumber(c.number ?? (c.pos ?? c.index ?? 0) + 1)}</span>
+          <span class="gg-cut-title">${esc(c.name || "(untitled)")}</span>
+          ${verInfo.text ? `<span class="gg-cut-ver" title="${esc(verInfo.title)}">${esc(verInfo.text)}</span>` : ""}
+          <span class="gg-cut-len" title="${esc(lenInfo.title)}">${esc(lenInfo.text)}</span>
+          ${headerBadges ? `<span class="gg-cut-header-badges">${headerBadges}</span>` : ""}
+          <div class="gg-stage-row" title="">${stageDots}</div>
+        </div>
+        ${bodyArea}
       </div>
     </li>`;
 }
@@ -2613,12 +2694,16 @@ function mountShots(el) {
     });
     if (c) bindCutPanelFields(panel, c);
   };
-  function captureStoryFocus() {
+  const FIELD_TEXT_SEL = ".gg-info-notes, .gg-caption-text";
+
+  function captureFieldTextFocus() {
     const el = document.activeElement;
-    if (!el || !root.contains(el) || !el.classList.contains("gg-story-text")) return null;
+    if (!el || !root.contains(el)) return null;
+    if (!el.classList.contains("gg-info-notes") && !el.classList.contains("gg-caption-text")) return null;
     const li = el.closest(".gg-cut");
     return {
       cutId: li?.dataset?.cutId || "",
+      field: el.classList.contains("gg-caption-text") ? "caption" : "notes",
       value: el.value,
       selectionStart: el.selectionStart,
       selectionEnd: el.selectionEnd,
@@ -2626,29 +2711,36 @@ function mountShots(el) {
     };
   }
 
-  function restoreStoryFocus(cap) {
+  function restoreFieldTextFocus(cap) {
     if (!cap?.cutId) return;
-    const ta = root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cap.cutId)}"] .gg-story-text`);
+    const sel = cap.field === "caption" ? ".gg-caption-text" : ".gg-info-notes";
+    const ta = root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cap.cutId)}"] ${sel}`);
     if (!ta) return;
     ta.value = cap.value;
     const c = cutByIdTimeline(cap.cutId);
-    if (c && c.notes !== cap.value) {
-      c.notes = cap.value;
-      scheduleCutFieldSave(cap.cutId, { notes: cap.value });
+    if (c) {
+      if (cap.field === "caption" && c.caption !== cap.value) {
+        c.caption = cap.value;
+        scheduleCutFieldSave(cap.cutId, { caption: cap.value });
+      }
+      if (cap.field === "notes" && c.notes !== cap.value) {
+        c.notes = cap.value;
+        scheduleCutFieldSave(cap.cutId, { notes: cap.value });
+      }
     }
     ta.focus({ preventScroll: true });
     try {
       ta.setSelectionRange(cap.selectionStart, cap.selectionEnd);
     } catch (_) {}
     ta.scrollTop = cap.scrollTop;
-    autoSizeStoryTextarea(ta);
+    autoSizeFieldTextarea(ta);
   }
 
   let repaintAfterCompose = () => {};
   let listSizeRo = null;
   let listSizeRoRaf = 0;
 
-  function storyTextMinMaxPx(ta) {
+  function fieldTextMinMaxPx(ta) {
     const cs = getComputedStyle(ta);
     const fs = parseFloat(cs.fontSize) || 11;
     const lh = parseFloat(cs.lineHeight) || fs * 1.3;
@@ -2657,24 +2749,27 @@ function mountShots(el) {
       (parseFloat(cs.paddingBottom) || 0) +
       (parseFloat(cs.borderTopWidth) || 0) +
       (parseFloat(cs.borderBottomWidth) || 0);
-    const minPx = lh * 3 + pad;
-    const maxPx = window.innerHeight * 0.45;
+    const isCap = ta.classList.contains("gg-caption-text");
+    const focused = document.activeElement === ta;
+    const minLines = isCap ? 3 : 2;
+    const minPx = lh * minLines + pad;
+    let maxPx = isCap ? window.innerHeight * 0.45 : lh * 2 + pad;
+    if (!isCap && focused) maxPx = lh * 6 + pad;
     return { minPx, maxPx };
   }
 
-  function autoSizeStoryTextarea(ta) {
+  function autoSizeFieldTextarea(ta) {
     if (!ta || !ta.isConnected) return;
     ta.style.height = "auto";
-    const { minPx, maxPx } = storyTextMinMaxPx(ta);
+    const { minPx, maxPx } = fieldTextMinMaxPx(ta);
     ta.style.height = `${autoHeightPx({ scrollHeight: ta.scrollHeight, minPx, maxPx })}px`;
   }
 
-  function autoSizeAllStoryTextareas() {
-    if (normalizeListMode(shotsUi.listMode) !== "story") return;
-    root.querySelectorAll(".gg-story-text").forEach(autoSizeStoryTextarea);
+  function autoSizeAllFieldTextareas() {
+    root.querySelectorAll(FIELD_TEXT_SEL).forEach(autoSizeFieldTextarea);
   }
 
-  function observeListWrapForStoryHeight() {
+  function observeListWrapForFieldHeight() {
     if (typeof ResizeObserver === "undefined") return;
     listSizeRo?.disconnect();
     const wrap = root.querySelector(".gg-grp-wrap");
@@ -2682,19 +2777,18 @@ function mountShots(el) {
     listSizeRo = new ResizeObserver(() => {
       cancelAnimationFrame(listSizeRoRaf);
       listSizeRoRaf = requestAnimationFrame(() => {
-        if (normalizeListMode(shotsUi.listMode) !== "story") return;
         const w = root.querySelector(".gg-grp-wrap");
         if (!w) return;
         const st = w.scrollTop;
-        autoSizeAllStoryTextareas();
+        autoSizeAllFieldTextareas();
         w.scrollTop = st;
       });
     });
     listSizeRo.observe(wrap);
   }
 
-  function bindStoryTextareas() {
-    root.querySelectorAll(".gg-story-text").forEach((ta) => {
+  function bindCutFieldTextareas() {
+    root.querySelectorAll(FIELD_TEXT_SEL).forEach((ta) => {
       const li = ta.closest(".gg-cut");
       const id = li?.dataset?.cutId;
       if (!id) return;
@@ -2709,20 +2803,31 @@ function mountShots(el) {
         shotsUi.composing = false;
         repaintAfterCompose();
       });
-      ta.addEventListener("input", () => {
-        const c = cutByIdTimeline(id);
-        if (c) c.notes = ta.value;
-        scheduleCutFieldSave(id, { notes: ta.value });
-        syncNotesViews(id, ta.value, ta);
-        autoSizeStoryTextarea(ta);
-      });
+      if (ta.classList.contains("gg-info-notes")) {
+        ta.addEventListener("focus", () => autoSizeFieldTextarea(ta));
+        ta.addEventListener("blur", () => autoSizeFieldTextarea(ta));
+        ta.addEventListener("input", () => {
+          const c = cutByIdTimeline(id);
+          if (c) c.notes = ta.value;
+          scheduleCutFieldSave(id, { notes: ta.value });
+          syncNotesViews(id, ta.value, ta);
+          autoSizeFieldTextarea(ta);
+        });
+      } else {
+        ta.addEventListener("input", () => {
+          const c = cutByIdTimeline(id);
+          if (c) c.caption = ta.value;
+          scheduleCutFieldSave(id, { caption: ta.value });
+          autoSizeFieldTextarea(ta);
+        });
+      }
     });
-    refreshStoryUnsavedClasses();
+    refreshFieldTextUnsavedClasses();
   }
 
   function applyPlayCutHighlight() {
     root.querySelectorAll(".gg-cut.gg-playing").forEach((el) => el.classList.remove("gg-playing"));
-    if (normalizeListMode(shotsUi.listMode) !== "story") return;
+    if (normalizeListMode(shotsUi.listMode) !== "caption") return;
     const id = shotsUi.playCutId;
     if (!id) return;
     root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(id)}"]`)?.classList.add("gg-playing");
@@ -2734,7 +2839,7 @@ function mountShots(el) {
     const groupCollapsed = row
       ? !!row.closest(".gg-cutlist[hidden], .gg-cutlist.hidden")
       : false;
-    const typing = document.activeElement?.classList?.contains("gg-story-text");
+    const typing = document.activeElement?.classList?.contains("gg-caption-text");
     const { scroll } = shouldFollowPlayback({
       mode: shotsUi.listMode,
       cutId,
@@ -2768,7 +2873,7 @@ function mountShots(el) {
       shotsUi.paintDeferred = true;
       return;
     }
-    const storyCap = captureStoryFocus();
+    const storyCap = captureFieldTextFocus();
     const tl = state.timeline;
     const opts = state.projects.map((p) =>
       `<option value="${esc(p.id)}"${p.id === state.pid ? " selected" : ""}>${esc(projectOptionLabel(p))}</option>`).join("");
@@ -2777,7 +2882,7 @@ function mountShots(el) {
     const groups = tl ? tl.groups || [] : [];
     const sections = shotsSections(cuts, groups);
     const viewFinal = shotsUi.view === "final";
-    const listStory = normalizeListMode(shotsUi.listMode) === "story";
+    const listCaption = normalizeListMode(shotsUi.listMode) === "caption";
     const listHtml = sections.map((sec) => {
       if (sec.type === "ungrouped") {
         return `<section class="gg-grp-sec gg-grp-loose"><header class="gg-grp-head">Ungrouped <span class="gg-grp-meta">${sec.cuts.length}</span></header><ol class="gg-cutlist">${sec.cuts.map(cutRowHtml).join("")}</ol></section>`;
@@ -2796,7 +2901,7 @@ function mountShots(el) {
         <ol class="gg-cutlist"${collapsed ? " hidden" : ""}>${sec.cuts.map(cutRowHtml).join("")}</ol>
       </section>`;
     }).join("");
-    root.className = `gg-root gg-shots${listStory ? " gg-list-story" : ""}`;
+    root.className = `gg-root gg-shots${listCaption ? " gg-list-caption" : ""}`;
     root.innerHTML = `
       <div class="gg-head">
         <select class="gg-proj" title="Project">${opts}</select>
@@ -2824,8 +2929,8 @@ function mountShots(el) {
           <button type="button" class="gg-btn gg-view-final${viewFinal ? " gg-on" : ""}" data-view="final">Final cut list</button>
         </div>
         <div class="gg-list-toggle"${viewFinal ? " hidden" : ""}>
-          <button type="button" class="gg-btn${listStory ? "" : " gg-on"}" data-mode="info" title="Show cut details">Info</button>
-          <button type="button" class="gg-btn${listStory ? " gg-on" : ""}" data-mode="story" title="Show each cut's Notes next to its thumbnail">Story</button>
+          <button type="button" class="gg-btn${listCaption ? "" : " gg-on"}" data-mode="info" title="Show cut details">Info</button>
+          <button type="button" class="gg-btn${listCaption ? " gg-on" : ""}" data-mode="caption" title="Edit dialogue / captions per cut">Caption</button>
         </div>
         <label class="gg-filter-redo" title="Show only cuts flagged needs redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Needs redo only</label>
       </div>
@@ -2878,6 +2983,10 @@ function mountShots(el) {
       const v = e.target.value;
       projectFieldUi.timer = setTimeout(() => saveProjectDue(v), 300);
     });
+    root.querySelector(".gg-export-srt")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      exportCaptionsSrt();
+    });
     root.querySelectorAll(".gg-final-item").forEach((li) => {
       li.addEventListener("click", () => {
         selectCut(li.dataset.cutId);
@@ -2904,7 +3013,7 @@ function mountShots(el) {
     });
     root.querySelectorAll(".gg-cut").forEach((li) => {
       li.addEventListener("click", (e) => {
-        if (e.target.closest(".gg-story-text")) return;
+        if (e.target.closest(FIELD_TEXT_SEL)) return;
         const id = li.dataset.cutId;
         if (e.shiftKey) selectCut(id, { range: true });
         else selectCut(id, { multi: e.ctrlKey || e.metaKey });
@@ -2925,11 +3034,12 @@ function mountShots(el) {
       head.addEventListener("contextmenu", (e) => openSceneContextMenu(e, gid));
     });
     bindHoverPlay(root);
+    bindThumbFallbacks(root);
     bindShotsReorder(root);
-    bindStoryTextareas();
-    restoreStoryFocus(storyCap);
-    autoSizeAllStoryTextareas();
-    observeListWrapForStoryHeight();
+    bindCutFieldTextareas();
+    restoreFieldTextFocus(storyCap);
+    autoSizeAllFieldTextareas();
+    observeListWrapForFieldHeight();
     paintSelection(root);
     paintPanel();
     paintProjectSummary(root);
@@ -3155,7 +3265,7 @@ function showFrame(force) {
     if (c.media && c.media.kind === "video") {
       img.hidden = true; blank.hidden = true; vid.hidden = false;
       const url = mediaUrl(c.media.id);
-      if (vid.dataset.src !== url) { vid.dataset.src = url; vid.src = url; }
+      if (vid.dataset.src !== url) { vid.dataset.src = url; vid.src = url; vid._ggSeekAt = 0; }
     } else if (c.media) {
       vid.pause(); vid.hidden = true; blank.hidden = true; img.hidden = false;
       const url = mediaUrl(c.media.id);
@@ -3171,16 +3281,31 @@ function showFrame(force) {
     const want = c.in + local;
     try {
       if (vid.readyState >= 1) {
-        const dur = Number(vid.duration);
-        if (Number.isFinite(dur) && want >= dur - 0.04) { if (!vid.paused) vid.pause(); }
-        else {
-          if (Math.abs((vid.currentTime || 0) - want) > (play.on ? 0.15 : 0.02)) vid.currentTime = want;
-          if (play.on && vid.paused) vid.play().catch(() => {});
-          if (!play.on && !vid.paused) vid.pause();
+        const sync = decideVideoSync({
+          want,
+          current: vid.currentTime || 0,
+          duration: vid.duration,
+          playing: play.on,
+          paused: vid.paused,
+          seeking: vid.seeking,
+          readyState: vid.readyState,
+          lastSeekAt: vid._ggSeekAt || 0,
+          now: performance.now(),
+        });
+        if (sync.seekTo != null) {
+          vid.currentTime = sync.seekTo;
+          vid._ggSeekAt = performance.now();
         }
+        if (sync.pause) vid.pause();
+        if (sync.play) vid.play().catch(() => {});
       } else if (!vid._ggWait) {
+        // One wait listener per src; cleared on error/emptied/abort (wireViewerMedia).
         vid._ggWait = true;
-        vid.addEventListener("loadedmetadata", () => { vid._ggWait = false; showFrame(); }, { once: true });
+        const onMeta = () => {
+          vid._ggWait = false;
+          showFrame();
+        };
+        vid.addEventListener("loadedmetadata", onMeta, { once: true });
       }
     } catch (_) {}
   }
@@ -3191,8 +3316,43 @@ function preloadNext(i) {
   const c = cutsNow()[i];
   if (!viewer || !c || !c.media) return;
   const url = mediaUrl(c.media.id);
-  if (c.media.kind === "video") { if (viewer.next.dataset.src !== url) { viewer.next.dataset.src = url; viewer.next.src = url; } }
-  else { const im = new Image(); im.src = url; }
+  if (c.media.kind === "video") {
+    if (viewer.next.dataset.src !== url) {
+      viewer.next.dataset.src = url;
+      viewer.next._ggWait = false;
+      viewer.next.src = url;
+    }
+  } else {
+    const im = new Image();
+    im.src = url;
+  }
+}
+
+/** Viewer main + preload video: surface load failures; clear stuck _ggWait on abort/emptied. */
+function wireViewerMedia(vid, next, blank) {
+  if (!vid || vid._ggMediaWired) return;
+  vid._ggMediaWired = true;
+  const clearWait = () => {
+    vid._ggWait = false;
+  };
+  vid.addEventListener("error", () => {
+    clearWait();
+    const err = vid.error;
+    const detail = err ? `${err.message || "error"} (code ${err.code})` : "unknown error";
+    if (blank) {
+      blank.hidden = false;
+      blank.textContent = `Video failed to load: ${detail}`;
+    }
+    vid.hidden = true;
+  });
+  vid.addEventListener("emptied", clearWait);
+  vid.addEventListener("abort", clearWait);
+  if (next && !next._ggMediaWired) {
+    next._ggMediaWired = true;
+    next.addEventListener("error", () => { next._ggWait = false; });
+    next.addEventListener("emptied", () => { next._ggWait = false; });
+    next.addEventListener("abort", () => { next._ggWait = false; });
+  }
 }
 
 function paintHead() {
@@ -3227,6 +3387,7 @@ function leaveExportView() {
   viewer.vid.controls = false;
   viewer.vid.pause();
   viewer.vid.dataset.src = "";
+  viewer.vid._ggSeekAt = 0;
   play.idx = -1;
 }
 
@@ -3466,6 +3627,7 @@ function mountTimeline(el) {
     blank: root.querySelector(".gg-v-blank"),
     label: root.querySelector(".gg-v-label"),
   };
+  wireViewerMedia(viewer.vid, viewer.next, viewer.blank);
   const $r = (q) => root.querySelector(q);
   const paintButtons = () => {
     $r(".gg-snap").classList.toggle("gg-on", ed.snap);
@@ -3664,6 +3826,7 @@ function showExport(job) {
   const url = exportUrl(job.file);
   vid.dataset.src = url;
   vid.src = url;
+  vid._ggSeekAt = 0;
   label.textContent = `EXPORT · ${job.file}`;
   document.querySelectorAll(".gg-timeline .gg-clip").forEach((el) => el.classList.remove("gg-play"));
 }
@@ -3713,10 +3876,22 @@ window.addEventListener("keydown", (e) => {
 }, true);
 
 function bindHoverPlay(root) {
-  root.querySelectorAll("video").forEach((v) => {
+  root.querySelectorAll("video.gg-thumb-vid").forEach((v) => {
+    if (v._ggHoverBound) return;
+    v._ggHoverBound = true;
     const host = v.parentElement;
-    host.addEventListener("mouseenter", () => { v.loop = true; v.play().catch(() => {}); });
-    host.addEventListener("mouseleave", () => { v.pause(); try { v.currentTime = 0; } catch (_) {} });
+    if (!host) return;
+    host.addEventListener("mouseenter", () => {
+      v.preload = "auto";
+      v.loop = true;
+      v.play().catch(() => {});
+    });
+    host.addEventListener("mouseleave", () => {
+      v.pause();
+      try {
+        v.currentTime = 0;
+      } catch (_) {}
+    });
   });
 }
 
@@ -3733,6 +3908,8 @@ app.registerExtension({
     globalThis.__gongganStoryToggle = "0.9.0";
     globalThis.__gongganInfoPanelTidy = "0.9.1";
     globalThis.__gongganStoryLayout = "0.9.2";
+    globalThis.__gongganCaptionMode = "0.9.3";
+    globalThis.__gongganHeaderLine = "0.9.3";
     globalThis.__gongganTabLabelRefresh = applyTabLabels;
     globalThis.__gongganReloadShotsData = () => loadProjects();
     setupTabLabels();

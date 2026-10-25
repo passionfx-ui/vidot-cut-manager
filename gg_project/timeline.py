@@ -195,6 +195,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "end_card": bool(cut.get("end_card")),
             "needs_redo": bool(cut.get("needs_redo")),
             "notes": cut.get("notes") if isinstance(cut.get("notes"), str) else "",
+            "caption": cut.get("caption") if isinstance(cut.get("caption"), str) else "",
             "scene_index": scene_idx,
             "cut_in_scene": 0,
             "number": 0,
