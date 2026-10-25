@@ -11,6 +11,7 @@ import {
   shouldDeferRepaint,
   applyFieldOverrides,
   classifySaveFailure,
+  autoHeightPx,
 } from "../../web/gg_story_core.js";
 
 describe("normalizeListMode", () => {
@@ -235,6 +236,21 @@ describe("applyFieldOverrides", () => {
     applyFieldOverrides(tl, { a: { end_card: true, needs_redo: true } });
     assert.equal(tl.cuts[0].end_card, true);
     assert.equal(tl.cuts[0].needs_redo, true);
+  });
+});
+
+describe("autoHeightPx", () => {
+  it("clamps between min and max", () => {
+    assert.equal(autoHeightPx({ scrollHeight: 50, minPx: 40, maxPx: 100 }), 50);
+    assert.equal(autoHeightPx({ scrollHeight: 20, minPx: 40, maxPx: 100 }), 40);
+    assert.equal(autoHeightPx({ scrollHeight: 200, minPx: 40, maxPx: 100 }), 100);
+  });
+
+  it("tolerates bad numbers", () => {
+    assert.equal(autoHeightPx({ scrollHeight: NaN, minPx: 30, maxPx: 80 }), 30);
+    assert.equal(autoHeightPx({ scrollHeight: undefined, minPx: 25, maxPx: 80 }), 25);
+    assert.equal(autoHeightPx({ scrollHeight: 50, minPx: undefined, maxPx: 80 }), 50);
+    assert.equal(autoHeightPx({ scrollHeight: 200, minPx: 40, maxPx: NaN }), 200);
   });
 });
 

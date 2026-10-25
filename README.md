@@ -138,6 +138,9 @@ Clicking a **Timeline** clip updates the selected cut and preview seek only; it 
 ## Info panel tidy (0.9.1)
 The selected-cut panel at the bottom of **Shots** is denser: one-line header (collapse, title, length, flags, Regen/Send), inline Length/End card/Needs redo, compact version strip, and project summary on one row (completion % + due date; stage bar only). Large in-panel preview and scene action buttons removed (**Split scene** moved to the cut context menu). Collapse state persists in `gg.panelOpen`. Pure helper: `web/gg_panel_core.js`; tests `tests/js/panel_core.test.mjs`.
 
+## Story layout (0.9.2)
+In **Story** mode the per-cut length label sits beside the cut number/name; the **Notes** textarea uses the full row width and auto-grows with content and panel size (scrolls when long, up to ~45vh) for dialogue as well as notes. **Info** mode layout is unchanged. Helper: `autoHeightPx` in `web/gg_story_core.js`.
+
 ## Story toggle (0.9.0)
 Shots cut list **Info | Story** toggle: Story mode shows a compact per-cut **Notes** field (same `notes` data as the cut panel) without changing Info layout. Timeline playback highlights the active cut in Story mode and scrolls the list (no workflow tab switch). **Send last ComfyUI output** attaches to the cut that queued the job when known. Pure helpers: `web/gg_story_core.js`, `web/gg_send_target_core.js`; tests `tests/js/story_core.test.mjs`, `tests/js/send_target_core.test.mjs`.
 
@@ -169,6 +172,7 @@ Headless Chrome scenarios live under `tests/e2e/` (manual / CI optional).
 
 ## Changelog
 
+- **0.9.2** — Story mode: length label beside cut name; Notes textarea full width with content/viewport auto-height and scroll; `autoHeightPx` in `gg_story_core.js`.
 - **0.9.1** — Denser Shots cut info panel (collapsible header, compact summary row, smaller version strip); removed in-panel preview and scene button row; **Split scene** in cut context menu; `gg_panel_core.js`, `tests/js/panel_core.test.mjs`.
 - **0.9.0** — Shots **Info | Story** list toggle (reuses cut `notes`, playback follow + highlight); send-last-output targets the cut that queued the prompt; `gg_story_core.js`, `gg_send_target_core.js`, `tests/js/story_core.test.mjs`, `tests/js/send_target_core.test.mjs`.
 - **0.8.4** — One Gonggan shot workflow tab per session (close previous owned tab after cut switch); display-only `Project / Cut` tab labels; `gg_tab_close_core.js`, `gg_tab_label_core.js`, `tests/js/tab_close_core.test.mjs`, `tests/js/tab_label_core.test.mjs`, e2e `tab_label_test.mjs`.

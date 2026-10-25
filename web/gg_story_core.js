@@ -93,3 +93,14 @@ export function classifySaveFailure(status) {
   if (s === 404 || s === 405) return "route-missing";
   return "error";
 }
+
+/** Clamp textarea content height (px) between min and max; safe for bad inputs. */
+export function autoHeightPx({ scrollHeight, minPx, maxPx }) {
+  const lo = Number(minPx);
+  const min = Number.isFinite(lo) ? lo : 0;
+  const sh = Number(scrollHeight);
+  const h = Number.isFinite(sh) ? sh : min;
+  const hi = Number(maxPx);
+  const max = Number.isFinite(hi) && hi > 0 ? hi : h;
+  return Math.min(max, Math.max(min, h));
+}
