@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatShotTabLabel, planTabLabels } from "../../web/gg_tab_label_core.js";
+import {
+  displayWorkflowFilename,
+  formatShotTabLabel,
+  normalizeTabDescriptor,
+  planTabLabels,
+} from "../../web/gg_tab_label_core.js";
 
 describe("formatShotTabLabel", () => {
   it("formats project and cut", () => {
@@ -75,7 +80,15 @@ describe("planTabLabels", () => {
       tabs: [{ text: "P / X", orig: "cut.json" }],
       workflows: [{ filename: "cut.json", label: null }],
     });
-    assert.deepEqual(plan[0], { index: 0, action: "restore", text: "cut.json" });
+    assert.deepEqual(plan[0], { index: 0, action: "restore", text: "cut" });
+  });
+
+  it("restore prefers current workflow filename after rename", () => {
+    const plan = planTabLabels({
+      tabs: [{ text: "P / X", orig: "old-tab.json" }],
+      workflows: [{ filename: "gonggan/proj/renamed-cut.json", label: null }],
+    });
+    assert.deepEqual(plan[0], { index: 0, action: "restore", text: "renamed-cut" });
   });
 
   it("idempotent after apply", () => {
@@ -110,6 +123,17 @@ describe("planTabLabels", () => {
     assert.equal(plan[0].action, "none");
   });
 
+  it("vue overwrite clears stale orig before plan", () => {
+    const raw = { text: "renamed-file.json", orig: "old-file.json", set: "Proj / Cut" };
+    const tab = normalizeTabDescriptor(raw);
+    assert.equal(tab.orig, "");
+    const plan = planTabLabels({
+      tabs: [tab],
+      workflows: [{ filename: "renamed-file.json", label: null }],
+    });
+    assert.equal(plan[0].action, "none");
+  });
+
   it("length mismatch uses unique filename only", () => {
     const plan = planTabLabels({
       tabs: [{ text: "solo.json", orig: "" }, { text: "extra.json", orig: "" }],
@@ -117,5 +141,27 @@ describe("planTabLabels", () => {
     });
     assert.equal(plan[0].action, "set");
     assert.equal(plan[1].action, "none");
+  });
+});
+
+describe("normalizeTabDescriptor", () => {
+  it("keeps orig when override still shown", () => {
+    assert.deepEqual(
+      normalizeTabDescriptor({ text: "P / A", orig: "a.json", set: "P / A" }),
+      { text: "P / A", orig: "a.json" }
+    );
+  });
+
+  it("drops orig when Vue changed tab text", () => {
+    assert.deepEqual(
+      normalizeTabDescriptor({ text: "new.json", orig: "old.json", set: "P / A" }),
+      { text: "new.json", orig: "" }
+    );
+  });
+});
+
+describe("displayWorkflowFilename", () => {
+  it("strips folders and extension", () => {
+    assert.equal(displayWorkflowFilename("gonggan/foo/cut1.json"), "cut1");
   });
 });

@@ -354,12 +354,32 @@ async function cleanupProjects(page) {
   }
 }
 
+function normWorkflowRelPath(p) {
+  return String(p ?? "")
+    .replace(/^\/+/, "")
+    .replace(/^workflows\//, "");
+}
+
+/** True for paths under gonggan/<folder>/… where folder is this run's ZZ-tablabel-* test project. */
+function isRunZzGongganPath(p) {
+  const norm = normWorkflowRelPath(p);
+  const m = norm.match(/^gonggan\/([^/]+)(?:\/|$)/);
+  if (!m) return false;
+  const folder = m[1];
+  if (!folder.startsWith("ZZ-")) return false;
+  const stamp = String(runStamp);
+  return folder === `ZZ-tablabel-${stamp}` || folder === `ZZ-tablabel-${stamp}-Renamed`;
+}
+
 async function cleanupNewWorkflows(page) {
-  const after = new Set(await fetchWorkflowPaths(page));
-  const before = new Set(workflowPathsBefore);
+  await sleep(800);
+  const normalize = normWorkflowRelPath;
+  const before = new Set(workflowPathsBefore.map(normalize));
+  let afterList = await fetchWorkflowPaths(page);
   const created = [];
-  for (const p of after) {
-    if (!before.has(p)) created.push(p);
+  for (const p of afterList) {
+    const n = normalize(p);
+    if (!before.has(n) && isRunZzGongganPath(n)) created.push(n);
   }
   for (const p of created.sort((a, b) => b.length - a.length)) {
     try {
@@ -370,18 +390,30 @@ async function cleanupNewWorkflows(page) {
   }
   const dirs = new Set();
   for (const p of created) {
-    const norm = p.replace(/^\/+/, "");
-    const parts = norm.split("/");
+    const parts = p.split("/");
     for (let i = 1; i < parts.length; i++) {
       dirs.add(parts.slice(0, i).join("/"));
     }
   }
   for (const d of [...dirs].sort((a, b) => b.length - a.length)) {
     if (!d.startsWith("gonggan/")) continue;
+    if (!isRunZzGongganPath(`${d}/`)) continue;
     const enc = encodeURIComponent(d);
     await page.evaluate(async (pathEnc) => {
       await fetch(`${location.origin}/api/userdata/${pathEnc}`, { method: "DELETE" });
     }, enc);
+  }
+  await sleep(400);
+  afterList = await fetchWorkflowPaths(page);
+  for (const p of afterList) {
+    const n = normalize(p);
+    if (!before.has(n) && isRunZzGongganPath(n)) {
+      try {
+        await deleteWorkflowFile(page, n);
+      } catch (e) {
+        console.warn(`workflow cleanup late ${n}:`, e.message);
+      }
+    }
   }
 }
 
