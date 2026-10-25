@@ -32,6 +32,21 @@
 .gg-shots .gg-cut.gg-on { border-color: var(--gg-acc); background: #2c2a22; }
 .gg-shots .gg-cut-thumb-col { flex: 0 0 96px; min-width: 0; }
 .gg-shots .gg-cut-thumb { position: relative; width: 96px; height: 54px; border-radius: 4px; overflow: hidden; background: #000; }
+.gg-shots .gg-cut.gg-open-tab .gg-cut-thumb::after {
+  content: "Open";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  padding: 0 3px;
+  font-size: 8px;
+  line-height: 1.2;
+  font-weight: 600;
+  color: #0d1a28;
+  background: #6ec8ff;
+  border-radius: 2px;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
 .gg-shots .gg-stage-row { position: relative; margin-top: 3px; pointer-events: none; }
 .gg-shots .gg-stage-pills { display: flex; gap: 2px; flex-wrap: nowrap; }
 .gg-shots .gg-stage-pill { flex: 1 1 0; font-size: 7px; line-height: 1.25; text-align: center; padding: 1px 2px; border-radius: 3px; border: 1px solid var(--gg-line); color: var(--gg-dim); background: #1e2128; }
