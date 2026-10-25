@@ -10,6 +10,68 @@ export function formatCutNumber(n) {
   return String(v).padStart(3, "0");
 }
 
+/** @param {number} sec */
+export function formatSecShort(sec) {
+  const n = Number(sec);
+  if (!Number.isFinite(n)) return "0.0s";
+  return `${n.toFixed(1)}s`;
+}
+
+/** Base length before timeline trim (planned or Gonggan tl_sec). */
+export function cutBaseSec(cut) {
+  const planned = cut?.planned_sec;
+  if (planned != null && Number.isFinite(planned)) return Number(planned);
+  const tl = cut?.tl_sec;
+  if (tl != null && Number.isFinite(tl)) return Number(tl);
+  const sec = cut?.sec;
+  if (sec != null && Number.isFinite(sec)) return Number(sec);
+  return 0;
+}
+
+/** Timeline playback length (after trim). */
+export function cutTimelineSec(cut) {
+  const sec = cut?.sec;
+  return sec != null && Number.isFinite(sec) ? Number(sec) : 0;
+}
+
+/**
+ * @param {object} cut
+ * @returns {{ text: string, title: string }}
+ */
+export function formatCutHeaderLengths(cut) {
+  const orig = cutBaseSec(cut);
+  const eff = cutTimelineSec(cut);
+  const origLabel = formatSecShort(orig);
+  if (Math.abs(orig - eff) > 0.05) {
+    const effLabel = formatSecShort(eff);
+    return {
+      text: `${origLabel} > ${effLabel}`,
+      title: `Base ${origLabel}, timeline ${effLabel}`,
+    };
+  }
+  return { text: origLabel, title: origLabel };
+}
+
+/**
+ * Compact label for the picked/Best version on a cut row header.
+ * @param {object} cut
+ * @returns {{ text: string, title: string }}
+ */
+export function formatPickedVersionInfo(cut) {
+  const media = cut?.media;
+  if (!media || typeof media !== "object" || !media.id) {
+    return { text: "", title: "" };
+  }
+  const pick = cut.pick || media.id;
+  const vLabel = versionLabel(cut.versions_list, pick);
+  const kind = media.kind || "image";
+  const parts = [vLabel, kind];
+  if (media.width && media.height) parts.push(`${media.width}x${media.height}`);
+  else if (media.model) parts.push(String(media.model));
+  const text = parts.join(" · ");
+  return { text, title: text };
+}
+
 /** @param {{ planned_sec?: number|null, sec?: number }} cut */
 export function computeEffectiveSec(cut) {
   const planned = cut?.planned_sec;

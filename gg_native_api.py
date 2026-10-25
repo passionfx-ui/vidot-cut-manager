@@ -318,7 +318,24 @@ def native_version_workflow(pid: str, cut_id: str, vid: str) -> dict | None:
     return None
 
 
+def _skip_native_media_lookup(media_id: str) -> bool:
+    """Legacy 공간쉐어 job/version ids are never native version UUIDs."""
+    try:
+        from . import gg_data as gd
+    except ImportError:
+        import gg_data as gd  # type: ignore
+    if not isinstance(media_id, str) or not media_id:
+        return True
+    if gd.VER_ID_RE.fullmatch(media_id):
+        return True
+    if gd.JOB_ID_RE.fullmatch(media_id):
+        return True
+    return False
+
+
 def native_media_path(media_id: str) -> Path | None:
+    if _skip_native_media_lookup(media_id):
+        return None
     store = native_store()
     hit = store.find_version_asset(media_id)
     return hit[1] if hit else None
@@ -348,9 +365,11 @@ def _poster_for_file(media_id: str, src: Path) -> Path | None:
         return src if _MEDIA_KIND.get(src.suffix.lower()) == "image" else None
     is_video = _MEDIA_KIND.get(src.suffix.lower()) == "video"
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(".tmp.jpg")
+    import os
+    import secrets
     import subprocess
 
+    tmp = out.with_name(f"{out.stem}.{os.getpid()}.{secrets.token_hex(4)}.tmp.jpg")
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.run(
         [exe, "-y", "-loglevel", "error", *(["-ss", "0.3"] if is_video else []), "-i", str(src),
@@ -358,8 +377,12 @@ def _poster_for_file(media_id: str, src: Path) -> Path | None:
         check=False, capture_output=True, timeout=30, creationflags=flags,
     )
     if tmp.is_file() and tmp.stat().st_size > 0:
-        tmp.replace(out)
-        return out
+        try:
+            tmp.replace(out)
+        except OSError:
+            pass
+        if out.is_file():
+            return out
     return src if not is_video else None
 
 

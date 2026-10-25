@@ -956,7 +956,10 @@ def poster_path(job_id: str) -> Path | None:
     if not exe:
         return None
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(".tmp.jpg")
+    import os
+    import secrets
+
+    tmp = out.with_name(f"{out.stem}.{os.getpid()}.{secrets.token_hex(4)}.tmp.jpg")
     with _poster_sem:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         subprocess.run(
@@ -965,8 +968,12 @@ def poster_path(job_id: str) -> Path | None:
             check=False, capture_output=True, timeout=30, creationflags=flags,
         )
     if tmp.is_file() and tmp.stat().st_size > 0:
-        tmp.replace(out)
-        return out
+        try:
+            tmp.replace(out)
+        except OSError:
+            pass
+        if out.is_file():
+            return out
     return None if is_video else src   # image fallback: the original file
 
 

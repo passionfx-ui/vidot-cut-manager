@@ -15,12 +15,36 @@ import {
   formatDueDisplay,
   formatMinSecDot,
   versionIndexFromList,
+  formatCutHeaderLengths,
+  cutBaseSec,
+  cutTimelineSec,
+  formatPickedVersionInfo,
 } from "../../web/gg_cuts_core.js";
 
 describe("formatCutNumber", () => {
   it("pads to three digits", () => {
     assert.equal(formatCutNumber(1), "001");
     assert.equal(formatCutNumber(42), "042");
+  });
+});
+
+describe("cut header lengths", () => {
+  it("shows edited length when trim differs", () => {
+    const r = formatCutHeaderLengths({ tl_sec: 4, sec: 3.2 });
+    assert.equal(r.text, "4.0s > 3.2s");
+  });
+  it("uses planned_sec as base", () => {
+    assert.equal(cutBaseSec({ planned_sec: 5, tl_sec: 4, sec: 3 }), 5);
+    assert.equal(cutTimelineSec({ sec: 3.1 }), 3.1);
+  });
+  it("version info from media", () => {
+    const r = formatPickedVersionInfo({
+      pick: "v1",
+      media: { id: "v1", kind: "video", width: 720, height: 1280 },
+      versions_list: [{ id: "v1", created: 1 }],
+    });
+    assert.match(r.text, /v01/);
+    assert.match(r.text, /720x1280/);
   });
 });
 
