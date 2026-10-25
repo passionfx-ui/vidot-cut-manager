@@ -35,6 +35,8 @@ import {
   shouldResetOpenTabTracking,
   shouldShowOpenTabMarker,
 } from "./gg_cut_select_core.js";
+import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
+import { formatShotTabLabel, normalizeTabDescriptor, planTabLabels } from "./gg_tab_label_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -291,7 +293,9 @@ function markWorkflowGongganOwned(wf, storagePath, meta) {
   if (p) {
     const key = p.toLowerCase();
     if (meta?.projectId && meta?.cutId) {
-      ggOwnedWorkflowMeta.set(key, { projectId: String(meta.projectId), cutId: String(meta.cutId) });
+      const m = { projectId: String(meta.projectId), cutId: String(meta.cutId) };
+      wf.ggGongganMeta = m;
+      ggOwnedWorkflowMeta.set(key, m);
     } else if (!ggOwnedWorkflowMeta.has(key)) {
       ggOwnedWorkflowMeta.set(key, {});
     }
@@ -517,12 +521,146 @@ function isUiWorkflowGraph(wf) {
   return wf && Array.isArray(wf.nodes);
 }
 
+let ggTabLabelTimer = 0;
+let ggTabLabelApplying = false;
+let ggTabLabelObserver = null;
+let ggTabLabelObservedEl = null;
+
+function resolveShotTabLabel(wf) {
+  if (!wf || !isGongganOwnedWorkflow(wf)) return null;
+  let meta = wf.ggGongganMeta;
+  if (!meta?.projectId || !meta?.cutId) {
+    const p = normalizeWorkflowPath(wf.path || "").replace(/^workflows\//, "");
+    const key = p.toLowerCase();
+    const mapped = key ? ggOwnedWorkflowMeta.get(key) : null;
+    if (mapped?.projectId && mapped?.cutId) meta = mapped;
+  }
+  if (!meta?.projectId || !meta?.cutId) return wf.ggTabLabelCache || null;
+
+  const projectName = state.projects.find((p) => p.id === meta.projectId)?.name;
+  if (!projectName) return wf.ggTabLabelCache || null;
+  if (meta.projectId !== state.pid || !state.timeline) return wf.ggTabLabelCache || null;
+
+  const c = cutById(meta.cutId);
+  if (!c) return wf.ggTabLabelCache || null;
+  const pos = c.pos ?? c.index;
+  const label = formatShotTabLabel({
+    projectName,
+    cutName: c.name,
+    cutNumber: pos != null ? pos + 1 : undefined,
+  });
+  if (label) wf.ggTabLabelCache = label;
+  return label;
+}
+
+function applyTabLabels() {
+  if (ggTabLabelApplying) return;
+  try {
+    const ws = ggWorkflowStore();
+    const open = ws?.openWorkflows || [];
+    const workflows = open.map((wf) => ({
+      filename: workflowBasename(wf) || wf.filename || "",
+      label: resolveShotTabLabel(wf),
+    }));
+    const tabEls = [...document.querySelectorAll('[data-testid="workflow-tab"]')];
+    const tabs = tabEls.map((el) => {
+      const span = el.querySelector(".workflow-label");
+      const rawText = span?.textContent ?? "";
+      const rawOrig = span?.dataset?.ggOrig ?? "";
+      const rawSet = span?.dataset?.ggSet ?? "";
+      const norm = normalizeTabDescriptor({ text: rawText, orig: rawOrig, set: rawSet });
+      if (span && rawOrig && norm.orig === "") {
+        delete span.dataset.ggOrig;
+        delete span.dataset.ggSet;
+      }
+      return {
+        span,
+        text: norm.text,
+        orig: norm.orig,
+      };
+    });
+    const plan = planTabLabels({
+      tabs: tabs.map((t) => ({ text: t.text, orig: t.orig })),
+      workflows,
+    });
+    ggTabLabelApplying = true;
+    for (const act of plan) {
+      if (act.action === "none") continue;
+      const row = tabs[act.index];
+      const span = row?.span;
+      if (!span) continue;
+      if (act.action === "set") {
+        const stillOurLabel =
+          span.dataset.ggSet && span.textContent === span.dataset.ggSet;
+        if (!stillOurLabel || !span.dataset.ggOrig) span.dataset.ggOrig = row.text;
+        span.dataset.ggSet = act.text;
+        if (span.textContent !== act.text) span.textContent = act.text;
+      } else if (act.action === "restore") {
+        if (span.textContent !== act.text) span.textContent = act.text;
+        delete span.dataset.ggOrig;
+        delete span.dataset.ggSet;
+      }
+    }
+  } catch (e) {
+    console.warn("[gonggan] tab label apply failed", e);
+    try {
+      document.querySelectorAll(".workflow-label[data-gg-orig]").forEach((span) => {
+        span.textContent = span.dataset.ggOrig;
+        delete span.dataset.ggOrig;
+        delete span.dataset.ggSet;
+      });
+    } catch (_) {}
+  } finally {
+    ggTabLabelApplying = false;
+    try {
+      ggTabLabelObserver?.takeRecords();
+    } catch (_) {}
+  }
+}
+
+function scheduleTabLabelRefresh() {
+  clearTimeout(ggTabLabelTimer);
+  ggTabLabelTimer = setTimeout(() => applyTabLabels(), 80);
+}
+
+function findWorkflowTabContainer() {
+  const tab = document.querySelector('[data-testid="workflow-tab"]');
+  return tab?.parentElement || document.body;
+}
+
+function ensureTabLabelObserver() {
+  const container = findWorkflowTabContainer();
+  if (ggTabLabelObservedEl === container && ggTabLabelObserver) return;
+  try {
+    ggTabLabelObserver?.disconnect();
+  } catch (_) {}
+  ggTabLabelObservedEl = container;
+  ggTabLabelObserver = new MutationObserver(() => {
+    if (ggTabLabelApplying) return;
+    scheduleTabLabelRefresh();
+  });
+  ggTabLabelObserver.observe(container, { childList: true, subtree: true, characterData: true });
+}
+
+function setupTabLabels() {
+  ensureTabLabelObserver();
+  applyTabLabels();
+  setInterval(() => {
+    ensureTabLabelObserver();
+    applyTabLabels();
+  }, 1000);
+  for (const ev of ["select", "gg-opentab", "projects", "timeline"]) {
+    bus.addEventListener(ev, () => scheduleTabLabelRefresh());
+  }
+}
+
 async function loadWorkflowIntoDedicatedTab(workflow, cut) {
   const relPath = shotWorkflowRelPathForCut(cut);
   const storagePath = await resolveShotWorkflowStoragePath(relPath);
   const loadName = storagePath.replace(/^workflows\//, "");
   const shotMeta = { projectId: state.pid, cutId: cut?.id || "" };
   if (!(await prepareGongganShotTabReplace())) return false;
+  const previous = ggOwnedShotWorkflow;
   const ws = ggWorkflowStore();
   if (
     ggOwnedShotWorkflow &&
@@ -554,6 +692,29 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut) {
   }
   adoptGongganShotWorkflow(loadName);
   markWorkflowGongganOwned(ggOwnedShotWorkflow, storagePath, shotMeta);
+  try {
+    const open = ws?.openWorkflows || [];
+    const newTab = ggOwnedShotWorkflow;
+    if (previous && previous !== newTab && open.includes(previous) && isGongganOwnedWorkflow(previous)) {
+      if (previous.isModified) {
+        ggToast("Previous shot tab kept (unsaved changes).", "", "warn");
+      } else {
+        const active = ws?.isActive?.(previous) ?? ws?.activeWorkflow === previous;
+        const decision = shouldClosePreviousShotTab({
+          previousOpen: true,
+          previousOwned: true,
+          previousIsNew: false,
+          previousActive: !!active,
+          previousModified: false,
+          loadOk: true,
+        });
+        if (decision.close) await closeGongganOwnedTab(previous);
+      }
+    }
+  } catch (e) {
+    console.warn("[gonggan] close previous shot tab failed", e);
+  }
+  scheduleTabLabelRefresh();
   scheduleLoadImageScan({ debounceMs: 200 });
   return true;
 }
@@ -3235,6 +3396,10 @@ app.registerExtension({
     globalThis.__gongganCutAutosaveOnSwitch = "0.8.2";
     globalThis.__gongganProjectFolders = "0.8.2";
     globalThis.__gongganTimelineNoTabSwitch = "0.8.3";
+    globalThis.__gongganTabLabel = "0.8.4";
+    globalThis.__gongganTabLabelRefresh = applyTabLabels;
+    globalThis.__gongganReloadShotsData = () => loadProjects();
+    setupTabLabels();
     let lastShotTabActive = isGongganShotTabOpenAndActive();
     setInterval(() => {
       const active = isGongganShotTabOpenAndActive();
