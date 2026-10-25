@@ -33,6 +33,27 @@ function tabOrigText(tab) {
   return String(tab?.text ?? "");
 }
 
+/** Strip path and .json for default tab label text. */
+export function displayWorkflowFilename(filename) {
+  const b = basenameOnly(filename);
+  const lower = b.toLowerCase();
+  return lower.endsWith(".json") ? b.slice(0, -5) : b;
+}
+
+/**
+ * Drop stale ggOrig when Vue re-rendered the span (text no longer matches ggSet).
+ * @param {{ text?: string, orig?: string, set?: string }}
+ * @returns {{ text: string, orig: string }}
+ */
+export function normalizeTabDescriptor({ text, orig, set }) {
+  const t = String(text ?? "");
+  const o = orig != null ? String(orig) : "";
+  const s = set != null ? String(set) : "";
+  if (o !== "" && s !== "" && t === s) return { text: t, orig: o };
+  if (o !== "" && (s === "" || t !== s)) return { text: t, orig: "" };
+  return { text: t, orig: o };
+}
+
 function findUniqueWorkflowIndexByFilename(workflows, filenameKey) {
   if (!filenameKey) return -1;
   let found = -1;
@@ -64,13 +85,18 @@ export function planTabLabels({ tabs, workflows }) {
       wfIndex = i;
     } else {
       wfIndex = findUniqueWorkflowIndexByFilename(workflows, normFilenameKey(tabOrigText(tab)));
+      if (wfIndex < 0 && orig !== "" && n === workflows.length) wfIndex = i;
     }
     const label = wfIndex >= 0 ? workflows[wfIndex]?.label ?? null : null;
 
     if (label != null && label !== "" && text !== label) {
       out.push({ index: i, action: "set", text: label });
     } else if ((label == null || label === "") && orig !== "") {
-      out.push({ index: i, action: "restore", text: orig });
+      let restoreText = orig;
+      if (wfIndex >= 0 && workflows[wfIndex]?.filename) {
+        restoreText = displayWorkflowFilename(workflows[wfIndex].filename);
+      }
+      out.push({ index: i, action: "restore", text: restoreText });
     } else {
       out.push({ index: i, action: "none", text: text });
     }

@@ -36,7 +36,7 @@ import {
   shouldShowOpenTabMarker,
 } from "./gg_cut_select_core.js";
 import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
-import { formatShotTabLabel, planTabLabels } from "./gg_tab_label_core.js";
+import { formatShotTabLabel, normalizeTabDescriptor, planTabLabels } from "./gg_tab_label_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -565,10 +565,18 @@ function applyTabLabels() {
     const tabEls = [...document.querySelectorAll('[data-testid="workflow-tab"]')];
     const tabs = tabEls.map((el) => {
       const span = el.querySelector(".workflow-label");
+      const rawText = span?.textContent ?? "";
+      const rawOrig = span?.dataset?.ggOrig ?? "";
+      const rawSet = span?.dataset?.ggSet ?? "";
+      const norm = normalizeTabDescriptor({ text: rawText, orig: rawOrig, set: rawSet });
+      if (span && rawOrig && norm.orig === "") {
+        delete span.dataset.ggOrig;
+        delete span.dataset.ggSet;
+      }
       return {
         span,
-        text: span?.textContent ?? "",
-        orig: span?.dataset?.ggOrig ?? "",
+        text: norm.text,
+        orig: norm.orig,
       };
     });
     const plan = planTabLabels({
@@ -582,11 +590,15 @@ function applyTabLabels() {
       const span = row?.span;
       if (!span) continue;
       if (act.action === "set") {
-        if (!span.dataset.ggOrig) span.dataset.ggOrig = row.text;
+        const stillOurLabel =
+          span.dataset.ggSet && span.textContent === span.dataset.ggSet;
+        if (!stillOurLabel || !span.dataset.ggOrig) span.dataset.ggOrig = row.text;
+        span.dataset.ggSet = act.text;
         if (span.textContent !== act.text) span.textContent = act.text;
       } else if (act.action === "restore") {
         if (span.textContent !== act.text) span.textContent = act.text;
         delete span.dataset.ggOrig;
+        delete span.dataset.ggSet;
       }
     }
   } catch (e) {
@@ -595,6 +607,7 @@ function applyTabLabels() {
       document.querySelectorAll(".workflow-label[data-gg-orig]").forEach((span) => {
         span.textContent = span.dataset.ggOrig;
         delete span.dataset.ggOrig;
+        delete span.dataset.ggSet;
       });
     } catch (_) {}
   } finally {
