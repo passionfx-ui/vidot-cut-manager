@@ -37,6 +37,17 @@ import {
 } from "./gg_cut_select_core.js";
 import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
 import { formatShotTabLabel, normalizeTabDescriptor, planTabLabels } from "./gg_tab_label_core.js";
+import {
+  loadListMode,
+  saveListMode,
+  normalizeListMode,
+  scrollTopToReveal,
+  shouldFollowPlayback,
+  shouldDeferRepaint,
+  applyFieldOverrides,
+  classifySaveFailure,
+} from "./gg_story_core.js";
+import { resolveSendTarget } from "./gg_send_target_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -44,8 +55,20 @@ const TIMELINE_TAB = "gg-timeline";
 const SHOTS_TAB = "gg-shots";
 const bus = new EventTarget();
 const state = { projects: [], pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
-const shotsUi = { view: "cuts", needsRedoOnly: false, dragSession: null };
-const cutFieldUi = { timer: 0, pending: null };
+const shotsUi = {
+  view: "cuts",
+  needsRedoOnly: false,
+  dragSession: null,
+  listMode: loadListMode(localStorage),
+  playCutId: "",
+  composing: false,
+  paintDeferred: false,
+};
+const cutFieldUi = { timer: 0, pending: null, unsaved: {}, routeMissing: false };
+let cutFieldSaveFailToastAt = 0;
+let routeMissingToastShown = false;
+let lastPlayCutAnnounced = "";
+let playCutScrollId = "";
 const projectFieldUi = { timer: 0 };
 const JOBS_KEY = "gonggan.jobs";
 const progressTracker = createProgressTracker();
@@ -108,10 +131,25 @@ async function loadProjects() {
   await loadTimeline();
 }
 
+function mergeFieldOverrides() {
+  const overrides = { ...cutFieldUi.unsaved };
+  if (cutFieldUi.pending) {
+    const { cutId, fields } = cutFieldUi.pending;
+    overrides[cutId] = { ...(overrides[cutId] || {}), ...fields };
+  }
+  return overrides;
+}
+
+function adoptServerTimeline(tl) {
+  if (!tl) return null;
+  applyFieldOverrides(tl, mergeFieldOverrides());
+  return tl;
+}
+
 async function loadTimeline() {
   if (!state.pid) { state.timeline = null; bus.dispatchEvent(new Event("timeline")); return; }
   try {
-    state.timeline = await getJson("/gonggan/timeline?pid=" + encodeURIComponent(state.pid));
+    state.timeline = adoptServerTimeline(await getJson("/gonggan/timeline?pid=" + encodeURIComponent(state.pid)));
     state.error = "";
   } catch (e) {
     state.timeline = null;
@@ -1889,21 +1927,72 @@ function bindShotsReorder(root) {
   });
 }
 
+function refreshStoryUnsavedClasses() {
+  const route = cutFieldUi.routeMissing;
+  document.querySelectorAll(".gg-shots .gg-story-text").forEach((ta) => {
+    const id = ta.closest(".gg-cut")?.dataset?.cutId;
+    const pending = id && (cutFieldUi.unsaved[id] || (cutFieldUi.pending?.cutId === id ? cutFieldUi.pending.fields : null));
+    const unsaved = route || (pending && Object.keys(pending).length);
+    ta.classList.toggle("gg-story-unsaved", !!unsaved);
+    if (route) ta.title = "Not saved yet – server restart needed";
+  });
+}
+
+function syncNotesViews(cutId, value, exceptEl) {
+  const panel = document.querySelector(".gg-shots .gg-cutpanel .gg-notes");
+  if (panel && panel !== exceptEl && state.cutId === cutId) panel.value = value;
+  document.querySelectorAll(".gg-shots .gg-story-text").forEach((ta) => {
+    const li = ta.closest(".gg-cut");
+    if (li?.dataset?.cutId === cutId && ta !== exceptEl) ta.value = value;
+  });
+}
+
 async function saveCutFields(cutId, fields) {
   if (!isNativeProject() || !state.pid) return;
+  cutFieldUi.unsaved[cutId] = { ...(cutFieldUi.unsaved[cutId] || {}), ...fields };
+  refreshStoryUnsavedClasses();
+  if (cutFieldUi.routeMissing) return;
   try {
     const data = await postJson("/gonggan/cut/update", { pid: state.pid, cut_id: cutId, fields });
     if (data.timeline) {
-      state.timeline = data.timeline;
+      state.timeline = adoptServerTimeline(data.timeline);
       state.error = "";
-      bus.dispatchEvent(new Event("timeline"));
+      const keys = Object.keys(fields);
+      const notesOnly = keys.length === 1 && keys[0] === "notes";
+      if (!notesOnly) bus.dispatchEvent(new Event("timeline"));
+      const bucket = cutFieldUi.unsaved[cutId];
+      if (bucket) {
+        for (const k of keys) delete bucket[k];
+        if (!Object.keys(bucket).length) delete cutFieldUi.unsaved[cutId];
+      }
+      refreshStoryUnsavedClasses();
     }
   } catch (e) {
-    ggToast("Save failed", e.message, "warn");
+    const kind = classifySaveFailure(e.status);
+    if (kind === "route-missing") {
+      cutFieldUi.routeMissing = true;
+      if (!routeMissingToastShown) {
+        routeMissingToastShown = true;
+        ggToast(
+          "Notes can't be saved yet",
+          "The server needs a one-time ComfyUI restart to enable saving. Your edits stay in this page until you reload.",
+          "warn",
+        );
+      }
+      refreshStoryUnsavedClasses();
+      return;
+    }
+    const now = Date.now();
+    if (now - cutFieldSaveFailToastAt >= 10000) {
+      cutFieldSaveFailToastAt = now;
+      ggToast("Save failed", e.message, "warn");
+    }
   }
 }
 
 function scheduleCutFieldSave(cutId, fields) {
+  cutFieldUi.unsaved[cutId] = { ...(cutFieldUi.unsaved[cutId] || {}), ...fields };
+  refreshStoryUnsavedClasses();
   clearTimeout(cutFieldUi.timer);
   cutFieldUi.pending = { cutId, fields: { ...(cutFieldUi.pending?.cutId === cutId ? cutFieldUi.pending.fields : {}), ...fields } };
   cutFieldUi.timer = setTimeout(() => {
@@ -2010,7 +2099,9 @@ function bindCutPanelFields(panel, c) {
     const onNotes = () => {
       c.notes = notes.value;
       scheduleCutFieldSave(c.id, { notes: notes.value });
+      syncNotesViews(c.id, notes.value, notes);
     };
+    notes.addEventListener("input", onNotes);
     notes.addEventListener("change", onNotes);
     notes.addEventListener("blur", onNotes);
   }
@@ -2082,6 +2173,12 @@ function refreshCutRowBadges(cutId) {
 }
 
 function cutRowHtml(c) {
+  const storyMode = normalizeListMode(shotsUi.listMode) === "story";
+  const nat = isNativeProject();
+  const notesTip = nat ? "Cut notes (same as Notes in the cut panel)" : NATIVE_READONLY_TIP;
+  const storyArea = storyMode
+    ? `<textarea class="gg-story-text" rows="2" placeholder="Notes…"${nat ? "" : " disabled"} title="${esc(notesTip)}">${esc(c.notes || "")}</textarea>`
+    : "";
   const warn = lengthWarning(c);
   const badges = [
     `<span class="gg-len-badge">${effectiveLenLabel(c)}</span>`,
@@ -2106,6 +2203,7 @@ function cutRowHtml(c) {
       <div class="gg-cut-text">
         <div class="gg-cut-name"><span class="gg-num">${formatCutNumber(c.number ?? (c.pos ?? c.index ?? 0) + 1)}</span>${esc(c.name || "(untitled)")}</div>
         <div class="gg-cut-sub">${c.group_name ? esc(c.group_name) + " · " : ""}${c.sec.toFixed(1)}s tl${c.versions > 1 ? ` · v${c.versions}` : ""}</div>
+        ${storyArea}
         <div class="gg-cut-badges">${badges}</div>
       </div>
     </li>`;
@@ -2243,7 +2341,11 @@ const fmtSrc = (s) => ({ gonggan: "Gonggan", "local-sdk": "SDK", "comfy-history"
 async function postJson(route, body) {
   const res = await api.fetchApi(route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+  if (!res.ok || data.ok === false) {
+    const err = new Error(data.message || data.error || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -2340,13 +2442,40 @@ async function regenCut(cutId) {
   }
 }
 
+function readJobsList() {
+  try {
+    const raw = localStorage.getItem(JOBS_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list : [];
+  } catch (_) {
+    return [];
+  }
+}
+
 async function sendLastOutput(cutId) {
   const tl = state.timeline;
   if (!tl) return;
   sdk.busy = "send"; sdk.msg = "Looking for the last ComfyUI output…"; bus.dispatchEvent(new Event("sdk"));
   try {
-    const d = await postJson("/gonggan/send-output", { pid: tl.project.id, cut_id: cutId });
-    sdk.msg = `Added ${d.output.name} (${d.output.from}) as a new version.`;
+    let lastPromptId = null;
+    try {
+      const lo = await getJson("/gonggan/last-output");
+      lastPromptId = lo?.output?.prompt_id ?? lo?.output?.promptId ?? null;
+    } catch (_) {}
+    const cutIds = tl.cuts.map((c) => c.id);
+    const { cutId: targetId, redirected } = resolveSendTarget({
+      lastPromptId,
+      jobs: readJobsList(),
+      projectId: tl.project.id,
+      selectedCutId: cutId,
+      cutIds,
+    });
+    const sendId = targetId || cutId;
+    const d = await postJson("/gonggan/send-output", { pid: tl.project.id, cut_id: sendId });
+    const targetCut = tl.cuts.find((c) => c.id === sendId);
+    const num = formatCutNumber(targetCut?.number ?? (targetCut?.pos ?? 0) + 1);
+    const name = targetCut?.name || "";
+    sdk.msg = `Added ${d.output.name} (${d.output.from}) to cut ${num}. ${name}${redirected ? " (the cut that queued it)" : ""}`;
     await loadTimeline();
   } catch (e) {
     sdk.msg = "Send failed: " + e.message;
@@ -2472,8 +2601,113 @@ function mountShots(el) {
     panel.querySelector(".gg-scene-off")?.addEventListener("click", () => ungroupCuts([c.id]));
     if (c) bindCutPanelFields(panel, c);
   };
+  function captureStoryFocus() {
+    const el = document.activeElement;
+    if (!el || !root.contains(el) || !el.classList.contains("gg-story-text")) return null;
+    const li = el.closest(".gg-cut");
+    return {
+      cutId: li?.dataset?.cutId || "",
+      value: el.value,
+      selectionStart: el.selectionStart,
+      selectionEnd: el.selectionEnd,
+      scrollTop: el.scrollTop,
+    };
+  }
+
+  function restoreStoryFocus(cap) {
+    if (!cap?.cutId) return;
+    const ta = root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cap.cutId)}"] .gg-story-text`);
+    if (!ta) return;
+    ta.value = cap.value;
+    const c = cutByIdTimeline(cap.cutId);
+    if (c && c.notes !== cap.value) {
+      c.notes = cap.value;
+      scheduleCutFieldSave(cap.cutId, { notes: cap.value });
+    }
+    ta.focus({ preventScroll: true });
+    try {
+      ta.setSelectionRange(cap.selectionStart, cap.selectionEnd);
+    } catch (_) {}
+    ta.scrollTop = cap.scrollTop;
+  }
+
+  let repaintAfterCompose = () => {};
+
+  function bindStoryTextareas() {
+    root.querySelectorAll(".gg-story-text").forEach((ta) => {
+      const li = ta.closest(".gg-cut");
+      const id = li?.dataset?.cutId;
+      if (!id) return;
+      const stop = (e) => e.stopPropagation();
+      ["click", "mousedown", "pointerdown", "dblclick", "keydown", "contextmenu"].forEach((ev) => {
+        ta.addEventListener(ev, stop);
+      });
+      ta.addEventListener("compositionstart", () => {
+        shotsUi.composing = true;
+      });
+      ta.addEventListener("compositionend", () => {
+        shotsUi.composing = false;
+        repaintAfterCompose();
+      });
+      ta.addEventListener("input", () => {
+        const c = cutByIdTimeline(id);
+        if (c) c.notes = ta.value;
+        scheduleCutFieldSave(id, { notes: ta.value });
+        syncNotesViews(id, ta.value, ta);
+      });
+    });
+    refreshStoryUnsavedClasses();
+  }
+
+  function applyPlayCutHighlight() {
+    root.querySelectorAll(".gg-cut.gg-playing").forEach((el) => el.classList.remove("gg-playing"));
+    if (normalizeListMode(shotsUi.listMode) !== "story") return;
+    const id = shotsUi.playCutId;
+    if (!id) return;
+    root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(id)}"]`)?.classList.add("gg-playing");
+  }
+
+  function scrollPlayCutIntoView() {
+    const cutId = shotsUi.playCutId || "";
+    const row = root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cutId)}"]`);
+    const groupCollapsed = row
+      ? !!row.closest(".gg-cutlist[hidden], .gg-cutlist.hidden")
+      : false;
+    const typing = document.activeElement?.classList?.contains("gg-story-text");
+    const { scroll } = shouldFollowPlayback({
+      mode: shotsUi.listMode,
+      cutId,
+      lastCutId: playCutScrollId,
+      typingInStory: typing,
+      groupCollapsed,
+    });
+    playCutScrollId = cutId;
+    if (!scroll || !row) return;
+    const wrap = root.querySelector(".gg-grp-wrap");
+    if (!wrap) return;
+    const rowTop = row.getBoundingClientRect().top - wrap.getBoundingClientRect().top + wrap.scrollTop;
+    const next = scrollTopToReveal({
+      viewHeight: wrap.clientHeight,
+      rowTop,
+      rowHeight: row.offsetHeight,
+      scrollTop: wrap.scrollTop,
+      margin: 4,
+    });
+    if (next !== wrap.scrollTop) wrap.scrollTop = next;
+  }
+
+  const onPlayCut = () => {
+    applyPlayCutHighlight();
+    scrollPlayCutIntoView();
+  };
+
   const paint = () => {
     if (shotsUi.dragSession) return;
+    if (shouldDeferRepaint({ composing: shotsUi.composing })) {
+      shotsUi.paintDeferred = true;
+      return;
+    }
+    const storyCap = captureStoryFocus();
     const tl = state.timeline;
     const opts = state.projects.map((p) =>
       `<option value="${esc(p.id)}"${p.id === state.pid ? " selected" : ""}>${esc(projectOptionLabel(p))}</option>`).join("");
@@ -2482,6 +2716,7 @@ function mountShots(el) {
     const groups = tl ? tl.groups || [] : [];
     const sections = shotsSections(cuts, groups);
     const viewFinal = shotsUi.view === "final";
+    const listStory = normalizeListMode(shotsUi.listMode) === "story";
     const listHtml = sections.map((sec) => {
       if (sec.type === "ungrouped") {
         return `<section class="gg-grp-sec gg-grp-loose"><header class="gg-grp-head">Ungrouped <span class="gg-grp-meta">${sec.cuts.length}</span></header><ol class="gg-cutlist">${sec.cuts.map(cutRowHtml).join("")}</ol></section>`;
@@ -2500,6 +2735,7 @@ function mountShots(el) {
         <ol class="gg-cutlist"${collapsed ? " hidden" : ""}>${sec.cuts.map(cutRowHtml).join("")}</ol>
       </section>`;
     }).join("");
+    root.className = `gg-root gg-shots${listStory ? " gg-list-story" : ""}`;
     root.innerHTML = `
       <div class="gg-head">
         <select class="gg-proj" title="Project">${opts}</select>
@@ -2528,6 +2764,10 @@ function mountShots(el) {
         <div class="gg-view-toggle">
           <button type="button" class="gg-btn gg-view-cuts${viewFinal ? "" : " gg-on"}" data-view="cuts">Cuts</button>
           <button type="button" class="gg-btn gg-view-final${viewFinal ? " gg-on" : ""}" data-view="final">Final cut list</button>
+        </div>
+        <div class="gg-list-toggle"${viewFinal ? " hidden" : ""}>
+          <button type="button" class="gg-btn${listStory ? "" : " gg-on"}" data-mode="info" title="Show cut details">Info</button>
+          <button type="button" class="gg-btn${listStory ? " gg-on" : ""}" data-mode="story" title="Show each cut's Notes next to its thumbnail">Story</button>
         </div>
         <label class="gg-filter-redo" title="Show only cuts flagged needs redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Needs redo only</label>
       </div>
@@ -2558,6 +2798,14 @@ function mountShots(el) {
     root.querySelectorAll(".gg-view-toggle .gg-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         shotsUi.view = btn.dataset.view === "final" ? "final" : "cuts";
+        paint();
+      });
+    });
+    root.querySelectorAll(".gg-list-toggle .gg-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const mode = normalizeListMode(btn.dataset.mode);
+        shotsUi.listMode = mode;
+        saveListMode(localStorage, mode);
         paint();
       });
     });
@@ -2598,6 +2846,7 @@ function mountShots(el) {
     });
     root.querySelectorAll(".gg-cut").forEach((li) => {
       li.addEventListener("click", (e) => {
+        if (e.target.closest(".gg-story-text")) return;
         const id = li.dataset.cutId;
         if (e.shiftKey) selectCut(id, { range: true });
         else selectCut(id, { multi: e.ctrlKey || e.metaKey });
@@ -2619,12 +2868,23 @@ function mountShots(el) {
     });
     bindHoverPlay(root);
     bindShotsReorder(root);
+    bindStoryTextareas();
+    restoreStoryFocus(storyCap);
     paintSelection(root);
     paintPanel();
     paintProjectSummary(root);
     paintAllCutProgress();
     syncProgressWireState();
+    applyPlayCutHighlight();
     fit();
+  };
+  repaintAfterCompose = () => {
+    setTimeout(() => {
+      if (shotsUi.paintDeferred) {
+        shotsUi.paintDeferred = false;
+        paint();
+      }
+    }, 0);
   };
   const onSel = () => { paintSelection(root); paintPanel(); fit(); };
   const onOpenTab = () => paintSelection(root);
@@ -2634,6 +2894,7 @@ function mountShots(el) {
   bus.addEventListener("template", onTemplate);
   bus.addEventListener("select", onSel);
   bus.addEventListener("gg-opentab", onOpenTab);
+  bus.addEventListener("gg-playcut", onPlayCut);
   bus.addEventListener("sdk", paintPanel);
   paint();
   if (!state.projects.length) loadProjects();
@@ -2683,6 +2944,8 @@ function mountShots(el) {
   root.addEventListener("contextmenu", onShotsPanelContextMenu);
   document.addEventListener("keydown", onShotsKey);
   return () => {
+    shotsUi.composing = false;
+    shotsUi.paintDeferred = false;
     ro.disconnect();
     window.removeEventListener("resize", fit);
     clearInterval(timer);
@@ -2695,6 +2958,7 @@ function mountShots(el) {
     bus.removeEventListener("template", onTemplate);
     bus.removeEventListener("select", onSel);
     bus.removeEventListener("gg-opentab", onOpenTab);
+    bus.removeEventListener("gg-playcut", onPlayCut);
     bus.removeEventListener("sdk", paintPanel);
     closeProjectModal();
     extraCleanup.forEach((fn) => fn());
@@ -2765,7 +3029,7 @@ async function saveEdit() {
     const data = await res.json();
     if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
     if (!ed.dragging && state.timeline && state.timeline.project.id === data.project.id) {
-      state.timeline = data;
+      state.timeline = adoptServerTimeline(data);
       state.error = "";
     }
   } catch (e) {
@@ -2816,6 +3080,12 @@ function showFrame(force) {
   const { img, vid, label, blank } = viewer;
   if (i !== play.idx || force) {
     play.idx = i;
+    const playId = c ? c.id : "";
+    if (playId !== lastPlayCutAnnounced) {
+      lastPlayCutAnnounced = playId;
+      shotsUi.playCutId = playId;
+      bus.dispatchEvent(new Event("gg-playcut"));
+    }
     document.querySelectorAll(".gg-timeline .gg-clip").forEach((el) => el.classList.toggle("gg-play", c && el.dataset.cutId === c.id));
     if (!c) { img.hidden = vid.hidden = true; blank.hidden = false; blank.textContent = ""; label.textContent = ""; return; }
     label.textContent = c.group_name ? `Scene · ${c.group_name} — ${c.pos + 1}. ${c.name}` : `${c.pos + 1}. ${c.name}`;
@@ -3397,6 +3667,7 @@ app.registerExtension({
     globalThis.__gongganProjectFolders = "0.8.2";
     globalThis.__gongganTimelineNoTabSwitch = "0.8.3";
     globalThis.__gongganTabLabel = "0.8.4";
+    globalThis.__gongganStoryToggle = "0.9.0";
     globalThis.__gongganTabLabelRefresh = applyTabLabels;
     globalThis.__gongganReloadShotsData = () => loadProjects();
     setupTabLabels();

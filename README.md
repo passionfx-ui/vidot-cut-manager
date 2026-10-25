@@ -135,6 +135,9 @@ Gonggan saves each shot’s ComfyUI workflow under `workflows/gonggan/<project-f
 ## Timeline selection without tab switch (0.8.3)
 Clicking a **Timeline** clip updates the selected cut and preview seek only; it does **not** load or switch the Gonggan shot workflow tab. **Shots** list clicks still open the cut workflow as before. When the canvas tab is a different cut than the selection, the Shots list shows a small **Open** marker on the open cut (`web/gg_cut_select_core.js`).
 
+## Story toggle (0.9.0)
+Shots cut list **Info | Story** toggle: Story mode shows a compact per-cut **Notes** field (same `notes` data as the cut panel) without changing Info layout. Timeline playback highlights the active cut in Story mode and scrolls the list (no workflow tab switch). **Send last ComfyUI output** attaches to the cut that queued the job when known. Pure helpers: `web/gg_story_core.js`, `web/gg_send_target_core.js`; tests `tests/js/story_core.test.mjs`, `tests/js/send_target_core.test.mjs`.
+
 ## Single shot tab and tab label (0.8.4)
 Switching shots in the **Shots** list reuses **one** Gonggan-owned workflow tab: after a successful load the previous owned tab is closed (auto-save first; unsaved tabs that could not be saved are kept with a warning toast). The ComfyUI tab bar shows a **display-only** label `Project / Cut` for Gonggan shot tabs (`workflow.filename` and saved paths are unchanged). Pure helpers: `web/gg_tab_close_core.js`, `web/gg_tab_label_core.js`.
 
@@ -163,6 +166,7 @@ Headless Chrome scenarios live under `tests/e2e/` (manual / CI optional).
 
 ## Changelog
 
+- **0.9.0** — Shots **Info | Story** list toggle (reuses cut `notes`, playback follow + highlight); send-last-output targets the cut that queued the prompt; `gg_story_core.js`, `gg_send_target_core.js`, `tests/js/story_core.test.mjs`, `tests/js/send_target_core.test.mjs`.
 - **0.8.4** — One Gonggan shot workflow tab per session (close previous owned tab after cut switch); display-only `Project / Cut` tab labels; `gg_tab_close_core.js`, `gg_tab_label_core.js`, `tests/js/tab_close_core.test.mjs`, `tests/js/tab_label_core.test.mjs`, e2e `tab_label_test.mjs`.
 - **0.8.3** — Timeline clip click follows selection/seek only (no workflow tab switch); **Open** marker on the Shots card whose workflow is on canvas; `gg_cut_select_core.js`, `tests/js/cut_select_core.test.mjs`.
 - **0.8.0** — Cut management UI (drag reorder, auto numbers, length/notes, 3 s rule + End card, Final list + total, Needs redo filter, `S01_003_v02` naming display, due date + completion %); `POST /gonggan/cut/update`, `/gonggan/project/update`; missing Load Image scan + queue guard (`gg_loadimage_core.js`, `gg_loadimage.js`); tests `cuts_core`, `loadimage_core`, e2e `cut_mgmt_test`, `loadimage_test`.
