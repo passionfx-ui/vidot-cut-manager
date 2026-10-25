@@ -35,6 +35,7 @@ import {
   shouldResetOpenTabTracking,
   shouldShowOpenTabMarker,
 } from "./gg_cut_select_core.js";
+import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -291,7 +292,9 @@ function markWorkflowGongganOwned(wf, storagePath, meta) {
   if (p) {
     const key = p.toLowerCase();
     if (meta?.projectId && meta?.cutId) {
-      ggOwnedWorkflowMeta.set(key, { projectId: String(meta.projectId), cutId: String(meta.cutId) });
+      const m = { projectId: String(meta.projectId), cutId: String(meta.cutId) };
+      wf.ggGongganMeta = m;
+      ggOwnedWorkflowMeta.set(key, m);
     } else if (!ggOwnedWorkflowMeta.has(key)) {
       ggOwnedWorkflowMeta.set(key, {});
     }
@@ -523,6 +526,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut) {
   const loadName = storagePath.replace(/^workflows\//, "");
   const shotMeta = { projectId: state.pid, cutId: cut?.id || "" };
   if (!(await prepareGongganShotTabReplace())) return false;
+  const previous = ggOwnedShotWorkflow;
   const ws = ggWorkflowStore();
   if (
     ggOwnedShotWorkflow &&
@@ -554,6 +558,28 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut) {
   }
   adoptGongganShotWorkflow(loadName);
   markWorkflowGongganOwned(ggOwnedShotWorkflow, storagePath, shotMeta);
+  try {
+    const open = ws?.openWorkflows || [];
+    const newTab = ggOwnedShotWorkflow;
+    if (previous && previous !== newTab && open.includes(previous) && isGongganOwnedWorkflow(previous)) {
+      if (previous.isModified) {
+        ggToast("Previous shot tab kept (unsaved changes).", "", "warn");
+      } else {
+        const active = ws?.isActive?.(previous) ?? ws?.activeWorkflow === previous;
+        const decision = shouldClosePreviousShotTab({
+          previousOpen: true,
+          previousOwned: true,
+          previousIsNew: false,
+          previousActive: !!active,
+          previousModified: false,
+          loadOk: true,
+        });
+        if (decision.close) await closeGongganOwnedTab(previous);
+      }
+    }
+  } catch (e) {
+    console.warn("[gonggan] close previous shot tab failed", e);
+  }
   scheduleLoadImageScan({ debounceMs: 200 });
   return true;
 }
