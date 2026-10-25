@@ -29,6 +29,12 @@ import {
   shouldSkipShotWorkflowReload,
   gongganExtraProjectId,
 } from "./gg_shot_names.js";
+import {
+  shouldScheduleCutWorkflowLoad,
+  shouldCancelPendingWorkflowLoad,
+  shouldResetOpenTabTracking,
+  shouldShowOpenTabMarker,
+} from "./gg_cut_select_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -342,6 +348,7 @@ async function closeGongganOwnedTab(wf) {
     console.warn("[gonggan] close shot tab failed", e);
   }
   if (ggOwnedShotWorkflow === wf) ggOwnedShotWorkflow = null;
+  bus.dispatchEvent(new Event("gg-opentab"));
 }
 
 function ensureWorkflowManagerActive() {
@@ -701,6 +708,7 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
       markGraphGongganCut(cutId);
       sdk.msg = hit.sdkMsg;
       bus.dispatchEvent(new Event("sdk"));
+      bus.dispatchEvent(new Event("gg-opentab"));
       const sum = hit.toastSummary || "Shot";
       const detail = hit.toastDetail ? `${title} — ${hit.toastDetail}` : title;
       ggToast(sum, detail, hit.toastKind);
@@ -724,6 +732,7 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
             markGraphGongganCut(cutId);
             sdk.msg = hit.sdkMsg;
             bus.dispatchEvent(new Event("sdk"));
+            bus.dispatchEvent(new Event("gg-opentab"));
             const sum = hit.toastSummary || "Shot";
             const detail = hit.toastDetail ? `${title} — ${hit.toastDetail}` : title;
             ggToast(sum, detail, hit.toastKind);
@@ -882,6 +891,7 @@ function selectCutRange(fromId, toId) {
 function selectCut(cutId, opts) {
   const range = opts && opts.range;
   const multi = opts && opts.multi;
+  const fromTimeline = !!(opts && opts.fromTimeline);
   if (range) {
     const anchor = cutSelAnchor || state.cutId || cutId;
     selectCutRange(anchor, cutId);
@@ -903,12 +913,27 @@ function selectCut(cutId, opts) {
     play.idx = -1;
     seek(startOf(i) + 0.001);
   }
-  if (!multi && !range) {
+  if (shouldCancelPendingWorkflowLoad({ fromTimeline })) {
+    clearTimeout(wfLoadDebounce);
+    wfLoadDebounce = 0;
+    ++wfLoadToken;
+  }
+  if (shouldScheduleCutWorkflowLoad({ multi, range, fromTimeline })) {
     clearTimeout(wfLoadDebounce);
     try {
       const g = app.graph?.extra?.gonggan;
       const gp = gongganExtraProjectId(g);
-      if (g?.cutId !== cutId || (state.pid && gp && gp !== state.pid)) {
+      if (
+        shouldResetOpenTabTracking({
+          multi,
+          range,
+          fromTimeline,
+          cutId,
+          graphCutId: g?.cutId || "",
+          projectId: state.pid,
+          graphProjectId: gp || "",
+        })
+      ) {
         wfLastLoadedCutId = "";
         wfLastLoadedProjectId = "";
       }
@@ -2004,9 +2029,29 @@ function updateSelectionBar(root) {
 }
 
 function paintSelection(root) {
+  const shotTabOpen = isGongganShotTabOpenAndActive();
+  const openCutId = wfLastLoadedCutId;
+  const sameProject =
+    !wfLastLoadedProjectId || !state.pid || wfLastLoadedProjectId === state.pid;
   root.querySelectorAll("[data-cut-id]").forEach((el) => {
-    el.classList.toggle("gg-on", el.dataset.cutId === state.cutId);
-    el.classList.toggle("gg-sel", state.cutSel.has(el.dataset.cutId));
+    const id = el.dataset.cutId;
+    el.classList.toggle("gg-on", id === state.cutId);
+    el.classList.toggle("gg-sel", state.cutSel.has(id));
+    if (el.classList.contains("gg-cut")) {
+      const showOpen = shouldShowOpenTabMarker({
+        cutId: id,
+        openCutId,
+        selectedCutId: state.cutId,
+        shotTabOpen,
+        sameProject,
+      });
+      el.classList.toggle("gg-open-tab", showOpen);
+      const thumb = el.querySelector(".gg-cut-thumb");
+      if (thumb) {
+        if (showOpen) thumb.title = "Open in canvas";
+        else thumb.removeAttribute("title");
+      }
+    }
   });
   const on = root.querySelector(`[data-cut-id="${CSS.escape(state.cutId)}"]`);
   if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -2421,11 +2466,13 @@ function mountShots(el) {
     fit();
   };
   const onSel = () => { paintSelection(root); paintPanel(); fit(); };
+  const onOpenTab = () => paintSelection(root);
   const onTemplate = () => paint();
   bus.addEventListener("projects", paint);
   bus.addEventListener("timeline", paint);
   bus.addEventListener("template", onTemplate);
   bus.addEventListener("select", onSel);
+  bus.addEventListener("gg-opentab", onOpenTab);
   bus.addEventListener("sdk", paintPanel);
   paint();
   if (!state.projects.length) loadProjects();
@@ -2486,6 +2533,7 @@ function mountShots(el) {
     bus.removeEventListener("timeline", paint);
     bus.removeEventListener("template", onTemplate);
     bus.removeEventListener("select", onSel);
+    bus.removeEventListener("gg-opentab", onOpenTab);
     bus.removeEventListener("sdk", paintPanel);
     closeProjectModal();
     extraCleanup.forEach((fn) => fn());
@@ -2814,7 +2862,7 @@ function bindReorder(root) {
         window.removeEventListener("pointercancel", up);
         marker.hidden = true;
         el.classList.remove("gg-moving");
-        if (!active) { selectCut(el.dataset.cutId); return; }
+        if (!active) { selectCut(el.dataset.cutId, { fromTimeline: true }); return; }
         ed.dragging = false;
         if (target >= 0 && target !== from && target !== from + 1) {
           const [m] = cuts.splice(from, 1);
@@ -3023,7 +3071,9 @@ function mountTimeline(el) {
   const onTimelineLocks = () => paintTimelineNativeLocks();
   bus.addEventListener("timeline", onTimelineLocks);
   bus.addEventListener("dirty", onDirty);
+  const onOpenTab = () => paintSelection(root);
   bus.addEventListener("select", onSel);
+  bus.addEventListener("gg-opentab", onOpenTab);
   paintTrack();
   paintExport();
   paintTimelineNativeLocks();
@@ -3037,6 +3087,7 @@ function mountTimeline(el) {
     bus.removeEventListener("projects", onProjects);
     bus.removeEventListener("dirty", onDirty);
     bus.removeEventListener("select", onSel);
+    bus.removeEventListener("gg-opentab", onOpenTab);
     if (viewer && viewer.box === root) viewer = null;
     syncProgressWireState();
   };
@@ -3183,6 +3234,15 @@ app.registerExtension({
   async setup() {
     globalThis.__gongganCutAutosaveOnSwitch = "0.8.2";
     globalThis.__gongganProjectFolders = "0.8.2";
+    globalThis.__gongganTimelineNoTabSwitch = "0.8.3";
+    let lastShotTabActive = isGongganShotTabOpenAndActive();
+    setInterval(() => {
+      const active = isGongganShotTabOpenAndActive();
+      if (active !== lastShotTabActive) {
+        lastShotTabActive = active;
+        bus.dispatchEvent(new Event("gg-opentab"));
+      }
+    }, 500);
     bindLoadImageUi({ ggToast });
     installLoadImageQueueGuard();
     loadPersistedJobs();
@@ -3192,6 +3252,7 @@ app.registerExtension({
       api.queuePrompt = async (...args) => {
         const res = await origQueue(...args);
         try {
+          // wfLastLoadedCutId is only set by loadCutWorkflow (Shots list path); timeline selectCut({fromTimeline}) never changes it.
           if (res?.prompt_id && wfLastLoadedCutId && state.pid && isGongganShotTabOpenAndActive()) {
             progressTracker.registerPrompt(res.prompt_id, wfLastLoadedCutId, state.pid);
             persistJob(res.prompt_id, wfLastLoadedCutId, state.pid);
