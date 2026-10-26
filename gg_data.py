@@ -50,8 +50,11 @@ def user_dir(settings: dict | None = None) -> Path:
     uid = str(s.get("uid") or "")
     if not UID_RE.fullmatch(uid):
         raise ValueError("invalid uid in settings")
-    root = Path(str(s.get("data_root") or "")).expanduser()
-    if not str(root) or not root.is_dir():
+    raw_root = str(s.get("data_root") or "").strip()
+    if not raw_root:
+        raise FileNotFoundError("data_root not set")
+    root = Path(raw_root).expanduser()
+    if not root.is_dir():
         raise FileNotFoundError(f"data_root not found: {root}")
     d = (root / uid).resolve()
     d.relative_to(root.resolve())
@@ -202,7 +205,12 @@ def _media_view(job: dict | None) -> dict | None:
 
 def list_projects() -> dict:
     s = load_settings()
-    d = user_dir(s)
+    try:
+        d = user_dir(s)
+    except (FileNotFoundError, ValueError) as ex:
+        # No 공간쉐어 data configured: native (pack-local) projects still work.
+        return {"ok": True, "uid": s.get("uid"), "active_project_id": None, "projects": [],
+                "legacy_unavailable": str(ex)}
     ws = _load_workspace(d)
     jobs = _all_media(d)
     by_cut = _jobs_by_cut(jobs)
