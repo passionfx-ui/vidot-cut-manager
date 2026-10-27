@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   trashButtonLabel,
+  movedToTrashToastMessage,
   normalizeTrashItems,
   formatTrashItem,
 } from "../../web/gg_trash_core.js";
@@ -14,6 +15,16 @@ describe("trashButtonLabel", () => {
   });
   it("formats count", () => {
     assert.equal(trashButtonLabel(3), "Trash (3)");
+  });
+});
+
+describe("movedToTrashToastMessage", () => {
+  it("singular", () => {
+    assert.equal(movedToTrashToastMessage(1), "Moved 1 cut to Trash");
+  });
+  it("plural", () => {
+    assert.equal(movedToTrashToastMessage(2), "Moved 2 cuts to Trash");
+    assert.equal(movedToTrashToastMessage(10), "Moved 10 cuts to Trash");
   });
 });
 
