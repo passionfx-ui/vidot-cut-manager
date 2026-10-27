@@ -369,11 +369,15 @@ async function main() {
 
   await runScenario("02", "Four cuts + drag reorder updates numbers", async () => {
     await ensureFourCuts(page);
-    const before = await getCutNumbers(page);
+    // Numbers (001..) are positional and never change on reorder; compare the cut ids/order instead.
+    const ids = () => page.$$eval(".gg-root.gg-shots .gg-cut", (els) => els.map((e) => e.dataset.cutId));
+    const before = await ids();
     if (before.length < 4) throw new Error("need 4 cuts");
     await dragCut(page, 0, 2);
-    const after = await getCutNumbers(page);
-    if (after.join() === before.join()) throw new Error(`numbers unchanged: ${before} -> ${after}`);
+    const after = await ids();
+    if (after.join() === before.join()) throw new Error(`order unchanged: ${before} -> ${after}`);
+    const nums = await getCutNumbers(page);
+    if (nums.join() !== ["001", "002", "003", "004"].slice(0, nums.length).join()) throw new Error(`numbers should stay positional: ${nums}`);
   });
 
   await runScenario("03", "Scene group + reorder inside scene", async () => {
@@ -450,6 +454,49 @@ async function main() {
     const total = await page.$eval(".gg-final-total", (el) => el.textContent);
     if (!/Total:/i.test(total)) throw new Error(`missing total: ${total}`);
     await page.click(".gg-view-cuts");
+  });
+
+  await runScenario("10", "Card notes single-click select, dbl-click edit", async () => {
+    timelineMocks.delete(mainPid);
+    await page.click(".gg-root.gg-shots .gg-reload");
+    await sleep(1500);
+    const cuts = await page.$$(".gg-root.gg-shots .gg-cut");
+    if (cuts.length < 2) throw new Error("need 2+ cuts");
+    const secondName = await cuts[1].$eval(
+      ".gg-cut-title",
+      (el) => el.textContent?.trim() || ""
+    );
+    const notesBox = await cuts[1].$(".gg-info-notes");
+    if (!notesBox) throw new Error("card notes textarea missing");
+    const nb = await notesBox.boundingBox();
+    if (!nb) throw new Error("notes box missing");
+    await page.mouse.click(nb.x + nb.width / 2, nb.y + nb.height / 2);
+    await sleep(400);
+    const panelName = await page.$eval(".gg-cutpanel .gg-panel-name", (el) => el.textContent?.trim());
+    if (panelName !== secondName) {
+      throw new Error(`single click on notes should select cut: panel=${panelName} expected=${secondName}`);
+    }
+    const focusedAfterClick = await page.evaluate(
+      () => document.activeElement?.classList?.contains("gg-info-notes") ?? false
+    );
+    if (focusedAfterClick) throw new Error("single click should not focus card notes");
+    await notesBox.click({ clickCount: 2 });
+    await sleep(200);
+    const focusedEdit = await page.evaluate(
+      () => document.activeElement?.classList?.contains("gg-info-notes") ?? false
+    );
+    if (!focusedEdit) throw new Error("double-click should enter edit mode");
+    const tag = `abc-${runStamp}`;
+    await page.keyboard.type(tag, { delay: 10 });
+    await page.keyboard.press("Escape");
+    await sleep(700);
+    const cardVal = await page.evaluate((el) => el.value, await cuts[1].$(".gg-info-notes"));
+    if (!cardVal.includes(tag)) throw new Error(`escape should keep text: ${cardVal}`);
+    await page.click(".gg-root.gg-shots .gg-reload");
+    await sleep(1500);
+    const cutsAfter = await page.$$(".gg-root.gg-shots .gg-cut");
+    const reloadedVal = await page.evaluate((el) => el?.value || "", await cutsAfter[1].$(".gg-info-notes"));
+    if (!reloadedVal.includes(tag)) throw new Error(`notes not persisted after reload: ${reloadedVal}`);
   });
 
   await runScenario("09", "Due date + completion percent", async () => {

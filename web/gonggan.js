@@ -42,6 +42,13 @@ import {
 import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
 import { formatShotTabLabel, normalizeTabDescriptor, planTabLabels } from "./gg_tab_label_core.js";
 import {
+  CARD_EDIT_IDLE_TIP,
+  CARD_EDIT_ACTIVE_TIP,
+  cardEditKeyAction,
+  shouldSkipCardSelect,
+  isCardFieldEditing,
+} from "./gg_card_edit_core.js";
+import {
   loadListMode,
   saveListMode,
   normalizeListMode,
@@ -1884,7 +1891,10 @@ function bindShotsReorder(root) {
   }
   root.querySelectorAll(".gg-cut").forEach((el) => {
     el.addEventListener("pointerdown", (e) => {
-      if (!isNativeProject() || e.button || e.target.closest("input, textarea, button, select, a")) return;
+      if (!isNativeProject() || e.button) return;
+      const blocker = e.target.closest("input, textarea, button, select, a");
+      // Card Notes/caption textareas only block a drag while they are in edit mode (double-click).
+      if (blocker && !(blocker.tagName === "TEXTAREA" && !isCardFieldEditing(blocker))) return;
       const startX = e.clientX;
       const startY = e.clientY;
       const cutId = el.dataset.cutId;
@@ -1958,9 +1968,11 @@ function refreshFieldTextUnsavedClasses() {
     const unsaved = degraded || (pending && Object.keys(pending).length);
     ta.classList.toggle("gg-field-unsaved", !!unsaved);
     if (degraded) {
-      ta.title = isCap
-        ? "Not saved yet – server restart needed"
-        : "Not saved yet – server restart needed";
+      ta.title = "Not saved yet – server restart needed";
+    } else if (isCardFieldEditing(ta)) {
+      ta.title = CARD_EDIT_ACTIVE_TIP;
+    } else if (!ta.disabled) {
+      ta.title = CARD_EDIT_IDLE_TIP;
     }
   });
 }
@@ -2253,11 +2265,12 @@ function refreshCutRowBadges(cutId) {
 function cutRowHtml(c) {
   const captionMode = normalizeListMode(shotsUi.listMode) === "caption";
   const nat = isNativeProject();
-  const notesTip = nat ? "Cut notes (same as Notes in the cut panel)" : NATIVE_READONLY_TIP;
-  const capTip = nat ? "Dialogue / caption for export" : NATIVE_READONLY_TIP;
+  const notesTip = nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP;
+  const capTip = nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP;
+  const roAttr = nat ? " readonly" : " disabled";
   const bodyArea = captionMode
-    ? `<textarea class="gg-caption-text" rows="3" placeholder="Dialogue / caption"${nat ? "" : " disabled"} title="${esc(capTip)}">${esc(c.caption || "")}</textarea>`
-    : `<textarea class="gg-info-notes" rows="2" placeholder="Notes…"${nat ? "" : " disabled"} title="${esc(notesTip)}">${esc(c.notes || "")}</textarea>`;
+    ? `<textarea class="gg-caption-text" rows="3" placeholder="Dialogue / caption"${roAttr} title="${esc(capTip)}">${esc(c.caption || "")}</textarea>`
+    : `<textarea class="gg-info-notes" rows="2" placeholder="Notes…"${roAttr} title="${esc(notesTip)}">${esc(c.notes || "")}</textarea>`;
   const warn = lengthWarning(c);
   const lenInfo = formatCutHeaderLengths(c);
   const verInfo = formatPickedVersionInfo(c);
@@ -2712,6 +2725,7 @@ function mountShots(el) {
       selectionStart: el.selectionStart,
       selectionEnd: el.selectionEnd,
       scrollTop: el.scrollTop,
+      editing: isCardFieldEditing(el),
     };
   }
 
@@ -2731,6 +2745,18 @@ function mountShots(el) {
         c.notes = cap.value;
         scheduleCutFieldSave(cap.cutId, { notes: cap.value });
       }
+    }
+    const nat = isNativeProject() && !ta.disabled;
+    if (cap.editing && nat) {
+      ta.readOnly = false;
+      ta.dataset.editing = "1";
+      ta.classList.add("gg-field-editing");
+      ta.title = CARD_EDIT_ACTIVE_TIP;
+    } else if (nat) {
+      ta.readOnly = true;
+      delete ta.dataset.editing;
+      ta.classList.remove("gg-field-editing");
+      ta.title = CARD_EDIT_IDLE_TIP;
     }
     ta.focus({ preventScroll: true });
     try {
@@ -2796,9 +2822,66 @@ function mountShots(el) {
       const li = ta.closest(".gg-cut");
       const id = li?.dataset?.cutId;
       if (!id) return;
-      const stop = (e) => e.stopPropagation();
-      ["click", "mousedown", "pointerdown", "dblclick", "keydown", "contextmenu"].forEach((ev) => {
-        ta.addEventListener(ev, stop);
+      const nat = isNativeProject() && !ta.disabled;
+
+      const exitCardFieldEdit = () => {
+        if (!isCardFieldEditing(ta)) return;
+        delete ta.dataset.editing;
+        ta.classList.remove("gg-field-editing");
+        if (nat) ta.readOnly = true;
+        ta.title = CARD_EDIT_IDLE_TIP;
+        autoSizeFieldTextarea(ta);
+        refreshFieldTextUnsavedClasses();
+      };
+
+      const enterCardFieldEdit = () => {
+        if (!nat) return;
+        ta.readOnly = false;
+        ta.dataset.editing = "1";
+        ta.classList.add("gg-field-editing");
+        ta.title = CARD_EDIT_ACTIVE_TIP;
+        ta.focus({ preventScroll: true });
+        const end = ta.value.length;
+        try {
+          ta.setSelectionRange(end, end);
+        } catch (_) {}
+        autoSizeFieldTextarea(ta);
+      };
+
+      ta.addEventListener("mousedown", (e) => {
+        if (isCardFieldEditing(ta)) e.stopPropagation();
+        else {
+          e.preventDefault();
+          const a = document.activeElement;
+          if (a && a !== ta && isCardFieldEditing(a)) a.blur();
+        }
+      });
+      ta.addEventListener("pointerdown", (e) => {
+        if (isCardFieldEditing(ta)) e.stopPropagation();
+      });
+      ta.addEventListener("click", (e) => {
+        if (isCardFieldEditing(ta)) e.stopPropagation();
+      });
+      ta.addEventListener("contextmenu", (e) => {
+        if (isCardFieldEditing(ta)) e.stopPropagation();
+      });
+      ta.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        if (nat) enterCardFieldEdit();
+      });
+      ta.addEventListener("keydown", (e) => {
+        if (!isCardFieldEditing(ta)) return;
+        e.stopPropagation();
+        const action = cardEditKeyAction({
+          key: e.key,
+          shiftKey: e.shiftKey,
+          isComposing: shotsUi.composing || e.isComposing,
+        });
+        if (action === "commit") {
+          e.preventDefault();
+          exitCardFieldEdit();
+          ta.blur();
+        }
       });
       ta.addEventListener("compositionstart", () => {
         shotsUi.composing = true;
@@ -2807,9 +2890,18 @@ function mountShots(el) {
         shotsUi.composing = false;
         repaintAfterCompose();
       });
+      ta.addEventListener("focus", () => {
+        if (nat && ta.readOnly && !isCardFieldEditing(ta)) {
+          enterCardFieldEdit();
+          return;
+        }
+        if (ta.classList.contains("gg-info-notes")) autoSizeFieldTextarea(ta);
+      });
+      ta.addEventListener("blur", () => {
+        if (isCardFieldEditing(ta)) exitCardFieldEdit();
+        else if (ta.classList.contains("gg-info-notes")) autoSizeFieldTextarea(ta);
+      });
       if (ta.classList.contains("gg-info-notes")) {
-        ta.addEventListener("focus", () => autoSizeFieldTextarea(ta));
-        ta.addEventListener("blur", () => autoSizeFieldTextarea(ta));
         ta.addEventListener("input", () => {
           const c = cutByIdTimeline(id);
           if (c) c.notes = ta.value;
@@ -3017,7 +3109,8 @@ function mountShots(el) {
     });
     root.querySelectorAll(".gg-cut").forEach((li) => {
       li.addEventListener("click", (e) => {
-        if (e.target.closest(FIELD_TEXT_SEL)) return;
+        const fieldEl = e.target.closest(FIELD_TEXT_SEL);
+        if (fieldEl && shouldSkipCardSelect({ inEditMode: isCardFieldEditing(fieldEl) })) return;
         const id = li.dataset.cutId;
         if (e.shiftKey) selectCut(id, { range: true });
         else selectCut(id, { multi: e.ctrlKey || e.metaKey });
