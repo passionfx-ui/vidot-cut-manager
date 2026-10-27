@@ -200,6 +200,13 @@ def native_restore_cuts(pid: str, cut_ids: list | None) -> dict | None:
     return {"ok": True, "timeline": store.to_timeline(pid)}
 
 
+def native_list_trash(pid: str) -> list | None:
+    store = native_store()
+    if store.get_project(pid) is None:
+        return None
+    return store.list_deleted_cuts(pid)
+
+
 def native_update_cut(
     pid: str,
     cut_id: str,

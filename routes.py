@@ -406,6 +406,11 @@ async def gg_trash_list(request):
     if not pid:
         return _err(400, "pid required")
     try:
+        if gg_native_api.is_native_pid(pid):
+            items = await asyncio.to_thread(gg_native_api.native_list_trash, pid)
+            if items is None:
+                return _err(404, "project not found")
+            return web.json_response({"ok": True, "native": True, "items": items})
         items = await asyncio.to_thread(gg_data.list_trash, pid)
     except ValueError as ex:
         return _err(400, str(ex))
