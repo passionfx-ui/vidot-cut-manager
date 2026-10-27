@@ -97,6 +97,15 @@ export function computeEffectiveSec(cut) {
   return 0;
 }
 
+/** Placeholder when planned length is unset (aligns with panel length badge, else 3 s). */
+export function plannedLenInputPlaceholder(cut) {
+  const sec = computeEffectiveSec(cut);
+  if (sec > 0) {
+    return Number.isInteger(sec) ? String(sec) : sec.toFixed(1);
+  }
+  return "3";
+}
+
 /**
  * @param {{ planned_sec?: number|null, sec?: number, end_card?: boolean }} cut
  * @param {{ limit?: number }} [opts]
