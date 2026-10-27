@@ -369,11 +369,15 @@ async function main() {
 
   await runScenario("02", "Four cuts + drag reorder updates numbers", async () => {
     await ensureFourCuts(page);
-    const before = await getCutNumbers(page);
+    // Numbers (001..) are positional and never change on reorder; compare the cut ids/order instead.
+    const ids = () => page.$$eval(".gg-root.gg-shots .gg-cut", (els) => els.map((e) => e.dataset.cutId));
+    const before = await ids();
     if (before.length < 4) throw new Error("need 4 cuts");
     await dragCut(page, 0, 2);
-    const after = await getCutNumbers(page);
-    if (after.join() === before.join()) throw new Error(`numbers unchanged: ${before} -> ${after}`);
+    const after = await ids();
+    if (after.join() === before.join()) throw new Error(`order unchanged: ${before} -> ${after}`);
+    const nums = await getCutNumbers(page);
+    if (nums.join() !== ["001", "002", "003", "004"].slice(0, nums.length).join()) throw new Error(`numbers should stay positional: ${nums}`);
   });
 
   await runScenario("03", "Scene group + reorder inside scene", async () => {
@@ -453,11 +457,14 @@ async function main() {
   });
 
   await runScenario("10", "Card notes single-click select, dbl-click edit", async () => {
+    timelineMocks.delete(mainPid);
+    await page.click(".gg-root.gg-shots .gg-reload");
+    await sleep(1500);
     const cuts = await page.$$(".gg-root.gg-shots .gg-cut");
     if (cuts.length < 2) throw new Error("need 2+ cuts");
-    const secondName = await page.$eval(
-      cuts[1],
-      (li) => li.querySelector(".gg-cut-title")?.textContent?.trim() || ""
+    const secondName = await cuts[1].$eval(
+      ".gg-cut-title",
+      (el) => el.textContent?.trim() || ""
     );
     const notesBox = await cuts[1].$(".gg-info-notes");
     if (!notesBox) throw new Error("card notes textarea missing");
