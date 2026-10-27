@@ -75,6 +75,13 @@ import {
   createUndoBurst,
   snapshotOrderGroups,
 } from "./gg_reorder_core.js";
+import {
+  loadLastTemplate,
+  saveLastTemplate,
+  filterTemplatePaths,
+  pickInitialTemplate,
+  shortTemplateName,
+} from "./gg_template_pick_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -398,6 +405,8 @@ function openNewProjectModal() {
       <h3 class="gg-modal-title">New Project</h3>
       <label class="gg-modal-field">Name <input type="text" class="gg-modal-name" required maxlength="120" /></label>
       <label class="gg-modal-field">Template
+        <input type="search" class="gg-modal-tpl-filter" placeholder="Filter templates…" autocomplete="off" />
+        <span class="gg-modal-tpl-hint" aria-live="polite"></span>
         <select class="gg-modal-tpl"><option value="">(none)</option></select>
       </label>
       <div class="gg-modal-actions">
@@ -410,8 +419,24 @@ function openNewProjectModal() {
   const form = wrap.querySelector("form");
   const nameIn = wrap.querySelector(".gg-modal-name");
   const tplSel = wrap.querySelector(".gg-modal-tpl");
+  const tplFilter = wrap.querySelector(".gg-modal-tpl-filter");
+  const tplHint = wrap.querySelector(".gg-modal-tpl-hint");
+  const refreshModalTplOptions = (forceSelected) => {
+    const selected = typeof forceSelected === "string" ? forceSelected : tplSel.value;
+    const filtered = filterTemplatePaths(userWorkflowPaths, tplFilter?.value || "", selected);
+    const total = userWorkflowPaths.length;
+    tplSel.innerHTML = `<option value="">(none)</option>${filtered
+      .map((p) => `<option value="${esc(p)}"${p === selected ? " selected" : ""}>${esc(p)}</option>`)
+      .join("")}`;
+    tplSel.value = selected;
+    if (tplHint) {
+      const q = (tplFilter?.value || "").trim();
+      tplHint.textContent = q && total ? `${filtered.length} of ${total}` : "";
+    }
+  };
+  tplFilter?.addEventListener("input", () => refreshModalTplOptions());
   fetchUserWorkflowPaths().then(() => {
-    tplSel.innerHTML = `<option value="">(none)</option>${userWorkflowPaths.map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("")}`;
+    refreshModalTplOptions(pickInitialTemplate(userWorkflowPaths, loadLastTemplate(localStorage)));
   });
   wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeProjectModal(); });
   wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", closeProjectModal);
@@ -420,6 +445,7 @@ function openNewProjectModal() {
     const name = nameIn.value.trim();
     if (!name) return;
     const template_ref = tplSel.value || undefined;
+    if (template_ref) saveLastTemplate(localStorage, template_ref);
     try {
       const d = await postJson("/gonggan/project/create", { name, template_ref });
       closeProjectModal();
@@ -1184,6 +1210,18 @@ function templateSelectOptionsHtml() {
   return opts.join("");
 }
 
+function syncTplUseLastButton(root) {
+  const btn = root?.querySelector(".gg-tpl-use-last");
+  if (!btn) return;
+  const last = loadLastTemplate(localStorage);
+  const show = !projectTemplateRef && !!last && userWorkflowPaths.includes(last);
+  btn.hidden = !show;
+  if (!show) return;
+  btn.title = `Link last used template: ${last}`;
+  btn.textContent = `Use ${shortTemplateName(last, 24)}`;
+  btn.dataset.ref = last;
+}
+
 async function refreshProjectTemplateFlag() {
   if (!state.pid) {
     projectHasTemplate = false;
@@ -1207,6 +1245,7 @@ async function setProjectTemplateRef(ref) {
     ggToast("Template", "Select a project first", "warn");
     return;
   }
+  if (ref) saveLastTemplate(localStorage, ref);
   try {
     await postJson("/gonggan/template", { pid: state.pid, ref: ref || "" });
     projectTemplateRef = ref || "";
@@ -3376,6 +3415,7 @@ function mountShots(el) {
         <label class="gg-tpl-wrap" title="ComfyUI saved workflow used as this project's template">
           <span class="gg-tpl-label">Template:</span>
           <select class="gg-tpl-select">${templateSelectOptionsHtml()}</select>
+          <button type="button" class="gg-btn gg-tpl-use-last" hidden>Use last</button>
         </label>
         <span class="gg-sdk-slot"></span>
         <span class="gg-other-chip" hidden title="Not started from a Gonggan cut"></span>
@@ -3423,9 +3463,21 @@ function mountShots(el) {
         const cur = tplSel.value;
         tplSel.innerHTML = templateSelectOptionsHtml();
         tplSel.value = cur || projectTemplateRef || "";
+        syncTplUseLastButton(root);
       });
     });
-    if (tplSel) fetchUserWorkflowPaths().then(() => { tplSel.innerHTML = templateSelectOptionsHtml(); tplSel.value = projectTemplateRef || ""; });
+    if (tplSel) {
+      fetchUserWorkflowPaths().then(() => {
+        tplSel.innerHTML = templateSelectOptionsHtml();
+        tplSel.value = projectTemplateRef || "";
+        syncTplUseLastButton(root);
+      });
+    }
+    syncTplUseLastButton(root);
+    root.querySelector(".gg-tpl-use-last")?.addEventListener("click", (e) => {
+      const ref = e.currentTarget?.dataset?.ref;
+      if (ref) void setProjectTemplateRef(ref);
+    });
     tplSel?.addEventListener("change", (e) => setProjectTemplateRef(e.target.value));
     root.querySelector(".gg-cut-add")?.addEventListener("click", () => addLocalCut());
     root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); refreshProjectTemplateFlag(); });
