@@ -20,6 +20,7 @@ import {
   formatPickedVersionInfo,
   trimSecFromDrag,
   plannedLenInputPlaceholder,
+  addCutTarget,
 } from "./gg_cuts_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import {
@@ -1060,10 +1061,11 @@ async function addLocalCut() {
     ggToast("Cut", "Select a project first", "warn");
     return;
   }
-  const active = state.cutId ? cutById(state.cutId) : null;
+  const cuts = state.timeline ? state.timeline.cuts : [];
+  const { after, group } = addCutTarget({ timelineCuts: cuts, activeCutId: state.cutId });
   const body = { pid: state.pid };
-  if (active && active.group_id) body.group = active.group_id;
-  if (state.cutId) body.after = state.cutId;
+  if (group) body.group = group;
+  if (after) body.after = after;
   try {
     const d = await postJson("/gonggan/cut/add", body);
     if (d.timeline) {
@@ -1256,9 +1258,11 @@ async function deleteSelectedCuts() {
 
 async function addCutAfter(cutId) {
   if (!state.pid) return;
-  const c = cutById(cutId);
-  const body = { pid: state.pid, after: cutId };
-  if (c && c.group_id) body.group = c.group_id;
+  const cuts = state.timeline ? state.timeline.cuts : [];
+  const { after, group } = addCutTarget({ timelineCuts: cuts, activeCutId: cutId });
+  const body = { pid: state.pid };
+  if (after) body.after = after;
+  if (group) body.group = group;
   try {
     const d = await postJson("/gonggan/cut/add", body);
     if (d.timeline) {

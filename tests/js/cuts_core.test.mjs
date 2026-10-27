@@ -20,6 +20,7 @@ import {
   cutTimelineSec,
   formatPickedVersionInfo,
   plannedLenInputPlaceholder,
+  addCutTarget,
 } from "../../web/gg_cuts_core.js";
 
 describe("formatCutNumber", () => {
@@ -219,5 +220,35 @@ describe("versionIndexFromList", () => {
     const list = [{ id: "a", created: 2 }, { id: "b", created: 1 }];
     assert.equal(versionIndexFromList(list, "b"), 1);
     assert.equal(versionIndexFromList(list, "a"), 2);
+  });
+});
+
+describe("addCutTarget", () => {
+  const cuts = [
+    { id: "a", group_id: "g1" },
+    { id: "b", group_id: "g1" },
+    { id: "c", group_id: "" },
+  ];
+
+  it("uses active cut scene and after", () => {
+    assert.deepEqual(addCutTarget({ timelineCuts: cuts, activeCutId: "a" }), {
+      after: "a",
+      group: "g1",
+    });
+  });
+
+  it("last cut when nothing selected", () => {
+    assert.deepEqual(addCutTarget({ timelineCuts: cuts, activeCutId: null }), {
+      after: "c",
+      group: null,
+    });
+  });
+
+  it("inherits Scene 1 for fresh project tail", () => {
+    const fresh = [{ id: "cut1", group_id: "scene1" }];
+    assert.deepEqual(addCutTarget({ timelineCuts: fresh, activeCutId: null }), {
+      after: "cut1",
+      group: "scene1",
+    });
   });
 });
