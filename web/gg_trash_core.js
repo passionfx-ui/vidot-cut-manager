@@ -6,6 +6,14 @@ export function trashButtonLabel(count) {
   return `Trash (${n})`;
 }
 
+/** Toast summary after soft-deleting cuts (Undo available). */
+export function movedToTrashToastMessage(count) {
+  const n = Math.floor(Number(count));
+  if (!Number.isFinite(n) || n <= 0) return "Moved cuts to Trash";
+  if (n === 1) return "Moved 1 cut to Trash";
+  return `Moved ${n} cuts to Trash`;
+}
+
 export function normalizeTrashItems(resp) {
   if (!resp || resp.ok === false) return [];
   const items = resp.items;
