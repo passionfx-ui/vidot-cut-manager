@@ -94,6 +94,11 @@ import {
   shortTemplateName,
   userTemplatePaths,
 } from "./gg_template_pick_core.js";
+import {
+  normalizeNameInput,
+  SCENE_NAME_MAX_LEN,
+  PROJECT_NAME_MAX_LEN,
+} from "./gg_ask_text_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -473,14 +478,110 @@ function openNewProjectModal() {
   nameIn.focus();
 }
 
+let askTextEl = null;
+
+/**
+ * @param {{ title: string, label?: string, value?: string, okLabel?: string, maxLength?: number }} opts
+ * @returns {Promise<string|null>}
+ */
+function askText(opts) {
+  if (askTextEl) return Promise.resolve(null);
+  const title = String(opts?.title ?? "Name");
+  const label = String(opts?.label ?? "Name");
+  const initial = String(opts?.value ?? "");
+  const okLabel = String(opts?.okLabel ?? "OK");
+  const maxLength = Number(opts?.maxLength) > 0 ? Math.floor(Number(opts.maxLength)) : SCENE_NAME_MAX_LEN;
+
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.className = "gg-modal-backdrop gg-ask-backdrop";
+    wrap.innerHTML = `
+      <form class="gg-modal gg-ask-dialog" role="dialog" aria-label="${esc(title)}">
+        <h3 class="gg-modal-title">${esc(title)}</h3>
+        <label class="gg-modal-field">${esc(label)}
+          <input type="text" class="gg-ask-input" maxlength="${maxLength}" autocomplete="off" />
+        </label>
+        <div class="gg-modal-actions">
+          <button type="button" class="gg-btn gg-ask-cancel">Cancel</button>
+          <button type="submit" class="gg-btn gg-primary gg-ask-ok">${esc(okLabel)}</button>
+        </div>
+      </form>`;
+    document.body.appendChild(wrap);
+    askTextEl = wrap;
+
+    const form = wrap.querySelector("form");
+    const input = wrap.querySelector(".gg-ask-input");
+    const okBtn = wrap.querySelector(".gg-ask-ok");
+    if (!form || !input || !okBtn) {
+      wrap.remove();
+      askTextEl = null;
+      resolve(null);
+      return;
+    }
+    input.value = initial;
+    input.select();
+
+    const syncOk = () => {
+      const norm = normalizeNameInput(input.value, maxLength);
+      okBtn.disabled = !norm.ok;
+    };
+    syncOk();
+    input.addEventListener("input", syncOk);
+
+    const finish = (value) => {
+      if (!askTextEl) return;
+      wrap.remove();
+      askTextEl = null;
+      resolve(value);
+    };
+
+    const trySubmit = () => {
+      const norm = normalizeNameInput(input.value, maxLength);
+      if (!norm.ok) {
+        syncOk();
+        input.focus();
+        return;
+      }
+      finish(norm.value);
+    };
+
+    wrap.querySelector(".gg-ask-cancel")?.addEventListener("click", () => finish(null));
+    wrap.addEventListener("mousedown", (e) => {
+      if (e.target === wrap) finish(null);
+    });
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      trySubmit();
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        finish(null);
+        return;
+      }
+      if (e.key === "Enter" && !e.isComposing) {
+        e.preventDefault();
+        trySubmit();
+      }
+    });
+    input.focus();
+  });
+}
+
 async function renameNativeProject() {
   if (!isNativeProject()) return;
   const p = currentProject();
   const cur = p?.name || "";
-  const name = prompt("Project name", cur);
-  if (name === null || !name.trim()) return;
+  const name = await askText({
+    title: "Project name",
+    label: "Name",
+    value: cur,
+    okLabel: "Rename",
+    maxLength: PROJECT_NAME_MAX_LEN,
+  });
+  if (name === null) return;
   try {
-    await postJson("/gonggan/project/rename", { pid: state.pid, name: name.trim() });
+    await postJson("/gonggan/project/rename", { pid: state.pid, name });
     await loadProjects();
     ggToast("Project", "Renamed", "ok");
   } catch (e) {
@@ -1796,10 +1897,16 @@ async function createSceneGroup(cutIds) {
   let ids = orderCutIds(cutIds && cutIds.length ? cutIds : cutSelIds());
   if (!ids.length && state.cutId) ids = [state.cutId];
   if (!ids.length) return;
-  const title = prompt("Scene name", "Scene " + ((state.timeline?.groups?.length || 0) + 1));
-  if (title === null || !title.trim()) return;
+  const title = await askText({
+    title: "Scene name",
+    label: "Name",
+    value: "Scene " + ((state.timeline?.groups?.length || 0) + 1),
+    okLabel: "Create scene",
+    maxLength: SCENE_NAME_MAX_LEN,
+  });
+  if (title === null) return;
   let groups = stripCutsFromGroups(groupsClone(), ids);
-  groups.push({ id: "s" + Date.now(), name: title.trim().slice(0, 40), cut_ids: ids, collapsed: false });
+  groups.push({ id: "s" + Date.now(), name: title, cut_ids: ids, collapsed: false });
   state.cutSel.clear();
   cutSelAnchor = "";
   await persistGroups(groups);
@@ -1815,11 +1922,17 @@ async function ungroupCuts(cutIds) {
 async function renameSceneGroup(groupId) {
   const g = (state.timeline?.groups || []).find((x) => x.id === groupId);
   if (!g) return;
-  const title = prompt("Scene name", g.name || "Scene");
-  if (title === null || !title.trim()) return;
+  const title = await askText({
+    title: "Scene name",
+    label: "Name",
+    value: g.name || "Scene",
+    okLabel: "Rename",
+    maxLength: SCENE_NAME_MAX_LEN,
+  });
+  if (title === null) return;
   const groups = groupsClone();
   const hit = groups.find((x) => x.id === groupId);
-  if (hit) hit.name = title.trim().slice(0, 40);
+  if (hit) hit.name = title;
   await persistGroups(groups);
 }
 
@@ -1854,15 +1967,21 @@ async function splitSceneHere(cutId) {
   const idx = cuts.findIndex((c) => c.id === cutId);
   if (idx < 0) return;
   const gid = cuts[idx].group_id;
-  const title = prompt("Scene name", cuts[idx].group_name || "Scene");
-  if (title === null || !title.trim()) return;
+  const title = await askText({
+    title: "Scene name",
+    label: "Name",
+    value: cuts[idx].group_name || "Scene",
+    okLabel: "Create scene",
+    maxLength: SCENE_NAME_MAX_LEN,
+  });
+  if (title === null) return;
   const moveIds = [];
   for (let i = idx; i < cuts.length; i++) {
     if (!gid || cuts[i].group_id === gid) moveIds.push(cuts[i].id);
     else break;
   }
   let groups = stripCutsFromGroups(groupsClone(), moveIds);
-  groups.push({ id: "s" + Date.now(), name: title.trim().slice(0, 40), cut_ids: moveIds, collapsed: false });
+  groups.push({ id: "s" + Date.now(), name: title, cut_ids: moveIds, collapsed: false });
   await persistGroups(groups);
 }
 

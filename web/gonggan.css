@@ -373,4 +373,5 @@
 .gg-modal-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 11px; color: var(--gg-dim, #9aa0aa); }
 .gg-modal-field input, .gg-modal-field select { font-size: 12px; padding: 4px 6px; border-radius: 4px; border: 1px solid var(--gg-line, #353a44); background: #1b1d22; color: inherit; }
 .gg-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.gg-ask-dialog .gg-ask-ok:disabled { opacity: 0.45; cursor: not-allowed; }
 .gg-root .gg-primary { border-color: var(--gg-acc, #f2b84b); }
