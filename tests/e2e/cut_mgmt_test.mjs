@@ -94,6 +94,33 @@ async function postJson(page, route, body) {
   }, route, body);
 }
 
+async function getJson(page, route) {
+  return page.evaluate(async (r) => {
+    const res = await fetch(r.startsWith("http") ? r : `${location.origin}${r}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return data;
+  }, route);
+}
+
+async function fetchWorkflowPaths(page) {
+  const data = await getJson(page, "/api/userdata?dir=workflows&recurse=true&split=false");
+  const paths = [];
+  if (Array.isArray(data)) {
+    for (const x of data) {
+      const k = typeof x === "string" ? x : x?.path || x?.name || "";
+      if (k) paths.push(String(k).replace(/^workflows\//, "").replace(/^\/+/, ""));
+    }
+  } else if (data && typeof data === "object") {
+    for (const k of Object.keys(data)) {
+      const rel = String(k).replace(/^workflows\//, "");
+      if (rel.toLowerCase().endsWith(".json")) paths.push(rel);
+    }
+  }
+  paths.sort((a, b) => a.localeCompare(b));
+  return paths;
+}
+
 async function launchBrowser() {
   const userDataDir = path.join(os.tmpdir(), `gg-cutmgmt-${runStamp}`);
   fs.mkdirSync(userDataDir, { recursive: true });
@@ -675,6 +702,72 @@ async function main() {
       return !!document.querySelector(`.gg-grp-sec[data-group-id] .gg-cut[data-cut-id="${id}"]`);
     }, firstId);
     if (!inSceneAfterUndo) throw new Error("Undo should restore scene membership");
+  });
+
+  await runScenario("13", "New project remembers last template + filter preselect", async () => {
+    const wfPaths = await fetchWorkflowPaths(page);
+    const jsonPaths = wfPaths.filter((p) => p.toLowerCase().endsWith(".json"));
+    if (!jsonPaths.length) {
+      console.log("NOTE: no userdata workflows — skipping template remember assertions");
+      return;
+    }
+    const templateRef = jsonPaths[0];
+    await page.evaluate((ref) => {
+      localStorage.setItem("gonggan-cut.lastTemplate", ref);
+    }, templateRef);
+
+    await page.evaluate(() => {
+      document.querySelector(".gg-root.gg-shots .gg-head")?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 40 })
+      );
+    });
+    await clickCtxItem(page, "New Project…");
+    await page.waitForSelector(".gg-modal-tpl-filter", { timeout: 10000 });
+    await page.waitForFunction(
+      (ref) => {
+        const sel = document.querySelector(".gg-modal-tpl");
+        return sel && Array.from(sel.options).some((o) => o.value === ref);
+      },
+      { timeout: 20000 },
+      templateRef
+    );
+    const preselected = await page.$eval(".gg-modal-tpl", (sel) => sel.value);
+    if (preselected !== templateRef) {
+      throw new Error(`expected modal preselect ${templateRef}, got ${preselected || "(none)"}`);
+    }
+
+    const needle = templateRef.slice(0, Math.min(8, templateRef.length)).toLowerCase();
+    await page.click(".gg-modal-tpl-filter", { clickCount: 3 });
+    await page.type(".gg-modal-tpl-filter", needle, { delay: 5 });
+    await sleep(200);
+    const optionCount = await page.$$eval(".gg-modal-tpl option", (els) => els.length);
+    const total = jsonPaths.length;
+    if (optionCount >= total + 1) {
+      throw new Error(`filter should narrow options (got ${optionCount}, total workflows ~${total})`);
+    }
+    const stillSelected = await page.$eval(".gg-modal-tpl", (sel) => sel.value);
+    if (stillSelected !== templateRef) throw new Error("filtered list should keep selected template");
+
+    const projName = `${TEST_PREFIX} tpl ${runStamp}`;
+    await page.click(".gg-modal-name", { clickCount: 3 });
+    await page.type(".gg-modal-name", projName, { delay: 8 });
+    await page.click(".gg-modal .gg-primary");
+    await page.waitForFunction(
+      (n) => {
+        const sel = document.querySelector(".gg-root.gg-shots .gg-proj");
+        const opt = sel?.options[sel.selectedIndex];
+        return opt && opt.textContent.includes(n);
+      },
+      { timeout: 30000 },
+      projName
+    );
+    const pid = await page.$eval(".gg-root.gg-shots .gg-proj", (sel) => sel.value);
+    if (pid) createdProjectIds.push(pid);
+
+    const tpl = await getJson(page, `/gonggan/template?pid=${encodeURIComponent(pid)}`);
+    if ((tpl.ref || "") !== templateRef) {
+      throw new Error(`template ref expected ${templateRef}, got ${tpl.ref || "(empty)"}`);
+    }
   });
 
   try {
