@@ -83,6 +83,33 @@ class LocalStoreTests(unittest.TestCase):
         doc = self.store.restore_cuts(pid, [cut_id])
         self.assertIsNone(doc["cuts"][cut_id]["deleted_at"])
 
+    def test_list_deleted_cuts_after_delete_restore(self):
+        doc = self.store.create_project("P")
+        pid = doc["id"]
+        cut_id = self._first_cut(doc)["id"]
+        doc = self.store.add_cut(pid, name="cut2")
+        cut2 = next(cid for cid, c in doc["cuts"].items() if cid != cut_id)
+        pdir = Path(self._tmp.name) / "projects" / pid
+        wf_count_before = len(list((pdir / "workflows").glob("*.json"))) if (pdir / "workflows").is_dir() else 0
+
+        self.assertEqual(self.store.list_deleted_cuts(pid), [])
+        self.store.delete_cuts(pid, [cut_id])
+        deleted = self.store.list_deleted_cuts(pid)
+        self.assertEqual(len(deleted), 1)
+        self.assertEqual(deleted[0]["id"], cut_id)
+        self.assertTrue(deleted[0]["deleted_at"])
+        self.assertEqual(deleted[0]["name"], "cut1")
+
+        self.store.restore_cuts(pid, [cut_id])
+        self.assertEqual(self.store.list_deleted_cuts(pid), [])
+
+        wf_count_after = len(list((pdir / "workflows").glob("*.json"))) if (pdir / "workflows").is_dir() else 0
+        self.assertEqual(wf_count_before, wf_count_after)
+
+        self.store.delete_cuts(pid, [cut2])
+        rows = self.store.list_deleted_cuts(pid)
+        self.assertEqual(rows[0]["id"], cut2)
+
     def test_journal_append_parseable(self):
         doc = self.store.create_project("J")
         pid = doc["id"]

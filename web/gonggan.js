@@ -22,6 +22,7 @@ import {
   plannedLenInputPlaceholder,
   addCutTarget,
 } from "./gg_cuts_core.js";
+import { trashButtonLabel, normalizeTrashItems, formatTrashItem } from "./gg_trash_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import {
   autosaveModifiedTabs,
@@ -186,7 +187,7 @@ function adoptServerTimeline(tl) {
 }
 
 async function loadTimeline() {
-  if (!state.pid) { state.timeline = null; bus.dispatchEvent(new Event("timeline")); return; }
+  if (!state.pid) { state.timeline = null; bus.dispatchEvent(new Event("timeline")); refreshTrashCount(); return; }
   try {
     state.timeline = adoptServerTimeline(await getJson("/gonggan/timeline?pid=" + encodeURIComponent(state.pid)));
     state.error = "";
@@ -195,6 +196,141 @@ async function loadTimeline() {
     state.error = "Could not load timeline: " + e.message;
   }
   bus.dispatchEvent(new Event("timeline"));
+  refreshTrashCount();
+}
+
+function refreshTrashCount() {
+  clearTimeout(trashRefreshTimer);
+  if (!state.pid || !isNativeProject()) {
+    trashCount = 0;
+    bus.dispatchEvent(new Event("trash"));
+    return;
+  }
+  trashRefreshTimer = setTimeout(async () => {
+    try {
+      const d = await getJson(`/gonggan/trash?pid=${encodeURIComponent(state.pid)}`);
+      trashCount = normalizeTrashItems(d).length;
+    } catch (_) {
+      trashCount = 0;
+    }
+    bus.dispatchEvent(new Event("trash"));
+  }, 120);
+}
+
+function syncTrashButton(root) {
+  const btn = root?.querySelector(".gg-trash-btn");
+  if (!btn) return;
+  const show = isNativeProject() && trashCount > 0;
+  btn.hidden = !show;
+  btn.textContent = trashButtonLabel(trashCount) || "Trash";
+}
+
+function trashMenuLabel() {
+  const n = trashCount > 0 ? trashCount : 0;
+  return `Trash (${n})…`;
+}
+
+async function restoreCutsByIds(ids, { selectFirst = false } = {}) {
+  const d = await postJson("/gonggan/cut/restore", { pid: state.pid, cuts: ids });
+  if (d.timeline) {
+    state.timeline = d.timeline;
+    state.error = "";
+    if (selectFirst) {
+      const pick = ids.find((id) => d.timeline.cuts.some((c) => c.id === id)) || d.timeline.cuts?.[0]?.id || "";
+      if (pick) {
+        state.cutId = pick;
+        wfLastLoadedCutId = "";
+        wfLastLoadedProjectId = "";
+      }
+    }
+    bus.dispatchEvent(new Event("timeline"));
+    bus.dispatchEvent(new Event("select"));
+  }
+  refreshTrashCount();
+  return d;
+}
+
+async function openTrashModal() {
+  if (!state.pid || !isNativeProject()) return;
+  let items = [];
+  try {
+    const d = await getJson(`/gonggan/trash?pid=${encodeURIComponent(state.pid)}`);
+    items = normalizeTrashItems(d);
+    trashCount = items.length;
+    bus.dispatchEvent(new Event("trash"));
+  } catch (_) {
+    items = [];
+  }
+  if (!items.length) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "gg-modal-backdrop";
+  wrap.innerHTML = `
+    <div class="gg-modal gg-modal-trash" role="dialog" aria-label="Trash">
+      <h3 class="gg-modal-title">Trash</h3>
+      <div class="gg-modal-trash-list"></div>
+      <div class="gg-modal-actions">
+        <button type="button" class="gg-btn gg-trash-restore-all">Restore all</button>
+        <button type="button" class="gg-btn gg-modal-cancel">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  const listEl = wrap.querySelector(".gg-modal-trash-list");
+  const close = () => wrap.remove();
+
+  const renderList = () => {
+    if (!listEl) return;
+    const now = Date.now();
+    listEl.innerHTML = items
+      .map((item) => {
+        const { title, sub } = formatTrashItem(item, now);
+        return `<div class="gg-trash-row" data-cut-id="${esc(item.id)}">
+          <div class="gg-trash-info">
+            <div class="gg-trash-name">${esc(title)}</div>
+            <div class="gg-trash-sub">${esc(sub)}</div>
+          </div>
+          <button type="button" class="gg-btn gg-trash-restore-one">Restore</button>
+        </div>`;
+      })
+      .join("");
+    listEl.querySelectorAll(".gg-trash-restore-one").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const row = btn.closest(".gg-trash-row");
+        const cutId = row?.dataset?.cutId;
+        if (!cutId) return;
+        try {
+          await restoreCutsByIds([cutId]);
+          const d = await getJson(`/gonggan/trash?pid=${encodeURIComponent(state.pid)}`);
+          items = normalizeTrashItems(d);
+          trashCount = items.length;
+          bus.dispatchEvent(new Event("trash"));
+          if (!items.length) close();
+          else renderList();
+        } catch (e) {
+          ggToast("Restore", e.message, "warn");
+        }
+      });
+    });
+  };
+
+  renderList();
+  wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", close);
+  wrap.addEventListener("click", (e) => {
+    if (e.target === wrap) close();
+  });
+  wrap.querySelector(".gg-trash-restore-all")?.addEventListener("click", async () => {
+    const ids = items.map((it) => it.id);
+    if (!ids.length) return;
+    try {
+      await restoreCutsByIds(ids);
+      items = [];
+      trashCount = 0;
+      bus.dispatchEvent(new Event("trash"));
+      close();
+    } catch (e) {
+      ggToast("Restore", e.message, "warn");
+    }
+  });
 }
 
 function selectProject(pid) {
@@ -343,6 +479,8 @@ let ggOwnedShotWorkflow = null;
 const ggOwnedWorkflowMeta = new Map();
 let ggCutSwitchAutosaveBlocked = false;
 let ggToastTimer = 0;
+let trashCount = 0;
+let trashRefreshTimer = 0;
 
 function ggWorkflowStore() {
   return app.extensionManager?.workflow;
@@ -800,7 +938,7 @@ async function loadShotApiIntoDedicatedTab(apiJson, cut) {
   return loadWorkflowIntoDedicatedTab(apiJson, cut);
 }
 
-function ggToast(summary, detail, kind = "info") {
+function ggToast(summary, detail, kind = "info", opts = null) {
   let host = document.getElementById("gg-toast-host");
   if (!host) {
     host = document.createElement("div");
@@ -809,9 +947,23 @@ function ggToast(summary, detail, kind = "info") {
     document.body.appendChild(host);
   }
   clearTimeout(ggToastTimer);
-  host.innerHTML = `<div class="gg-toast gg-toast-${kind}"><span class="gg-toast-sum">${esc(summary)}</span><span class="gg-toast-detail">${esc(detail)}</span></div>`;
+  const actionLabel = opts && opts.actionLabel;
+  const onAction = opts && opts.onAction;
+  const hasAction = actionLabel && typeof onAction === "function";
+  const ttl = hasAction ? (opts.ttlMs ?? 10000) : (opts?.ttlMs ?? 4500);
+  const actionBtn = hasAction
+    ? `<button type="button" class="gg-toast-action">${esc(actionLabel)}</button>`
+    : "";
+  host.innerHTML = `<div class="gg-toast gg-toast-${kind}"><span class="gg-toast-sum">${esc(summary)}</span><span class="gg-toast-detail">${esc(detail)}</span>${actionBtn}</div>`;
   host.hidden = false;
-  ggToastTimer = setTimeout(() => { host.hidden = true; }, 4500);
+  if (hasAction) {
+    host.querySelector(".gg-toast-action")?.addEventListener("click", () => {
+      clearTimeout(ggToastTimer);
+      host.hidden = true;
+      onAction();
+    });
+  }
+  ggToastTimer = setTimeout(() => { host.hidden = true; }, ttl);
 }
 
 function cutById(cutId) {
@@ -1237,12 +1389,14 @@ async function deleteSelectedCuts() {
   if (!ids.length || !state.pid) return;
   const msg = ids.length === 1 ? "Delete 1 cut?" : `Delete ${ids.length} cuts?`;
   if (!confirm(msg)) return;
+  const deletedIds = [...ids];
+  const n = deletedIds.length;
   try {
-    const d = await postJson("/gonggan/cut/delete", { pid: state.pid, cuts: ids });
+    const d = await postJson("/gonggan/cut/delete", { pid: state.pid, cuts: deletedIds });
     if (d.timeline) state.timeline = d.timeline;
     state.cutSel.clear();
     cutSelAnchor = "";
-    if (ids.includes(state.cutId)) {
+    if (deletedIds.includes(state.cutId)) {
       state.cutId = state.timeline?.cuts?.[0]?.id || "";
       wfLastLoadedCutId = "";
       wfLastLoadedProjectId = "";
@@ -1250,7 +1404,18 @@ async function deleteSelectedCuts() {
     state.error = "";
     bus.dispatchEvent(new Event("timeline"));
     bus.dispatchEvent(new Event("select"));
-    ggToast("Delete", `${ids.length} cut(s) hidden`, "ok");
+    refreshTrashCount();
+    ggToast(`Deleted ${n} cut(s)`, "", "ok", {
+      actionLabel: "Undo",
+      onAction: async () => {
+        try {
+          await restoreCutsByIds(deletedIds, { selectFirst: true });
+          ggToast(`Restored ${n} cut(s)`, "", "ok");
+        } catch (e) {
+          ggToast("Restore", e.message, "warn");
+        }
+      },
+    });
   } catch (e) {
     ggToast("Delete", e.message, "warn");
   }
@@ -1302,6 +1467,12 @@ function openCutContextMenu(e, cutId) {
     { label: redoLabel, disabled: !nat, title: nat ? "" : NATIVE_READONLY_TIP, action: () => toggleNeedsRedo(cutId) },
     { label: "Add Cut", action: () => addCutAfter(cutId) },
     { label: "Delete", danger: true, action: () => deleteSelectedCuts() },
+    {
+      label: trashMenuLabel(),
+      disabled: !nat || trashCount <= 0,
+      title: nat ? "Deleted cuts – click to restore" : NATIVE_READONLY_TIP,
+      action: () => openTrashModal(),
+    },
   ]);
 }
 
@@ -1317,9 +1488,18 @@ function openSceneContextMenu(e, groupId) {
 function openShotsPanelContextMenu(e) {
   e.preventDefault();
   e.stopPropagation();
+  const nat = isNativeProject();
   const items = [{ label: "Add Cut", action: () => addLocalCut() }];
   const ids = cutSelIds();
   if (ids.length) items.push({ label: "New Scene", action: () => createSceneGroup(ids) });
+  if (nat) {
+    items.push({
+      label: trashMenuLabel(),
+      disabled: trashCount <= 0,
+      title: "Deleted cuts – click to restore",
+      action: () => openTrashModal(),
+    });
+  }
   showCtxMenu(e.clientX, e.clientY, items);
 }
 
@@ -3034,7 +3214,10 @@ function mountShots(el) {
         </div>
         <label class="gg-filter-redo" title="Show only cuts flagged needs redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Needs redo only</label>
       </div>
-      <div class="gg-meta">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</div>
+      <div class="gg-meta">
+        <span class="gg-meta-text">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</span>
+        <button type="button" class="gg-btn gg-trash-btn" hidden title="Deleted cuts – click to restore">${esc(trashButtonLabel(trashCount))}</button>
+      </div>
       <div class="gg-selbar" hidden>
         <span class="gg-sel-count">0</span> selected · <button type="button" class="gg-btn gg-sel-group">Group</button> · <button type="button" class="gg-btn gg-sel-ungroup">Ungroup</button> · <button type="button" class="gg-btn gg-sel-x">×</button>
       </div>
@@ -3095,6 +3278,8 @@ function mountShots(el) {
         paintPanel();
       });
     });
+    root.querySelector(".gg-trash-btn")?.addEventListener("click", () => openTrashModal());
+    syncTrashButton(root);
     root.querySelector(".gg-scene-add")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-group")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-ungroup")?.addEventListener("click", () => ungroupCuts(cutSelIds()));
@@ -3162,6 +3347,7 @@ function mountShots(el) {
   const onTemplate = () => paint();
   bus.addEventListener("projects", paint);
   bus.addEventListener("timeline", paint);
+  bus.addEventListener("trash", () => syncTrashButton(root));
   bus.addEventListener("template", onTemplate);
   bus.addEventListener("select", onSel);
   bus.addEventListener("gg-opentab", onOpenTab);
