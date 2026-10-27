@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
+import { submitAskDialog, dismissAskDialog } from "./ask_text_helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -152,7 +153,7 @@ async function closeBrowser(browser) {
 function acceptDialogs(page) {
   page.on("dialog", async (d) => {
     try {
-      if (d.type() === "prompt") await d.accept(`Scene ${runStamp % 100}`);
+      if (d.type() === "prompt") await d.dismiss();
       else await d.accept();
     } catch (_) {
       try {
@@ -451,10 +452,44 @@ async function main() {
       await page.keyboard.up("Control");
     }
     await page.click(".gg-root.gg-shots .gg-sel-group");
+    await submitAskDialog(page);
     await sleep(800);
     const inScene = await page.$$eval(".gg-grp-sec[data-group-id] .gg-cut .gg-num", (els) => els.map((e) => e.textContent));
     if (inScene.length < 2) throw new Error("scene should have 2+ cuts");
     await dragCut(page, 0, 1);
+  });
+
+  await runScenario("03b", "Scene ask dialog Esc cancel and Enter confirm", async () => {
+    const scenesBefore = await page.$$eval(".gg-root.gg-shots .gg-grp-sec[data-group-id]", (els) => els.length);
+    await page.keyboard.press("Escape");
+    const picked = await page.evaluate(() => {
+      const els = [...document.querySelectorAll(".gg-root.gg-shots .gg-cut")].filter((e) => e.offsetParent !== null);
+      const two = els.slice(0, 2);
+      two.forEach((el, i) => {
+        const r = el.getBoundingClientRect();
+        el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: i > 0, clientX: r.x + 12, clientY: r.y + r.height / 2 }));
+      });
+      return two.length;
+    });
+    if (picked < 2) throw new Error("need two visible cuts for scene dialog test");
+    await sleep(300);
+    await page.click(".gg-root.gg-shots .gg-sel-group");
+    await dismissAskDialog(page);
+    await sleep(400);
+    const scenesAfterEsc = await page.$$eval(".gg-root.gg-shots .gg-grp-sec[data-group-id]", (els) => els.length);
+    if (scenesAfterEsc !== scenesBefore) throw new Error("Esc should cancel scene create");
+
+    await page.click(".gg-root.gg-shots .gg-sel-group");
+    const sceneName = `EnterScene ${runStamp}`;
+    await submitAskDialog(page, { text: sceneName, useEnter: true });
+    await sleep(600);
+    const titles = await page.$$eval(
+      ".gg-root.gg-shots .gg-grp-sec[data-group-id] .gg-grp-title",
+      (els) => els.map((e) => e.textContent?.trim() || "")
+    );
+    if (!titles.some((t) => t.includes(sceneName))) {
+      throw new Error(`Enter should create scene; titles=${titles.join("|")}`);
+    }
   });
 
   await runScenario("04", "Length 4s warning badge", async () => {
@@ -693,6 +728,7 @@ async function main() {
     }
 
     await page.click(".gg-root.gg-shots .gg-sel-group");
+    await submitAskDialog(page);
     await sleep(800);
     const orderBeforeScene = await cutIdOrder(page);
     const firstId = orderBeforeScene[0];
