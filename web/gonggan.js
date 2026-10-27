@@ -19,6 +19,7 @@ import {
   formatCutHeaderLengths,
   formatPickedVersionInfo,
   trimSecFromDrag,
+  plannedLenInputPlaceholder,
 } from "./gg_cuts_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import {
@@ -2152,7 +2153,8 @@ function bindCutPanelFields(panel, c) {
   if (lenIn) {
     lenIn.value = planned != null && Number.isFinite(planned) ? String(planned) : "";
     lenIn.disabled = !nat;
-    lenIn.title = nat ? "Planned length (seconds)" : roTip;
+    lenIn.placeholder = plannedLenInputPlaceholder(c);
+    lenIn.title = nat ? "Planned length (seconds). Leave empty to use the default." : roTip;
     const onLen = () => {
       const raw = lenIn.value.trim();
       const val = raw === "" ? null : Number(raw);
@@ -2594,6 +2596,7 @@ function cutPanelHtml(c) {
   }).join("");
   const planned = c.planned_sec;
   const lenVal = planned != null && Number.isFinite(planned) ? String(planned) : "";
+  const lenPh = lenVal ? "" : plannedLenInputPlaceholder(c);
   const vIdx = rep ? versionIndexFromList(c.versions_list, rep) : 1;
   const fname = fileBaseName(c, { scene_index: c.scene_index }, vIdx);
   const metaDisabled = nat ? "" : " disabled";
@@ -2620,7 +2623,7 @@ function cutPanelHtml(c) {
       <div class="gg-cut-fields">
         <div class="gg-cut-meta-row">
           <label class="gg-field-len"${metaTip}>Length (sec)
-            <input type="number" class="gg-len-input" min="0.5" max="600" step="0.1" value="${esc(lenVal)}"${metaDisabled} />
+            <input type="number" class="gg-len-input" min="0.5" max="600" step="0.1" value="${esc(lenVal)}"${lenPh ? ` placeholder="${esc(lenPh)}"` : ""} title="${nat ? "Planned length (seconds). Leave empty to use the default." : esc(NATIVE_READONLY_TIP)}"${metaDisabled} />
           </label>
           <label class="gg-field-end"${metaTip}><input type="checkbox" class="gg-endcard-chk"${c.end_card ? " checked" : ""}${metaDisabled} /> End card</label>
           <label class="gg-field-redo"${metaTip}><input type="checkbox" class="gg-redo-chk"${c.needs_redo ? " checked" : ""}${metaDisabled} /> Needs redo</label>
@@ -3912,6 +3915,7 @@ app.registerExtension({
     globalThis.__gongganCaptionMode = "0.9.3";
     globalThis.__gongganHeaderLine = "0.9.3";
     globalThis.__gongganTrimArrows = "0.9.5";
+    globalThis.__gongganUxTidy = "0.9.6";
     globalThis.__gongganTabLabelRefresh = applyTabLabels;
     globalThis.__gongganReloadShotsData = () => loadProjects();
     setupTabLabels();
