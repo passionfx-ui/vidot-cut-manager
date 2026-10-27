@@ -140,8 +140,18 @@
   border-radius: 4px;
   padding: 2px 4px;
 }
-.gg-shots .gg-info-notes:focus,
-.gg-shots .gg-caption-text:focus { border-color: var(--gg-acc); outline: none; }
+.gg-shots .gg-info-notes.gg-field-editing:focus,
+.gg-shots .gg-caption-text.gg-field-editing:focus { border-color: var(--gg-acc); outline: none; }
+.gg-shots .gg-info-notes:not(.gg-field-editing):not(:disabled),
+.gg-shots .gg-caption-text:not(.gg-field-editing):not(:disabled) {
+  cursor: default;
+}
+.gg-shots .gg-info-notes:not(.gg-field-editing):not(:disabled):hover,
+.gg-shots .gg-caption-text:not(.gg-field-editing):not(:disabled):hover {
+  border-color: #4a5568;
+}
+.gg-shots .gg-info-notes.gg-field-editing,
+.gg-shots .gg-caption-text.gg-field-editing { cursor: text; }
 .gg-shots .gg-field-unsaved { border-style: dashed; }
 .gg-shots .gg-info-notes:disabled,
 .gg-shots .gg-caption-text:disabled { opacity: 0.55; }

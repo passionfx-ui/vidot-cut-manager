@@ -452,6 +452,46 @@ async function main() {
     await page.click(".gg-view-cuts");
   });
 
+  await runScenario("10", "Card notes single-click select, dbl-click edit", async () => {
+    const cuts = await page.$$(".gg-root.gg-shots .gg-cut");
+    if (cuts.length < 2) throw new Error("need 2+ cuts");
+    const secondName = await page.$eval(
+      cuts[1],
+      (li) => li.querySelector(".gg-cut-title")?.textContent?.trim() || ""
+    );
+    const notesBox = await cuts[1].$(".gg-info-notes");
+    if (!notesBox) throw new Error("card notes textarea missing");
+    const nb = await notesBox.boundingBox();
+    if (!nb) throw new Error("notes box missing");
+    await page.mouse.click(nb.x + nb.width / 2, nb.y + nb.height / 2);
+    await sleep(400);
+    const panelName = await page.$eval(".gg-cutpanel .gg-panel-name", (el) => el.textContent?.trim());
+    if (panelName !== secondName) {
+      throw new Error(`single click on notes should select cut: panel=${panelName} expected=${secondName}`);
+    }
+    const focusedAfterClick = await page.evaluate(
+      () => document.activeElement?.classList?.contains("gg-info-notes") ?? false
+    );
+    if (focusedAfterClick) throw new Error("single click should not focus card notes");
+    await notesBox.click({ clickCount: 2 });
+    await sleep(200);
+    const focusedEdit = await page.evaluate(
+      () => document.activeElement?.classList?.contains("gg-info-notes") ?? false
+    );
+    if (!focusedEdit) throw new Error("double-click should enter edit mode");
+    const tag = `abc-${runStamp}`;
+    await page.keyboard.type(tag, { delay: 10 });
+    await page.keyboard.press("Escape");
+    await sleep(700);
+    const cardVal = await page.evaluate((el) => el.value, await cuts[1].$(".gg-info-notes"));
+    if (!cardVal.includes(tag)) throw new Error(`escape should keep text: ${cardVal}`);
+    await page.click(".gg-root.gg-shots .gg-reload");
+    await sleep(1500);
+    const cutsAfter = await page.$$(".gg-root.gg-shots .gg-cut");
+    const reloadedVal = await page.evaluate((el) => el?.value || "", await cutsAfter[1].$(".gg-info-notes"));
+    if (!reloadedVal.includes(tag)) throw new Error(`notes not persisted after reload: ${reloadedVal}`);
+  });
+
   await runScenario("09", "Due date + completion percent", async () => {
     timelineMocks.delete(mainPid);
     await page.click(".gg-root.gg-shots .gg-reload");
