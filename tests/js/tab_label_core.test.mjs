@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   displayWorkflowFilename,
   formatShotTabLabel,
+  formatShotTabTitle,
   normalizeTabDescriptor,
   planTabLabels,
 } from "../../web/gg_tab_label_core.js";
@@ -35,6 +36,35 @@ describe("formatShotTabLabel", () => {
 
   it("unicode names", () => {
     assert.equal(formatShotTabLabel({ projectName: "박", cutName: "제비" }), "박 / 제비");
+  });
+
+  it("truncates long project first", () => {
+    const label = formatShotTabLabel({
+      projectName: "My very long project name",
+      cutName: "cut12",
+    });
+    assert.equal(label, "My very long projec… / cut12");
+    assert.ok(label.length <= 28);
+    assert.ok(label.endsWith(" / cut12"));
+  });
+
+  it("truncates cut when project at minimum", () => {
+    const label = formatShotTabLabel({
+      projectName: "Extremely long project title here",
+      cutName: "abcdefghijklmnopqrs",
+    });
+    assert.ok(label.length <= 28);
+    assert.match(label, /… \/ /);
+    assert.ok(label.endsWith("…") || label.includes("… / "));
+  });
+
+  it("formatShotTabTitle is full string", () => {
+    const long = "My very long project name";
+    assert.equal(
+      formatShotTabTitle({ projectName: long, cutName: "cut12" }),
+      `${long} / cut12`
+    );
+    assert.equal(formatShotTabLabel({ projectName: long, cutName: "cut12" }).length, 28);
   });
 });
 

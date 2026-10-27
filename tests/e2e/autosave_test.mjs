@@ -123,6 +123,28 @@ function pickTemplateRef(paths) {
   );
 }
 
+// The first *.json in userdata is often not a usable UI-graph template (API-format exports,
+// settings files...). Cut load then fails with "workflow must be a UI graph" and every
+// waitForCutLoaded() times out at 90 s. Pick a template that really is a UI graph.
+async function pickUsableTemplateRef(page, paths) {
+  const norm = (p) => String(p).replace(/^\/+/, "");
+  const base = (p) => norm(p).replace(/^.*\//, "").toLowerCase();
+  const cands = paths.filter((p) => base(p).endsWith(".json") && !/^cut\d+\.json$/i.test(base(p)) && !norm(p).startsWith("gonggan/") && !/_api\.json$/i.test(base(p)));
+  cands.sort((a, b) => (base(b).startsWith("zz") ? 1 : 0) - (base(a).startsWith("zz") ? 1 : 0));
+  for (const p of cands.slice(0, 40)) {
+    const ok = await page.evaluate(async (rel) => {
+      try {
+        const r = await fetch(`/api/userdata/${encodeURIComponent("workflows/" + rel)}`);
+        if (!r.ok) return false;
+        const j = await r.json();
+        return Array.isArray(j.nodes) && j.nodes.length > 0 && j.nodes.length < 80;
+      } catch (_) { return false; }
+    }, norm(p));
+    if (ok) return norm(p);
+  }
+  return pickTemplateRef(paths);
+}
+
 function expectedShotWorkflowRel(pid, projectName, cut) {
   const pos = cut?.pos ?? cut?.index;
   return shotWorkflowRelPath({
@@ -462,7 +484,7 @@ async function main() {
   workflowPathsBefore = await fetchWorkflowPaths(page);
 
   const paths = await fetchWorkflowPaths(page);
-  const templateRef = pickTemplateRef(paths);
+  const templateRef = await pickUsableTemplateRef(page, paths);
   const projectName = `${TEST_PREFIX} ${runStamp}`;
   let pid = "";
   let cutA = null;
