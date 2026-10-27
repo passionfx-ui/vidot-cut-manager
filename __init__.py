@@ -1,4 +1,4 @@
-"""comfyui-gonggan-cut - shot list + rough-cut timeline tab for ComfyUI, reading 공간?�어 project data."""
+"""comfyui-gonggan-cut - shot list + rough-cut timeline tab for ComfyUI, reading 공간쉐어 project data."""
 
 __version__ = "0.9.4"
 
