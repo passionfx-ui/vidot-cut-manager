@@ -19,6 +19,7 @@ import {
   cutBaseSec,
   cutTimelineSec,
   formatPickedVersionInfo,
+  plannedLenInputPlaceholder,
 } from "../../web/gg_cuts_core.js";
 
 describe("formatCutNumber", () => {
@@ -51,6 +52,12 @@ describe("cut header lengths", () => {
 describe("computeEffectiveSec + lengthWarning", () => {
   it("uses planned_sec when set", () => {
     assert.equal(computeEffectiveSec({ sec: 3, planned_sec: 2 }), 2);
+  });
+
+  it("plannedLenInputPlaceholder matches effective sec or 3", () => {
+    assert.equal(plannedLenInputPlaceholder({ sec: 3 }), "3");
+    assert.equal(plannedLenInputPlaceholder({ sec: 2.5 }), "2.5");
+    assert.equal(plannedLenInputPlaceholder({}), "3");
   });
 
   it("end_card exempt from warning", () => {
