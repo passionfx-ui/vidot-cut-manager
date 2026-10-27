@@ -584,15 +584,28 @@ async function main() {
     const last = cuts[cuts.length - 1];
     const box = await last.boundingBox();
     if (!box) throw new Error("cut box missing");
+    let cutDeleteDialogCount = 0;
+    const countCutDeleteDialog = () => {
+      cutDeleteDialogCount += 1;
+    };
+    page.on("dialog", countCutDeleteDialog);
     await page.mouse.click(box.x + 12, box.y + 12, { button: "right" });
     await clickCtxItem(page, "Delete");
     await sleep(700);
+    page.off("dialog", countCutDeleteDialog);
+    if (cutDeleteDialogCount !== 0) {
+      throw new Error(`expected no confirm dialog on cut delete, got ${cutDeleteDialogCount}`);
+    }
     const afterDel = await countCuts(page);
     if (afterDel !== before - 1) throw new Error(`delete count: ${before} -> ${afterDel}`);
 
     await page.waitForSelector(".gg-toast-action", { timeout: 10000 });
     const toastSum = await page.$eval(".gg-toast-sum", (el) => el.textContent?.trim() || "");
-    if (!/Deleted/i.test(toastSum)) throw new Error(`expected delete toast, got: ${toastSum}`);
+    if (toastSum !== "Moved 1 cut to Trash") {
+      throw new Error(`expected delete toast, got: ${toastSum}`);
+    }
+    const undoLabel = await page.$eval(".gg-toast-action", (el) => el.textContent?.trim() || "");
+    if (undoLabel !== "Undo") throw new Error(`expected Undo action, got: ${undoLabel}`);
     await page.click(".gg-toast-action");
     await sleep(1200);
     const afterUndo = await countCuts(page);
