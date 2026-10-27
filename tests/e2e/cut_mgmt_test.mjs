@@ -369,6 +369,11 @@ async function main() {
 
   await runScenario("02", "Four cuts + drag reorder updates numbers", async () => {
     await ensureFourCuts(page);
+    const grouped = await page.$$eval(".gg-grp-sec[data-group-id] .gg-cut", (els) => els.length);
+    const total = await countCuts(page);
+    if (grouped !== total) {
+      throw new Error(`expected all ${total} cuts in a scene, found ${grouped} in grouped sections`);
+    }
     // Numbers (001..) are positional and never change on reorder; compare the cut ids/order instead.
     const ids = () => page.$$eval(".gg-root.gg-shots .gg-cut", (els) => els.map((e) => e.dataset.cutId));
     const before = await ids();

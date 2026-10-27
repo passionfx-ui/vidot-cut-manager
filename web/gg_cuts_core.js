@@ -306,6 +306,27 @@ export function finalCutList(timeline) {
 }
 
 /**
+ * Where to insert a new cut: after the reference cut, in the same scene (or ungrouped).
+ * @param {{ timelineCuts: object[], activeCutId?: string|null }} args
+ * @returns {{ after: string|null, group: string|null }}
+ */
+export function addCutTarget({ timelineCuts, activeCutId }) {
+  const cuts = Array.isArray(timelineCuts) ? timelineCuts : [];
+  let refId =
+    activeCutId && cuts.some((c) => c && c.id === activeCutId) ? String(activeCutId) : null;
+  if (!refId && cuts.length) {
+    const last = cuts[cuts.length - 1];
+    if (last?.id) refId = String(last.id);
+  }
+  if (!refId) return { after: null, group: null };
+  const ref = cuts.find((c) => c && c.id === refId);
+  const rawGroup = ref?.group_id;
+  const group =
+    rawGroup != null && String(rawGroup).trim() !== "" ? String(rawGroup).trim() : null;
+  return { after: refId, group };
+}
+
+/**
  * @param {object[]} cuts
  * @param {{ needsRedoOnly?: boolean }} [opts]
  */
