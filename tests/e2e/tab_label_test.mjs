@@ -2,6 +2,12 @@
  * Headless Chrome: single Gonggan shot tab + display-only Project / Cut labels (0.8.4).
  */
 import { shotWorkflowRelPath } from "../../web/gg_shot_names.js";
+import { formatShotTabLabel } from "../../web/gg_tab_label_core.js";
+
+// Expected tab text goes through the same length budget as the plugin (long project names are shortened).
+function expLabel(projectName, c) {
+  return formatShotTabLabel({ projectName, cutName: c.name, cutNumber: (c.pos ?? c.index ?? 0) + 1 });
+}
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -121,6 +127,28 @@ function pickTemplateRef(paths) {
     paths.find((p) => base(p).endsWith(".json")) ||
     ""
   );
+}
+
+// The first *.json in userdata is often not a usable UI-graph template (API-format exports,
+// settings files...). Cut load then fails with "workflow must be a UI graph" and every
+// waitForCutLoaded() times out at 90 s. Pick a template that really is a UI graph.
+async function pickUsableTemplateRef(page, paths) {
+  const norm = (p) => String(p).replace(/^\/+/, "");
+  const base = (p) => norm(p).replace(/^.*\//, "").toLowerCase();
+  const cands = paths.filter((p) => base(p).endsWith(".json") && !/^cut\d+\.json$/i.test(base(p)) && !norm(p).startsWith("gonggan/") && !/_api\.json$/i.test(base(p)));
+  cands.sort((a, b) => (base(b).startsWith("zz") ? 1 : 0) - (base(a).startsWith("zz") ? 1 : 0));
+  for (const p of cands.slice(0, 40)) {
+    const ok = await page.evaluate(async (rel) => {
+      try {
+        const r = await fetch(`/api/userdata/${encodeURIComponent("workflows/" + rel)}`);
+        if (!r.ok) return false;
+        const j = await r.json();
+        return Array.isArray(j.nodes) && j.nodes.length > 0 && j.nodes.length < 80;
+      } catch (_) { return false; }
+    }, norm(p));
+    if (ok) return norm(p);
+  }
+  return pickTemplateRef(paths);
 }
 
 async function deleteWorkflowFile(page, relPath) {
@@ -504,7 +532,7 @@ async function main() {
   workflowPathsBefore = await fetchWorkflowPaths(page);
 
   const paths = await fetchWorkflowPaths(page);
-  const templateRef = pickTemplateRef(paths);
+  const templateRef = await pickUsableTemplateRef(page, paths);
   const projectName = `${TEST_PREFIX} ${runStamp}`;
   let pid = "";
   let cuts = [];
@@ -540,7 +568,7 @@ async function main() {
     await clickCutById(page, c.id);
     await waitForCutLoaded(page, c.id);
     await refreshTabLabels(page);
-    const expected = `${projectName} / ${c.name || `Cut ${(c.pos ?? c.index ?? 0) + 1}`}`;
+    const expected = expLabel(projectName, c);
     const st = await getWorkflowTabState(page);
     const hasLabel = st.labels.some((l) => l === expected);
     if (!hasLabel) throw new Error(`label "${expected}" not in [${st.labels.join(", ")}]`);
@@ -565,7 +593,7 @@ async function main() {
     await clickCutById(page, c2.id);
     await waitForCutLoaded(page, c2.id);
     await refreshTabLabels(page);
-    const expectedC2 = `${projectName} / ${c2.name || `Cut ${(c2.pos ?? c2.index ?? 0) + 1}`}`;
+    const expectedC2 = expLabel(projectName, c2);
     await page.waitForFunction(
       (exp) => [...document.querySelectorAll(".workflow-label")].some((s) => s.textContent?.trim() === exp),
       { timeout: 3000 },
@@ -576,7 +604,7 @@ async function main() {
     await postJson(page, "/gonggan/project/rename", { pid, name: newProj });
     await reloadShotsData(page);
     await refreshTabLabels(page);
-    const expectedProj = `${newProj} / ${c2.name || `Cut ${(c2.pos ?? c2.index ?? 0) + 1}`}`;
+    const expectedProj = expLabel(newProj, c2);
     await page.waitForFunction(
       (exp) => [...document.querySelectorAll(".workflow-label")].some((s) => s.textContent?.trim() === exp),
       { timeout: 3000 },
@@ -587,7 +615,7 @@ async function main() {
     await clickCutById(page, c0.id);
     await waitForCutLoaded(page, c0.id);
     await refreshTabLabels(page);
-    const expectedC0 = `${newProj} / ${c0.name || `Cut ${(c0.pos ?? c0.index ?? 0) + 1}`}`;
+    const expectedC0 = expLabel(newProj, c0);
     await page.waitForFunction(
       (exp) => [...document.querySelectorAll(".workflow-label")].some((s) => s.textContent?.trim() === exp),
       { timeout: 3000 },
