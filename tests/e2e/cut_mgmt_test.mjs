@@ -215,6 +215,33 @@ async function clickCtxItem(page, label) {
   throw new Error(`Context menu item not found: ${label}`);
 }
 
+async function clickCtxSubItem(page, parentLabel, childLabel) {
+  await clickCtxItem(page, parentLabel);
+  await page.waitForSelector(".gg-ctx-sub", { timeout: 5000 });
+  const items = await page.$$(".gg-ctx-sub .gg-ctx-item");
+  for (const it of items) {
+    const t = await page.evaluate((n) => n.textContent?.trim(), it);
+    if (t === childLabel) {
+      await it.click();
+      return;
+    }
+  }
+  throw new Error(`Submenu item not found: ${childLabel}`);
+}
+
+async function rightClickCut(page, index = 0) {
+  const cuts = await page.$$(".gg-root.gg-shots .gg-cut");
+  const cut = cuts[index];
+  if (!cut) throw new Error(`cut index ${index} missing`);
+  const box = await cut.boundingBox();
+  if (!box) throw new Error("cut box missing");
+  await page.mouse.click(box.x + 12, box.y + 12, { button: "right" });
+}
+
+async function cutIdOrder(page) {
+  return page.$$eval(".gg-root.gg-shots .gg-cut", (els) => els.map((e) => e.dataset.cutId));
+}
+
 async function countCuts(page) {
   return page.$$eval(".gg-root.gg-shots .gg-cut", (els) => els.length);
 }
@@ -566,6 +593,88 @@ async function main() {
     if (final !== before) throw new Error(`modal restore: expected ${before}, got ${final}`);
     const trashHidden = await page.$eval(".gg-root.gg-shots .gg-trash-btn", (el) => el.hidden);
     if (!trashHidden) throw new Error("Trash button should hide when empty");
+  });
+
+  await runScenario("12", "Reorder menu, keyboard, scene move, undo, drag handle", async () => {
+    timelineMocks.delete(mainPid);
+    await page.click(".gg-root.gg-shots .gg-reload");
+    await sleep(1200);
+    await ensureFourCuts(page);
+
+    const handles = await page.$$eval(".gg-root.gg-shots .gg-drag-handle", (els) => els.length);
+    const total = await countCuts(page);
+    if (handles !== total) throw new Error(`drag handles ${handles} != cuts ${total}`);
+
+    const before = await cutIdOrder(page);
+    if (before.length < 4) throw new Error("need 4 cuts");
+
+    await rightClickCut(page, 0);
+    await clickCtxItem(page, "Move down");
+    await sleep(900);
+    const afterDown = await cutIdOrder(page);
+    if (afterDown.join() === before.join()) throw new Error("Move down should change order");
+
+    await page.keyboard.down("Alt");
+    try {
+      await page.keyboard.press("ArrowUp");
+    } finally {
+      await page.keyboard.up("Alt");
+    }
+    await sleep(900);
+    const afterUp = await cutIdOrder(page);
+    if (afterUp.join() !== before.join()) throw new Error("Alt+ArrowUp should restore prior order");
+
+    // Re-query after every click: selecting re-renders the list and old handles go stale.
+    const clickIdx = async (idx) => {
+      const els = await page.$$(".gg-root.gg-shots .gg-cut");
+      const bb = await els[idx].boundingBox();
+      await page.mouse.click(bb.x + bb.width / 2, bb.y + bb.height / 2);
+      await sleep(250);
+    };
+    await clickIdx(0); // plain click: selection = cut 0 only (Ctrl-click would toggle it off)
+    await page.keyboard.down("Control");
+    try {
+      await clickIdx(1);
+    } finally {
+      await page.keyboard.up("Control");
+    }
+    const beforePair = await cutIdOrder(page);
+    await rightClickCut(page, 0);
+    await clickCtxItem(page, "Move down");
+    await sleep(900);
+    const afterPair = await cutIdOrder(page);
+    const pairIds = [beforePair[0], beforePair[1]];
+    const idx0 = afterPair.indexOf(pairIds[0]);
+    const idx1 = afterPair.indexOf(pairIds[1]);
+    if (idx0 < 0 || idx1 < 0 || idx1 !== idx0 + 1) {
+      const sel = await page.$$eval(".gg-root.gg-shots .gg-cut.gg-sel", (els) => els.length);
+      const tags = (arr) => arr.map((x) => x.slice(-4)).join();
+      throw new Error(`pair should stay adjacent after move (selected=${sel}): before ${tags(beforePair)} after ${tags(afterPair)}`);
+    }
+
+    await page.click(".gg-root.gg-shots .gg-sel-group");
+    await sleep(800);
+    const orderBeforeScene = await cutIdOrder(page);
+    const firstId = orderBeforeScene[0];
+    await rightClickCut(page, 0);
+    await clickCtxSubItem(page, "Move to scene \u25B8", "No scene");
+    await sleep(900);
+    const orderUngrouped = await cutIdOrder(page);
+    if (orderUngrouped.join() === orderBeforeScene.join()) {
+      throw new Error("Move to No scene should change order/group");
+    }
+
+    await page.waitForSelector(".gg-toast-action", { timeout: 10000 });
+    await page.click(".gg-toast-action");
+    await sleep(1200);
+    const afterUndo = await cutIdOrder(page);
+    if (afterUndo.join() !== orderBeforeScene.join()) {
+      throw new Error("Undo should restore order before scene move");
+    }
+    const inSceneAfterUndo = await page.evaluate((id) => {
+      return !!document.querySelector(`.gg-grp-sec[data-group-id] .gg-cut[data-cut-id="${id}"]`);
+    }, firstId);
+    if (!inSceneAfterUndo) throw new Error("Undo should restore scene membership");
   });
 
   try {

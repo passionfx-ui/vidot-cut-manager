@@ -67,6 +67,14 @@ import { buildSrt, srtFileName } from "./gg_caption_core.js";
 import { decideVideoSync } from "./gg_playback_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
+import {
+  stepMove,
+  moveToScene,
+  canMoveUp,
+  canMoveDown,
+  createUndoBurst,
+  snapshotOrderGroups,
+} from "./gg_reorder_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -98,7 +106,9 @@ const PROGRESS_API_EVENTS = [
   "executed", "execution_success", "execution_error", "execution_interrupted",
 ];
 let cutSelAnchor = "";
-const ctxUi = { el: null, onDoc: null, onKey: null };
+const ctxUi = { el: null, sub: null, onDoc: null, onKey: null };
+const reorderUndoBurst = createUndoBurst({ windowMs: 1500 });
+let reorderPersistChain = Promise.resolve();
 
 (function loadCss() {
   if (document.getElementById("gg-css")) return;
@@ -1281,6 +1291,8 @@ function selectCut(cutId, opts) {
   }
   const cut = cutById(cutId);
   if (multi) {
+    // The plainly-selected ("current") cut counts as selected: Ctrl-click on a 2nd card makes a pair.
+    if (!state.cutSel.size && state.cutId && state.cutId !== cutId && cutById(state.cutId)) state.cutSel.add(state.cutId);
     if (state.cutSel.has(cutId)) state.cutSel.delete(cutId);
     else state.cutSel.add(cutId);
     cutSelAnchor = cutId;
@@ -1326,6 +1338,10 @@ function selectCut(cutId, opts) {
 }
 
 function closeCtxMenu() {
+  if (ctxUi.sub) {
+    ctxUi.sub.remove();
+    ctxUi.sub = null;
+  }
   if (ctxUi.el) {
     ctxUi.el.remove();
     ctxUi.el = null;
@@ -1340,12 +1356,15 @@ function closeCtxMenu() {
   }
 }
 
-function showCtxMenu(x, y, items) {
-  closeCtxMenu();
-  const menu = document.createElement("div");
-  menu.className = "gg-ctx";
-  menu.setAttribute("role", "menu");
-  items.forEach((it) => {
+function openCtxSubmenu(anchorBtn, subItems) {
+  if (ctxUi.sub) {
+    ctxUi.sub.remove();
+    ctxUi.sub = null;
+  }
+  const sub = document.createElement("div");
+  sub.className = "gg-ctx gg-ctx-sub";
+  sub.setAttribute("role", "menu");
+  subItems.forEach((it) => {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "gg-ctx-item" + (it.danger ? " gg-ctx-danger" : "");
@@ -1357,6 +1376,49 @@ function showCtxMenu(x, y, items) {
       closeCtxMenu();
       if (!it.disabled && it.action) it.action();
     });
+    sub.appendChild(btn);
+  });
+  document.body.appendChild(sub);
+  ctxUi.sub = sub;
+  const pad = 6;
+  const a = anchorBtn.getBoundingClientRect();
+  const sr = sub.getBoundingClientRect();
+  let left = a.right + 2;
+  let top = a.top;
+  if (left + sr.width > window.innerWidth - pad) left = a.left - sr.width - 2;
+  if (top + sr.height > window.innerHeight - pad) top = window.innerHeight - sr.height - pad;
+  sub.style.left = `${Math.max(pad, left)}px`;
+  sub.style.top = `${Math.max(pad, top)}px`;
+}
+
+function showCtxMenu(x, y, items) {
+  closeCtxMenu();
+  const menu = document.createElement("div");
+  menu.className = "gg-ctx";
+  menu.setAttribute("role", "menu");
+  items.forEach((it) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "gg-ctx-item" + (it.danger ? " gg-ctx-danger" : "") + (it.submenu ? " gg-ctx-parent" : "");
+    btn.textContent = it.label;
+    btn.disabled = !!it.disabled;
+    if (it.title) btn.title = it.title;
+    if (it.submenu) {
+      const openSub = () => {
+        if (!it.disabled) openCtxSubmenu(btn, it.submenu);
+      };
+      btn.addEventListener("mouseenter", openSub);
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openSub();
+      });
+    } else {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeCtxMenu();
+        if (!it.disabled && it.action) it.action();
+      });
+    }
     menu.appendChild(btn);
   });
   document.body.appendChild(menu);
@@ -1370,7 +1432,9 @@ function showCtxMenu(x, y, items) {
   menu.style.left = `${Math.max(pad, left)}px`;
   menu.style.top = `${Math.max(pad, top)}px`;
   ctxUi.onDoc = (e) => {
-    if (!menu.contains(e.target)) closeCtxMenu();
+    const t = e.target;
+    if (menu.contains(t) || ctxUi.sub?.contains(t)) return;
+    closeCtxMenu();
   };
   ctxUi.onKey = (e) => {
     if (e.key === "Escape") closeCtxMenu();
@@ -1445,6 +1509,91 @@ async function addCutAfter(cutId) {
   }
 }
 
+function cutGroupMembership(ids) {
+  const grps = state.timeline?.groups || [];
+  const mem = new Map();
+  for (const g of grps) {
+    for (const id of g.cut_ids || []) mem.set(id, g.id);
+  }
+  const allIn = (gid) => ids.every((id) => (mem.get(id) || null) === gid);
+  return { allIn };
+}
+
+function buildMoveToSceneSubmenu(ids) {
+  const tl = state.timeline;
+  if (!tl) return [];
+  const { allIn } = cutGroupMembership(ids);
+  const items = [
+    { label: "No scene", disabled: allIn(null), action: () => applyMoveToScene(ids, null) },
+  ];
+  for (const g of tl.groups || []) {
+    items.push({
+      label: g.name,
+      disabled: allIn(g.id),
+      action: () => applyMoveToScene(ids, g.id),
+    });
+  }
+  return items;
+}
+
+async function applyMoveToScene(ids, sceneIdOrNull) {
+  const tl = state.timeline;
+  if (!tl || !isNativeProject()) return;
+  const r = moveToScene(tl.cuts.map((c) => c.id), groupsClone(), ids, sceneIdOrNull);
+  if (!r.changed) return;
+  await commitShotsReorder(r.order, r.groups);
+}
+
+async function applyStepMove(dir) {
+  const tl = state.timeline;
+  if (!tl || !isNativeProject()) return;
+  const ids = cutSelIds();
+  if (!ids.length) return;
+  const r = stepMove(tl.cuts.map((c) => c.id), groupsClone(), ids, dir);
+  if (!r.changed) return;
+  await commitShotsReorder(r.order, r.groups);
+}
+
+function scrollMovedCutsIntoView() {
+  const ids = cutSelIds();
+  const wrap = document.querySelector(".gg-shots .gg-grp-wrap");
+  if (!wrap || !ids.length) return;
+  const row = wrap.querySelector(`.gg-cut[data-cut-id="${CSS.escape(ids[0])}"]`);
+  row?.scrollIntoView({ block: "nearest" });
+}
+
+function enqueueReorderPersist(fn) {
+  const run = async () => fn();
+  reorderPersistChain = reorderPersistChain.then(run, run);
+  return reorderPersistChain;
+}
+
+async function commitShotsReorder(order, groups, opts = {}) {
+  const { recordUndo = true, moveCount } = opts;
+  if (!state.timeline || !isNativeProject()) return false;
+  let undoTarget = null;
+  if (recordUndo) {
+    const snap = snapshotOrderGroups(state.timeline);
+    if (snap) undoTarget = reorderUndoBurst.push(snap, Date.now());
+  }
+  const ok = await enqueueReorderPersist(() => persistShotsReorder(order, groups));
+  if (!ok) return false;
+  scrollMovedCutsIntoView();
+  if (recordUndo && undoTarget) {
+    const n = moveCount ?? Math.max(1, cutSelIds().length);
+    ggToast(`Moved ${n} cut(s)`, "", "ok", {
+      ttlMs: 8000,
+      actionLabel: "Undo",
+      onAction: async () => {
+        reorderUndoBurst.reset();
+        const restored = await enqueueReorderPersist(() => persistShotsReorder(undoTarget.order, undoTarget.groups));
+        if (restored) ggToast("Undone", "", "ok");
+      },
+    });
+  }
+  return true;
+}
+
 function openCutContextMenu(e, cutId) {
   e.preventDefault();
   e.stopPropagation();
@@ -1460,7 +1609,28 @@ function openCutContextMenu(e, cutId) {
   const inScene = !!(c && c.group_id);
   const nat = isNativeProject();
   const redoLabel = c?.needs_redo ? "Clear needs redo" : "Mark needs redo";
+  const order = state.timeline ? state.timeline.cuts.map((x) => x.id) : [];
+  const moveItems = nat
+    ? [
+        {
+          label: "Move up",
+          disabled: !canMoveUp(order, ids),
+          action: () => applyStepMove(-1),
+        },
+        {
+          label: "Move down",
+          disabled: !canMoveDown(order, ids),
+          action: () => applyStepMove(1),
+        },
+        {
+          label: "Move to scene \u25B8",
+          disabled: false,
+          submenu: buildMoveToSceneSubmenu(ids),
+        },
+      ]
+    : [];
   showCtxMenu(e.clientX, e.clientY, [
+    ...moveItems,
     { label: "Group into Scene", action: () => createSceneGroup(ids) },
     { label: "Split scene", disabled: !inScene, action: () => splitSceneHere(cutId) },
     { label: "Remove from Scene", disabled: !inScene && !ids.some((id) => cutById(id)?.group_id), action: () => ungroupCuts(ids) },
@@ -2015,10 +2185,20 @@ function applyOrderGroupsLocally(order, groups) {
 
 async function persistShotsReorder(order, groups) {
   const tl = state.timeline;
-  if (!tl || !isNativeProject()) return;
+  if (!tl || !isNativeProject()) return true;
   applyOrderGroupsLocally(order, groups);
   bus.dispatchEvent(new Event("timeline"));
   try {
+    // Order matters: scene membership (/groups) first, then the flat order (/edit). The server
+    // lays cuts out as "scenes in list order, then ungrouped"; applying /edit first would use the
+    // OLD membership and a cut that leaves/enters a scene would snap back to its old position.
+    const gRes = await api.fetchApi("/gonggan/groups", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pid: tl.project.id, groups }),
+    });
+    const gData = await gRes.json();
+    if (!gRes.ok || gData.ok === false) throw new Error(gData.message || `HTTP ${gRes.status}`);
     const body = {
       pid: tl.project.id,
       order,
@@ -2027,22 +2207,16 @@ async function persistShotsReorder(order, groups) {
     const res = await api.fetchApi("/gonggan/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const data = await res.json();
     if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
-    const gRes = await api.fetchApi("/gonggan/groups", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pid: tl.project.id, groups }),
-    });
-    const gData = await gRes.json();
-    if (!gRes.ok || gData.ok === false) throw new Error(gData.message || `HTTP ${gRes.status}`);
-    state.timeline = gData;
+    state.timeline = data;
     state.error = "";
   } catch (e) {
     state.error = "Reorder failed: " + e.message;
-    ggToast("Reorder failed", e.message, "warn");
+    ggToast("Reorder failed – restored previous order", e.message, "warn");
     await loadTimeline();
-    return;
+    return false;
   }
   bus.dispatchEvent(new Event("timeline"));
+  return true;
 }
 
 function collectShotRowRects(wrap) {
@@ -2088,11 +2262,21 @@ function bindShotsReorder(root) {
         if (state.cutSel.size >= 2 && state.cutSel.has(cutId)) return cutSelIds();
         return [cutId];
       };
+      let scrollRaf = 0;
+      const autoScroll = (clientY) => {
+        const wr = wrap.getBoundingClientRect();
+        const edge = 40;
+        if (clientY < wr.top + edge) wrap.scrollTop = Math.max(0, wrap.scrollTop - 14);
+        else if (clientY > wr.bottom - edge) wrap.scrollTop = wrap.scrollTop + 14;
+      };
       const cancel = () => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
         window.removeEventListener("pointercancel", up);
+        if (scrollRaf) cancelAnimationFrame(scrollRaf);
+        scrollRaf = 0;
         indicator.hidden = true;
+        wrap.classList.remove("gg-reorder-dragging");
         el.classList.remove("gg-moving");
         root.querySelectorAll(".gg-cut.gg-moving").forEach((n) => n.classList.remove("gg-moving"));
         shotsUi.dragSession = null;
@@ -2103,6 +2287,7 @@ function bindShotsReorder(root) {
         if (!active) {
           active = true;
           ed.dragging = true;
+          wrap.classList.add("gg-reorder-dragging");
           el.classList.add("gg-moving");
           movingIds().forEach((id) => {
             root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(id)}"]`)?.classList.add("gg-moving");
@@ -2116,6 +2301,8 @@ function bindShotsReorder(root) {
         drop = shotsDropTarget(order, rows, ev.clientY);
         indicator.hidden = false;
         indicator.style.top = `${drop.lineY}px`;
+        if (scrollRaf) cancelAnimationFrame(scrollRaf);
+        scrollRaf = requestAnimationFrame(() => autoScroll(ev.clientY));
       };
       const up = async () => {
         const wasActive = active;
@@ -2131,7 +2318,7 @@ function bindShotsReorder(root) {
           r.order.every((id, i) => id === order0[i]) &&
           JSON.stringify(r.groups) === JSON.stringify(tl.groups || []);
         if (same) return;
-        await persistShotsReorder(r.order, r.groups);
+        await commitShotsReorder(r.order, r.groups);
       };
       shotsUi.dragSession = { cancel };
       window.addEventListener("pointermove", move);
@@ -2474,6 +2661,7 @@ function cutRowHtml(c) {
       </div>
       <div class="gg-cut-text">
         <div class="gg-cut-header" title="${esc(nameTitle)}">
+          ${isNativeProject() ? '<span class="gg-drag-handle" title="Drag to reorder (or Alt+Up/Down)" aria-hidden="true">\u22EE\u22EE</span>' : ""}
           <span class="gg-num">${formatCutNumber(c.number ?? (c.pos ?? c.index ?? 0) + 1)}</span>
           <span class="gg-cut-title">${esc(c.name || "(untitled)")}</span>
           ${verInfo.text ? `<span class="gg-cut-ver" title="${esc(verInfo.title)}">${esc(verInfo.text)}</span>` : ""}
@@ -3380,6 +3568,17 @@ function mountShots(el) {
     if (e.key === "Delete" && cutsForDelete().length) {
       e.preventDefault();
       deleteSelectedCuts();
+      return;
+    }
+    const ae = document.activeElement;
+    if (ae && isCardFieldEditing(ae)) return;
+    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      if (!shotsSidebarActive() || !isNativeProject()) return;
+      const ids = cutSelIds();
+      if (!ids.length) return;
+      e.preventDefault();
+      const dir = e.key === "ArrowUp" ? -1 : 1;
+      void applyStepMove(dir);
     }
   };
   const onShotsEmptyClick = (e) => {
