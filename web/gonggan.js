@@ -9,6 +9,7 @@ import {
   lengthWarning,
   moveCuts,
   shotsDropTarget,
+  clientYToWrapY,
   finalCutList,
   filterCuts,
   fileBaseName,
@@ -2374,7 +2375,9 @@ function bindShotsReorder(root) {
         if (!tl) return;
         const order = tl.cuts.map((c) => c.id);
         const rows = collectShotRowRects(wrap);
-        drop = shotsDropTarget(order, rows, ev.clientY);
+        const wr = wrap.getBoundingClientRect();
+        const wrapY = clientYToWrapY(ev.clientY, wr.top, wrap.scrollTop);
+        drop = shotsDropTarget(order, rows, wrapY);
         indicator.hidden = false;
         indicator.style.top = `${drop.lineY}px`;
         if (scrollRaf) cancelAnimationFrame(scrollRaf);

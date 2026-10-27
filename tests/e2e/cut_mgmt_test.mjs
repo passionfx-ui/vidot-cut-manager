@@ -702,6 +702,64 @@ async function main() {
       return !!document.querySelector(`.gg-grp-sec[data-group-id] .gg-cut[data-cut-id="${id}"]`);
     }, firstId);
     if (!inSceneAfterUndo) throw new Error("Undo should restore scene membership");
+
+    const nCuts = await countCuts(page);
+    const orderBeforeHandleDrag = await cutIdOrder(page);
+    const lastCutId = orderBeforeHandleDrag[orderBeforeHandleDrag.length - 1];
+    const handlePt = await page.evaluate(() => {
+      const cuts = document.querySelectorAll(".gg-root.gg-shots .gg-cut");
+      const last = cuts[cuts.length - 1];
+      const handle = last?.querySelector(".gg-drag-handle");
+      if (!handle) return null;
+      const r = handle.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    if (!handlePt) throw new Error("last cut drag handle missing");
+    const targetPt = await page.evaluate(() => {
+      const first = document.querySelector(".gg-root.gg-shots .gg-cut");
+      if (!first) return null;
+      const r = first.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + 6 };
+    });
+    if (!targetPt) throw new Error("first cut missing for drag target");
+
+    await page.mouse.move(handlePt.x, handlePt.y);
+    await page.mouse.down();
+    await sleep(60);
+    let indSeen = false;
+    const steps = 14;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const x = handlePt.x + (targetPt.x - handlePt.x) * t;
+      const y = handlePt.y + (targetPt.y - handlePt.y) * t;
+      await page.mouse.move(x, y);
+      await sleep(35);
+      const seen = await page.evaluate(() => {
+        const ind = document.querySelector(".gg-root.gg-shots .gg-drag-ind");
+        return !!(ind && !ind.hidden);
+      });
+      if (seen) indSeen = true;
+    }
+    if (!indSeen) throw new Error(".gg-drag-ind should be visible while dragging by handle");
+    await page.mouse.up();
+    await sleep(1200);
+
+    const orderAfterHandle = await cutIdOrder(page);
+    if (orderAfterHandle[0] !== lastCutId) {
+      throw new Error(`handle drag: last cut should be first, got ${orderAfterHandle.join()}`);
+    }
+    const nums = await getCutNumbers(page);
+    const expectedNums = Array.from({ length: nCuts }, (_, i) => String(i + 1).padStart(3, "0"));
+    if (nums.join(",") !== expectedNums.join(",")) {
+      throw new Error(`cut numbers should be 001..${nCuts}, got ${nums.join(",")}`);
+    }
+
+    await page.click(".gg-root.gg-shots .gg-reload");
+    await sleep(1200);
+    const orderReload = await cutIdOrder(page);
+    if (orderReload[0] !== lastCutId) {
+      throw new Error("handle drag order should persist after reload");
+    }
   });
 
   await runScenario("13", "New project remembers last template + filter preselect", async () => {
