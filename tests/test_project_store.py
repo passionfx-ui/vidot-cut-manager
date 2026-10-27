@@ -12,7 +12,9 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from gg_native_api import native_add_cut, set_native_store
 from gg_project import ConflictError, LocalStore, uuid7
+from gg_project.timeline import timeline_order
 from gg_project.workflow_hash import workflow_sha256
 
 UUID7_RE = re.compile(
@@ -38,6 +40,7 @@ class LocalStoreTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.store = LocalStore(Path(self._tmp.name))
+        set_native_store(self.store)
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -174,6 +177,44 @@ class LocalStoreTests(unittest.TestCase):
         ):
             self.assertIn(key, c0)
         self.assertIn("-", pid)
+
+    def test_add_cut_infers_scene_from_after(self):
+        doc = self.store.create_project("Infer")
+        pid = doc["id"]
+        s1 = doc["scenes"][0]["id"]
+        c1 = self._first_cut(doc)["id"]
+        doc = self.store.add_cut(pid, after=c1, name="cut2")
+        c2 = next(cid for cid in doc["cuts"] if cid != c1)
+        self.assertEqual(doc["cuts"][c2]["scene_id"], s1)
+        self.assertEqual(timeline_order(doc), [c1, c2])
+
+    def test_add_cut_explicit_scene_overrides_after(self):
+        doc = self.store.create_project("Explicit")
+        pid = doc["id"]
+        s1 = doc["scenes"][0]["id"]
+        c1 = self._first_cut(doc)["id"]
+        doc = self.store.add_scene(pid, "Scene 2")
+        s2 = doc["scenes"][1]["id"]
+        doc = self.store.add_cut(pid, scene_id=s2, after=c1, name="cut2")
+        c2 = next(cid for cid in doc["cuts"] if cid != c1)
+        self.assertEqual(doc["cuts"][c2]["scene_id"], s2)
+        s2_scene = next(s for s in doc["scenes"] if s["id"] == s2)
+        self.assertEqual(s2_scene["cut_order"], [c2])
+
+    def test_native_add_cut_id_when_inserted_mid_timeline(self):
+        doc = self.store.create_project("Mid")
+        pid = doc["id"]
+        s1 = doc["scenes"][0]["id"]
+        c1 = self._first_cut(doc)["id"]
+        doc = self.store.add_cut(pid, scene_id=s1, name="cut2")
+        c2 = next(cid for cid in doc["cuts"] if cid != c1)
+        doc = self.store.add_cut(pid, scene_id=s1, name="cut3")
+        c3 = next(cid for cid in doc["cuts"] if cid not in (c1, c2))
+        out = native_add_cut(pid, None, c1)
+        new_id = out["cut"]["id"]
+        self.assertNotIn(new_id, (c1, c2, c3))
+        self.assertEqual(timeline_order(self.store.get_project(pid)), [c1, new_id, c2, c3])
+        self.assertEqual(self.store.get_project(pid)["cuts"][new_id]["scene_id"], s1)
 
 
 if __name__ == "__main__":

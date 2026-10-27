@@ -158,7 +158,7 @@ class LocalStore:
                 scene["cut_order"] = [x for x in co if x != cut_id]
 
     def _insert_cut_in_order(self, doc: dict[str, Any], cut_id: str, scene_id: str | None, after: str | None) -> None:
-        order = timeline_order(doc)
+        order = [x for x in timeline_order(doc) if x != cut_id]
         if after and after in order:
             idx = order.index(after) + 1
             order.insert(idx, cut_id)
@@ -388,6 +388,12 @@ class LocalStore:
             sid = scene_id
             if sid and not self._scene(doc, sid):
                 sid = None
+            if not sid and after:
+                ref = self._cuts_map(doc).get(after)
+                if isinstance(ref, dict) and not ref.get("deleted_at"):
+                    ref_sid = ref.get("scene_id")
+                    if isinstance(ref_sid, str) and self._scene(doc, ref_sid):
+                        sid = ref_sid
             cut = new_cut(sid, cut_name, doc.get("settings", {}).get("default_sec", 3.0), workflow_sha)
             cuts = self._cuts_map(doc)
             cuts[cut["id"]] = cut

@@ -162,9 +162,18 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
         if tpl:
             graph = tpl
     scene_id = group_id if isinstance(group_id, str) and group_id else None
+    before = store.get_project(pid)
+    before_ids = set()
+    if before:
+        for cid, c in (before.get("cuts") or {}).items():
+            if isinstance(c, dict) and not c.get("deleted_at"):
+                before_ids.add(cid)
     doc = store.add_cut(pid, scene_id=scene_id, after=after, template_graph=graph)
-    order = timeline_order(doc)
-    new_id = order[-1] if order else None
+    new_id = None
+    for cid, c in (doc.get("cuts") or {}).items():
+        if cid not in before_ids and isinstance(c, dict) and not c.get("deleted_at"):
+            new_id = cid
+            break
     cut_entry = (doc.get("cuts") or {}).get(new_id) if new_id else None
     tl = store.to_timeline(pid)
     return {
