@@ -5,8 +5,10 @@ import {
   loadLastTemplate,
   saveLastTemplate,
   filterTemplatePaths,
+  isInternalWorkflowPath,
   pickInitialTemplate,
   shortTemplateName,
+  userTemplatePaths,
 } from "../../web/gg_template_pick_core.js";
 
 function mockStorage() {
@@ -45,6 +47,31 @@ describe("pickInitialTemplate", () => {
   });
 });
 
+describe("isInternalWorkflowPath", () => {
+  it("matches gonggan prefix case-insensitively", () => {
+    assert.equal(isInternalWorkflowPath("gonggan/cut/foo.json"), true);
+    assert.equal(isInternalWorkflowPath("Gonggan/bar.json"), true);
+    assert.equal(isInternalWorkflowPath("GONGGAN\\x.json"), true);
+  });
+
+  it("does not match other folders", () => {
+    assert.equal(isInternalWorkflowPath("xpu_latest/x.json"), false);
+    assert.equal(isInternalWorkflowPath("notgonggan/x.json"), false);
+  });
+});
+
+describe("userTemplatePaths", () => {
+  const paths = ["alpha/x.json", "gonggan/internal.json", "xpu_latest/x.json"];
+
+  it("hides internal workflows", () => {
+    assert.deepEqual(userTemplatePaths(paths, ""), ["alpha/x.json", "xpu_latest/x.json"]);
+  });
+
+  it("keeps selected internal ref", () => {
+    assert.deepEqual(userTemplatePaths(paths, "gonggan/internal.json"), paths);
+  });
+});
+
 describe("filterTemplatePaths", () => {
   const paths = ["alpha/x.json", "beta/y.json", "gamma/z.json"];
 
@@ -60,6 +87,12 @@ describe("filterTemplatePaths", () => {
 
   it("empty query returns all sorted", () => {
     assert.deepEqual(filterTemplatePaths(paths, "", ""), paths);
+  });
+
+  it("excludes internal gonggan paths unless kept", () => {
+    const mixed = ["a.json", "gonggan/cut/w.json", "b.json"];
+    assert.deepEqual(filterTemplatePaths(mixed, "", ""), ["a.json", "b.json"]);
+    assert.deepEqual(filterTemplatePaths(mixed, "", "gonggan/cut/w.json"), mixed.sort((a, b) => a.localeCompare(b)));
   });
 });
 
