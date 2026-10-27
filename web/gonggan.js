@@ -23,7 +23,12 @@ import {
   plannedLenInputPlaceholder,
   addCutTarget,
 } from "./gg_cuts_core.js";
-import { trashButtonLabel, normalizeTrashItems, formatTrashItem } from "./gg_trash_core.js";
+import {
+  trashButtonLabel,
+  normalizeTrashItems,
+  formatTrashItem,
+  movedToTrashToastMessage,
+} from "./gg_trash_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import {
   autosaveModifiedTabs,
@@ -1528,8 +1533,6 @@ function cutsForDelete() {
 async function deleteSelectedCuts() {
   const ids = cutsForDelete();
   if (!ids.length || !state.pid) return;
-  const msg = ids.length === 1 ? "Delete 1 cut?" : `Delete ${ids.length} cuts?`;
-  if (!confirm(msg)) return;
   const deletedIds = [...ids];
   const n = deletedIds.length;
   try {
@@ -1546,7 +1549,7 @@ async function deleteSelectedCuts() {
     bus.dispatchEvent(new Event("timeline"));
     bus.dispatchEvent(new Event("select"));
     refreshTrashCount();
-    ggToast(`Deleted ${n} cut(s)`, "", "ok", {
+    ggToast(movedToTrashToastMessage(n), "", "ok", {
       actionLabel: "Undo",
       onAction: async () => {
         try {
