@@ -538,6 +538,39 @@ class LocalStore:
             self._save_project_doc(pid, doc, "delete_cuts", pid)
             return doc
 
+    def list_deleted_cuts(self, pid: str) -> list[dict[str, Any]]:
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                return []
+            cuts = self._cuts_map(doc)
+            scenes_by_id: dict[str, str] = {}
+            for s in doc.get("scenes") or []:
+                if isinstance(s, dict) and s.get("id") and not s.get("deleted_at"):
+                    scenes_by_id[s["id"]] = s.get("name") if isinstance(s.get("name"), str) else ""
+            rows: list[dict[str, Any]] = []
+            for cid, c in cuts.items():
+                if not isinstance(c, dict) or not c.get("deleted_at"):
+                    continue
+                notes = c.get("notes") if isinstance(c.get("notes"), str) else ""
+                if len(notes) > 120:
+                    notes = notes[:120]
+                sid = c.get("scene_id")
+                scene_name = scenes_by_id.get(sid, "") if isinstance(sid, str) else ""
+                planned = c.get("planned_sec")
+                rows.append(
+                    {
+                        "id": cid,
+                        "name": c.get("name") if isinstance(c.get("name"), str) else "",
+                        "deleted_at": c["deleted_at"],
+                        "scene_name": scene_name,
+                        "notes": notes,
+                        "planned_sec": planned if isinstance(planned, (int, float)) else None,
+                    }
+                )
+            rows.sort(key=lambda r: r.get("deleted_at") or "", reverse=True)
+            return rows
+
     def restore_cuts(self, pid: str, ids: list[str] | None = None) -> dict[str, Any]:
         with self._lock:
             doc = self._load_project_doc(pid)

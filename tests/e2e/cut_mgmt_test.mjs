@@ -519,6 +519,55 @@ async function main() {
     if (!/%/.test(pct)) throw new Error(`percent missing: ${pct}`);
   });
 
+  await runScenario("11", "Delete undo and trash modal restore", async () => {
+    timelineMocks.delete(mainPid);
+    await page.click(".gg-root.gg-shots .gg-reload");
+    await sleep(1200);
+    const before = await countCuts(page);
+    if (before < 2) throw new Error("need 2+ cuts for delete restore");
+
+    const cuts = await page.$$(".gg-root.gg-shots .gg-cut");
+    const last = cuts[cuts.length - 1];
+    const box = await last.boundingBox();
+    if (!box) throw new Error("cut box missing");
+    await page.mouse.click(box.x + 12, box.y + 12, { button: "right" });
+    await clickCtxItem(page, "Delete");
+    await sleep(700);
+    const afterDel = await countCuts(page);
+    if (afterDel !== before - 1) throw new Error(`delete count: ${before} -> ${afterDel}`);
+
+    await page.waitForSelector(".gg-toast-action", { timeout: 10000 });
+    const toastSum = await page.$eval(".gg-toast-sum", (el) => el.textContent?.trim() || "");
+    if (!/Deleted/i.test(toastSum)) throw new Error(`expected delete toast, got: ${toastSum}`);
+    await page.click(".gg-toast-action");
+    await sleep(1200);
+    const afterUndo = await countCuts(page);
+    if (afterUndo !== before) throw new Error(`undo count: expected ${before}, got ${afterUndo}`);
+
+    const cuts2 = await page.$$(".gg-root.gg-shots .gg-cut");
+    const last2 = cuts2[cuts2.length - 1];
+    const box2 = await last2.boundingBox();
+    if (!box2) throw new Error("cut box missing (2)");
+    await page.mouse.click(box2.x + 12, box2.y + 12, { button: "right" });
+    await clickCtxItem(page, "Delete");
+    await sleep(1500);
+    await page.waitForFunction(
+      () => {
+        const btn = document.querySelector(".gg-root.gg-shots .gg-trash-btn");
+        return btn && !btn.hidden && /Trash \(1\)/.test(btn.textContent || "");
+      },
+      { timeout: 15000 }
+    );
+    await page.click(".gg-root.gg-shots .gg-trash-btn");
+    await page.waitForSelector(".gg-modal-trash", { timeout: 10000 });
+    await page.click(".gg-trash-restore-one");
+    await sleep(1200);
+    const final = await countCuts(page);
+    if (final !== before) throw new Error(`modal restore: expected ${before}, got ${final}`);
+    const trashHidden = await page.$eval(".gg-root.gg-shots .gg-trash-btn", (el) => el.hidden);
+    if (!trashHidden) throw new Error("Trash button should hide when empty");
+  });
+
   try {
     await cleanupProjects(page);
   } catch (e) {
