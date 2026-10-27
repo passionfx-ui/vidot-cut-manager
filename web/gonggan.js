@@ -1891,7 +1891,10 @@ function bindShotsReorder(root) {
   }
   root.querySelectorAll(".gg-cut").forEach((el) => {
     el.addEventListener("pointerdown", (e) => {
-      if (!isNativeProject() || e.button || e.target.closest("input, textarea, button, select, a")) return;
+      if (!isNativeProject() || e.button) return;
+      const blocker = e.target.closest("input, textarea, button, select, a");
+      // Card Notes/caption textareas only block a drag while they are in edit mode (double-click).
+      if (blocker && !(blocker.tagName === "TEXTAREA" && !isCardFieldEditing(blocker))) return;
       const startX = e.clientX;
       const startY = e.clientY;
       const cutId = el.dataset.cutId;
