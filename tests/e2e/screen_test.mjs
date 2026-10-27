@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
+import { submitAskDialog } from "./ask_text_helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -181,7 +182,7 @@ function wireConsole(page) {
 function acceptDialogs(page) {
   page.on("dialog", async (d) => {
     try {
-      if (d.type() === "prompt") await d.accept(`Scene ${runStamp % 100}`);
+      if (d.type() === "prompt") await d.dismiss();
       else await d.accept();
     } catch (_) {
       try {
@@ -594,6 +595,7 @@ async function main() {
     const nSel = await selectionCount(page);
     if (nSel < 2) throw new Error(`selection bar should show for 3 selected (count=${nSel})`);
     await page.click(".gg-root.gg-shots .gg-sel-group");
+    await submitAskDialog(page);
     await sleep(1000);
     const scenes = await page.$$eval(".gg-root.gg-shots .gg-grp-sec[data-group-id]", (els) => els.length);
     if (scenes < 1) throw new Error("expected a scene section after group");
