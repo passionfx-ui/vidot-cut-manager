@@ -92,6 +92,7 @@ import {
   filterTemplatePaths,
   pickInitialTemplate,
   shortTemplateName,
+  userTemplatePaths,
 } from "./gg_template_pick_core.js";
 
 const EXT = "gonggan.cut";
@@ -416,7 +417,7 @@ function openNewProjectModal() {
       <h3 class="gg-modal-title">New Project</h3>
       <label class="gg-modal-field">Name <input type="text" class="gg-modal-name" required maxlength="120" /></label>
       <label class="gg-modal-field">Template
-        <input type="search" class="gg-modal-tpl-filter" placeholder="Filter templates…" autocomplete="off" />
+        <input type="search" class="gg-modal-tpl-filter" placeholder="Filter templates..." autocomplete="off" />
         <span class="gg-modal-tpl-hint" aria-live="polite"></span>
         <select class="gg-modal-tpl"><option value="">(none)</option></select>
       </label>
@@ -434,15 +435,17 @@ function openNewProjectModal() {
   const tplHint = wrap.querySelector(".gg-modal-tpl-hint");
   const refreshModalTplOptions = (forceSelected) => {
     const selected = typeof forceSelected === "string" ? forceSelected : tplSel.value;
+    const userTotal = userTemplatePaths(userWorkflowPaths, selected).length;
     const filtered = filterTemplatePaths(userWorkflowPaths, tplFilter?.value || "", selected);
-    const total = userWorkflowPaths.length;
     tplSel.innerHTML = `<option value="">(none)</option>${filtered
       .map((p) => `<option value="${esc(p)}"${p === selected ? " selected" : ""}>${esc(p)}</option>`)
       .join("")}`;
     tplSel.value = selected;
     if (tplHint) {
       const q = (tplFilter?.value || "").trim();
-      tplHint.textContent = q && total ? `${filtered.length} of ${total}` : "";
+      if (q && userTotal) tplHint.textContent = `${filtered.length} of ${userTotal}`;
+      else if (!q && userTotal) tplHint.textContent = `${userTotal} templates`;
+      else tplHint.textContent = "";
     }
   };
   tplFilter?.addEventListener("input", () => refreshModalTplOptions());
@@ -1244,7 +1247,7 @@ async function fetchUserWorkflowPaths() {
 function templateSelectOptionsHtml() {
   const opts = [`<option value="">(none)</option>`];
   const cur = projectTemplateRef || "";
-  for (const p of userWorkflowPaths) {
+  for (const p of userTemplatePaths(userWorkflowPaths, cur)) {
     opts.push(`<option value="${esc(p)}"${p === cur ? " selected" : ""}>${esc(p)}</option>`);
   }
   if (cur && !userWorkflowPaths.includes(cur)) {
