@@ -191,16 +191,26 @@ export function moveCuts(order, groups, cutIds, target) {
 }
 
 /**
+ * Map viewport pointer Y to Y inside a scrollable shots list wrap (same space as row tops).
+ * @param {number} clientY
+ * @param {number} wrapTop wrap.getBoundingClientRect().top
+ * @param {number} scrollTop wrap.scrollTop
+ */
+export function clientYToWrapY(clientY, wrapTop, scrollTop) {
+  return clientY - wrapTop + scrollTop;
+}
+
+/**
  * @param {string[]} order
  * @param {{ id: string, top: number, bottom: number, groupId: string|null }[]} rows
- * @param {number} clientY
+ * @param {number} wrapY pointer Y in wrap content coordinates (see clientYToWrapY)
  */
-export function shotsDropTarget(order, rows, clientY) {
+export function shotsDropTarget(order, rows, wrapY) {
   if (!rows.length) return { toIndex: 0, toGroupId: null, lineY: 0 };
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     const mid = (r.top + r.bottom) / 2;
-    if (clientY < mid) {
+    if (wrapY < mid) {
       const idx = order.indexOf(r.id);
       return { toIndex: idx < 0 ? 0 : idx, toGroupId: r.groupId, lineY: r.top };
     }
