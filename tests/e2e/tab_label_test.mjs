@@ -233,7 +233,35 @@ async function rightClickEmptyShots(page) {
     const wrap = document.querySelector(".gg-root.gg-shots .gg-grp-wrap");
     if (!wrap) return null;
     const r = wrap.getBoundingClientRect();
-    return { x: r.left + r.width / 2, y: Math.min(r.bottom - 8, r.top + 80) };
+    const cuts = wrap.querySelectorAll(".gg-cut");
+    let y;
+    if (cuts.length > 0) {
+      const lastRect = cuts[cuts.length - 1].getBoundingClientRect();
+      const belowY = lastRect.bottom + 12;
+      y = belowY < r.bottom - 6 ? belowY : r.bottom - 6;
+    } else {
+      y = Math.min(r.bottom - 6, r.top + 40);
+    }
+    const inset = 2;
+    const x = Math.max(r.left + inset, Math.min(r.right - inset, r.left + r.width / 2));
+    y = Math.max(r.top + inset, Math.min(r.bottom - inset, y));
+
+    const isBlocked = (el) => {
+      if (!el) return false;
+      if (el.closest(".gg-cut")) return true;
+      if (el.closest("textarea, input, button")) return true;
+      const header = el.closest("header");
+      return !!(header && header.closest(".gg-grp-sec"));
+    };
+    const hit = document.elementFromPoint(x, y);
+    if (isBlocked(hit)) {
+      const tag = hit.tagName.toLowerCase();
+      const cls = typeof hit.className === "string" ? hit.className : "";
+      throw new Error(
+        `rightClickEmptyShots: point (${x}, ${y}) is on blocked element <${tag}${cls ? ` class="${cls}"` : ""}>`
+      );
+    }
+    return { x, y };
   });
   if (!box) throw new Error("gg-grp-wrap not found");
   await page.mouse.click(box.x, box.y, { button: "right" });
