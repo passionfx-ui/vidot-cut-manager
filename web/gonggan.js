@@ -18,6 +18,7 @@ import {
   versionIndexFromList,
   formatCutHeaderLengths,
   formatPickedVersionInfo,
+  trimSecFromDrag,
 } from "./gg_cuts_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import {
@@ -3442,9 +3443,9 @@ function bindTrim(root) {
           const nextIn = Math.max(0, snapSec(startIn + dx / ed.px));
           next = clampClip(c, Math.min(nextIn, outPt - VID_MIN), outPt - Math.min(nextIn, outPt - VID_MIN));
         } else if (side === "l") {
-          next = clampClip(c, 0, snapSec(startSec - dx / ed.px));
+          next = clampClip(c, 0, snapSec(trimSecFromDrag(side, startSec, dx / ed.px)));
         } else {
-          next = clampClip(c, startIn, snapSec(startSec + dx / ed.px));
+          next = clampClip(c, startIn, snapSec(trimSecFromDrag(side, startSec, dx / ed.px)));
         }
         c.in = next.in; c.sec = next.sec;
         layoutClips(root);
@@ -3910,6 +3911,7 @@ app.registerExtension({
     globalThis.__gongganStoryLayout = "0.9.2";
     globalThis.__gongganCaptionMode = "0.9.3";
     globalThis.__gongganHeaderLine = "0.9.3";
+    globalThis.__gongganTrimArrows = "0.9.5";
     globalThis.__gongganTabLabelRefresh = applyTabLabels;
     globalThis.__gongganReloadShotsData = () => loadProjects();
     setupTabLabels();
