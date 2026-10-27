@@ -794,6 +794,12 @@ async function main() {
     });
     await clickCtxItem(page, "New Project…");
     await page.waitForSelector(".gg-modal-tpl-filter", { timeout: 10000 });
+    const gongganOpts = await page.$$eval(".gg-modal-tpl option", (els) =>
+      els.map((o) => o.value).filter((v) => /^gonggan\//i.test(v))
+    );
+    if (gongganOpts.length) {
+      throw new Error(`modal template list must not include gonggan/ workflows: ${gongganOpts.join(", ")}`);
+    }
     await page.waitForFunction(
       (ref) => {
         const sel = document.querySelector(".gg-modal-tpl");
