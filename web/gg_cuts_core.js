@@ -35,6 +35,22 @@ export function cutTimelineSec(cut) {
 }
 
 /**
+ * Still/image clip length after horizontal trim drag (seconds delta).
+ * @param {"l"|"r"} side
+ * @param {number} startSec
+ * @param {number} dxSec
+ */
+export function trimSecFromDrag(side, startSec, dxSec) {
+  if (side === "r") return startSec + dxSec;
+  return startSec - dxSec;
+}
+
+/** @param {"l"|"r"} side */
+export function trimArrowGlyph(side) {
+  return side === "r" ? ">" : "<";
+}
+
+/**
  * @param {object} cut
  * @returns {{ text: string, title: string }}
  */
