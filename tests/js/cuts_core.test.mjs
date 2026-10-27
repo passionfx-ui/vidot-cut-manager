@@ -7,6 +7,7 @@ import {
   moveCut,
   moveCuts,
   shotsDropTarget,
+  clientYToWrapY,
   finalCutList,
   filterCuts,
   fileBaseName,
@@ -186,6 +187,13 @@ describe("moveCuts", () => {
   });
 });
 
+describe("clientYToWrapY", () => {
+  it("converts viewport Y with offset and scroll", () => {
+    assert.equal(clientYToWrapY(215, 260, 50), 5);
+    assert.equal(clientYToWrapY(260, 260, 0), 0);
+  });
+});
+
 describe("shotsDropTarget", () => {
   it("inserts before row when above midpoint", () => {
     const order = ["a", "b"];
@@ -196,6 +204,22 @@ describe("shotsDropTarget", () => {
     const t = shotsDropTarget(order, rows, 5);
     assert.equal(t.toIndex, 0);
     assert.equal(t.toGroupId, "g1");
+  });
+
+  it("last cut onto first row with wrap offset and scroll", () => {
+    const order = ["a", "b", "c"];
+    const rows = [
+      { id: "a", top: 0, bottom: 20, groupId: "scene1" },
+      { id: "b", top: 20, bottom: 40, groupId: "scene1" },
+      { id: "c", top: 40, bottom: 60, groupId: null },
+    ];
+    const wrapTop = 260;
+    const scrollTop = 50;
+    const wrapY = clientYToWrapY(215, wrapTop, scrollTop);
+    const t = shotsDropTarget(order, rows, wrapY);
+    assert.equal(t.toIndex, 0);
+    assert.equal(t.toGroupId, "scene1");
+    assert.equal(t.lineY, 0);
   });
 });
 
