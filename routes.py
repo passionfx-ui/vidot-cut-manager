@@ -12,6 +12,11 @@ from . import gg_native_api
 from . import gg_template
 from . import gg_wfstore
 
+try:
+    from .gg_project import ConflictError
+except ImportError:  # unittest / plain script
+    from gg_project import ConflictError  # type: ignore
+
 routes = PromptServer.instance.routes
 log = logging.getLogger("gonggan-cut")
 
@@ -428,8 +433,6 @@ async def gg_cut_update(request):
     if expected_rev is not None and not isinstance(expected_rev, int):
         return _err(400, "expected_rev must be an integer")
     try:
-        from gg_project import ConflictError
-
         res = await asyncio.to_thread(
             gg_native_api.native_update_cut, pid, cut_id, fields, expected_rev,
         )
@@ -462,8 +465,6 @@ async def gg_project_update(request):
     if expected_rev is not None and not isinstance(expected_rev, int):
         return _err(400, "expected_rev must be an integer")
     try:
-        from gg_project import ConflictError
-
         res = await asyncio.to_thread(
             gg_native_api.native_update_project, pid, fields, expected_rev,
         )
