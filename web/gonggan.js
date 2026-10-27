@@ -42,7 +42,12 @@ import {
   shouldShowOpenTabMarker,
 } from "./gg_cut_select_core.js";
 import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
-import { formatShotTabLabel, normalizeTabDescriptor, planTabLabels } from "./gg_tab_label_core.js";
+import {
+  formatShotTabLabel,
+  formatShotTabTitle,
+  normalizeTabDescriptor,
+  planTabLabels,
+} from "./gg_tab_label_core.js";
 import {
   CARD_EDIT_IDLE_TIP,
   CARD_EDIT_ACTIVE_TIP,
@@ -804,6 +809,31 @@ function resolveShotTabLabel(wf) {
   return label;
 }
 
+function resolveShotTabTitle(wf) {
+  if (!wf || !isGongganOwnedWorkflow(wf)) return null;
+  let meta = wf.ggGongganMeta;
+  if (!meta?.projectId || !meta?.cutId) {
+    const p = normalizeWorkflowPath(wf.path || "").replace(/^workflows\//, "");
+    const key = p.toLowerCase();
+    const mapped = key ? ggOwnedWorkflowMeta.get(key) : null;
+    if (mapped?.projectId && mapped?.cutId) meta = mapped;
+  }
+  if (!meta?.projectId || !meta?.cutId) return null;
+
+  const projectName = state.projects.find((p) => p.id === meta.projectId)?.name;
+  if (!projectName) return null;
+  if (meta.projectId !== state.pid || !state.timeline) return null;
+
+  const c = cutById(meta.cutId);
+  if (!c) return null;
+  const pos = c.pos ?? c.index;
+  return formatShotTabTitle({
+    projectName,
+    cutName: c.name,
+    cutNumber: pos != null ? pos + 1 : undefined,
+  });
+}
+
 function applyTabLabels() {
   if (ggTabLabelApplying) return;
   try {
@@ -839,6 +869,7 @@ function applyTabLabels() {
       if (act.action === "none") continue;
       const row = tabs[act.index];
       const span = row?.span;
+      const tabEl = tabEls[act.index];
       if (!span) continue;
       if (act.action === "set") {
         const stillOurLabel =
@@ -846,10 +877,16 @@ function applyTabLabels() {
         if (!stillOurLabel || !span.dataset.ggOrig) span.dataset.ggOrig = row.text;
         span.dataset.ggSet = act.text;
         if (span.textContent !== act.text) span.textContent = act.text;
+        const tip = resolveShotTabTitle(open[act.index]);
+        if (tabEl) {
+          if (tip) { if (tabEl.title !== tip) tabEl.title = tip; }
+          else tabEl.removeAttribute("title");
+        }
       } else if (act.action === "restore") {
         if (span.textContent !== act.text) span.textContent = act.text;
         delete span.dataset.ggOrig;
         delete span.dataset.ggSet;
+        tabEl?.removeAttribute("title");
       }
     }
   } catch (e) {
