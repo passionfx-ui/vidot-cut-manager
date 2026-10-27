@@ -215,7 +215,17 @@ async function openShotsTab(page) {
 }
 
 async function reloadShots(page) {
-  await page.click(".gg-root.gg-shots .gg-reload");
+  // The header is re-rendered right after a project switch; retry the click once the new button has a box.
+  for (let i = 0; ; i++) {
+    try {
+      await page.waitForSelector(".gg-root.gg-shots .gg-reload", { visible: true, timeout: 5000 });
+      await page.click(".gg-root.gg-shots .gg-reload");
+      break;
+    } catch (e) {
+      if (i >= 3) throw e;
+      await sleep(600);
+    }
+  }
   await sleep(1200);
 }
 
@@ -379,6 +389,28 @@ async function fetchWorkflowPaths(page) {
   return [];
 }
 
+// The first *.json in userdata is often not a usable UI-graph template (API-format exports,
+// settings files...). Cut load then fails with "workflow must be a UI graph" and every
+// waitForCutLoaded() times out at 90 s. Pick a template that really is a UI graph.
+async function pickUsableTemplateRef(page, paths) {
+  const norm = (p) => String(p).replace(/^\/+/, "");
+  const base = (p) => norm(p).replace(/^.*\//, "").toLowerCase();
+  const cands = paths.filter((p) => base(p).endsWith(".json") && !/^cut\d+\.json$/i.test(base(p)) && !norm(p).startsWith("gonggan/") && !/_api\.json$/i.test(base(p)));
+  cands.sort((a, b) => (base(b).startsWith("zz") ? 1 : 0) - (base(a).startsWith("zz") ? 1 : 0));
+  for (const p of cands.slice(0, 40)) {
+    const ok = await page.evaluate(async (rel) => {
+      try {
+        const r = await fetch(`/api/userdata/${encodeURIComponent("workflows/" + rel)}`);
+        if (!r.ok) return false;
+        const j = await r.json();
+        return Array.isArray(j.nodes) && j.nodes.length > 0 && j.nodes.length < 80;
+      } catch (_) { return false; }
+    }, norm(p));
+    if (ok) return norm(p);
+  }
+  return paths.find((p) => /\.json$/i.test(p)) || "";
+}
+
 function buildMockTimeline(pid, stamp) {
   const cutA = `cut-a-${stamp}`;
   const vImg = `ver-img-${stamp}`;
@@ -483,7 +515,7 @@ async function runScenario(id, title, fn) {
       entry.detail = e.message;
       console.log(`SKIP  ${id} ${title}: ${e.message}`);
     } else {
-      entry.detail = e.message || String(e);
+      entry.detail = (e.message || String(e)) + (e.stack ? " @ " + String(e.stack).split("\n").filter((x) => x.includes("screen_test")).slice(0, 2).join(" | ").replace(/file:\/\/\/\S*\//g, "") : "");
       console.log(`FAIL  ${id} ${title}: ${entry.detail}`);
     }
   }
@@ -523,7 +555,7 @@ async function main() {
 
   await runScenario("02", "New native project becomes active", async () => {
     const paths = await fetchWorkflowPaths(page);
-    templateRef = paths[0] || "";
+    templateRef = await pickUsableTemplateRef(page, paths);
     mainPid = await createProjectViaUi(page, mainProjectName, templateRef || undefined);
     if (!mainPid || !mainPid.includes("-")) throw new Error(`expected native uuid pid, got ${mainPid}`);
     const label = await getActiveProjectName(page);
@@ -619,7 +651,7 @@ async function main() {
       const ws = window.app?.extensionManager?.workflow;
       const active = ws?.activeWorkflow;
       const base = active?.filename || String(active?.path || "").replace(/^.*\//, "");
-      const nameEl = document.querySelector(".gg-root.gg-shots .gg-cut .gg-cut-name");
+      const nameEl = document.querySelector(".gg-root.gg-shots .gg-cut .gg-cut-title");
       const raw = nameEl?.textContent?.replace(/^\d+\s*/, "").trim() || "";
       return { tab: base, cutName: raw };
     });
@@ -703,7 +735,7 @@ async function main() {
       };
     });
     if (!state.allDone) throw new Error("gg-stage-all-done not set with Best pick");
-    if (!state.glow) throw new Error("gg-done-glow not visible");
+    // gg-done-glow was removed in 0.9.3 (stage dots + gg-stage-all-done replaced it).
     if (!/^Done\s+1\//i.test(state.sum)) throw new Error(`summary wrong: "${state.sum}"`);
     if (!/Video/i.test(state.sum) || !/Image/i.test(state.sum)) {
       throw new Error(`summary missing Video/Image: "${state.sum}"`);

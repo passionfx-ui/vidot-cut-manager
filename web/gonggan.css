@@ -99,13 +99,17 @@
   align-items: center;
   gap: 4px;
   min-width: 0;
-  flex-wrap: nowrap;
-  white-space: nowrap;
-  overflow: hidden;
+  flex-wrap: wrap;
   font-size: 11px;
   line-height: 1.25;
 }
-.gg-shots .gg-cut-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.gg-shots .gg-cut-title {
+  flex: 1 1 6em;
+  min-width: 6em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .gg-shots .gg-cut-ver { flex: 0 1 auto; max-width: 38%; overflow: hidden; text-overflow: ellipsis; color: var(--gg-dim); font-size: 10px; }
 .gg-shots .gg-cut-len { flex: 0 0 auto; color: var(--gg-dim); font-size: 10px; font-variant-numeric: tabular-nums; }
 .gg-shots .gg-cut-header-badges { display: flex; gap: 3px; flex-shrink: 0; font-size: 8px; }

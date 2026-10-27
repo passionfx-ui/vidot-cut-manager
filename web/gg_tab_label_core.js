@@ -2,8 +2,12 @@ function collapseWs(s) {
   return String(s ?? "").trim().replace(/\s+/g, " ");
 }
 
-/** @returns {string|null} null when project name empty (do not override label). */
-export function formatShotTabLabel({ projectName, cutName, cutNumber }) {
+const MAX_LABEL_CHARS = 28;
+const MIN_PROJECT_CHARS = 6;
+const TAB_LABEL_SEP = " / ";
+const TAB_LABEL_ELL = "…";
+
+function resolveShotTabParts({ projectName, cutName, cutNumber }) {
   const project = collapseWs(projectName);
   if (!project) return null;
   let cut = collapseWs(cutName);
@@ -14,7 +18,41 @@ export function formatShotTabLabel({ projectName, cutName, cutNumber }) {
       cut = "Untitled cut";
     }
   }
-  return `${project} / ${cut}`;
+  return { project, cut };
+}
+
+function truncateWithEllipsis(s, maxLen) {
+  if (maxLen <= 0) return TAB_LABEL_ELL;
+  if (s.length <= maxLen) return s;
+  if (maxLen === 1) return TAB_LABEL_ELL;
+  return s.slice(0, maxLen - 1) + TAB_LABEL_ELL;
+}
+
+/** Full untruncated tab tooltip text. */
+export function formatShotTabTitle({ projectName, cutName, cutNumber }) {
+  const parts = resolveShotTabParts({ projectName, cutName, cutNumber });
+  if (!parts) return null;
+  return `${parts.project}${TAB_LABEL_SEP}${parts.cut}`;
+}
+
+/** @returns {string|null} null when project name empty (do not override label). */
+export function formatShotTabLabel({ projectName, cutName, cutNumber }) {
+  const parts = resolveShotTabParts({ projectName, cutName, cutNumber });
+  if (!parts) return null;
+  const { project, cut } = parts;
+  const full = `${project}${TAB_LABEL_SEP}${cut}`;
+  if (full.length <= MAX_LABEL_CHARS) return full;
+
+  const minProjectSlot = MIN_PROJECT_CHARS + 1;
+  const projectOnlyMax = MAX_LABEL_CHARS - TAB_LABEL_SEP.length - cut.length;
+  if (projectOnlyMax >= minProjectSlot) {
+    return truncateWithEllipsis(project, projectOnlyMax) + TAB_LABEL_SEP + cut;
+  }
+
+  const projectShort = truncateWithEllipsis(project, minProjectSlot);
+  const cutMax = MAX_LABEL_CHARS - TAB_LABEL_SEP.length - projectShort.length;
+  const cutShort = truncateWithEllipsis(cut, cutMax);
+  return projectShort + TAB_LABEL_SEP + cutShort;
 }
 
 function basenameOnly(filename) {
