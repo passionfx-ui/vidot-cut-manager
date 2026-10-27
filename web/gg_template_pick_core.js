@@ -29,13 +29,35 @@ export function saveLastTemplate(storage, ref) {
 }
 
 /**
+ * Plugin per-cut workflows under workflows/gonggan/ — not user-facing templates.
+ * @param {string} path
+ * @returns {boolean}
+ */
+export function isInternalWorkflowPath(path) {
+  const s = String(path ?? "").trim().replace(/\\/g, "/");
+  return /^gonggan\//i.test(s);
+}
+
+/**
+ * @param {string[]} paths
+ * @param {string} [keep] currently selected ref (internal paths kept only when this matches)
+ * @returns {string[]}
+ */
+export function userTemplatePaths(paths, keep) {
+  const keepVal = String(keep ?? "").trim();
+  return (paths || []).filter(
+    (p) => !isInternalWorkflowPath(p) || (keepVal && p === keepVal)
+  );
+}
+
+/**
  * @param {string[]} paths
  * @param {string} query
  * @param {string} keep currently selected path (always included when present in paths)
  * @returns {string[]}
  */
 export function filterTemplatePaths(paths, query, keep) {
-  const list = [...(paths || [])].sort((a, b) => a.localeCompare(b));
+  const list = [...userTemplatePaths(paths, keep)].sort((a, b) => a.localeCompare(b));
   const q = String(query ?? "").trim().toLowerCase();
   const keepVal = String(keep ?? "").trim();
   return list.filter((p) => {
