@@ -33,10 +33,12 @@ import {
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import {
   autosaveModifiedTabs,
+  autosaveWorkflow,
   normalizeWorkflowPath,
   pickFreeWorkflowPath,
   pathCollides,
 } from "./gg_autosave_core.js";
+import { cutBaseKey, stampWip, shouldRestoreWip } from "./gg_wip_core.js";
 import {
   shotWorkflowRelPathById,
   shouldSkipShotWorkflowReload,
@@ -624,6 +626,7 @@ const WF_LOAD_DEBOUNCE_MS = 250;
 /** Monotonic token; only selectCut bumps it to cancel stale debounced/in-flight loads. */
 let wfLoadToken = 0;
 let wfLoadDebounce = 0;
+let ggCutLoadsInFlight = 0;
 let wfLastLoadedCutId = "";
 let wfLastLoadedProjectId = "";
 /** ComfyWorkflow tab last opened by Gonggan shot load (never user workflows). */
@@ -631,6 +634,10 @@ let ggOwnedShotWorkflow = null;
 /** Paths Gonggan created/renamed this session (lowercase) -> { projectId, cutId }. */
 const ggOwnedWorkflowMeta = new Map();
 let ggCutSwitchAutosaveBlocked = false;
+const GG_WIP_AUTOSAVE_MIN_MS = 2000;
+let ggWipLastAutosaveAt = 0;
+let ggWipAutosaveRunning = false;
+let ggWipLastFailToastAt = 0;
 let ggToastTimer = 0;
 let trashCount = 0;
 let trashRefreshTimer = 0;
@@ -782,9 +789,122 @@ function buildAutosaveDeps() {
   };
 }
 
+function resolveWorkflowCutForWip(wf) {
+  if (!wf) return null;
+  let cutId = wf.ggGongganMeta?.cutId;
+  let projectId = wf.ggGongganMeta?.projectId;
+  if (!cutId && wf.path) {
+    const key = normalizeWorkflowPath(wf.path).replace(/^workflows\//, "").toLowerCase();
+    const mapped = key ? ggOwnedWorkflowMeta.get(key) : null;
+    cutId = mapped?.cutId;
+    projectId = mapped?.projectId;
+  }
+  if (!cutId || !projectId || projectId !== state.pid) return null;
+  const cut = cutById(cutId);
+  return cut ? { cutId, cut } : null;
+}
+
+function applyWipStampForWorkflow(wf) {
+  const ws = ggWorkflowStore();
+  if (!ws || !wf || !wf.isModified || !app.graph) return;
+  const active = ws.activeWorkflow === wf || wf === ggOwnedShotWorkflow;
+  if (!active) return;
+  const resolved = resolveWorkflowCutForWip(wf);
+  if (!resolved) return;
+  app.graph.extra = stampWip(app.graph.extra || {}, {
+    cutId: resolved.cutId,
+    baseKey: cutBaseKey(resolved.cut),
+  });
+}
+
+function ggWipAutosaveBlockedNow() {
+  if (ggCutSwitchAutosaveBlocked) return true;
+  if (wfLoadDebounce || ggCutLoadsInFlight > 0) return true;
+  if (ggWipAutosaveRunning) return true;
+  return false;
+}
+
+async function runGongganWipAutosave(opts = {}) {
+  const force = !!opts.force;
+  if (ggWipAutosaveBlockedNow()) return;
+  const ws = ggWorkflowStore();
+  const wf = ggOwnedShotWorkflow;
+  if (!ws || !wf || !(ws.openWorkflows || []).includes(wf)) return;
+  if (!isGongganOwnedWorkflow(wf) || !wf.isModified) return;
+  if (!(ws.isActive?.(wf) ?? ws.activeWorkflow === wf)) return;
+  const now = Date.now();
+  if (!force && now - ggWipLastAutosaveAt < GG_WIP_AUTOSAVE_MIN_MS) return;
+
+  ggWipAutosaveRunning = true;
+  try {
+    applyWipStampForWorkflow(wf);
+    const deps = buildAutosaveDeps();
+    if (typeof deps.saveWorkflow !== "function") throw new Error("saveWorkflow unavailable");
+    await autosaveWorkflow(wf, deps);
+    ggWipLastAutosaveAt = Date.now();
+  } catch (e) {
+    console.warn("[gonggan] periodic wip autosave failed", e);
+    if (Date.now() - ggWipLastFailToastAt >= 60000) {
+      ggWipLastFailToastAt = Date.now();
+      ggToast("Auto-save failed.", e?.message || String(e), "warn");
+    }
+  } finally {
+    ggWipAutosaveRunning = false;
+  }
+}
+
+function setupWipPeriodicAutosave() {
+  setInterval(() => {
+    runGongganWipAutosave().catch(() => {});
+  }, 1000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      runGongganWipAutosave({ force: true }).catch(() => {});
+    }
+  });
+  window.addEventListener("pagehide", () => {
+    runGongganWipAutosave({ force: true }).catch(() => {});
+  });
+}
+
+async function fetchCutWorkingCopyJson(cut) {
+  const rel = shotWorkflowRelPathForCut(cut);
+  const storage = rel.startsWith("workflows/") ? rel : `workflows/${rel}`;
+  const res = await api.fetchApi(`/userdata/${encodeURIComponent(storage)}`);
+  if (res.status === 404) return null;
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
+}
+
+async function tryRestoreCutWorkingCopy(cutId, cutRec, loadToken) {
+  const cut = cutRec || cutById(cutId);
+  if (!cut || !cutId) return false;
+  try {
+    const json = await fetchCutWorkingCopyJson(cut);
+    if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
+    if (!json || !shouldRestoreWip(json, { cutId, baseKey: cutBaseKey(cut) })) return false;
+    const loaded = await loadWorkflowIntoDedicatedTab(json, cut);
+    if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
+    if (ggCutSwitchAutosaveBlocked) return false;
+    if (!loaded) return false;
+    wfLastLoadedCutId = cutId;
+    wfLastLoadedProjectId = state.pid;
+    markGraphGongganCut(cutId);
+    sdk.msg = `Canvas: ${shotTitle(cut)} (restored edits)`;
+    bus.dispatchEvent(new Event("sdk"));
+    bus.dispatchEvent(new Event("gg-opentab"));
+    ggToast("Restored your unsaved edits", shotTitle(cut), "info");
+    return true;
+  } catch (e) {
+    console.warn("[gonggan] working copy restore failed", e);
+    return false;
+  }
+}
+
 async function prepareGongganShotTabReplace() {
   const tabs = collectGongganShotTabs();
   if (tabs.some((w) => w.isModified)) {
+    for (const w of tabs) applyWipStampForWorkflow(w);
     const deps = buildAutosaveDeps();
     if (typeof deps.saveWorkflow !== "function") {
       ggCutSwitchAutosaveBlocked = true;
@@ -1251,6 +1371,7 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
   ggCutSwitchAutosaveBlocked = false;
   const cutRec = cut || cutById(cutId);
   const title = shotTitle(cutRec);
+  if (await tryRestoreCutWorkingCopy(cutId, cutRec, loadToken)) return;
   let lastErr = null;
   for (const src of CUT_WORKFLOW_SOURCES) {
     try {
@@ -1515,7 +1636,15 @@ function selectCut(cutId, opts) {
       }
     } catch (_) {}
     const loadToken = ++wfLoadToken;
-    wfLoadDebounce = setTimeout(() => loadCutWorkflow(cutId, cut, loadToken), WF_LOAD_DEBOUNCE_MS);
+    wfLoadDebounce = setTimeout(() => {
+      wfLoadDebounce = 0;
+      ggCutLoadsInFlight++;
+      Promise.resolve(loadCutWorkflow(cutId, cut, loadToken))
+        .catch((e) => console.warn("[gonggan] cut load failed", e))
+        .finally(() => {
+          ggCutLoadsInFlight--;
+        });
+    }, WF_LOAD_DEBOUNCE_MS);
   }
 }
 
@@ -4705,6 +4834,7 @@ app.registerExtension({
     globalThis.__gongganTabLabelRefresh = applyTabLabels;
     globalThis.__gongganReloadShotsData = () => loadProjects();
     setupTabLabels();
+    setupWipPeriodicAutosave();
     let lastShotTabActive = isGongganShotTabOpenAndActive();
     setInterval(() => {
       const active = isGongganShotTabOpenAndActive();

@@ -129,6 +129,8 @@ Also run `node --check web/gonggan.js` and `node --check web/gg_progress_core.js
 ## Auto-save on cut switch (0.8.1)
 Switching to another shot while the Gonggan workflow tab has unsaved edits **auto-saves** via ComfyUI’s workflow store (same as Ctrl+S) instead of a blocking confirm. If save fails, the switch is cancelled and the tab is left unchanged. Logic: `web/gg_autosave_core.js`.
 
+While the Gonggan shot tab is active and modified, the same save path runs at most every **2 s** (1 s poll), on **tab hide** (`visibilitychange` / `pagehide`), and still on **cut switch**. Each save stamps `extra.ggWip` (`web/gg_wip_core.js`) so reload can restore the working copy only when pick/version state matches. Opening a shot tries `workflows/gonggan/<projectId>/<cutId>.json` before server sources.
+
 ## Shot workflow paths (0.8.2+)
 Each shot’s ComfyUI tab copy is saved at a **stable id-based path**: `workflows/gonggan/<projectId>/<cutId>.json` (one working file per cut; reload/rename does not create `cut6 (2).json` suffixes). The tab bar still shows the display-only **Project / Cut** label from project/cut metadata, not the filename. Legacy name-based helpers remain in `web/gg_shot_names.js` for tests. E2E guard: `tests/e2e/tabfile_dedupe_test.mjs`.
 
@@ -169,6 +171,8 @@ python -m unittest discover -s tests -p test_*.py
 node --test tests/js/cut_stage.test.mjs tests/js/progress_core.test.mjs tests/js/cuts_core.test.mjs tests/js/loadimage_core.test.mjs
 ```
 Headless Chrome scenarios live under `tests/e2e/` (manual / CI optional).
+
+**Edit persistence** (`tests/e2e/edit_persist_test.mjs`): WIP autosave every 2s (plus on tab hide) stamps `extra.ggWip` on `workflows/gonggan/<pid>/<cutId>.json`; opening a shot restores that file when `ggWip.baseKey` still matches the cut’s pick/version state (`web/gg_wip_core.js`). Scenarios S1 (report-only), S2–S6 (SIGKILL/graceful/switch — must persist), S7 (mock timeline version bump — must load source, not stale WIP). Unit tests: `tests/js/wip_core.test.mjs`. Requires ComfyUI on `8188`, 40+ GB free RAM; blocks `/prompt` and `/gonggan/regen`.
 
 ## Changelog
 
