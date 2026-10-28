@@ -714,8 +714,9 @@ function openProjectSettingsModal() {
   wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", closeProjectModal);
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const name = normalizeNameInput(nameIn.value, PROJECT_NAME_MAX_LEN);
-    if (!name) return;
+    const nameNorm = normalizeNameInput(nameIn.value, PROJECT_NAME_MAX_LEN);
+    if (!nameNorm.ok) return;
+    const name = nameNorm.value;
     const settings = readProjectSetupFromModal(wrap, curSettings);
     const template_ref = tplSel.value || "";
     try {
@@ -830,7 +831,7 @@ async function renameReference(refId) {
   const ref = cutById(refId);
   if (!ref) return;
   const name = await askText({ title: "Rename reference", label: "Name", value: ref.name, okLabel: "Rename", maxLength: 80 });
-  const clean = name == null ? "" : normalizeNameInput(name, 80);
+  const clean = name == null ? "" : normalizeNameInput(name, 80).value;
   if (!clean || clean === ref.name) return;
   try {
     await postJson("/gonggan/cut/rename", { pid: state.pid, cut_id: refId, name: clean });
@@ -899,7 +900,7 @@ function openReferencesModal() {
   wrap.querySelector(".gg-refs-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const nameIn = wrap.querySelector(".gg-refs-name");
-    const name = normalizeNameInput(nameIn.value, 80);
+    const name = normalizeNameInput(nameIn.value, 80).value;
     if (!name) return;
     const category = wrap.querySelector(".gg-refs-cat").value;
     try {
