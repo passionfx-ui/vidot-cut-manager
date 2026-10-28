@@ -2,29 +2,36 @@
 
 export const LAST_TEMPLATE_KEY = "gonggan-cut.lastTemplate";
 
+/** Stored in localStorage when the user explicitly chose (none). */
+export const LAST_TEMPLATE_NONE = "__none__";
+
 /**
  * @param {Storage|null|undefined} storage
- * @returns {string}
+ * @returns {string|undefined} template ref, "" when last pick was (none), undefined when never set
  */
 export function loadLastTemplate(storage) {
   try {
-    if (!storage) return "";
-    return String(storage.getItem(LAST_TEMPLATE_KEY) ?? "").trim();
+    if (!storage) return undefined;
+    const raw = storage.getItem(LAST_TEMPLATE_KEY);
+    if (raw === null) return undefined;
+    if (raw === LAST_TEMPLATE_NONE) return "";
+    return String(raw).trim();
   } catch (_) {
-    return "";
+    return undefined;
   }
 }
 
 /**
- * Remember a non-empty template ref. Explicit "(none)" does not clear storage — last stays for preselect / shortcut.
+ * Remember last template pick, including explicit (none) as "".
  * @param {Storage|null|undefined} storage
- * @param {string} ref
+ * @param {string} ref workflow ref or "" for (none)
  */
 export function saveLastTemplate(storage, ref) {
   const r = String(ref ?? "").trim();
-  if (!r) return;
   try {
-    if (storage) storage.setItem(LAST_TEMPLATE_KEY, r);
+    if (!storage) return;
+    if (!r) storage.setItem(LAST_TEMPLATE_KEY, LAST_TEMPLATE_NONE);
+    else storage.setItem(LAST_TEMPLATE_KEY, r);
   } catch (_) {}
 }
 
@@ -69,11 +76,12 @@ export function filterTemplatePaths(paths, query, keep) {
 
 /**
  * @param {string[]} paths
- * @param {string} last
- * @returns {string} '' when none or last missing from paths
+ * @param {string|undefined} last from loadLastTemplate
+ * @returns {string} '' preselects (none); template ref when last is in paths
  */
 export function pickInitialTemplate(paths, last) {
-  const l = String(last ?? "").trim();
+  if (last === undefined) return "";
+  const l = String(last).trim();
   if (!l) return "";
   const list = paths || [];
   return list.includes(l) ? l : "";
