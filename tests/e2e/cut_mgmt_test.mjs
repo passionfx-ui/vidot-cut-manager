@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
 import { submitAskDialog, dismissAskDialog } from "./ask_text_helpers.mjs";
+import { waitForDomCutCountSync } from "./dom_sync_helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -296,6 +297,7 @@ async function createProjectViaUi(page, name) {
   );
   const pid = await page.$eval(".gg-root.gg-shots .gg-proj", (sel) => sel.value);
   if (pid) createdProjectIds.push(pid);
+  await waitForDomCutCountSync(page);
   return pid;
 }
 
@@ -304,6 +306,7 @@ async function ensureFourCuts(page) {
   while ((await countCuts(page)) < 4) {
     await rightClickEmptyShots(page);
     await clickCtxItem(page, "Add Cut");
+    await waitForDomCutCountSync(page);
     await sleep(500);
   }
 }
@@ -436,8 +439,10 @@ async function main() {
     await dragCut(page, 0, 2);
     const after = await ids();
     if (after.join() === before.join()) throw new Error(`order unchanged: ${before} -> ${after}`);
+    // Scene-cut labels follow display order within each scene block (1-1, 1-2, …).
     const nums = await getCutNumbers(page);
-    if (nums.join() !== ["001", "002", "003", "004"].slice(0, nums.length).join()) throw new Error(`numbers should stay positional: ${nums}`);
+    const expected = Array.from({ length: nums.length }, (_, i) => `1-${i + 1}`);
+    if (nums.join() !== expected.join()) throw new Error(`expected ${expected.join()}, got ${nums.join()}`);
   });
 
   await runScenario("03", "Scene group + reorder inside scene", async () => {
@@ -802,9 +807,17 @@ async function main() {
       throw new Error(`handle drag: last cut should be first, got ${orderAfterHandle.join()}`);
     }
     const nums = await getCutNumbers(page);
-    const expectedNums = Array.from({ length: nCuts }, (_, i) => String(i + 1).padStart(3, "0"));
-    if (nums.join(",") !== expectedNums.join(",")) {
-      throw new Error(`cut numbers should be 001..${nCuts}, got ${nums.join(",")}`);
+    // Labels are per scene: scene number steps by 1, cut number restarts at 1 for each new scene (earlier steps may have created scenes).
+    {
+      let prevS = 0;
+      let prevC = 0;
+      for (const lab of nums) {
+        const m = /^(\d+)-(\d+)$/.exec(lab || "");
+        const ok = m && ((+m[1] === prevS && +m[2] === prevC + 1) || (+m[1] === prevS + 1 && +m[2] === 1));
+        if (!ok) throw new Error(`cut numbers should restart per scene (S-N), got ${nums.join(",")}`);
+        prevS = +m[1];
+        prevC = +m[2];
+      }
     }
 
     await page.click(".gg-root.gg-shots .gg-reload");

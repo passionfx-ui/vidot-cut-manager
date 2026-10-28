@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
 import { submitAskDialog } from "./ask_text_helpers.mjs";
+import { waitForDomCutCountSync } from "./dom_sync_helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -326,6 +327,7 @@ async function createProjectViaUi(page, name, templateRef) {
   );
   const pid = await page.$eval(".gg-root.gg-shots .gg-proj", (sel) => sel.value);
   if (pid) createdProjectIds.push(pid);
+  await waitForDomCutCountSync(page);
   return pid;
 }
 
@@ -565,6 +567,7 @@ async function main() {
 
   await runScenario("03", "Empty area Add Cut", async () => {
     timelineMocks.delete(mainPid);
+    await waitForDomCutCountSync(page);
     const before = await countCuts(page);
     await rightClickEmptyShots(page);
     await clickCtxItem(page, "Add Cut");
@@ -573,6 +576,7 @@ async function main() {
       { timeout: 15000 },
       before
     );
+    await waitForDomCutCountSync(page);
   });
 
   await runScenario("04", "Multi-select and Group into scene", async () => {
@@ -580,6 +584,7 @@ async function main() {
       await rightClickEmptyShots(page);
       await clickCtxItem(page, "Add Cut");
       await sleep(500);
+      await waitForDomCutCountSync(page);
     }
     await clickCut(page, 0);
     await ctrlClickCut(page, 2);

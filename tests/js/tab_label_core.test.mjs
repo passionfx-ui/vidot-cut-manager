@@ -27,6 +27,7 @@ describe("formatShotTabLabel", () => {
 
   it("untitled cut and cut number fallback", () => {
     assert.equal(formatShotTabLabel({ projectName: "P", cutName: "", cutNumber: 3 }), "P / Cut 3");
+    assert.equal(formatShotTabLabel({ projectName: "P", cutName: "", cutNumber: "1-2" }), "P / Cut 1-2");
     assert.equal(formatShotTabLabel({ projectName: "P", cutName: "" }), "P / Untitled cut");
   });
 

@@ -163,7 +163,7 @@ Shots with no stored/version workflow and no draft still open the **owned** shot
 ## Cut management (0.8.0)
 Shots and Timeline add lightweight production tracking on top of the existing scene/cut model (English UI labels).
 
-- **Drag reorder** in the Shots list with **auto cut numbers** (`001`, `002`, …) after drops.
+- **Drag reorder** in the Shots list with **per-scene cut labels** (`1-1`, `1-2`, `2-1`, …) recomputed from timeline order and scene blocks (explicit groups plus consecutive ungrouped runs).
 - **Per-cut fields**: planned length (`planned_sec`), notes, **End card** flag (exempt from the short-form length rule).
 - **3-second rule warning** when effective length is over 3 s (uses `planned_sec` when set, else media `sec`); End card cuts are exempt.
 - **Final cut list** view: ordered picks with **total length**, copyable **file naming** display `S01_003_v02` (computed label only — pack files are never renamed).

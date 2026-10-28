@@ -10,6 +10,57 @@ export function formatCutNumber(n) {
   return String(v).padStart(3, "0");
 }
 
+/** @param {object|null|undefined} cut */
+function cutSceneBlockKey(cut) {
+  const gid = cut?.group_id;
+  if (gid != null && String(gid).trim() !== "") return `g:${String(gid).trim()}`;
+  return "u";
+}
+
+/**
+ * Per-scene display labels (1-1, 1-2, 2-1…) in timeline order.
+ * Each consecutive run in the same group is one scene block; each consecutive run of ungrouped cuts is one implicit scene block.
+ * @param {{ cuts?: object[] }} timeline
+ * @returns {Map<string, { scene: number, cut: number, label: string }>}
+ */
+export function computeCutLabels(timeline) {
+  const cuts = Array.isArray(timeline?.cuts) ? timeline.cuts : [];
+  /** @type {Map<string, { scene: number, cut: number, label: string }>} */
+  const map = new Map();
+  let sceneNum = 0;
+  let cutInScene = 0;
+  /** @type {string|null} */
+  let prevBlock = null;
+
+  for (const cut of cuts) {
+    if (!cut?.id) continue;
+    const block = cutSceneBlockKey(cut);
+    if (prevBlock === null || block !== prevBlock) {
+      sceneNum += 1;
+      cutInScene = 1;
+      prevBlock = block;
+    } else {
+      cutInScene += 1;
+    }
+    map.set(cut.id, { scene: sceneNum, cut: cutInScene, label: `${sceneNum}-${cutInScene}` });
+  }
+  return map;
+}
+
+/**
+ * @param {object|null|undefined} cut
+ * @param {Map<string, { label?: string }>|null|undefined} labels
+ */
+export function cutDisplayLabel(cut, labels) {
+  const id = cut?.id;
+  if (id && labels) {
+    const entry = labels.get(id);
+    if (entry?.label) return entry.label;
+  }
+  const n = cut?.number ?? (cut?.pos ?? cut?.index ?? 0) + 1;
+  return formatCutNumber(n);
+}
+
 /** @param {number} sec */
 export function formatSecShort(sec) {
   const n = Number(sec);
