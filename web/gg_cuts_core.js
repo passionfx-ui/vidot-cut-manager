@@ -201,6 +201,39 @@ export function clientYToWrapY(clientY, wrapTop, scrollTop) {
 }
 
 /**
+ * Scroll delta for auto-scroll while dragging in a vertical list wrap.
+ * @param {number} clientY pointer Y in viewport coordinates
+ * @param {number} wrapTop wrap.getBoundingClientRect().top
+ * @param {number} wrapBottom wrap.getBoundingClientRect().bottom
+ * @param {number} [edge] edge zone height in px
+ * @param {number} [maxStep] max scroll per animation frame
+ * @returns {number} delta to add to scrollTop (negative = scroll up)
+ */
+export function autoScrollDelta(clientY, wrapTop, wrapBottom, edge = 48, maxStep = 16) {
+  const e = Math.max(1, Number(edge) || 48);
+  const max = Math.max(1, Number(maxStep) || 16);
+  if (clientY < wrapTop) {
+    const dist = wrapTop - clientY;
+    const t = Math.min(1, (e + dist) / e);
+    return -max * t;
+  }
+  if (clientY > wrapBottom) {
+    const dist = clientY - wrapBottom;
+    const t = Math.min(1, (e + dist) / e);
+    return max * t;
+  }
+  if (clientY < wrapTop + e) {
+    const t = 1 - (clientY - wrapTop) / e;
+    return -max * Math.max(0, t);
+  }
+  if (clientY > wrapBottom - e) {
+    const t = 1 - (wrapBottom - clientY) / e;
+    return max * Math.max(0, t);
+  }
+  return 0;
+}
+
+/**
  * @param {string[]} order
  * @param {{ id: string, top: number, bottom: number, groupId: string|null }[]} rows
  * @param {number} wrapY pointer Y in wrap content coordinates (see clientYToWrapY)

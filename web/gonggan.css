@@ -9,7 +9,7 @@
 .gg-root .gg-no { display: inline-block; min-width: 1.6em; margin-right: 4px; color: var(--gg-acc); font-variant-numeric: tabular-nums; }
 
 /* Shots sidebar */
-.gg-shots { display: flex; flex-direction: column; overflow: hidden; }
+.gg-shots { display: flex; flex-direction: column; overflow: hidden; position: relative; }
 .gg-shots .gg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; border-bottom: 1px solid var(--gg-line); }
 .gg-shots .gg-tpl-wrap { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--gg-muted, #888); }
 .gg-shots .gg-tpl-select { max-width: 11rem; font-size: 11px; padding: 2px 4px; }
@@ -34,7 +34,16 @@
 .gg-shots .gg-selbar[hidden] { display: none !important; }
 .gg-shots .gg-cutlist { list-style: none; margin: 0; padding: 0 6px 6px; }
 .gg-shots .gg-cut.gg-sel { outline: 2px solid var(--gg-acc); background: #3a3528; box-shadow: inset 0 0 0 1px rgba(242, 184, 75, 0.35); }
-.gg-shots .gg-cut { display: flex; gap: 8px; align-items: center; padding: 4px; border-radius: 6px; cursor: pointer; border: 1px solid transparent; }
+.gg-shots .gg-cut {
+  display: flex; gap: 8px; align-items: center; padding: 4px; border-radius: 6px; cursor: pointer; border: 1px solid transparent;
+  -webkit-user-drag: none; user-drag: none; user-select: none;
+}
+.gg-shots .gg-cut textarea.gg-info-notes.gg-field-editing,
+.gg-shots .gg-cut textarea.gg-caption-text.gg-field-editing,
+.gg-shots .gg-cut input,
+.gg-shots .gg-cut select { user-select: text; }
+.gg-shots .gg-thumb-img,
+.gg-shots .gg-thumb-vid { -webkit-user-drag: none; user-drag: none; }
 .gg-shots .gg-cut:hover { background: var(--gg-panel); }
 .gg-shots .gg-cut.gg-on { border-color: var(--gg-acc); background: #2c2a22; }
 .gg-shots .gg-cut-thumb-col { flex: 0 0 96px; min-width: 0; }
@@ -129,6 +138,21 @@
   padding: 0 2px 0 0;
 }
 .gg-shots .gg-drag-handle:active { cursor: grabbing; }
+.gg-shots .gg-move-col {
+  flex: 0 0 auto; display: flex; flex-direction: column; gap: 1px; align-self: center; opacity: 0; pointer-events: none;
+}
+.gg-shots .gg-cut:hover .gg-move-col,
+.gg-shots .gg-cut.gg-sel .gg-move-col { opacity: 1; pointer-events: auto; }
+.gg-shots .gg-move-btn {
+  background: var(--gg-panel); border: 1px solid var(--gg-line); color: var(--gg-dim); border-radius: 3px;
+  font-size: 9px; line-height: 1; padding: 1px 4px; cursor: pointer; min-width: 1.4em;
+}
+.gg-shots .gg-move-btn:hover:not(:disabled) { border-color: var(--gg-acc); color: var(--gg-fg); }
+.gg-shots .gg-move-btn:disabled { opacity: 0.35; cursor: default; }
+.gg-shots .gg-version {
+  position: absolute; right: 6px; bottom: 2px; font-size: 9px; color: var(--gg-dim); opacity: 0.55;
+  pointer-events: none; z-index: 3; font-variant-numeric: tabular-nums;
+}
 .gg-shots .gg-cut.gg-moving {
   opacity: 0.92;
   outline: 2px solid var(--gg-acc);
