@@ -205,6 +205,23 @@ def native_import_structure(pid: str, payload: dict) -> dict:
     return {"ok": True, "timeline": store.to_timeline(pid)}
 
 
+def native_add_reference(pid: str, name: str, category: str) -> dict | None:
+    store = native_store()
+    doc = store.get_project(pid)
+    if not doc:
+        return None
+    if not isinstance(name, str) or not name.strip() or len(name.strip()) > 80:
+        raise ValueError("name must be 1-80 characters")
+    graph = None
+    ref = doc.get("template_ref")
+    if isinstance(ref, str) and ref:
+        graph = resolve_template_graph(ref)
+    if graph is None:
+        graph = gg_template.get_template(pid)
+    c = store.add_reference(pid, name, category, template_graph=graph or None)
+    return {"ok": True, "reference": {"id": c["id"], "name": c["name"], "category": c["category"]}, "timeline": store.to_timeline(pid)}
+
+
 def native_rename_cut(pid: str, cut_id: str, name: str) -> dict | None:
     store = native_store()
     if store.get_project(pid) is None:

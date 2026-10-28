@@ -510,6 +510,28 @@ async def gg_project_import(request):
     return web.json_response(res)
 
 
+@routes.post("/gonggan/reference/add")
+async def gg_reference_add(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    if not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid required")
+    try:
+        res = await asyncio.to_thread(gg_native_api.native_add_reference, pid, data.get("name"), data.get("category"))
+    except FileNotFoundError:
+        return _err(404, "project not found")
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] reference add failed")
+        return _err(500, str(ex))
+    if res is None:
+        return _err(404, "project not found")
+    return web.json_response(res)
+
+
 @routes.post("/gonggan/cut/rename")
 async def gg_cut_rename(request):
     data = await _json_body(request)
