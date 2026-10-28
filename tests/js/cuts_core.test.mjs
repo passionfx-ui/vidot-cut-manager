@@ -8,6 +8,7 @@ import {
   moveCuts,
   shotsDropTarget,
   clientYToWrapY,
+  autoScrollDelta,
   finalCutList,
   filterCuts,
   fileBaseName,
@@ -220,6 +221,23 @@ describe("shotsDropTarget", () => {
     assert.equal(t.toIndex, 0);
     assert.equal(t.toGroupId, "scene1");
     assert.equal(t.lineY, 0);
+  });
+});
+
+describe("autoScrollDelta", () => {
+  it("scrolls up when pointer is above the wrap", () => {
+    assert.ok(autoScrollDelta(100, 200, 600, 48, 16) < 0);
+  });
+  it("scrolls down when pointer is below the wrap", () => {
+    assert.ok(autoScrollDelta(700, 200, 600, 48, 16) > 0);
+  });
+  it("returns zero in the middle band", () => {
+    assert.equal(autoScrollDelta(400, 200, 600, 48, 16), 0);
+  });
+  it("is stronger nearer the top edge", () => {
+    const near = Math.abs(autoScrollDelta(210, 200, 600, 48, 16));
+    const far = Math.abs(autoScrollDelta(230, 200, 600, 48, 16));
+    assert.ok(near > far);
   });
 });
 

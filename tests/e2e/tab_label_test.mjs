@@ -251,6 +251,8 @@ async function createProjectViaUi(page, name, templateRef) {
     { timeout: 30000 },
     name
   );
+  // wait until the list shows the NEW project (1 seed cut), not the previously selected one
+  await page.waitForFunction(() => document.querySelectorAll(".gg-root.gg-shots .gg-cut").length === 1, { timeout: 20000 });
   const pid = await page.$eval(".gg-root.gg-shots .gg-proj", (sel) => sel.value);
   if (pid) createdProjectIds.push(pid);
   return pid;
