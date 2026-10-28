@@ -2698,6 +2698,7 @@ function openCutContextMenu(e, cutId) {
     { label: "Split scene", disabled: !inScene, action: () => splitSceneHere(cutId) },
     { label: "Remove from Scene", disabled: !inScene && !ids.some((id) => cutById(id)?.group_id), action: () => ungroupCuts(ids) },
     { label: redoLabel, disabled: !nat, title: nat ? "" : NATIVE_READONLY_TIP, action: () => toggleNeedsRedo(cutId) },
+    { label: "Rename…", disabled: !nat || ids.length > 1, title: nat ? "" : NATIVE_READONLY_TIP, action: () => renameCut(cutId) },
     { label: "Add Cut", action: () => addCutAfter(cutId) },
     { label: "Delete", danger: true, action: () => deleteSelectedCuts() },
     {
@@ -2796,6 +2797,20 @@ async function ungroupCuts(cutIds) {
   state.cutSel.clear();
   cutSelAnchor = "";
   await persistGroups(stripCutsFromGroups(groupsClone(), ids));
+}
+
+async function renameCut(cutId) {
+  const c = cutById(cutId);
+  if (!c || !state.pid) return;
+  const name = await askText({ title: "Cut name", label: "Name", value: c.name || "", okLabel: "Rename", maxLength: 80 });
+  if (name === null || name === c.name) return;
+  try {
+    await postJson("/gonggan/cut/rename", { pid: state.pid, cut_id: cutId, name });
+    await loadTimeline();
+  } catch (err) {
+    const hint = err.status === 404 || err.status === 405 ? "Restart ComfyUI to enable renaming." : err.message;
+    ggToast("Cut", hint, "warn");
+  }
 }
 
 async function renameSceneGroup(groupId) {
