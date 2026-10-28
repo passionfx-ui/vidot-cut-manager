@@ -9,6 +9,8 @@ try:
 except ImportError:  # unittest / plain script
     from gg_data import clamp_clip, media_duration  # type: ignore
 
+from .project_settings import normalize_settings
+
 _IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _VID_EXT = {".mp4", ".webm"}
 
@@ -232,6 +234,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "name": project.get("name") or "",
             "logline": "",
             "due_date": project.get("due_date") if isinstance(project.get("due_date"), str) else None,
+            "settings": normalize_settings(project.get("settings") if isinstance(project.get("settings"), dict) else None),
         },
         "cuts": cuts,
         "groups": groups,

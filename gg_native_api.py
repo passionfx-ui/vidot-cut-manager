@@ -79,14 +79,14 @@ def resolve_template_graph(template_ref: str | None) -> dict | None:
         return None
 
 
-def create_native_project(name: str, template_ref: str | None = None) -> dict:
+def create_native_project(name: str, template_ref: str | None = None, settings: dict | None = None) -> dict:
     name = (name or "").strip()
     if not name:
         raise ValueError("name required")
     ref = (template_ref or "").strip() or None
     graph = resolve_template_graph(ref) if ref else None
     store = native_store()
-    doc = store.create_project(name, template_ref=ref, template_graph=graph)
+    doc = store.create_project(name, template_ref=ref, template_graph=graph, settings=settings)
     return {"ok": True, "project": {"id": doc["id"], "name": doc.get("name"), "native": True}}
 
 

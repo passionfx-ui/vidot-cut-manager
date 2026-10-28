@@ -132,6 +132,15 @@ import {
   timelineShortcutAllowed,
   timelineToggleTooltip,
 } from "./gg_timeline_toggle_core.js";
+import {
+  RESOLUTION_PRESETS,
+  FPS_OPTIONS,
+  DEFAULT_PROJECT_SETTINGS,
+  presetKey,
+  normalizeProjectSettings,
+  presetKeyForSettings,
+  readSettingsFromFormValues,
+} from "./gg_project_settings_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -442,6 +451,41 @@ function projectOptionLabel(p) {
 
 let projectModalEl = null;
 
+function projectSetupFieldsHtml() {
+  const presetOpts = RESOLUTION_PRESETS.map((p) => {
+    const k = presetKey(p);
+    return `<option value="${esc(k)}">${esc(p.label)}</option>`;
+  }).join("");
+  const fpsOpts = FPS_OPTIONS.map((f) => `<option value="${f}">${f}</option>`).join("");
+  return `
+      <label class="gg-modal-field">Aspect / resolution
+        <select class="gg-modal-resolution">${presetOpts}</select>
+      </label>
+      <label class="gg-modal-field">FPS
+        <select class="gg-modal-fps">${fpsOpts}</select>
+      </label>
+      <label class="gg-modal-field">Default cut length (sec)
+        <input type="number" class="gg-modal-cut-sec" min="1" max="60" step="0.1" value="${DEFAULT_PROJECT_SETTINGS.cut_seconds}" />
+      </label>`;
+}
+
+function applyProjectSetupToModal(wrap, settings) {
+  const s = normalizeProjectSettings(settings);
+  const resSel = wrap.querySelector(".gg-modal-resolution");
+  const fpsSel = wrap.querySelector(".gg-modal-fps");
+  const cutIn = wrap.querySelector(".gg-modal-cut-sec");
+  if (resSel) resSel.value = presetKeyForSettings(s);
+  if (fpsSel) fpsSel.value = String(s.fps);
+  if (cutIn) cutIn.value = String(s.cut_seconds);
+}
+
+function readProjectSetupFromModal(wrap, base) {
+  const resSel = wrap.querySelector(".gg-modal-resolution");
+  const fpsSel = wrap.querySelector(".gg-modal-fps");
+  const cutIn = wrap.querySelector(".gg-modal-cut-sec");
+  return readSettingsFromFormValues(resSel?.value, fpsSel?.value, cutIn?.value, base);
+}
+
 function closeProjectModal() {
   if (projectModalEl) {
     projectModalEl.remove();
@@ -457,6 +501,7 @@ function openNewProjectModal() {
     <form class="gg-modal" role="dialog" aria-label="New project">
       <h3 class="gg-modal-title">New Project</h3>
       <label class="gg-modal-field">Name <input type="text" class="gg-modal-name" required maxlength="120" /></label>
+      ${projectSetupFieldsHtml()}
       <label class="gg-modal-field">Template
         <input type="search" class="gg-modal-tpl-filter" placeholder="Filter templates..." autocomplete="off" />
         <span class="gg-modal-tpl-hint" aria-live="polite"></span>
@@ -493,6 +538,7 @@ function openNewProjectModal() {
   fetchUserWorkflowPaths().then(() => {
     refreshModalTplOptions(pickInitialTemplate(userWorkflowPaths, loadLastTemplate(localStorage)));
   });
+  applyProjectSetupToModal(wrap, DEFAULT_PROJECT_SETTINGS);
   wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeProjectModal(); });
   wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", closeProjectModal);
   form.addEventListener("submit", async (e) => {
@@ -500,13 +546,99 @@ function openNewProjectModal() {
     const name = nameIn.value.trim();
     if (!name) return;
     const template_ref = tplSel.value || undefined;
+    const settings = readProjectSetupFromModal(wrap, DEFAULT_PROJECT_SETTINGS);
     saveLastTemplate(localStorage, tplSel.value);
     try {
-      const d = await postJson("/gonggan/project/create", { name, template_ref });
+      const d = await postJson("/gonggan/project/create", { name, template_ref, settings });
       closeProjectModal();
       await loadProjects();
       if (d.project?.id) selectProject(d.project.id);
       ggToast("Project", `Created "${name}"`, "ok");
+    } catch (err) {
+      ggToast("Project", err.message, "warn");
+    }
+  });
+  nameIn.focus();
+}
+
+function openProjectSettingsModal() {
+  if (!isNativeProject() || !state.pid) return;
+  closeProjectModal();
+  const p = currentProject();
+  const tl = state.timeline;
+  const curSettings = normalizeProjectSettings(tl?.project?.settings);
+  const wrap = document.createElement("div");
+  wrap.className = "gg-modal-backdrop";
+  wrap.innerHTML = `
+    <form class="gg-modal" role="dialog" aria-label="Project settings">
+      <h3 class="gg-modal-title">Project Settings</h3>
+      <label class="gg-modal-field">Name <input type="text" class="gg-modal-name" required maxlength="${PROJECT_NAME_MAX_LEN}" /></label>
+      ${projectSetupFieldsHtml()}
+      <label class="gg-modal-field">Default template
+        <input type="search" class="gg-modal-tpl-filter" placeholder="Filter templates..." autocomplete="off" />
+        <span class="gg-modal-tpl-hint" aria-live="polite"></span>
+        <select class="gg-modal-tpl"><option value="">(none)</option></select>
+      </label>
+      <div class="gg-modal-actions">
+        <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
+        <button type="submit" class="gg-btn gg-primary">Save</button>
+      </div>
+    </form>`;
+  document.body.appendChild(wrap);
+  projectModalEl = wrap;
+  const form = wrap.querySelector("form");
+  const nameIn = wrap.querySelector(".gg-modal-name");
+  nameIn.value = p?.name || tl?.project?.name || "";
+  const tplSel = wrap.querySelector(".gg-modal-tpl");
+  const tplFilter = wrap.querySelector(".gg-modal-tpl-filter");
+  const tplHint = wrap.querySelector(".gg-modal-tpl-hint");
+  const refreshModalTplOptions = (forceSelected) => {
+    const selected = typeof forceSelected === "string" ? forceSelected : tplSel.value;
+    const userTotal = userTemplatePaths(userWorkflowPaths, selected).length;
+    const filtered = filterTemplatePaths(userWorkflowPaths, tplFilter?.value || "", selected);
+    tplSel.innerHTML = `<option value="">(none)</option>${filtered
+      .map((path) => `<option value="${esc(path)}"${path === selected ? " selected" : ""}>${esc(path)}</option>`)
+      .join("")}`;
+    tplSel.value = selected;
+    if (tplHint) {
+      const q = (tplFilter?.value || "").trim();
+      if (q && userTotal) tplHint.textContent = `${filtered.length} of ${userTotal}`;
+      else if (!q && userTotal) tplHint.textContent = `${userTotal} templates`;
+      else tplHint.textContent = "";
+    }
+  };
+  tplFilter?.addEventListener("input", () => refreshModalTplOptions());
+  fetchUserWorkflowPaths().then(() => {
+    refreshModalTplOptions(projectTemplateRef || "");
+  });
+  applyProjectSetupToModal(wrap, curSettings);
+  wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeProjectModal(); });
+  wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", closeProjectModal);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = normalizeNameInput(nameIn.value, PROJECT_NAME_MAX_LEN);
+    if (!name) return;
+    const settings = readProjectSetupFromModal(wrap, curSettings);
+    const template_ref = tplSel.value || "";
+    try {
+      if (name !== (p?.name || tl?.project?.name || "")) {
+        await postJson("/gonggan/project/rename", { pid: state.pid, name });
+      }
+      const data = await postJson("/gonggan/project/update", { pid: state.pid, fields: { settings } });
+      if (template_ref !== (projectTemplateRef || "")) {
+        await postJson("/gonggan/template", { pid: state.pid, ref: template_ref || "" });
+        projectTemplateRef = template_ref || "";
+        projectHasTemplate = !!template_ref;
+      }
+      closeProjectModal();
+      if (data.timeline) state.timeline = data.timeline;
+      if (data.projects) state.projects = data.projects;
+      await loadProjects();
+      bus.dispatchEvent(new Event("projects"));
+      bus.dispatchEvent(new Event("timeline"));
+      bus.dispatchEvent(new Event("template"));
+      paintProjectSummary(null);
+      ggToast("Project", "Settings saved", "ok");
     } catch (err) {
       ggToast("Project", err.message, "warn");
     }
@@ -646,6 +778,7 @@ function openProjectContextMenu(e) {
   const nat = isNativeProject();
   showCtxMenu(e.clientX, e.clientY, [
     { label: "New Project…", action: () => openNewProjectModal() },
+    { label: "Project Settings…", disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => openProjectSettingsModal() },
     { label: "Rename Project…", disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => renameNativeProject() },
     { label: "Delete Project", danger: true, disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => deleteNativeProject() },
   ]);
@@ -4143,7 +4276,7 @@ function mountShots(el) {
           <button type="button" class="gg-btn${listCaption ? "" : " gg-on"}" data-mode="info" title="Show cut details">Info</button>
           <button type="button" class="gg-btn${listCaption ? " gg-on" : ""}" data-mode="caption" title="Edit dialogue / captions per cut">Caption</button>
         </div>
-        <label class="gg-filter-redo" title="Show only cuts flagged needs redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Needs redo only</label>
+        <label class="gg-filter-redo" title="Show only cuts marked for redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Show redo cuts only</label>
       </div>
       <div class="gg-meta">
         <span class="gg-meta-text">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</span>

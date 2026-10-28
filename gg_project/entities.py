@@ -42,7 +42,9 @@ def bump_entity(ent: dict[str, Any]) -> None:
 
 
 def default_settings() -> dict[str, Any]:
-    return {"fps": 24, "default_sec": 3.0}
+    from .project_settings import DEFAULT_PROJECT_SETTINGS, normalize_settings
+
+    return normalize_settings(DEFAULT_PROJECT_SETTINGS)
 
 
 def new_scene(name: str) -> dict[str, Any]:
