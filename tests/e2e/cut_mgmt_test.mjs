@@ -807,9 +807,17 @@ async function main() {
       throw new Error(`handle drag: last cut should be first, got ${orderAfterHandle.join()}`);
     }
     const nums = await getCutNumbers(page);
-    const expectedNums = Array.from({ length: nCuts }, (_, i) => `1-${i + 1}`);
-    if (nums.join(",") !== expectedNums.join(",")) {
-      throw new Error(`cut numbers should be ${expectedNums.join(",")}, got ${nums.join(",")}`);
+    // Labels are per scene: scene number steps by 1, cut number restarts at 1 for each new scene (earlier steps may have created scenes).
+    {
+      let prevS = 0;
+      let prevC = 0;
+      for (const lab of nums) {
+        const m = /^(\d+)-(\d+)$/.exec(lab || "");
+        const ok = m && ((+m[1] === prevS && +m[2] === prevC + 1) || (+m[1] === prevS + 1 && +m[2] === 1));
+        if (!ok) throw new Error(`cut numbers should restart per scene (S-N), got ${nums.join(",")}`);
+        prevS = +m[1];
+        prevC = +m[2];
+      }
     }
 
     await page.click(".gg-root.gg-shots .gg-reload");
