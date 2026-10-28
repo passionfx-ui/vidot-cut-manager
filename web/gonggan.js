@@ -40,7 +40,7 @@ import {
   movedToTrashToastMessage,
 } from "./gg_trash_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
-import { parseImportList, summarizeImport, buildLlmPrompt } from "./gg_import_core.js";
+import { parseImportList, summarizeImport, buildLlmPrompt, REFERENCE_CATEGORIES } from "./gg_import_core.js";
 import {
   autosaveModifiedTabs,
   autosaveWorkflow,
@@ -744,6 +744,175 @@ function openProjectSettingsModal() {
   nameIn.focus();
 }
 
+let refsModalEl = null;
+const refsUi = { cat: "All" };
+
+function closeReferencesModal() {
+  if (refsModalEl) {
+    refsModalEl.remove();
+    refsModalEl = null;
+  }
+}
+
+function referenceCardHtml(r) {
+  const img = r.media
+    ? `<img src="${esc(posterUrl(r.media.id))}" loading="lazy" alt="" />`
+    : `<span class="gg-ref-empty">No image yet</span>`;
+  return `
+    <div class="gg-ref" data-ref-id="${esc(r.id)}">
+      <div class="gg-ref-thumb">${img}</div>
+      <div class="gg-ref-name" title="${esc(r.name)}">${esc(r.name)}</div>
+      <div class="gg-ref-cat">${esc(r.category)}</div>
+      <div class="gg-ref-actions">
+        <button type="button" class="gg-btn gg-ref-gen" title="Open this reference's workflow in a ComfyUI tab. Run it, then click Add last output.">Generate</button>
+        <button type="button" class="gg-btn gg-ref-add" title="Use ComfyUI's last output as this reference's image">Add last output</button>
+        <button type="button" class="gg-btn gg-ref-rename">Rename</button>
+        <button type="button" class="gg-btn gg-ref-del">Delete</button>
+      </div>
+    </div>`;
+}
+
+function paintReferencesModal() {
+  const wrap = refsModalEl;
+  if (!wrap) return;
+  const all = (state.timeline && state.timeline.references) || [];
+  const cats = ["All", ...REFERENCE_CATEGORIES];
+  if (!cats.includes(refsUi.cat)) refsUi.cat = "All";
+  wrap.querySelector(".gg-refs-chips").innerHTML = cats
+    .map((c) => {
+      const n = c === "All" ? all.length : all.filter((r) => r.category === c).length;
+      return `<button type="button" class="gg-ref-chip${c === refsUi.cat ? " gg-on" : ""}" data-cat="${esc(c)}">${esc(c)} ${n}</button>`;
+    })
+    .join("");
+  const shown = refsUi.cat === "All" ? all : all.filter((r) => r.category === refsUi.cat);
+  const list = wrap.querySelector(".gg-refs-list");
+  list.innerHTML = shown.length
+    ? shown.map(referenceCardHtml).join("")
+    : `<div class="gg-refs-none">${all.length ? "Nothing in this category." : "No references yet. Add a character, place or prop below."}</div>`;
+  const sel = wrap.querySelector(".gg-refs-cat");
+  if (sel && refsUi.cat !== "All" && sel.dataset.touched !== "1") sel.value = refsUi.cat;
+}
+
+function referenceErrorText(err, what) {
+  return err && (err.status === 404 || err.status === 405) ? `Restart ComfyUI to enable ${what}.` : err.message;
+}
+
+async function openReferenceWorkflow(refId) {
+  const ref = cutById(refId);
+  if (!ref) return;
+  closeReferencesModal();
+  clearTimeout(wfLoadDebounce);
+  wfLoadDebounce = 0;
+  wfLastLoadedCutId = "";
+  wfLastLoadedProjectId = "";
+  const loadToken = ++wfLoadToken;
+  ggCutLoadsInFlight++;
+  try {
+    await scheduleLoadCutWorkflow(refId, ref, loadToken);
+  } finally {
+    ggCutLoadsInFlight--;
+  }
+}
+
+async function addLastOutputToReference(refId) {
+  const ref = cutById(refId);
+  try {
+    await postJson("/gonggan/send-output", { pid: state.pid, cut_id: refId });
+    await loadTimeline();
+    paintReferencesModal();
+    ggToast("Reference", `Added the last output to ${ref?.name || "the reference"}`, "ok");
+  } catch (err) {
+    ggToast("Reference", err.message, "warn");
+  }
+}
+
+async function renameReference(refId) {
+  const ref = cutById(refId);
+  if (!ref) return;
+  const name = await askText({ title: "Rename reference", label: "Name", value: ref.name, okLabel: "Rename", maxLength: 80 });
+  const clean = name == null ? "" : normalizeNameInput(name, 80);
+  if (!clean || clean === ref.name) return;
+  try {
+    await postJson("/gonggan/cut/rename", { pid: state.pid, cut_id: refId, name: clean });
+    await loadTimeline();
+    paintReferencesModal();
+  } catch (err) {
+    ggToast("Reference", referenceErrorText(err, "renaming"), "warn");
+  }
+}
+
+async function deleteReference(refId) {
+  const ref = cutById(refId);
+  if (!ref) return;
+  if (!confirm(`Delete reference "${ref.name}"?`)) return;
+  try {
+    await postJson("/gonggan/cut/delete", { pid: state.pid, cuts: [refId] });
+    await loadTimeline();
+    paintReferencesModal();
+  } catch (err) {
+    ggToast("Reference", err.message, "warn");
+  }
+}
+
+function openReferencesModal() {
+  if (!isNativeProject() || !state.pid) return;
+  closeProjectModal();
+  closeReferencesModal();
+  const wrap = document.createElement("div");
+  wrap.className = "gg-modal-backdrop";
+  wrap.innerHTML = `
+    <div class="gg-modal gg-refs" role="dialog" aria-label="References">
+      <h3 class="gg-modal-title">References</h3>
+      <div class="gg-refs-chips"></div>
+      <div class="gg-refs-list"></div>
+      <form class="gg-refs-form">
+        <input type="text" class="gg-refs-name" maxlength="80" placeholder="New reference name" autocomplete="off" />
+        <select class="gg-refs-cat">${REFERENCE_CATEGORIES.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
+        <button type="submit" class="gg-btn gg-primary">+ New</button>
+      </form>
+      <div class="gg-refs-hint">Generate opens the workflow in a ComfyUI tab. Run it, then come back and click Add last output.</div>
+      <div class="gg-modal-actions"><button type="button" class="gg-btn gg-refs-close">Close</button></div>
+    </div>`;
+  document.body.appendChild(wrap);
+  refsModalEl = wrap;
+  paintReferencesModal();
+  wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeReferencesModal(); });
+  wrap.querySelector(".gg-refs-close").addEventListener("click", closeReferencesModal);
+  wrap.querySelector(".gg-refs-cat").addEventListener("change", (e) => { e.target.dataset.touched = "1"; });
+  wrap.addEventListener("click", (e) => {
+    const chip = e.target.closest(".gg-ref-chip");
+    if (chip) {
+      refsUi.cat = chip.dataset.cat;
+      const sel = wrap.querySelector(".gg-refs-cat");
+      if (sel) sel.dataset.touched = "";
+      paintReferencesModal();
+      return;
+    }
+    const card = e.target.closest(".gg-ref");
+    const id = card?.dataset.refId;
+    if (!id) return;
+    if (e.target.closest(".gg-ref-gen")) openReferenceWorkflow(id);
+    else if (e.target.closest(".gg-ref-add")) addLastOutputToReference(id);
+    else if (e.target.closest(".gg-ref-rename")) renameReference(id);
+    else if (e.target.closest(".gg-ref-del")) deleteReference(id);
+  });
+  wrap.querySelector(".gg-refs-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const nameIn = wrap.querySelector(".gg-refs-name");
+    const name = normalizeNameInput(nameIn.value, 80);
+    if (!name) return;
+    const category = wrap.querySelector(".gg-refs-cat").value;
+    try {
+      await postJson("/gonggan/reference/add", { pid: state.pid, name, category });
+      nameIn.value = "";
+      await loadTimeline();
+      paintReferencesModal();
+    } catch (err) {
+      ggToast("Reference", referenceErrorText(err, "References"), "warn");
+    }
+  });
+  wrap.querySelector(".gg-refs-name").focus();
+}
 let askTextEl = null;
 
 /**
@@ -876,6 +1045,7 @@ function openProjectContextMenu(e) {
   const nat = isNativeProject();
   showCtxMenu(e.clientX, e.clientY, [
     { label: "New Project…", action: () => openNewProjectModal() },
+    { label: "References…", disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => openReferencesModal() },
     { label: "Project Settings…", disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => openProjectSettingsModal() },
     { label: "Rename Project…", disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => renameNativeProject() },
     { label: "Delete Project", danger: true, disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => deleteNativeProject() },
@@ -1736,11 +1906,13 @@ function ggToast(summary, detail, kind = "info", opts = null) {
 
 function cutById(cutId) {
   const tl = state.timeline;
-  return tl ? tl.cuts.find((c) => c.id === cutId) : null;
+  if (!tl) return null;
+  return tl.cuts.find((c) => c.id === cutId) || (tl.references || []).find((c) => c.id === cutId) || null;
 }
 
 function shotTitle(c) {
   if (!c) return "";
+  if (c.kind === "reference") return `Reference: ${c.name || "(untitled)"}`;
   return `${(c.pos ?? c.index) + 1}. ${c.name || "(untitled)"}`;
 }
 
