@@ -447,7 +447,20 @@ async function modifyWorkflowViaWidget(page, marker) {
     wf?.changeTracker?.checkState?.();
     return { ok: !!wf?.isModified, err: wf?.isModified ? "" : "isModified false" };
   }, marker);
-  if (!ok.ok) throw new Error(ok.err || "modify failed");
+  if (!ok.ok && !ok.err) throw new Error("modify failed");
+  // checkState() is skipped by ComfyUI while a graph load/configure is in flight; retry like real input events would.
+  if (!ok.ok) {
+    let flagged = false;
+    for (let i = 0; i < 20 && !flagged; i++) {
+      await new Promise((r) => setTimeout(r, 150));
+      flagged = await page.evaluate(() => {
+        const wf = window.app.extensionManager.workflow.activeWorkflow;
+        wf?.changeTracker?.checkState?.();
+        return !!wf?.isModified;
+      });
+    }
+    if (!flagged) throw new Error("isModified false (edit never flagged dirty after 3s)");
+  }
 }
 
 async function activeGraphHasMarker(page, marker) {
