@@ -1,6 +1,6 @@
 ﻿[project]
 name = "comfyui-gonggan-cut"
-version = "0.9.31"
+version = "0.9.32"
 description = "Shot list and rough-cut timeline inside ComfyUI"
 readme = "README.md"
 license = { file = "LICENSE" }
