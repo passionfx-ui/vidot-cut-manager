@@ -135,7 +135,7 @@ async function launchPersistentBrowser() {
 }
 
 async function newGuardedPage(browser) {
-  const page = await browser.newPage();
+  const page = await browser.newPage(); page.on("dialog", (d) => d.accept().catch(() => {}));
   page.setDefaultNavigationTimeout(180000);
   page.setDefaultTimeout(60000);
   await page.setRequestInterception(true);
@@ -167,7 +167,12 @@ async function openShotsTab(page) {
 
 async function selectProject(page, pid) {
   await page.waitForSelector(".gg-root.gg-shots .gg-proj", { timeout: 30000 });
-  await page.select(".gg-root.gg-shots .gg-proj", pid);
+  for (let i = 0; i < 12; i++) {
+    await page.select(".gg-root.gg-shots .gg-proj", pid);
+    await sleep(600);
+    const v = await page.$eval(".gg-root.gg-shots .gg-proj", (el) => el.value);
+    if (v === pid) break;
+  }
   await sleep(500);
 }
 
