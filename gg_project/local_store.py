@@ -532,6 +532,95 @@ class LocalStore:
             self._save_project_doc(pid, doc, "rename_cut", cut_id)
             return doc
 
+    _REF_CATEGORIES = ("Character", "Place", "Prop", "Style", "Other")
+    _IMPORT_MAX_CUTS = 500
+
+    def import_structure(
+        self,
+        pid: str,
+        scenes: list[dict[str, Any]],
+        loose: list[dict[str, Any]],
+        references: list[dict[str, Any]],
+        template_graph: dict | None = None,
+    ) -> dict[str, Any]:
+        """Auto Cut Split: fill a brand-new project (one untouched cut) with scenes, empty cuts and reference names."""
+        scenes = scenes if isinstance(scenes, list) else []
+        loose = loose if isinstance(loose, list) else []
+        references = references if isinstance(references, list) else []
+        total = len(loose) + sum(len((s or {}).get("cuts") or []) for s in scenes if isinstance(s, dict))
+        if total < 1:
+            raise ValueError("nothing to import")
+        if total > self._IMPORT_MAX_CUTS:
+            raise ValueError(f"at most {self._IMPORT_MAX_CUTS} cuts per import")
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                raise FileNotFoundError(pid)
+            cuts = self._cuts_map(doc)
+            active = [cid for cid, c in cuts.items() if isinstance(c, dict) and not c.get("deleted_at")]
+            if len(active) != 1:
+                raise ValueError("project already has cuts")
+            first = cuts[active[0]]
+            if first.get("caption") or self.list_versions(pid, first["id"]):
+                raise ValueError("project already has cuts")
+            default_sec = normalize_settings(doc.get("settings")).get("cut_seconds", 3.0)
+            sha = self.put_blob(pid, template_graph) if template_graph is not None else None
+            reuse = [first]
+
+            def make(entry: Any, scene_id: str | None) -> str:
+                if not isinstance(entry, dict):
+                    raise ValueError("invalid cut entry")
+                name = str(entry.get("name") or "").strip()[:80] or "cut"
+                if reuse:
+                    c = reuse.pop()
+                    c["name"] = name
+                    c["scene_id"] = scene_id
+                else:
+                    c = new_cut(scene_id, name, default_sec, sha)
+                    cuts[c["id"]] = c
+                sec = entry.get("sec")
+                c["planned_sec"] = self._validate_planned_sec(sec) if sec is not None else None
+                cap = entry.get("caption")
+                cap = cap if isinstance(cap, str) else ""
+                if len(cap) > self._CAPTION_MAX_LEN:
+                    raise ValueError(f"caption must be at most {self._CAPTION_MAX_LEN} characters")
+                c["caption"] = cap
+                bump_entity(c)
+                return c["id"]
+
+            loose_ids = [make(e, None) for e in loose]
+            new_scenes: list[dict[str, Any]] = []
+            for s in scenes:
+                if not isinstance(s, dict):
+                    raise ValueError("invalid scene entry")
+                sc = new_scene(str(s.get("name") or "").strip()[:40] or "Scene")
+                sc["cut_order"] = [make(e, sc["id"]) for e in (s.get("cuts") or [])]
+                if sc["cut_order"]:
+                    new_scenes.append(sc)
+            doc["cuts"] = cuts
+            doc["scenes"] = new_scenes
+            doc["loose_order"] = loose_ids
+            refs = [r for r in (doc.get("references") or []) if isinstance(r, dict)]
+            seen = {(str(r.get("category")).lower(), str(r.get("name")).strip().lower()) for r in refs}
+            for r in references:
+                if not isinstance(r, dict):
+                    continue
+                cat = r.get("category")
+                nm = str(r.get("name") or "").strip()[:80]
+                if cat not in self._REF_CATEGORIES or not nm:
+                    continue
+                key = (cat.lower(), nm.lower())
+                if key in seen:
+                    continue
+                seen.add(key)
+                ref = entity_base()
+                ref["name"] = nm
+                ref["category"] = cat
+                refs.append(ref)
+            doc["references"] = refs
+            self._bump_project(doc)
+            self._save_project_doc(pid, doc, "import_structure", pid)
+            return doc
     def delete_cuts(self, pid: str, ids: list[str]) -> dict[str, Any]:
         with self._lock:
             doc = self._load_project_doc(pid)
