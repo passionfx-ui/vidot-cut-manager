@@ -15,7 +15,7 @@ const SCREENS_DIR = path.join(REPO_ROOT, "tests/screens");
 const JSON_PATH = path.join(SCREENS_DIR, "switch_perf.json");
 const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const BASE = process.env.BASE_URL || "http://127.0.0.1:8188";
-const MIN_RAM = 40 * 1024 ** 3;
+const MIN_RAM = 40e9;
 const VIEWPORT = { width: 1600, height: 900 };
 const TEST_PREFIX = "ZZ switchperf";
 const MARKER = "ZZ_SWITCHPERF_MARKER";
@@ -26,9 +26,9 @@ const BLOCKED_POST = [
   /\/api\/gonggan\/regen(\?|$)/,
 ];
 
-const SWITCH_CLEAN_MEDIAN_MS = Number(process.env.SWITCH_CLEAN_MEDIAN_MS || 800);
-const SWITCH_CLEAN_MAX_MS = Number(process.env.SWITCH_CLEAN_MAX_MS || 3000);
-const SWITCH_MOD_MEDIAN_MS = Number(process.env.SWITCH_MOD_MEDIAN_MS || 1200);
+const SWITCH_CLEAN_MEDIAN_MS = Number(process.env.SWITCH_CLEAN_MEDIAN_MS || 250);
+const SWITCH_CLEAN_MAX_MS = Number(process.env.SWITCH_CLEAN_MAX_MS || 1500);
+const SWITCH_MOD_MEDIAN_MS = Number(process.env.SWITCH_MOD_MEDIAN_MS || 400);
 
 const CYCLES = 15;
 const runStamp = Date.now();
@@ -400,7 +400,6 @@ async function waitForCutLoaded(page, cutId) {
     { timeout: 90000 },
     cutId
   );
-  await sleep(500);
 }
 
 async function waitForGraphNodes(page) {
@@ -456,18 +455,22 @@ function summarizeNetwork(t0, t1) {
   let saves = 0;
   let gonggan = 0;
   let maxBodyBytes = 0;
+  const requests = [];
   for (const e of win) {
     let pathname = "";
     try {
-      pathname = new URL(e.url).pathname;
+      const u = new URL(e.url);
+      pathname = u.pathname;
+      requests.push(`${e.method} ${pathname}`);
     } catch {
+      requests.push(`${e.method} ${e.url}`);
       continue;
     }
     if (isSaveRequest(e.method, pathname)) saves += 1;
     if (isGongganRequest(pathname)) gonggan += 1;
     maxBodyBytes = Math.max(maxBodyBytes, e.bodyBytes);
   }
-  return { total: win.length, saves, gonggan, maxBodyBytes };
+  return { total: win.length, saves, gonggan, maxBodyBytes, requests };
 }
 
 async function measuredSwitch(page, cutId, { modify, modifyMarker, phase, cycle, step }) {
@@ -514,6 +517,7 @@ function percentile(sorted, p) {
 function phaseStats(records) {
   const switchMs = records.map((r) => r.switch_ms).sort((a, b) => a - b);
   const saves = records.map((r) => r.network.saves);
+  const netTotals = records.map((r) => r.network.total);
   const longest = records.map((r) => r.blocking.longestBlockMs);
   const openCounts = records.flatMap((r) => [r.tabs.openBefore, r.tabs.openAfter]);
   return {
@@ -525,6 +529,10 @@ function phaseStats(records) {
     saves: {
       median: percentile([...saves].sort((a, b) => a - b), 50),
       max: Math.max(0, ...saves),
+    },
+    network: {
+      median: percentile([...netTotals].sort((a, b) => a - b), 50),
+      max: Math.max(0, ...netTotals),
     },
     longestBlock: { max: Math.max(0, ...longest) },
     tabs: { min: Math.min(...openCounts), max: Math.max(...openCounts) },
@@ -538,6 +546,7 @@ function printPhaseTable(phaseName, stats) {
   console.log("| --- | ---: | ---: | ---: |");
   console.log(`| switch_ms | ${stats.switch_ms.median} | ${stats.switch_ms.p95} | ${stats.switch_ms.max} |`);
   console.log(`| saves/switch | ${stats.saves.median} | — | ${stats.saves.max} |`);
+  console.log(`| network/switch | ${stats.network.median} | — | ${stats.network.max} |`);
   console.log(`| longest block (ms) | — | — | ${stats.longestBlock.max} |`);
   console.log(`| open tab count | min ${stats.tabs.min} | — | max ${stats.tabs.max} |`);
 }
@@ -709,6 +718,7 @@ async function main() {
     baseline: { openTabs: baselineTabs, ownedTabs: baselineOwned },
     clean: { records: cleanRecords, stats: cleanStats },
     modified: { records: modRecords, stats: modStats },
+    sampleCleanRequests: cleanRecords[0]?.network?.requests?.slice(0, 12) || [],
     pluginConsoleErrors: [...pluginConsoleErrors],
     blockedPromptAttempts,
   };
@@ -752,6 +762,27 @@ async function main() {
   await runScenario("S5", "no plugin console errors", () => {
     if (pluginConsoleErrors.length) {
       throw new Error(pluginConsoleErrors.map((x) => x.text).join(" | "));
+    }
+  });
+
+  await runScenario("S6", "rapid A→B→C clicks: owned tab stays 1, tabs do not grow", async () => {
+    const order = [cuts[0], cuts[1], cuts[2]];
+    let maxOpen = baselineTabs;
+    for (let round = 0; round < 5; round++) {
+      for (const c of order) {
+        await clickCutById(page, c.id);
+        await sleep(30);
+      }
+      await waitForCutLoaded(page, order[2].id);
+      const st = await getWorkflowTabState(page);
+      maxOpen = Math.max(maxOpen, st.openCount);
+      const owned = await countOwnedTabs(page);
+      if (owned !== 1) {
+        throw new Error(`round ${round}: owned tabs ${owned} !== 1`);
+      }
+    }
+    if (maxOpen > baselineTabs) {
+      throw new Error(`open tabs grew to ${maxOpen} (baseline ${baselineTabs})`);
     }
   });
 
