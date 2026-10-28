@@ -36,22 +36,23 @@ export function formatShotTabTitle({ projectName, cutName, cutNumber }) {
 }
 
 /** @returns {string|null} null when project name empty (do not override label). */
-export function formatShotTabLabel({ projectName, cutName, cutNumber }) {
+export function formatShotTabLabel({ projectName, cutName, cutNumber, edited }) {
   const parts = resolveShotTabParts({ projectName, cutName, cutNumber });
   if (!parts) return null;
   const { project, cut } = parts;
-  const full = `${project}${TAB_LABEL_SEP}${cut}`;
+  const cutLabel = edited ? `${cut} *` : cut;
+  const full = `${project}${TAB_LABEL_SEP}${cutLabel}`;
   if (full.length <= MAX_LABEL_CHARS) return full;
 
   const minProjectSlot = MIN_PROJECT_CHARS + 1;
-  const projectOnlyMax = MAX_LABEL_CHARS - TAB_LABEL_SEP.length - cut.length;
+  const projectOnlyMax = MAX_LABEL_CHARS - TAB_LABEL_SEP.length - cutLabel.length;
   if (projectOnlyMax >= minProjectSlot) {
-    return truncateWithEllipsis(project, projectOnlyMax) + TAB_LABEL_SEP + cut;
+    return truncateWithEllipsis(project, projectOnlyMax) + TAB_LABEL_SEP + cutLabel;
   }
 
   const projectShort = truncateWithEllipsis(project, minProjectSlot);
   const cutMax = MAX_LABEL_CHARS - TAB_LABEL_SEP.length - projectShort.length;
-  const cutShort = truncateWithEllipsis(cut, cutMax);
+  const cutShort = truncateWithEllipsis(cutLabel, cutMax);
   return projectShort + TAB_LABEL_SEP + cutShort;
 }
 
