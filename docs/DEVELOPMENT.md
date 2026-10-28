@@ -139,6 +139,9 @@ Each shot’s ComfyUI tab copy is saved at a **stable id-based path**: `workflow
 ## Timeline selection without tab switch (0.8.3)
 Clicking a **Timeline** clip updates the selected cut and preview seek only; it does **not** load or switch the Gonggan shot workflow tab. **Shots** list clicks still open the cut workflow as before. When the canvas tab is a different cut than the selection, the Shots list shows a small **Open** marker on the open cut (`web/gg_cut_select_core.js`).
 
+## Timeline panel toggle
+**Shots** header **Timeline** button (and **T** / **Alt+T** when Shots or the Timeline panel is active) shows on/off state (`aria-pressed`, tooltip `Timeline: on (T)` / `Timeline: off (T)`). Off fully collapses the ComfyUI bottom panel via `Workspace.ToggleBottomPanelTab.gg-timeline`; on restores the previous height (`gg.timelineHeight`, min 220px, capped at ~70% viewport). Preference `gg.timelineOpen` (`1`/`0`, default on). Auto-open on Shots show or cut select respects off. Helpers: `web/gg_timeline_toggle_core.js`; unit tests `tests/js/timeline_toggle_core.test.mjs`; E2E `tests/e2e/timeline_toggle_test.mjs` (blocks `/prompt` and `/gonggan/regen`).
+
 ## Info panel tidy (0.9.1)
 The selected-cut panel at the bottom of **Shots** is denser: one-line header (collapse, title, length, flags, Regen/Send), inline Length/End card/Needs redo, compact version strip, and project summary on one row (completion % + due date; stage bar only). Large in-panel preview and scene action buttons removed (**Split scene** moved to the cut context menu). Collapse state persists in `gg.panelOpen`. Pure helper: `web/gg_panel_core.js`; tests `tests/js/panel_core.test.mjs`.
 
