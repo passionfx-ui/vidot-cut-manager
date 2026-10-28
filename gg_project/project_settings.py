@@ -24,9 +24,10 @@ DEFAULT_PROJECT_SETTINGS: dict[str, Any] = {
     "fps": 24,
     "cut_seconds": 3.0,
     "caption_lang": "English",
+    "project_folder": "",
 }
 
-_SETTING_KEYS = frozenset({"aspect", "width", "height", "fps", "cut_seconds", "caption_lang"})
+_SETTING_KEYS = frozenset({"aspect", "width", "height", "fps", "cut_seconds", "caption_lang", "project_folder"})
 
 
 def preset_key(preset: dict[str, Any]) -> str:
@@ -87,6 +88,12 @@ def _clamp_caption_lang(value: Any) -> str:
     return s if s in CAPTION_LANG_ALLOWED else str(DEFAULT_PROJECT_SETTINGS["caption_lang"])
 
 
+def _clamp_project_folder(value: Any) -> str:
+    """Optional local folder path (display + future sync target only; nothing is written there)."""
+    s = "".join(ch for ch in str(value or "") if ch >= " ").strip()
+    return s[:260]
+
+
 def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     """Merge missing keys and clamp; old docs may use default_sec instead of cut_seconds."""
     out = dict(DEFAULT_PROJECT_SETTINGS)
@@ -104,6 +111,7 @@ def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     out["fps"] = _clamp_fps(out.get("fps"))
     out["cut_seconds"] = _clamp_cut_seconds(out.get("cut_seconds"))
     out["caption_lang"] = _clamp_caption_lang(out.get("caption_lang"))
+    out["project_folder"] = _clamp_project_folder(out.get("project_folder"))
     return out
 
 
