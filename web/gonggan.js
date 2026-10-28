@@ -58,7 +58,13 @@ import {
   shouldShowOpenTabMarker,
 } from "./gg_cut_select_core.js";
 import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
-import { GG_VERSION } from "./gg_version.js";
+import {
+  readCutWorkflowKindSwitch,
+  repMediaKind,
+  resolveEffectiveWorkflowKind,
+  shouldTryEmbeddedRepWorkflow,
+  workflowSourceToastDetail,
+} from "./gg_rep_wf_core.js";
 import {
   formatShotTabLabel,
   formatShotTabTitle,
@@ -129,6 +135,8 @@ const shotsUi = {
   playCutId: "",
   composing: false,
   paintDeferred: false,
+  cutWfKind: null,
+  cutWfKindCutId: "",
 };
 const cutFieldUi = { timer: 0, pending: null, unsaved: {}, routeMissing: false, captionDegraded: false };
 let cutFieldSaveFailToastAt = 0;
@@ -246,6 +254,7 @@ async function loadTimeline() {
   }
   bus.dispatchEvent(new Event("timeline"));
   refreshTrashCount();
+  await reloadOpenCutWorkflowIfRepChanged();
 }
 
 function refreshTrashCount() {
@@ -640,6 +649,7 @@ let wfLoadDebounce = 0;
 let ggCutLoadsInFlight = 0;
 let wfLastLoadedCutId = "";
 let wfLastLoadedProjectId = "";
+let wfLastLoadedRepId = "";
 /** ComfyWorkflow tab last opened by Gonggan shot load (never user workflows). */
 let ggOwnedShotWorkflow = null;
 /** Paths Gonggan created/renamed this session (lowercase) -> { projectId, cutId }. */
@@ -959,8 +969,7 @@ async function tryRestoreCutWorkingCopy(cutId, cutRec, loadToken) {
     if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
     if (ggCutSwitchAutosaveBlocked) return false;
     if (!loaded) return false;
-    wfLastLoadedCutId = cutId;
-    wfLastLoadedProjectId = state.pid;
+    markWorkflowLoadComplete(cutId, cut);
     markGraphGongganCut(cutId);
     rememberWorkflowBaselineFromActiveGraph(cutId);
     sdk.msg = `Canvas: ${shotTitle(cut)} (restored edits)`;
@@ -1374,9 +1383,44 @@ const SOURCE_TOAST = {
   draft: "draft workflow",
 };
 
-async function fetchCutSourceWorkflowPayload(cutId) {
+function userWorkflowKindSwitch(cutId) {
+  const fromUi =
+    shotsUi.cutWfKindCutId === cutId && shotsUi.cutWfKind ? shotsUi.cutWfKind : null;
+  return readCutWorkflowKindSwitch(localStorage, cutId) || fromUi || null;
+}
+
+function workflowKindForCut(cut) {
+  if (!cut) return null;
+  return resolveEffectiveWorkflowKind({
+    userKind: userWorkflowKindSwitch(cut.id),
+    repKind: repMediaKind(cut),
+  });
+}
+
+function markWorkflowLoadComplete(cutId, cutRec) {
+  wfLastLoadedCutId = cutId;
+  wfLastLoadedProjectId = state.pid;
+  wfLastLoadedRepId = repIdOf(cutRec || cutById(cutId));
+}
+
+async function reloadOpenCutWorkflowIfRepChanged() {
+  const cutId = wfLastLoadedCutId;
+  if (!cutId || !state.pid || wfLastLoadedProjectId !== state.pid) return;
+  if (!isGongganShotTabOpenAndActive()) return;
+  const cut = cutById(cutId);
+  if (!cut) return;
+  const rep = repIdOf(cut);
+  if (rep === wfLastLoadedRepId) return;
+  const loadToken = ++wfLoadToken;
+  await loadCutWorkflow(cutId, cut, loadToken);
+}
+
+async function fetchCutSourceWorkflowPayload(cutId, cutRec) {
   const tl = state.timeline;
-  const q = `/gonggan/cut-source-workflow?pid=${encodeURIComponent(tl.project.id)}&cut=${encodeURIComponent(cutId)}`;
+  const cut = cutRec || cutById(cutId);
+  const effectiveKind = workflowKindForCut(cut);
+  let q = `/gonggan/cut-source-workflow?pid=${encodeURIComponent(tl.project.id)}&cut=${encodeURIComponent(cutId)}`;
+  if (effectiveKind) q += `&kind=${encodeURIComponent(effectiveKind)}`;
   const res = await api.fetchApi(q);
   if (res.status === 404) {
     const err = new Error("cut-source-workflow unavailable");
@@ -1426,21 +1470,22 @@ const CUT_WORKFLOW_SOURCES = [
   {
     id: "stored",
     async resolve(cutId) {
-      const data = await fetchCutSourceWorkflowPayload(cutId);
+      const c = cutById(cutId);
+      const data = await fetchCutSourceWorkflowPayload(cutId, c);
       if (isEmptyCutSourcePayload(data)) {
         const err = new Error("empty cut");
         err.ggEmptyCut = true;
         throw err;
       }
-      const c = cutById(cutId);
       const title = shotTitle(c);
       const src = data.source || "stored";
       const label = SOURCE_TOAST[src] || src;
+      const detail = workflowSourceToastDetail(label, data.fallback);
       return {
         workflow: data.workflow,
-        sdkMsg: `Canvas: ${title} (${label})`,
+        sdkMsg: `Canvas: ${title} (${detail})`,
         toastKind: "ok",
-        toastDetail: label,
+        toastDetail: detail,
         toastSummary: src === "template" ? "template" : src === "draft" ? "draft" : "stored",
       };
     },
@@ -1448,9 +1493,9 @@ const CUT_WORKFLOW_SOURCES = [
   ...LEGACY_CUT_WORKFLOW_SOURCES,
 ];
 
-async function tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken) {
+async function tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken, effectiveKind) {
   const cut = cutRec || cutById(cutId);
-  if (!cut?.media || cut.media.kind === "video") return false;
+  if (!shouldTryEmbeddedRepWorkflow(cut, effectiveKind)) return false;
   try {
     const res = await api.fetchApi(`/gonggan/media?id=${encodeURIComponent(cut.media.id)}`);
     if (!res.ok) return false;
@@ -1462,8 +1507,7 @@ async function tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken) {
     if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
     if (ggCutSwitchAutosaveBlocked) return false;
     if (!loaded) return false;
-    wfLastLoadedCutId = cutId;
-    wfLastLoadedProjectId = state.pid;
+    markWorkflowLoadComplete(cutId, cut);
     markGraphGongganCut(cutId);
     const title = shotTitle(cut);
     sdk.msg = `Canvas: ${title} (embedded in result)`;
@@ -1488,8 +1532,7 @@ async function loadEmptyCutWorkflow(cutId, cutRec, loadToken, title) {
   if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
   if (ggCutSwitchAutosaveBlocked) return false;
   if (!loaded) return false;
-  wfLastLoadedCutId = cutId;
-  wfLastLoadedProjectId = state.pid;
+  markWorkflowLoadComplete(cutId, cutRec);
   markGraphGongganCut(cutId);
   const label = kind === "template" ? "project template" : "empty canvas";
   sdk.msg = `Canvas: ${title} (${label})`;
@@ -1507,8 +1550,9 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
   ggCutSwitchAutosaveBlocked = false;
   const cutRec = cut || cutById(cutId);
   const title = shotTitle(cutRec);
+  const effectiveKind = workflowKindForCut(cutRec);
   if (await tryRestoreCutWorkingCopy(cutId, cutRec, loadToken)) return;
-  if (await tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken)) return;
+  if (await tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken, effectiveKind)) return;
   let lastErr = null;
   for (const src of CUT_WORKFLOW_SOURCES) {
     try {
@@ -1521,8 +1565,7 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
         lastErr = new Error("workflow load failed");
         continue;
       }
-      wfLastLoadedCutId = cutId;
-      wfLastLoadedProjectId = state.pid;
+      markWorkflowLoadComplete(cutId, cutRec);
       markGraphGongganCut(cutId);
       sdk.msg = hit.sdkMsg;
       bus.dispatchEvent(new Event("sdk"));
@@ -1550,8 +1593,7 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
               lastErr = new Error("workflow load failed");
               continue;
             }
-            wfLastLoadedCutId = cutId;
-            wfLastLoadedProjectId = state.pid;
+            markWorkflowLoadComplete(cutId, cutRec);
             markGraphGongganCut(cutId);
             sdk.msg = hit.sdkMsg;
             bus.dispatchEvent(new Event("sdk"));
@@ -3418,7 +3460,17 @@ async function setPick(cutId, vid) {
   bus.dispatchEvent(new Event("select"));
   clearTimeout(ed.saveTimer);
   const ok = await saveEdit();
-  if (ok) return;
+  if (ok) {
+    if (
+      cutId === wfLastLoadedCutId &&
+      state.pid === wfLastLoadedProjectId &&
+      isGongganShotTabOpenAndActive()
+    ) {
+      const loadToken = ++wfLoadToken;
+      loadCutWorkflow(cutId, c, loadToken).catch((e) => console.warn("[gonggan] rep workflow reload failed", e));
+    }
+    return;
+  }
   const v = (c.versions_list || []).find((x) => x.id === prev.pick);
   c.pick = prev.pick;
   c.media = prev.media || (v ? mediaFromVersion(v) : null);
