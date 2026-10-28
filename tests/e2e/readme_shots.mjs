@@ -3,6 +3,7 @@
  * ZZ-test- projects only. Blocks POST /prompt and /gonggan/regen.
  */
 import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -195,11 +196,7 @@ async function run() {
     for (let i = 0; i < flat.length; i += 1) {
       const [nm, sec, cap] = flat[i];
       await api(page, "/gonggan/cut/update", { pid: demoPid, cut_id: tl.cuts[i].id, fields: { planned_sec: sec, caption: cap } });
-      try {
-        await api(page, "/gonggan/cut/rename", { pid: demoPid, cut_id: tl.cuts[i].id, name: nm });
-      } catch (_) {
-        /* old server: names stay cut1.. */
-      }
+      await api(page, "/gonggan/cut/rename", { pid: demoPid, cut_id: tl.cuts[i].id, name: nm });
     }
     tl = (await getJson(page, `/gonggan/timeline?pid=${encodeURIComponent(demoPid)}`)).data;
     let at = 0;
@@ -209,6 +206,8 @@ async function run() {
       return { id: `demo-scene-${gi + 1}`, name, cut_ids: ids, collapsed: false };
     });
     await api(page, "/gonggan/groups", { pid: demoPid, groups });
+    const seedIds = [0, 1, 3, 4].map((i) => tl.cuts[i].id);
+    execFileSync("python", [path.join(__dirname, "seed_demo_thumbs.py"), demoPid, ...seedIds], { stdio: "inherit" });
     const emptyTl = (await getJson(page, `/gonggan/timeline?pid=${encodeURIComponent(emptyPid)}`)).data;
     await api(page, "/gonggan/cut/delete", { pid: emptyPid, cuts: emptyTl.cuts.map((c) => c.id) });
 
@@ -241,6 +240,10 @@ async function run() {
     const nDemo = await page.$$eval(`${root} .gg-cut`, (e) => e.length);
     const nGroups = await page.$$eval(`${root} .gg-grp-sec[data-group-id]`, (e) => e.length);
     if (nDemo !== flat.length) throw new Error(`demo shows ${nDemo} cuts`);
+    const titles = await page.$$eval(`${root} .gg-cut .gg-cut-title`, (e) => e.map((x) => x.textContent.trim()));
+    if (JSON.stringify(titles) !== JSON.stringify(flat.map((f) => f[0]))) throw new Error(`cut names not shown: ${titles}`);
+    const thumbs = await page.$$eval(`${root} .gg-cut img.gg-thumb`, (e) => e.filter((i) => i.naturalWidth > 0).length);
+    if (thumbs !== seedIds.length) throw new Error(`expected ${seedIds.length} loaded thumbnails, got ${thumbs}`);
     const firstCut = await page.$(`${root} .gg-cut`);
     await firstCut.click({ offset: { x: 150, y: 10 } });
     await sleep(2500);
@@ -264,7 +267,7 @@ async function run() {
       seen.set(hash, k);
       report[k] = { bytes: buf.length, sha256_12: hash };
     }
-    console.log("PASS  screenshots written (NOT visually checked): " + JSON.stringify({ cuts: nDemo, groupsNodes: nGroups, timeline: tlm, files: report }));
+    console.log("PASS  screenshots written (NOT visually checked): " + JSON.stringify({ cuts: nDemo, groupsNodes: nGroups, titles, thumbs, timeline: tlm, files: report }));
   } finally {
     try {
       await cleanupProjects(page);
