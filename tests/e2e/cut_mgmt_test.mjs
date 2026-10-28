@@ -436,8 +436,10 @@ async function main() {
     await dragCut(page, 0, 2);
     const after = await ids();
     if (after.join() === before.join()) throw new Error(`order unchanged: ${before} -> ${after}`);
+    // Scene-cut labels follow display order within each scene block (1-1, 1-2, …).
     const nums = await getCutNumbers(page);
-    if (nums.join() !== ["001", "002", "003", "004"].slice(0, nums.length).join()) throw new Error(`numbers should stay positional: ${nums}`);
+    const expected = Array.from({ length: nums.length }, (_, i) => `1-${i + 1}`);
+    if (nums.join() !== expected.join()) throw new Error(`expected ${expected.join()}, got ${nums.join()}`);
   });
 
   await runScenario("03", "Scene group + reorder inside scene", async () => {
@@ -802,9 +804,9 @@ async function main() {
       throw new Error(`handle drag: last cut should be first, got ${orderAfterHandle.join()}`);
     }
     const nums = await getCutNumbers(page);
-    const expectedNums = Array.from({ length: nCuts }, (_, i) => String(i + 1).padStart(3, "0"));
+    const expectedNums = Array.from({ length: nCuts }, (_, i) => `1-${i + 1}`);
     if (nums.join(",") !== expectedNums.join(",")) {
-      throw new Error(`cut numbers should be 001..${nCuts}, got ${nums.join(",")}`);
+      throw new Error(`cut numbers should be ${expectedNums.join(",")}, got ${nums.join(",")}`);
     }
 
     await page.click(".gg-root.gg-shots .gg-reload");

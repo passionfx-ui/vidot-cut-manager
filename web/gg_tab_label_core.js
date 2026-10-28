@@ -12,8 +12,14 @@ function resolveShotTabParts({ projectName, cutName, cutNumber }) {
   if (!project) return null;
   let cut = collapseWs(cutName);
   if (!cut) {
-    if (cutNumber != null && Number.isFinite(Number(cutNumber))) {
-      cut = `Cut ${Number(cutNumber)}`;
+    if (cutNumber != null) {
+      if (typeof cutNumber === "string" && cutNumber.trim() !== "") {
+        cut = `Cut ${cutNumber.trim()}`;
+      } else if (Number.isFinite(Number(cutNumber))) {
+        cut = `Cut ${Number(cutNumber)}`;
+      } else {
+        cut = "Untitled cut";
+      }
     } else {
       cut = "Untitled cut";
     }
