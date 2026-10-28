@@ -13,6 +13,7 @@ from .entities import (
     bump_entity,
     default_settings,
     entity_base,
+    is_reference,
     new_cut,
     new_scene,
     new_version,
@@ -145,7 +146,10 @@ class LocalStore:
         return raw if isinstance(raw, dict) else {}
 
     def _active_cut_ids(self, doc: dict[str, Any]) -> set[str]:
-        return {cid for cid, c in self._cuts_map(doc).items() if isinstance(c, dict) and not c.get("deleted_at")}
+        return {
+            cid for cid, c in self._cuts_map(doc).items()
+            if isinstance(c, dict) and not c.get("deleted_at") and not is_reference(c)
+        }
 
     def _remove_cut_from_orders(self, doc: dict[str, Any], cut_id: str) -> None:
         loose = doc.get("loose_order")
@@ -190,7 +194,7 @@ class LocalStore:
     def _next_cut_name(self, doc: dict[str, Any]) -> str:
         max_n = 0
         for c in self._cuts_map(doc).values():
-            if not isinstance(c, dict):
+            if not isinstance(c, dict) or is_reference(c):
                 continue
             m = _CUT_NAME_RE.match(str(c.get("name") or ""))
             if m:
@@ -557,7 +561,7 @@ class LocalStore:
             if not doc or doc.get("deleted_at"):
                 raise FileNotFoundError(pid)
             cuts = self._cuts_map(doc)
-            active = [cid for cid, c in cuts.items() if isinstance(c, dict) and not c.get("deleted_at")]
+            active = [cid for cid, c in cuts.items() if isinstance(c, dict) and not c.get("deleted_at") and not is_reference(c)]
             if len(active) != 1:
                 raise ValueError("project already has cuts")
             first = cuts[active[0]]
@@ -600,27 +604,45 @@ class LocalStore:
             doc["cuts"] = cuts
             doc["scenes"] = new_scenes
             doc["loose_order"] = loose_ids
-            refs = [r for r in (doc.get("references") or []) if isinstance(r, dict)]
-            seen = {(str(r.get("category")).lower(), str(r.get("name")).strip().lower()) for r in refs}
             for r in references:
-                if not isinstance(r, dict):
-                    continue
-                cat = r.get("category")
-                nm = str(r.get("name") or "").strip()[:80]
-                if cat not in self._REF_CATEGORIES or not nm:
-                    continue
-                key = (cat.lower(), nm.lower())
-                if key in seen:
-                    continue
-                seen.add(key)
-                ref = entity_base()
-                ref["name"] = nm
-                ref["category"] = cat
-                refs.append(ref)
-            doc["references"] = refs
+                if isinstance(r, dict):
+                    self._add_reference_locked(doc, r.get("name"), r.get("category"), sha, skip_bad=True)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "import_structure", pid)
             return doc
+
+    def _add_reference_locked(self, doc, name, category, sha, skip_bad=False):
+        nm = str(name or "").strip()[:80]
+        if category not in self._REF_CATEGORIES or not nm:
+            if skip_bad:
+                return None
+            raise ValueError("name and a valid category are required")
+        cuts = self._cuts_map(doc)
+        key = (category.lower(), nm.lower())
+        for c in cuts.values():
+            if is_reference(c) and not c.get("deleted_at") and (str(c.get("category")).lower(), str(c.get("name")).strip().lower()) == key:
+                if skip_bad:
+                    return None
+                raise ValueError("this reference already exists")
+        c = new_cut(None, nm, 3.0, sha)
+        c["kind"] = "reference"
+        c["category"] = category
+        cuts[c["id"]] = c
+        doc["cuts"] = cuts
+        return c
+
+    def add_reference(self, pid: str, name: str, category: str, template_graph: dict | None = None) -> dict[str, Any]:
+        """Add a reference (hidden from the timeline). Returns the new reference record."""
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                raise FileNotFoundError(pid)
+            sha = self.put_blob(pid, template_graph) if template_graph is not None else None
+            c = self._add_reference_locked(doc, name, category, sha)
+            self._bump_project(doc)
+            self._save_project_doc(pid, doc, "add_reference", c["id"])
+            return c
+
     def delete_cuts(self, pid: str, ids: list[str]) -> dict[str, Any]:
         with self._lock:
             doc = self._load_project_doc(pid)
@@ -650,7 +672,7 @@ class LocalStore:
                     scenes_by_id[s["id"]] = s.get("name") if isinstance(s.get("name"), str) else ""
             rows: list[dict[str, Any]] = []
             for cid, c in cuts.items():
-                if not isinstance(c, dict) or not c.get("deleted_at"):
+                if not isinstance(c, dict) or not c.get("deleted_at") or is_reference(c):
                     continue
                 notes = c.get("notes") if isinstance(c.get("notes"), str) else ""
                 if len(notes) > 120:
@@ -786,7 +808,7 @@ class LocalStore:
             ver = new_version(cut_id, asset, wf_sha, prompt_id)
             vpath = self._project_dir(pid) / "versions" / cut_id / f"{ver['id']}.json"
             _atomic_write_json(vpath, ver)
-            if not c.get("pick_version_id"):
+            if not c.get("pick_version_id") or is_reference(c):
                 c["pick_version_id"] = ver["id"]
             bump_entity(c)
             self._bump_project(doc)

@@ -55,6 +55,11 @@ def new_scene(name: str) -> dict[str, Any]:
     return s
 
 
+def is_reference(c: Any) -> bool:
+    """A reference (Character/Place/...) is stored like a cut but never appears on the timeline."""
+    return isinstance(c, dict) and c.get("kind") == "reference"
+
+
 def new_cut(
     scene_id: str | None,
     name: str,

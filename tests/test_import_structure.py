@@ -57,8 +57,8 @@ class ImportStructureTests(unittest.TestCase):
         self.assertEqual(cut["caption"], "Rain | on platform")
         self.assertEqual(cut["planned_sec"], 3.0)
         self.assertIsNone(doc["cuts"][order[3]]["scene_id"])
-        self.assertEqual([(r["category"], r["name"]) for r in doc["references"]],
-                         [("Character", "Mina"), ("Place", "Old station")])
+        refs = [(r["category"], r["name"]) for r in self.store.to_timeline(self.pid)["references"]]
+        self.assertEqual(refs, [("Character", "Mina"), ("Place", "Old station")])
 
     def test_refuses_project_with_cuts(self):
         native_import_structure(self.pid, self._payload())
