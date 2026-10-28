@@ -151,6 +151,9 @@ Shots **Info | Caption** toggle (legacy localStorage `story` → Caption). Capti
 ## Single shot tab and tab label (0.8.4)
 Switching shots in the **Shots** list reuses **one** Gonggan-owned workflow tab: after a successful load the previous owned tab is closed (auto-save first; unsaved tabs that could not be saved are kept with a warning toast). The ComfyUI tab bar shows a **display-only** label `Project / Cut` for Gonggan shot tabs (`workflow.filename` and saved paths are unchanged). Pure helpers: `web/gg_tab_close_core.js`, `web/gg_tab_label_core.js`.
 
+## Empty cuts (contest fix)
+Shots with no stored/version workflow and no draft still open the **owned** shot tab (`loadWorkflowIntoDedicatedTab`): project **template** graph when linked, otherwise a **blank** UI graph (zero nodes) stamped with `ggGongganMeta`. Switching between empty and worked cuts never spawns extra workflow tabs. **New Project** / project template **(none)** is remembered in `gonggan-cut.lastTemplate` (explicit none vs never chosen). Pure: `web/gg_empty_cut_core.js`, `web/gg_template_pick_core.js`; unit `tests/js/empty_cut_core.test.mjs`; e2e `tests/e2e/empty_cut_test.mjs` (blocks `/prompt`, `/gonggan/regen`).
+
 ## Cut management (0.8.0)
 Shots and Timeline add lightweight production tracking on top of the existing scene/cut model (English UI labels).
 
