@@ -106,6 +106,10 @@ import {
   userTemplatePaths,
 } from "./gg_template_pick_core.js";
 import {
+  isEmptyCutSourcePayload,
+  resolveEmptyCutWorkflow,
+} from "./gg_empty_cut_core.js";
+import {
   normalizeNameInput,
   SCENE_NAME_MAX_LEN,
   PROJECT_NAME_MAX_LEN,
@@ -475,7 +479,7 @@ function openNewProjectModal() {
     const name = nameIn.value.trim();
     if (!name) return;
     const template_ref = tplSel.value || undefined;
-    if (template_ref) saveLastTemplate(localStorage, template_ref);
+    saveLastTemplate(localStorage, tplSel.value);
     try {
       const d = await postJson("/gonggan/project/create", { name, template_ref });
       closeProjectModal();
@@ -1386,6 +1390,7 @@ async function fetchCutSourceWorkflowPayload(cutId) {
     throw err;
   }
   if (!data.workflow) {
+    if (isEmptyCutSourcePayload(data)) return data;
     throw new Error("no workflow for this shot");
   }
   return data;
@@ -1422,6 +1427,11 @@ const CUT_WORKFLOW_SOURCES = [
     id: "stored",
     async resolve(cutId) {
       const data = await fetchCutSourceWorkflowPayload(cutId);
+      if (isEmptyCutSourcePayload(data)) {
+        const err = new Error("empty cut");
+        err.ggEmptyCut = true;
+        throw err;
+      }
       const c = cutById(cutId);
       const title = shotTitle(c);
       const src = data.source || "stored";
@@ -1467,6 +1477,28 @@ async function tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken) {
   }
 }
 
+async function loadEmptyCutWorkflow(cutId, cutRec, loadToken, title) {
+  if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
+  let templateWf = null;
+  try {
+    templateWf = await fetchProjectTemplatePayload();
+  } catch (_) {}
+  const { kind, workflow } = resolveEmptyCutWorkflow({ templateWorkflow: templateWf });
+  const loaded = await loadWorkflowIntoDedicatedTab(workflow, cutRec);
+  if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
+  if (ggCutSwitchAutosaveBlocked) return false;
+  if (!loaded) return false;
+  wfLastLoadedCutId = cutId;
+  wfLastLoadedProjectId = state.pid;
+  markGraphGongganCut(cutId);
+  const label = kind === "template" ? "project template" : "empty canvas";
+  sdk.msg = `Canvas: ${title} (${label})`;
+  bus.dispatchEvent(new Event("sdk"));
+  bus.dispatchEvent(new Event("gg-opentab"));
+  ggToast("Shot", `${title} — ${label}`, kind === "template" ? "ok" : "info");
+  return true;
+}
+
 async function loadCutWorkflow(cutId, cut, loadToken) {
   const tl = state.timeline;
   if (!tl || !cutId) return;
@@ -1500,6 +1532,11 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
       ggToast(sum, detail, hit.toastKind);
       return;
     } catch (e) {
+      if (e.ggEmptyCut) {
+        if (await loadEmptyCutWorkflow(cutId, cutRec, loadToken, title)) return;
+        lastErr = e;
+        break;
+      }
       lastErr = e;
       if (src.id === "stored" && e.status === 404) {
         for (const leg of LEGACY_CUT_WORKFLOW_SOURCES) {
@@ -1536,6 +1573,7 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
     }
   }
   if (loadToken !== wfLoadToken) return;
+  if (await loadEmptyCutWorkflow(cutId, cutRec, loadToken, title)) return;
   const msg = lastErr ? lastErr.message : "workflow unavailable";
   const hasMedia = cut && cut.media;
   sdk.msg = hasMedia ? `Shot: ${title} (preview — no workflow: ${msg})` : `Shot: ${title} — ${msg}`;
@@ -1583,7 +1621,7 @@ function syncTplUseLastButton(root) {
   const btn = root?.querySelector(".gg-tpl-use-last");
   if (!btn) return;
   const last = loadLastTemplate(localStorage);
-  const show = !projectTemplateRef && !!last && userWorkflowPaths.includes(last);
+  const show = !projectTemplateRef && typeof last === "string" && !!last && userWorkflowPaths.includes(last);
   btn.hidden = !show;
   if (!show) return;
   btn.title = `Link last used template: ${last}`;
@@ -1614,7 +1652,7 @@ async function setProjectTemplateRef(ref) {
     ggToast("Template", "Select a project first", "warn");
     return;
   }
-  if (ref) saveLastTemplate(localStorage, ref);
+  saveLastTemplate(localStorage, ref || "");
   try {
     await postJson("/gonggan/template", { pid: state.pid, ref: ref || "" });
     projectTemplateRef = ref || "";

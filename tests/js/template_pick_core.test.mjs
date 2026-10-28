@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   LAST_TEMPLATE_KEY,
+  LAST_TEMPLATE_NONE,
   loadLastTemplate,
   saveLastTemplate,
   filterTemplatePaths,
@@ -27,12 +28,19 @@ describe("loadLastTemplate / saveLastTemplate", () => {
     assert.equal(s.getItem(LAST_TEMPLATE_KEY), "foo/bar.json");
   });
 
-  it("empty ref does not clear prior last", () => {
+  it("empty ref stores explicit (none)", () => {
     const s = mockStorage();
     saveLastTemplate(s, "keep.json");
     saveLastTemplate(s, "");
+    assert.equal(loadLastTemplate(s), "");
+    assert.equal(s.getItem(LAST_TEMPLATE_KEY), LAST_TEMPLATE_NONE);
     saveLastTemplate(s, "   ");
-    assert.equal(loadLastTemplate(s), "keep.json");
+    assert.equal(loadLastTemplate(s), "");
+  });
+
+  it("never set returns undefined", () => {
+    const s = mockStorage();
+    assert.equal(loadLastTemplate(s), undefined);
   });
 });
 
@@ -41,9 +49,17 @@ describe("pickInitialTemplate", () => {
     assert.equal(pickInitialTemplate(["a.json", "b.json"], "b.json"), "b.json");
   });
 
-  it("returns empty when last missing", () => {
+  it("returns empty when last missing from paths", () => {
     assert.equal(pickInitialTemplate(["a.json"], "z.json"), "");
     assert.equal(pickInitialTemplate([], "a.json"), "");
+  });
+
+  it("explicit none preselects empty", () => {
+    assert.equal(pickInitialTemplate(["a.json", "b.json"], ""), "");
+  });
+
+  it("never chosen preselects empty", () => {
+    assert.equal(pickInitialTemplate(["a.json"], undefined), "");
   });
 });
 
