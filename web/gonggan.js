@@ -2,7 +2,14 @@
 // Day 1: static render of real Gonggan projects/cuts (read-only). Trim/reorder come next.
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { createProgressTracker, cutStage, projectSummary, formatSummary } from "./gg_progress_core.js";
+import {
+  createProgressTracker,
+  cutStage,
+  projectSummary,
+  formatSummary,
+  summaryBarParts,
+  sceneBestProgress,
+} from "./gg_progress_core.js";
 import {
   formatCutNumber,
   computeEffectiveSec,
@@ -2595,10 +2602,30 @@ function applyProgressToThumb(li, cut) {
   applyLiveChipToRow(li, cut);
 }
 
+function paintSceneProgressHeaders(tl, scope) {
+  if (!tl) return;
+  const cuts = tl.cuts || [];
+  const rank = new Map(cuts.map((c, i) => [c.id, i]));
+  const root = scope || document;
+  for (const g of tl.groups || []) {
+    const sec = root.querySelector?.(`.gg-grp-sec[data-group-id="${CSS.escape(g.id)}"]`);
+    if (!sec) continue;
+    const ids = (g.cut_ids || []).filter((id) => rank.has(id));
+    const sceneCuts = ids.map((id) => cuts.find((c) => c.id === id)).filter(Boolean);
+    const { best, total } = sceneBestProgress(sceneCuts);
+    const el = sec.querySelector(".gg-grp-prog");
+    if (el) {
+      el.textContent = `${best}/${total}`;
+      el.title = total ? `Best ${best} of ${total} cuts in this scene` : "";
+    }
+  }
+}
+
 function paintProjectSummary(root) {
   const tl = state.timeline;
   const cuts = tl?.cuts || [];
   const sum = projectSummary(cuts);
+  const parts = summaryBarParts(cuts);
   const text = formatSummary(sum);
   const comp = projectCompletion(tl || { cuts: [] });
   const due = formatDueDisplay(comp);
@@ -2610,15 +2637,23 @@ function paintProjectSummary(root) {
     const bar = host.querySelector?.(".gg-summary-bar");
     if (line) line.textContent = text;
     if (bar) {
-      const t = sum.total || 1;
-      const segDone = bar.querySelector(".gg-seg-done");
+      const segBest = bar.querySelector(".gg-seg-best") || bar.querySelector(".gg-seg-done");
       const segVideo = bar.querySelector(".gg-seg-video");
       const segImage = bar.querySelector(".gg-seg-image");
-      if (segDone) segDone.style.flex = `${sum.done} 0 0`;
-      if (segVideo) segVideo.style.flex = `${sum.video} 0 0`;
-      if (segImage) segImage.style.flex = `${sum.image} 0 0`;
+      const segEmpty = bar.querySelector(".gg-seg-empty");
+      if (segBest) segBest.style.flex = `${parts.best} 0 0`;
+      if (segVideo) segVideo.style.flex = `${parts.video} 0 0`;
+      if (segImage) segImage.style.flex = `${parts.image} 0 0`;
+      if (segEmpty) segEmpty.style.flex = `${parts.empty} 0 0`;
+      const tip = text;
+      bar.title = tip;
+      if (segBest) segBest.title = parts.total ? `Best ${sum.done}/${parts.total}` : "";
+      if (segVideo) segVideo.title = parts.total ? `Video ${sum.video}/${parts.total}` : "";
+      if (segImage) segImage.title = parts.total ? `Image ${sum.image}/${parts.total}` : "";
+      if (segEmpty) segEmpty.title = parts.empty ? `Empty ${parts.empty}/${parts.total}` : "";
       bar.hidden = sum.total === 0;
     }
+    paintSceneProgressHeaders(tl, host);
     const cpct = host.querySelector?.(".gg-complete-pct");
     if (cpct) {
       cpct.textContent = comp.total ? `${comp.percent}%` : "";
@@ -4236,6 +4271,10 @@ function mountShots(el) {
         <header class="gg-grp-head">
           <button type="button" class="gg-grp-fold" title="Collapse or expand">${collapsed ? "▸" : "▾"}</button>
           <span class="gg-grp-title">Scene · ${esc(g.name)}</span>
+          <span class="gg-grp-prog">${(() => {
+            const { best, total } = sceneBestProgress(sec.cuts);
+            return esc(`${best}/${total}`);
+          })()}</span>
           <span class="gg-grp-meta">${sec.cuts.length}</span>
           <button type="button" class="gg-grp-ren" title="Rename scene">✎</button>
           <button type="button" class="gg-grp-del" title="Delete scene (cuts become ungrouped)">×</button>
@@ -4265,7 +4304,7 @@ function mountShots(el) {
           <label class="gg-due-label">Due <input type="date" class="gg-due-input" /></label>
           <span class="gg-due-text"></span>
         </div>
-        <div class="gg-summary-bar"${(tl?.cuts?.length || 0) ? "" : " hidden"}><span class="gg-seg gg-seg-done"></span><span class="gg-seg gg-seg-video"></span><span class="gg-seg gg-seg-image"></span></div>
+        <div class="gg-summary-bar"${(tl?.cuts?.length || 0) ? "" : " hidden"}><span class="gg-seg gg-seg-best"></span><span class="gg-seg gg-seg-video"></span><span class="gg-seg gg-seg-image"></span><span class="gg-seg gg-seg-empty"></span></div>
       </div>
       <div class="gg-shots-toolbar">
         <div class="gg-view-toggle">

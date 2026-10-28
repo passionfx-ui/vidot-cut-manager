@@ -110,7 +110,7 @@ Routes (in addition to existing `/gonggan/*`):
 - `GET /gonggan/projects` — share projects plus native (`native: true|false`)
 
 ## Work stages & progress (0.7.0)
-Each shot shows **Image / Video / Best** stage pills (from `versions_list` kinds and `pick`). The Shots header shows a summary line (`Done N/T · Video … · Image …`) and a segmented bar. **Timeline** clips show a small stage dot (gray / blue / purple / green).
+Each shot shows **Image / Video / Best** stage pills (from `versions_list` kinds and `pick`). The Shots header shows `Image a/N · Video b/N · Best c/N` (plus `· Empty k` when any cut has no versions), a single stacked bar (Best → Video → Image → empty track), and scene headers show **n/m** (Best picks in scene / cuts in scene). Trashed cuts (`deleted_at`) are excluded from N. **Timeline** clips show a small stage dot (gray / blue / purple / green).
 
 **Live run chip** (only for jobs linked to a cut): pulsing dot + percent while running, `Queued #n` in queue, red **Failed** on error. Stage pills stay visible; the live chip hides when the run ends and the UI reloads timeline data (throttled **GET** `/gonggan/timeline`). Jobs started from the Gonggan shot workflow tab are linked via `api.queuePrompt` and `localStorage` key `gonggan.jobs` (max 200). Unmapped ComfyUI jobs appear as **Other job running** / **Other jobs: N running, M queued** in the Shots header (read-only).
 
@@ -122,7 +122,7 @@ Pure stage helpers and the live tracker live in `web/gg_progress_core.js` (`cutS
 
 ### JS tests (no npm)
 ```
-node --test tests/js/progress_core.test.mjs tests/js/cut_stage.test.mjs tests/js/cuts_core.test.mjs tests/js/loadimage_core.test.mjs
+node --test tests/js/progress_core.test.mjs tests/js/progress_summary.test.mjs tests/js/cut_stage.test.mjs tests/js/cuts_core.test.mjs tests/js/loadimage_core.test.mjs
 ```
 Also run `node --check web/gonggan.js` and `node --check web/gg_progress_core.js` after UI edits.
 

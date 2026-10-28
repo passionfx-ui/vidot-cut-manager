@@ -96,30 +96,72 @@ export function cutStage(cut) {
   return { image, video, best, stage };
 }
 
+/** @param {object|null|undefined} cut */
+export function isTrashedCut(cut) {
+  return !!(cut && typeof cut === "object" && cut.deleted_at);
+}
+
 /**
- * @param {object[]|null|undefined} cuts Visible timeline cuts (hidden already excluded).
+ * @param {object[]|null|undefined} cuts Timeline cuts (may include trashed entries).
  */
 export function projectSummary(cuts) {
-  const arr = Array.isArray(cuts) ? cuts : [];
+  const arr = Array.isArray(cuts) ? cuts.filter((c) => !isTrashedCut(c)) : [];
   let image = 0;
   let video = 0;
   let done = 0;
+  let empty = 0;
   for (const c of arr) {
     const s = cutStage(c);
     if (s.image) image++;
     if (s.video) video++;
     if (s.best) done++;
+    if (s.stage === "empty") empty++;
   }
-  return { total: arr.length, image, video, done };
+  return { total: arr.length, image, video, done, empty };
 }
 
-/** @param {{ total?: number, image?: number, video?: number, done?: number }} s */
+/**
+ * Non-overlapping bar segments (Best → Video → Image → Empty), each out of `total`.
+ * @param {object[]|null|undefined} cuts Same input as projectSummary (trashed excluded internally).
+ */
+export function summaryBarParts(cuts) {
+  const arr = Array.isArray(cuts) ? cuts.filter((c) => !isTrashedCut(c)) : [];
+  let best = 0;
+  let video = 0;
+  let image = 0;
+  let empty = 0;
+  for (const c of arr) {
+    const s = cutStage(c);
+    if (s.best) best++;
+    else if (s.video) video++;
+    else if (s.image) image++;
+    else empty++;
+  }
+  return { total: arr.length, best, video, image, empty };
+}
+
+/** @param {{ total?: number, image?: number, video?: number, done?: number, empty?: number }} s */
 export function formatSummary(s) {
   const t = s?.total ?? 0;
   const d = s?.done ?? 0;
   const v = s?.video ?? 0;
   const i = s?.image ?? 0;
-  return `Done ${d}/${t} · Video ${v}/${t} · Image ${i}/${t}`;
+  const e = s?.empty ?? 0;
+  let line = `Image ${i}/${t} · Video ${v}/${t} · Best ${d}/${t}`;
+  if (e > 0) line += ` · Empty ${e}`;
+  return line;
+}
+
+/**
+ * @param {object[]} sceneCuts Cuts belonging to one scene (non-trashed only counted).
+ */
+export function sceneBestProgress(sceneCuts) {
+  const arr = Array.isArray(sceneCuts) ? sceneCuts.filter((c) => !isTrashedCut(c)) : [];
+  let best = 0;
+  for (const c of arr) {
+    if (cutStage(c).best) best++;
+  }
+  return { best, total: arr.length };
 }
 
 export function createProgressTracker() {
