@@ -12,6 +12,8 @@ import {
 } from "./gg_progress_core.js";
 import {
   formatCutNumber,
+  computeCutLabels,
+  cutDisplayLabel,
   computeEffectiveSec,
   lengthWarning,
   moveCuts,
@@ -1284,10 +1286,12 @@ function resolveShotTabLabel(wf) {
   const c = cutById(meta.cutId);
   if (!c) return wf.ggTabLabelCache || null;
   const pos = c.pos ?? c.index;
+  const labelEntry = computeCutLabels(state.timeline).get(c.id);
+  const tabCutNum = labelEntry?.label ?? (pos != null ? pos + 1 : undefined);
   const label = formatShotTabLabel({
     projectName,
     cutName: c.name,
-    cutNumber: pos != null ? pos + 1 : undefined,
+    cutNumber: tabCutNum,
     edited: cutShowsEditedMarker(c),
   });
   if (label) wf.ggTabLabelCache = label;
@@ -1312,10 +1316,12 @@ function resolveShotTabTitle(wf) {
   const c = cutById(meta.cutId);
   if (!c) return null;
   const pos = c.pos ?? c.index;
+  const labelEntry = computeCutLabels(state.timeline).get(c.id);
+  const tabCutNum = labelEntry?.label ?? (pos != null ? pos + 1 : undefined);
   return formatShotTabTitle({
     projectName,
     cutName: c.name,
-    cutNumber: pos != null ? pos + 1 : undefined,
+    cutNumber: tabCutNum,
   });
 }
 
@@ -3255,6 +3261,7 @@ function toggleNeedsRedo(cutId) {
 }
 
 function finalCutListHtml(tl) {
+  const labels = computeCutLabels(tl);
   const r = finalCutList(tl);
   const items = r.items.map((it) => {
     const cut = tl.cuts.find((c) => c.id === it.cutId) || {};
@@ -3263,7 +3270,7 @@ function finalCutListHtml(tl) {
     const capLine = effectiveCaption(cut).replace(/\s+/g, " ").trim();
     return `
       <li class="gg-final-item" data-cut-id="${esc(it.cutId)}">
-        <span class="gg-num">${formatCutNumber(it.number)}</span>
+        <span class="gg-num">${esc(cutDisplayLabel(cut, labels))}</span>
         <div class="gg-final-thumb">${thumbHtml(cut.media, "gg-thumb")}</div>
         <div class="gg-final-meta">
           <div class="gg-final-name">${esc(it.name)}</div>
@@ -3351,9 +3358,10 @@ function bindCutPanelFields(panel, c) {
 function refreshCutRowBadges(cutId) {
   const c = cutByIdTimeline(cutId);
   if (!c) return;
+  const labels = computeCutLabels(state.timeline);
   document.querySelectorAll(`.gg-cut[data-cut-id="${CSS.escape(cutId)}"]`).forEach((li) => {
     const num = li.querySelector(".gg-num");
-    if (num) num.textContent = formatCutNumber(c.number ?? (c.pos ?? 0) + 1);
+    if (num) num.textContent = cutDisplayLabel(c, labels);
     const len = li.querySelector(".gg-cut-len");
     if (len) {
       const liInfo = formatCutHeaderLengths(c);
@@ -3395,7 +3403,7 @@ function refreshCutRowBadges(cutId) {
   });
 }
 
-function cutRowHtml(c) {
+function cutRowHtml(c, labels) {
   const listCaption = normalizeListMode(shotsUi.listMode) === "caption";
   const nat = isNativeProject();
   const timelineOrder = state.timeline?.cuts?.map((x) => x.id) ?? [];
@@ -3425,7 +3433,7 @@ function cutRowHtml(c) {
       <div class="gg-cut-text">
         <div class="gg-cut-header" title="${esc(nameTitle)}">
           ${isNativeProject() ? '<span class="gg-drag-handle" title="Drag to reorder (or Alt+Up/Down)" aria-hidden="true">\u22EE\u22EE</span>' : ""}
-          <span class="gg-num">${formatCutNumber(c.number ?? (c.pos ?? c.index ?? 0) + 1)}</span>
+          <span class="gg-num">${esc(cutDisplayLabel(c, labels))}</span>
           <span class="gg-cut-title">${esc(displayCutName(c))}</span>
           ${verInfo.text ? `<span class="gg-cut-ver" title="${esc(verInfo.title)}">${esc(verInfo.text)}</span>` : ""}
           <span class="gg-cut-len" title="${esc(lenInfo.title)}">${esc(lenInfo.text)}</span>
@@ -3841,7 +3849,7 @@ async function sendLastOutput(cutId) {
     const sendId = targetId || cutId;
     const d = await postJson("/gonggan/send-output", { pid: tl.project.id, cut_id: sendId });
     const targetCut = tl.cuts.find((c) => c.id === sendId);
-    const num = formatCutNumber(targetCut?.number ?? (targetCut?.pos ?? 0) + 1);
+    const num = cutDisplayLabel(targetCut, computeCutLabels(tl));
     const name = targetCut?.name || "";
     sdk.msg = `Added ${d.output.name} (${d.output.from}) to cut ${num}. ${name}${redirected ? " (the cut that queued it)" : ""}`;
     await loadTimeline();
@@ -3861,7 +3869,7 @@ api.addEventListener("gonggan.regen", (e) => {
   bus.dispatchEvent(new Event("sdk"));
 });
 
-function cutPanelHtml(c) {
+function cutPanelHtml(c, labels) {
   if (!c) return `<div class="gg-panel-empty">Select a cut for versions and actions.</div>`;
   const nat = isNativeProject();
   const panelOpen = loadPanelOpen(localStorage);
@@ -3898,7 +3906,7 @@ function cutPanelHtml(c) {
   return `
     <header class="gg-panel-head">
       <button type="button" class="gg-panel-fold" title="Collapse or expand panel">${panelOpen ? "▾" : "▸"}</button>
-      <span class="gg-num">${formatCutNumber(c.number ?? c.pos + 1)}</span>
+      <span class="gg-num">${esc(cutDisplayLabel(c, labels))}</span>
       <span class="gg-panel-name">${esc(displayCutName(c))}</span>
       <span class="gg-panel-len">${esc(effectiveLenLabel(c))}</span>
       <span class="gg-panel-dots">${dotEnd}${dotRedo}</span>
@@ -3964,7 +3972,8 @@ function mountShots(el) {
     if (badge) badge.innerHTML = sdkBadge();
     if (!panel) return;
     const c = state.timeline && state.timeline.cuts.find((x) => x.id === state.cutId);
-    panel.innerHTML = cutPanelHtml(c);
+    const labels = computeCutLabels(state.timeline);
+    panel.innerHTML = cutPanelHtml(c, labels);
     panel.querySelectorAll(".gg-promote").forEach((b) => b.addEventListener("click", (e) => {
       e.stopPropagation();
       const wrap = b.closest(".gg-ver-wrap");
@@ -4232,11 +4241,12 @@ function mountShots(el) {
     if (shotsUi.needsRedoOnly) cuts = filterCuts(cuts, { needsRedoOnly: true });
     const groups = tl ? tl.groups || [] : [];
     const sections = shotsSections(cuts, groups);
+    const cutLabels = computeCutLabels(tl || { cuts: [] });
     const viewFinal = shotsUi.view === "final";
     const listCaption = normalizeListMode(shotsUi.listMode) === "caption";
     const listHtml = sections.map((sec) => {
       if (sec.type === "ungrouped") {
-        return `<section class="gg-grp-sec gg-grp-loose"><header class="gg-grp-head">Ungrouped <span class="gg-grp-meta">${sec.cuts.length}</span></header><ol class="gg-cutlist">${sec.cuts.map(cutRowHtml).join("")}</ol></section>`;
+        return `<section class="gg-grp-sec gg-grp-loose"><header class="gg-grp-head">Ungrouped <span class="gg-grp-meta">${sec.cuts.length}</span></header><ol class="gg-cutlist">${sec.cuts.map((c) => cutRowHtml(c, cutLabels)).join("")}</ol></section>`;
       }
       const g = sec.group;
       const hue = groupColor(g.id);
@@ -4253,7 +4263,7 @@ function mountShots(el) {
           <button type="button" class="gg-grp-ren" title="Rename scene">✎</button>
           <button type="button" class="gg-grp-del" title="Delete scene (cuts become ungrouped)">×</button>
         </header>
-        <ol class="gg-cutlist"${collapsed ? " hidden" : ""}>${sec.cuts.map(cutRowHtml).join("")}</ol>
+        <ol class="gg-cutlist"${collapsed ? " hidden" : ""}>${sec.cuts.map((c) => cutRowHtml(c, cutLabels)).join("")}</ol>
       </section>`;
     }).join("");
     root.className = `gg-root gg-shots${listCaption ? " gg-list-caption" : ""}`;
@@ -4666,7 +4676,8 @@ function showFrame(force) {
     }
     document.querySelectorAll(".gg-timeline .gg-clip").forEach((el) => el.classList.toggle("gg-play", c && el.dataset.cutId === c.id));
     if (!c) { img.hidden = vid.hidden = true; blank.hidden = false; blank.textContent = ""; label.textContent = ""; return; }
-    label.textContent = c.group_name ? `Scene · ${c.group_name} — ${c.pos + 1}. ${c.name}` : `${c.pos + 1}. ${c.name}`;
+    const dispNum = cutDisplayLabel(c, computeCutLabels(state.timeline));
+    label.textContent = c.group_name ? `Scene · ${c.group_name} — ${dispNum}. ${c.name}` : `${dispNum}. ${c.name}`;
     if (c.media && c.media.kind === "video") {
       img.hidden = true; blank.hidden = true; vid.hidden = false;
       const url = mediaUrl(c.media.id);
@@ -4677,7 +4688,7 @@ function showFrame(force) {
       if (img.dataset.src !== url) { img.dataset.src = url; img.src = url; }
     } else {
       vid.pause(); vid.hidden = true; img.hidden = true; blank.hidden = false;
-      blank.textContent = `${c.pos + 1}. ${c.name} — no media`;
+      blank.textContent = `${dispNum}. ${c.name} — no media`;
     }
     preloadNext(i + 1);
   }
@@ -5081,6 +5092,7 @@ function mountTimeline(el) {
   const paintTrack = () => {
     const tl = state.timeline;
     const cuts = cutsNow();
+    const cutLabels = computeCutLabels(tl || { cuts: [] });
     $r(".gg-tl-title").textContent = tl ? tl.project.name : "No project";
     const err = $r(".gg-error");
     err.hidden = !state.error;
@@ -5088,7 +5100,7 @@ function mountTimeline(el) {
     $r(".gg-track").innerHTML = cuts.map((c, i) => {
       const run = c.group_id && (i === 0 || cuts[i - 1].group_id !== c.group_id);
       const hue = c.group_id ? groupColor(c.group_id) : 0;
-      const tip = `${c.group_name ? `Scene · ${c.group_name}\n` : ""}${c.pos + 1}. ${c.name}  ${c.sec.toFixed(1)}s${c.src_dur ? ` (src ${c.src_dur}s)` : ""}${(() => {
+      const tip = `${c.group_name ? `Scene · ${c.group_name}\n` : ""}${cutDisplayLabel(c, cutLabels)}. ${c.name}  ${c.sec.toFixed(1)}s${c.src_dur ? ` (src ${c.src_dur}s)` : ""}${(() => {
         const cap = effectiveCaption(c).trim();
         return cap ? `\n${cap}` : "";
       })()}`;
@@ -5099,7 +5111,7 @@ function mountTimeline(el) {
         ${run ? `<div class="gg-scene-band">Scene · ${esc(c.group_name)}</div>` : ""}
         ${thumbHtml(c.media, "gg-clip-thumb")}
         <span class="gg-clip-dot gg-dot-empty"></span>
-        <div class="gg-clip-label"><span class="gg-no">${c.pos + 1}</span>${esc(displayCutName(c))}</div>
+        <div class="gg-clip-label"><span class="gg-no">${esc(cutDisplayLabel(c, cutLabels))}</span>${esc(displayCutName(c))}</div>
         <div class="gg-clip-in">${kindOf(c) === "video" && c.in > 0 ? `in ${c.in.toFixed(1)}` : ""}</div>
         <div class="gg-clip-dur">${c.sec.toFixed(1)}s</div>
         <div class="gg-clip-prog" hidden><div class="gg-prog-bar"><div class="gg-prog-fill"></div></div></div>

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   formatCutNumber,
+  computeCutLabels,
+  cutDisplayLabel,
   computeEffectiveSec,
   lengthWarning,
   moveCut,
@@ -29,6 +31,72 @@ describe("formatCutNumber", () => {
   it("pads to three digits", () => {
     assert.equal(formatCutNumber(1), "001");
     assert.equal(formatCutNumber(42), "042");
+  });
+});
+
+describe("computeCutLabels", () => {
+  it("empty timeline", () => {
+    assert.equal(computeCutLabels(null).size, 0);
+    assert.equal(computeCutLabels({ cuts: [] }).size, 0);
+  });
+
+  it("single scene group", () => {
+    const tl = {
+      cuts: [
+        { id: "a", group_id: "g1" },
+        { id: "b", group_id: "g1" },
+        { id: "c", group_id: "g1" },
+      ],
+    };
+    const m = computeCutLabels(tl);
+    assert.deepEqual(m.get("a"), { scene: 1, cut: 1, label: "1-1" });
+    assert.deepEqual(m.get("b"), { scene: 1, cut: 2, label: "1-2" });
+    assert.deepEqual(m.get("c"), { scene: 1, cut: 3, label: "1-3" });
+  });
+
+  it("ungrouped consecutive run is one implicit scene", () => {
+    const tl = {
+      cuts: [{ id: "a", group_id: "" }, { id: "b", group_id: "" }],
+    };
+    const m = computeCutLabels(tl);
+    assert.equal(m.get("a")?.label, "1-1");
+    assert.equal(m.get("b")?.label, "1-2");
+  });
+
+  it("mixed grouped and ungrouped blocks in order", () => {
+    const tl = {
+      cuts: [
+        { id: "a", group_id: "g1" },
+        { id: "b", group_id: "g1" },
+        { id: "c", group_id: "" },
+        { id: "d", group_id: "" },
+        { id: "e", group_id: "g2" },
+      ],
+    };
+    const m = computeCutLabels(tl);
+    assert.equal(m.get("a")?.label, "1-1");
+    assert.equal(m.get("b")?.label, "1-2");
+    assert.equal(m.get("c")?.label, "2-1");
+    assert.equal(m.get("d")?.label, "2-2");
+    assert.equal(m.get("e")?.label, "3-1");
+  });
+
+  it("reorder changes labels within scene", () => {
+    const tl = {
+      cuts: [
+        { id: "b", group_id: "g1" },
+        { id: "a", group_id: "g1" },
+      ],
+    };
+    const m = computeCutLabels(tl);
+    assert.equal(m.get("b")?.label, "1-1");
+    assert.equal(m.get("a")?.label, "1-2");
+  });
+
+  it("cutDisplayLabel falls back to global number", () => {
+    assert.equal(cutDisplayLabel({ id: "x", number: 5 }, new Map()), "005");
+    const m = computeCutLabels({ cuts: [{ id: "x", group_id: "g" }] });
+    assert.equal(cutDisplayLabel({ id: "x" }, m), "1-1");
   });
 });
 
