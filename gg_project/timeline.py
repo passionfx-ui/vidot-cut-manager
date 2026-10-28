@@ -9,6 +9,7 @@ try:
 except ImportError:  # unittest / plain script
     from gg_data import clamp_clip, media_duration  # type: ignore
 
+from .entities import is_reference
 from .project_settings import normalize_settings
 
 _IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -23,7 +24,7 @@ def _active_cuts(project: dict[str, Any]) -> dict[str, dict[str, Any]]:
     cuts = project.get("cuts") or {}
     if not isinstance(cuts, dict):
         return {}
-    return {cid: c for cid, c in cuts.items() if isinstance(c, dict) and not c.get("deleted_at")}
+    return {cid: c for cid, c in cuts.items() if isinstance(c, dict) and not c.get("deleted_at") and not is_reference(c)}
 
 
 def timeline_order(project: dict[str, Any]) -> list[str]:
@@ -115,6 +116,43 @@ def _media_view(job: dict[str, Any] | None) -> dict[str, Any] | None:
     if not job:
         return None
     return {k: job.get(k) for k in ("id", "kind", "width", "height", "seconds", "model", "source")}
+
+
+def _reference_views(root: Path, project: dict[str, Any]) -> list[dict[str, Any]]:
+    """References shaped like cuts (id, name, media, pick, versions_list) so the same workflow tab code can open them."""
+    pid = project["id"]
+    cuts = project.get("cuts") or {}
+    if not isinstance(cuts, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for cid, c in cuts.items():
+        if not is_reference(c) or c.get("deleted_at"):
+            continue
+        versions = _load_versions(root, pid, cid)
+        jobs = [j for j in (_version_job(root, pid, v) for v in versions) if j]
+        pick = c.get("pick_version_id")
+        job = next((j for j in jobs if j["id"] == pick), None) if isinstance(pick, str) else None
+        if not job and jobs:
+            job = jobs[0]
+        out.append({
+            "id": cid,
+            "name": c.get("name") or "",
+            "category": c.get("category") or "Other",
+            "kind": "reference",
+            "created": c.get("created_at") or "",
+            "media": _media_view(job),
+            "versions": len(versions),
+            "versions_list": [
+                {"id": j["id"], "kind": j["kind"], "source": "native", "model": None, "created": j["mtime"],
+                 "seconds": None, "width": None, "height": None}
+                for j in jobs
+            ],
+            "pick": job["id"] if job else None,
+            "caption": "",
+            "notes": "",
+            "prompt": "",
+        })
+    return out
 
 
 def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
@@ -237,6 +275,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "settings": normalize_settings(project.get("settings") if isinstance(project.get("settings"), dict) else None),
         },
         "cuts": cuts,
+        "references": _reference_views(root, project),
         "groups": groups,
         "groups_customized": True,
         "total_sec": _round(at),
