@@ -10,6 +10,7 @@ import {
   moveCuts,
   shotsDropTarget,
   clientYToWrapY,
+  autoScrollDelta,
   finalCutList,
   filterCuts,
   fileBaseName,
@@ -48,6 +49,7 @@ import {
   shouldShowOpenTabMarker,
 } from "./gg_cut_select_core.js";
 import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
+import { GG_VERSION } from "./gg_version.js";
 import {
   formatShotTabLabel,
   formatShotTabTitle,
@@ -157,9 +159,9 @@ function thumbHtml(media, cls) {
   const url = esc(mediaUrl(media.id));
   if (media.kind === "video") {
     // poster from the pack cache; the video itself loads only on hover (preload=none)
-    return `<video class="${cls} gg-thumb-vid" src="${url}" poster="${esc(posterUrl(media.id))}" muted playsinline preload="none"></video>`;
+    return `<video class="${cls} gg-thumb-vid" draggable="false" src="${url}" poster="${esc(posterUrl(media.id))}" muted playsinline preload="none"></video>`;
   }
-  return `<img class="${cls} gg-thumb-img" src="${esc(posterUrl(media.id))}" loading="lazy" decoding="async" alt="" />`;
+  return `<img class="${cls} gg-thumb-img" draggable="false" src="${esc(posterUrl(media.id))}" loading="lazy" decoding="async" alt="" />`;
 }
 
 function bindThumbFallbacks(root) {
@@ -1738,6 +1740,18 @@ async function applyStepMove(dir) {
   await commitShotsReorder(r.order, r.groups);
 }
 
+async function applyCutMoveBtn(cutId, dir) {
+  const tl = state.timeline;
+  if (!tl || !isNativeProject() || !cutId) return;
+  const order = tl.cuts.map((c) => c.id);
+  const ids = [cutId];
+  if (dir < 0 && !canMoveUp(order, ids)) return;
+  if (dir > 0 && !canMoveDown(order, ids)) return;
+  const r = stepMove(order, groupsClone(), ids, dir);
+  if (!r.changed) return;
+  await commitShotsReorder(r.order, r.groups, { moveCount: 1 });
+}
+
 function scrollMovedCutsIntoView() {
   const ids = cutSelIds();
   const wrap = document.querySelector(".gg-shots .gg-grp-wrap");
@@ -2412,8 +2426,10 @@ async function persistShotsReorder(order, groups) {
     state.timeline = data;
     state.error = "";
   } catch (e) {
-    state.error = "Reorder failed: " + e.message;
-    ggToast("Reorder failed – restored previous order", e.message, "warn");
+    const msg = e?.message || String(e);
+    console.warn("[gonggan-cut] Reorder failed:", msg);
+    state.error = "Reorder failed: " + msg;
+    ggToast("Reorder failed – restored previous order", msg, "warn");
     await loadTimeline();
     return false;
   }
@@ -2442,6 +2458,20 @@ function bindShotsReorder(root) {
   if (!isNativeProject()) return;
   const wrap = root.querySelector(".gg-grp-wrap");
   if (!wrap) return;
+  if (!wrap._ggDragKill) {
+    wrap._ggDragKill = true;
+    wrap.addEventListener(
+      "dragstart",
+      (e) => {
+        const cut = e.target.closest(".gg-cut");
+        if (!cut) return;
+        const field = e.target.closest("textarea, input");
+        if (field && isCardFieldEditing(field)) return;
+        e.preventDefault();
+      },
+      true,
+    );
+  }
   let indicator = wrap.querySelector(".gg-drag-ind");
   if (!indicator) {
     indicator = document.createElement("div");
@@ -2450,6 +2480,25 @@ function bindShotsReorder(root) {
     wrap.appendChild(indicator);
   }
   root.querySelectorAll(".gg-cut").forEach((el) => {
+    if (!el._ggReorderMd) {
+      el._ggReorderMd = true;
+      el.addEventListener(
+        "mousedown",
+        (e) => {
+          if (e.button !== 0) return;
+          const blocker = e.target.closest("input, textarea, button, select, a");
+          if (blocker) {
+            if (blocker.tagName === "TEXTAREA" && !isCardFieldEditing(blocker)) {
+              e.preventDefault();
+              return;
+            }
+            return;
+          }
+          e.preventDefault();
+        },
+        true,
+      );
+    }
     el.addEventListener("pointerdown", (e) => {
       if (!isNativeProject() || e.button) return;
       const blocker = e.target.closest("input, textarea, button, select, a");
@@ -2459,24 +2508,56 @@ function bindShotsReorder(root) {
       const startY = e.clientY;
       const cutId = el.dataset.cutId;
       let active = false;
+      let aborted = false;
       let drop = { toIndex: 0, toGroupId: null, lineY: 0 };
+      let lastClientY = startY;
       const movingIds = () => {
         if (state.cutSel.size >= 2 && state.cutSel.has(cutId)) return cutSelIds();
         return [cutId];
       };
       let scrollRaf = 0;
-      const autoScroll = (clientY) => {
+      let scrollLoop = false;
+      const refreshDropIndicator = () => {
+        const tl = state.timeline;
+        if (!tl) return;
+        const order = tl.cuts.map((c) => c.id);
+        const rows = collectShotRowRects(wrap);
         const wr = wrap.getBoundingClientRect();
-        const edge = 40;
-        if (clientY < wr.top + edge) wrap.scrollTop = Math.max(0, wrap.scrollTop - 14);
-        else if (clientY > wr.bottom - edge) wrap.scrollTop = wrap.scrollTop + 14;
+        const wrapY = clientYToWrapY(lastClientY, wr.top, wrap.scrollTop);
+        drop = shotsDropTarget(order, rows, wrapY);
+        indicator.hidden = false;
+        indicator.style.top = `${drop.lineY}px`;
+      };
+      const tickAutoScroll = () => {
+        if (!scrollLoop) return;
+        const wr = wrap.getBoundingClientRect();
+        const delta = autoScrollDelta(lastClientY, wr.top, wr.bottom, 48, 16);
+        if (delta !== 0) wrap.scrollTop += delta;
+        refreshDropIndicator();
+        scrollRaf = requestAnimationFrame(tickAutoScroll);
+      };
+      const stopScrollLoop = () => {
+        scrollLoop = false;
+        if (scrollRaf) cancelAnimationFrame(scrollRaf);
+        scrollRaf = 0;
+      };
+      const startScrollLoop = () => {
+        if (scrollLoop) return;
+        scrollLoop = true;
+        scrollRaf = requestAnimationFrame(tickAutoScroll);
+      };
+      const onEsc = (ev) => {
+        if (ev.key !== "Escape") return;
+        ev.preventDefault();
+        aborted = true;
+        cancel();
       };
       const cancel = () => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
         window.removeEventListener("pointercancel", up);
-        if (scrollRaf) cancelAnimationFrame(scrollRaf);
-        scrollRaf = 0;
+        window.removeEventListener("keydown", onEsc);
+        stopScrollLoop();
         indicator.hidden = true;
         wrap.classList.remove("gg-reorder-dragging");
         el.classList.remove("gg-moving");
@@ -2495,23 +2576,16 @@ function bindShotsReorder(root) {
             root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(id)}"]`)?.classList.add("gg-moving");
           });
           try { el.setPointerCapture(e.pointerId); } catch (_) {}
+          window.addEventListener("keydown", onEsc);
+          startScrollLoop();
         }
-        const tl = state.timeline;
-        if (!tl) return;
-        const order = tl.cuts.map((c) => c.id);
-        const rows = collectShotRowRects(wrap);
-        const wr = wrap.getBoundingClientRect();
-        const wrapY = clientYToWrapY(ev.clientY, wr.top, wrap.scrollTop);
-        drop = shotsDropTarget(order, rows, wrapY);
-        indicator.hidden = false;
-        indicator.style.top = `${drop.lineY}px`;
-        if (scrollRaf) cancelAnimationFrame(scrollRaf);
-        scrollRaf = requestAnimationFrame(() => autoScroll(ev.clientY));
+        lastClientY = ev.clientY;
+        refreshDropIndicator();
       };
       const up = async () => {
         const wasActive = active;
         cancel();
-        if (!wasActive) return;
+        if (!wasActive || aborted) return;
         const tl = state.timeline;
         if (!tl) return;
         const order0 = tl.cuts.map((c) => c.id);
@@ -2840,6 +2914,9 @@ function refreshCutRowBadges(cutId) {
 function cutRowHtml(c) {
   const captionMode = normalizeListMode(shotsUi.listMode) === "caption";
   const nat = isNativeProject();
+  const timelineOrder = state.timeline?.cuts?.map((x) => x.id) ?? [];
+  const canUp = nat && canMoveUp(timelineOrder, [c.id]);
+  const canDown = nat && canMoveDown(timelineOrder, [c.id]);
   const notesTip = nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP;
   const capTip = nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP;
   const roAttr = nat ? " readonly" : " disabled";
@@ -2875,6 +2952,10 @@ function cutRowHtml(c) {
         </div>
         ${bodyArea}
       </div>
+      ${nat ? `<div class="gg-move-col">
+          <button type="button" class="gg-move-btn gg-move-up" title="Move up" aria-label="Move up"${canUp ? "" : " disabled"}>\u25B2</button>
+          <button type="button" class="gg-move-btn gg-move-down" title="Move down" aria-label="Move down"${canDown ? "" : " disabled"}>\u25BC</button>
+        </div>` : ""}
     </li>`;
 }
 
@@ -3616,7 +3697,8 @@ function mountShots(el) {
       </div>
       <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${listHtml}</div>
       <div class="gg-final-wrap"${viewFinal ? "" : " hidden"}>${viewFinal && tl ? finalCutListHtml(tl) : ""}</div>
-      <div class="gg-cutpanel"></div>`;
+      <div class="gg-cutpanel"></div>
+      <span class="gg-version" title="comfyui-gonggan-cut version - if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>`;
     const projSel = root.querySelector(".gg-proj");
     projSel?.addEventListener("change", (e) => selectProject(e.target.value));
     root.querySelector(".gg-head")?.addEventListener("contextmenu", (e) => {
@@ -3727,6 +3809,17 @@ function mountShots(el) {
     bindHoverPlay(root);
     bindThumbFallbacks(root);
     bindShotsReorder(root);
+    root.querySelectorAll(".gg-move-btn").forEach((btn) => {
+      const cutId = btn.closest(".gg-cut")?.dataset?.cutId;
+      const dir = btn.classList.contains("gg-move-up") ? -1 : 1;
+      btn.addEventListener("pointerdown", (e) => e.stopPropagation());
+      btn.addEventListener("mousedown", (e) => e.stopPropagation());
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (btn.disabled) return;
+        void applyCutMoveBtn(cutId, dir);
+      });
+    });
     bindCutFieldTextareas();
     restoreFieldTextFocus(storyCap);
     autoSizeAllFieldTextareas();
