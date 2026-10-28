@@ -157,6 +157,9 @@ Switching shots in the **Shots** list reuses **one** Gonggan-owned workflow tab:
 ## Empty cuts (contest fix)
 Shots with no stored/version workflow and no draft still open the **owned** shot tab (`loadWorkflowIntoDedicatedTab`): project **template** graph when linked, otherwise a **blank** UI graph (zero nodes) stamped with `ggGongganMeta`. Switching between empty and worked cuts never spawns extra workflow tabs. **New Project** / project template **(none)** is remembered in `gonggan-cut.lastTemplate` (explicit none vs never chosen). Pure: `web/gg_empty_cut_core.js`, `web/gg_template_pick_core.js`; unit `tests/js/empty_cut_core.test.mjs`; e2e `tests/e2e/empty_cut_test.mjs` (blocks `/prompt`, `/gonggan/regen`).
 
+## Project setup (native)
+**New Project** and **Project Settings…** (header context menu) collect name, aspect/resolution preset, FPS (24/25/30), default cut length (seconds), and default template. Values live in the native project document as `settings: { aspect, width, height, fps, cut_seconds }` (legacy `default_sec` is upgraded on read). `POST /gonggan/project/create` accepts optional `settings`; `POST /gonggan/project/update` accepts `settings` or individual keys. New cuts use `cut_seconds` for their initial `sec`; existing cuts are unchanged. Timeline exposes `project.settings` for the UI. Regen/export size wiring for native projects is not hooked up yet (settings are stored for later). Pure: `web/gg_project_settings_core.js`, `gg_project/project_settings.py`; unit `tests/js/project_settings_core.test.mjs`, `tests/test_project_settings.py`; e2e `tests/e2e/project_setup_test.mjs`. Shots redo filter label: **Show redo cuts only**.
+
 ## Cut management (0.8.0)
 Shots and Timeline add lightweight production tracking on top of the existing scene/cut model (English UI labels).
 
@@ -164,7 +167,7 @@ Shots and Timeline add lightweight production tracking on top of the existing sc
 - **Per-cut fields**: planned length (`planned_sec`), notes, **End card** flag (exempt from the short-form length rule).
 - **3-second rule warning** when effective length is over 3 s (uses `planned_sec` when set, else media `sec`); End card cuts are exempt.
 - **Final cut list** view: ordered picks with **total length**, copyable **file naming** display `S01_003_v02` (computed label only — pack files are never renamed).
-- **Needs redo** flag per cut plus **filter** to show only flagged cuts.
+- **Needs redo** flag per cut plus **filter** (**Show redo cuts only**) to show only flagged cuts.
 - **Project due date** and **completion %** in the Shots header (`due_date` on native projects; share projects when present in timeline payload).
 - Routes: `POST /gonggan/cut/update` `{pid, cut_id, fields}` · `POST /gonggan/project/update` `{pid, fields}` (Python route changes need a ComfyUI restart).
 
