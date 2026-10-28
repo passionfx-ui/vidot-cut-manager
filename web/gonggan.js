@@ -39,6 +39,7 @@ import {
   formatTrashItem,
   movedToTrashToastMessage,
 } from "./gg_trash_core.js";
+import { createTimelineGuard } from "./gg_timeline_guard_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import { parseImportList, summarizeImport, buildLlmPrompt, REFERENCE_CATEGORIES } from "./gg_import_core.js";
 import {
@@ -163,6 +164,21 @@ const TIMELINE_TAB = "gg-timeline";
 const SHOTS_TAB = "gg-shots";
 const bus = new EventTarget();
 const state = { projects: [], pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
+// Every assignment to state.timeline that is not a load result counts as a mutation (see gg_timeline_guard_core.js).
+const timelineGuard = createTimelineGuard();
+let timelineAssignByLoad = false;
+{
+  let tl = state.timeline;
+  Object.defineProperty(state, "timeline", {
+    enumerable: true,
+    configurable: true,
+    get() { return tl; },
+    set(v) {
+      tl = v;
+      if (!timelineAssignByLoad) timelineGuard.markMutation();
+    },
+  });
+}
 const shotsUi = {
   view: "cuts",
   needsRedoOnly: false,
@@ -281,13 +297,20 @@ function adoptServerTimeline(tl) {
 
 async function loadTimeline() {
   if (!state.pid) { state.timeline = null; bus.dispatchEvent(new Event("timeline")); refreshTrashCount(); return; }
+  const token = timelineGuard.begin(state.pid);
+  let next = null;
+  let failure = "";
   try {
-    state.timeline = adoptServerTimeline(await getJson("/gonggan/timeline?pid=" + encodeURIComponent(state.pid)));
-    state.error = "";
+    next = adoptServerTimeline(await getJson("/gonggan/timeline?pid=" + encodeURIComponent(token.pid)));
   } catch (e) {
-    state.timeline = null;
-    state.error = "Could not load timeline: " + e.message;
+    failure = e.message;
   }
+  // A slower, older response must not overwrite a newer timeline (newer load, mutation response, other project).
+  if (timelineGuard.isStale(token, state.pid)) return;
+  timelineAssignByLoad = true;
+  state.timeline = next;
+  timelineAssignByLoad = false;
+  state.error = failure ? "Could not load timeline: " + failure : "";
   bus.dispatchEvent(new Event("timeline"));
   refreshTrashCount();
   await reloadOpenCutWorkflowIfRepChanged();
