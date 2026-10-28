@@ -333,7 +333,7 @@ def native_version_workflow(pid: str, cut_id: str, vid: str) -> dict | None:
 
 
 def _skip_native_media_lookup(media_id: str) -> bool:
-    """Legacy 공간쉐어 job/version ids are never native version UUIDs."""
+    """Legacy imported job/version ids are never native version UUIDs."""
     try:
         from . import gg_data as gd
     except ImportError:

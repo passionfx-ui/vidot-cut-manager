@@ -436,7 +436,7 @@ function selectProject(pid) {
   loadTimeline();
 }
 
-const NATIVE_READONLY_TIP = "Not available for Gonggan-share (read-only) projects";
+const NATIVE_READONLY_TIP = "Not available for read-only (imported) projects";
 const NATIVE_ONLY_TIP = "Native projects only";
 
 function currentProject() {
@@ -2779,7 +2779,7 @@ function updateOtherJobsChip() {
   chips.forEach((el) => {
     el.hidden = !text;
     el.textContent = text ? `● ${total}` : "";
-    el.title = text || "Not started from a Gonggan cut";
+    el.title = text || "Not started from a Shots cut";
   });
 }
 
@@ -3702,7 +3702,7 @@ function sdkBadge() {
   return `<span class="gg-sdk ${st.ok ? "gg-sdk-ok" : "gg-sdk-bad"}" title="${esc(tip)}">● SDK${st.ok ? "" : " off"}</span>`;
 }
 
-const fmtSrc = (s) => ({ gonggan: "Gonggan", "local-sdk": "SDK", "comfy-history": "Comfy", "comfy-output-folder": "Comfy" }[s] || s || "");
+const fmtSrc = (s) => ({ gonggan: "Import", "local-sdk": "SDK", "comfy-history": "Comfy", "comfy-output-folder": "Comfy" }[s] || s || "");
 
 async function postJson(route, body) {
   const res = await api.fetchApi(route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -4276,7 +4276,7 @@ function mountShots(el) {
           <button type="button" class="gg-btn gg-tpl-use-last" hidden>Use last</button>
         </label>
         <span class="gg-sdk-slot"></span>
-        <span class="gg-other-chip" hidden title="Not started from a Gonggan cut"></span>
+        <span class="gg-other-chip" hidden title="Not started from a Shots cut"></span>
         <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
       </div>
@@ -4311,7 +4311,7 @@ function mountShots(el) {
       <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${listHtml}</div>
       <div class="gg-final-wrap"${viewFinal ? "" : " hidden"}>${viewFinal && tl ? finalCutListHtml(tl) : ""}</div>
       <div class="gg-cutpanel"></div>
-      <span class="gg-version" title="comfyui-gonggan-cut version - if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>`;
+      <span class="gg-version" title="Shots plugin version — if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>`;
     const projSel = root.querySelector(".gg-proj");
     projSel?.addEventListener("change", (e) => selectProject(e.target.value));
     root.querySelector(".gg-head")?.addEventListener("contextmenu", (e) => {
@@ -4632,7 +4632,7 @@ async function saveEdit() {
 async function resetEdit() {
   const tl = state.timeline;
   if (!tl) return;
-  if (!confirm("Reset this timeline to the Gonggan order and lengths? (the current edit is kept as a backup file)")) return;
+  if (!confirm("Reset this timeline to the original order and lengths? (the current edit is kept as a backup file)")) return;
   stopPlay();
   try {
     const res = await api.fetchApi("/gonggan/edit/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pid: tl.project.id }) });
@@ -5008,7 +5008,7 @@ function mountTimeline(el) {
         <button class="gg-btn gg-snap" title="Snap: 1 s steps (off = 0.1 s)">Snap</button>
         <button class="gg-btn gg-zoom-out" title="Zoom out">−</button>
         <button class="gg-btn gg-zoom-in" title="Zoom in">+</button>
-        <button class="gg-btn gg-reset" title="Reset to Gonggan order and lengths">Reset</button>
+        <button class="gg-btn gg-reset" title="Reset to original order and lengths">Reset</button>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
         <span class="gg-sep"></span>
         <select class="gg-ex-preset" title="Export size">
@@ -5200,7 +5200,7 @@ function paintTimelineNativeLocks() {
   });
   document.querySelectorAll(".gg-timeline .gg-reset").forEach((btn) => {
     btn.disabled = nat;
-    btn.title = nat ? tip : "Reset to Gonggan order and lengths";
+    btn.title = nat ? tip : "Reset to original order and lengths";
   });
   document.querySelectorAll(".gg-timeline .gg-ex-preset, .gg-timeline .gg-ex-sound").forEach((el) => {
     el.disabled = nat;
@@ -5379,7 +5379,7 @@ app.registerExtension({
       id: SHOTS_TAB,
       icon: "pi pi-images",
       title: "Shots",
-      tooltip: "Gonggan shot list",
+      tooltip: "Shots list",
       type: "custom",
       render: (el) => mountShots(el),
     });
