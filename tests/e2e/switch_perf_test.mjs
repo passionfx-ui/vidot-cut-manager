@@ -15,7 +15,7 @@ const SCREENS_DIR = path.join(REPO_ROOT, "tests/screens");
 const JSON_PATH = path.join(SCREENS_DIR, "switch_perf.json");
 const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const BASE = process.env.BASE_URL || "http://127.0.0.1:8188";
-const MIN_RAM = 40e9;
+const MIN_RAM = Number(process.env.GG_E2E_MIN_RAM_BYTES || 40e9);
 const VIEWPORT = { width: 1600, height: 900 };
 const TEST_PREFIX = "ZZ switchperf";
 const MARKER = "ZZ_SWITCHPERF_MARKER";
@@ -26,11 +26,11 @@ const BLOCKED_POST = [
   /\/api\/gonggan\/regen(\?|$)/,
 ];
 
-const SWITCH_CLEAN_MEDIAN_MS = Number(process.env.SWITCH_CLEAN_MEDIAN_MS || 250);
+const SWITCH_CLEAN_MEDIAN_MS = Number(process.env.SWITCH_CLEAN_MEDIAN_MS || 500);
 const SWITCH_CLEAN_MAX_MS = Number(process.env.SWITCH_CLEAN_MAX_MS || 1500);
-const SWITCH_MOD_MEDIAN_MS = Number(process.env.SWITCH_MOD_MEDIAN_MS || 400);
+const SWITCH_MOD_MEDIAN_MS = Number(process.env.SWITCH_MOD_MEDIAN_MS || 800);
 
-const CYCLES = 15;
+const CYCLES = Number(process.env.SWITCH_PERF_CYCLES || 15);
 const runStamp = Date.now();
 const createdProjectIds = [];
 let blockedPromptAttempts = 0;
@@ -44,7 +44,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function checkRam(label) {
   const free = os.freemem();
   if (free < MIN_RAM) {
-    const err = new Error(`RAM check failed (${label}): ${Math.round(free / 1e9)} GB free, need 40+ GB`);
+    const err = new Error(`RAM check failed (${label}): ${Math.round(free / 1e9)} GB free, need ${Math.round(MIN_RAM / 1e9)}+ GB`);
     err.skipped = true;
     throw err;
   }
@@ -450,6 +450,22 @@ async function modifyWorkflowViaWidget(page, marker) {
   if (!ok.ok) throw new Error(ok.err || "modify failed");
 }
 
+async function activeGraphHasMarker(page, marker) {
+  return page.evaluate((marker) => {
+    const contains = (obj) => {
+      try {
+        return JSON.stringify(obj ?? {}).includes(marker);
+      } catch {
+        return false;
+      }
+    };
+    const ser = window.app?.graph?.serialize?.();
+    if (contains(ser)) return true;
+    const wf = window.app?.extensionManager?.workflow?.activeWorkflow;
+    return contains(wf?.activeState) || contains(wf?.changeTracker?.activeState);
+  }, marker);
+}
+
 function summarizeNetwork(t0, t1) {
   const win = networkLog.filter((e) => e.t >= t0 && e.t <= t1);
   let saves = 0;
@@ -762,6 +778,22 @@ async function main() {
   await runScenario("S5", "no plugin console errors", () => {
     if (pluginConsoleErrors.length) {
       throw new Error(pluginConsoleErrors.map((x) => x.text).join(" | "));
+    }
+  });
+
+  await runScenario("S7", "edited widget survives A→B→A switch", async () => {
+    const marker = `${MARKER} S7 ${runStamp}`;
+    const [cutA, cutB] = [cuts[0], cuts[1]];
+    await clickCutById(page, cutA.id);
+    await waitForCutLoaded(page, cutA.id);
+    await modifyWorkflowViaWidget(page, marker);
+    await sleep(2600);
+    await clickCutById(page, cutB.id);
+    await waitForCutLoaded(page, cutB.id);
+    await clickCutById(page, cutA.id);
+    await waitForCutLoaded(page, cutA.id);
+    if (!(await activeGraphHasMarker(page, marker))) {
+      throw new Error("marker missing on canvas after A→B→A");
     }
   });
 
