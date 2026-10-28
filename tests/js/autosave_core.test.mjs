@@ -56,9 +56,9 @@ describe("pickFreeWorkflowPath", () => {
 });
 
 describe("autosaveModifiedTabs", () => {
-  it("no modified tabs -> nothing called", async () => {
+  it("empty queue -> nothing called", async () => {
     const calls = { save: 0, rename: 0, list: 0 };
-    const tabs = [mockTab({ isModified: false })];
+    const tabs = [];
     const deps = {
       saveWorkflow: async () => {
         calls.save++;

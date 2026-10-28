@@ -89,9 +89,8 @@ export function captureWorkflowEdits(wf) {
  * @returns {Promise<{ name: string, path: string }>}
  */
 export async function autosaveWorkflow(wf, deps) {
-  if (!wf?.isModified) return null;
-
   captureWorkflowEdits(wf);
+  if (!wf?.isModified) wf.isModified = true;
 
   if (typeof deps.saveWorkflow !== "function") {
     throw new Error("saveWorkflow unavailable");
@@ -150,7 +149,7 @@ export async function autosaveWorkflow(wf, deps) {
  * @returns {Promise<{ ok: boolean, saved: { name: string, path: string }[], failed: { name: string, error: string } | null }>}
  */
 export async function autosaveModifiedTabs(tabs, deps) {
-  const queue = (tabs || []).filter((w) => w && w.isModified);
+  const queue = (tabs || []).filter((w) => w);
   const saved = [];
   for (const wf of queue) {
     try {

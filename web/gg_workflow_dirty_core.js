@@ -46,12 +46,27 @@ export function graphContentDiffers(baseline, current) {
  * @returns {boolean} true if autosave should run
  */
 export function workflowTabNeedsAutosave(wf, ctx = {}) {
-  if (!wf?.isModified) return false;
   const cutId = ctx.cutId || "";
   const baselineCutId = ctx.baselineCutId || "";
   const baseline = ctx.baseline;
   const current = ctx.currentSnapshot;
   const graphCutId = ctx.graphCutId || "";
+  const modified = !!wf?.isModified;
+
+  const canCompareContent =
+    cutId &&
+    cutId === baselineCutId &&
+    baseline &&
+    current &&
+    Array.isArray(current.nodes) &&
+    current.nodes.length &&
+    (!graphCutId || graphCutId === cutId);
+
+  if (canCompareContent) {
+    return graphContentDiffers(baseline, current);
+  }
+
+  if (!modified) return false;
   if (!cutId || cutId !== baselineCutId || !baseline || !current) return true;
   if (graphCutId && graphCutId !== cutId) return true;
   if (!Array.isArray(current.nodes) || !current.nodes.length) return true;
