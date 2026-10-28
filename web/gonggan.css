@@ -429,3 +429,4 @@
 .gg-refs-form { display: flex; gap: 6px; }
 .gg-refs-name { flex: 1; min-width: 0; }
 .gg-refs-hint { font-size: 10px; opacity: .7; }
+.gg-shots .gg-list-empty { padding: 14px 12px; line-height: 1.5; }
