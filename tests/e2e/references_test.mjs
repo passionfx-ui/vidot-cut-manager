@@ -274,8 +274,10 @@ async function run() {
     });
     await clickCtxItem(page, "Project Settings…");
     await page.waitForSelector(".gg-modal", { timeout: 10000 });
+    await page.click(".gg-modal-name");
+    await page.keyboard.press("End");
     await page.type(".gg-modal-name", "x", { delay: 5 });
-    await page.click(".gg-modal form button[type=submit]");
+    await page.click("form.gg-modal button[type=submit]");
     await page.waitForFunction(() => !document.querySelector(".gg-modal-backdrop"), { timeout: 15000 });
     await sleep(600);
     const renamed = await page.$eval(".gg-root.gg-shots .gg-proj", (sel) => sel.options[sel.selectedIndex].textContent);
