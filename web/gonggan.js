@@ -1233,12 +1233,18 @@ async function prepareGongganShotTabReplace() {
       ggToast("Auto-save failed. Switch cancelled.", "saveWorkflow unavailable", "warn");
       return false;
     }
+    const savedSnaps = dirtyTabs.map((w) => ({
+      cutId: resolveWorkflowCutForWip(w)?.cutId || "",
+      snap: captureWorkflowSnapshotForTab(w),
+    }));
     const result = await autosaveModifiedTabs(dirtyTabs, deps);
     if (!result.ok) {
       ggCutSwitchAutosaveBlocked = true;
       ggToast("Auto-save failed. Switch cancelled.", result.failed?.error || "save failed", "warn");
       return false;
     }
+    // Saved content is the new baseline: such a tab is clean now and may be closed/replaced.
+    for (const s of savedSnaps) if (s.cutId && s.snap) ggWorkflowBaselines.set(s.cutId, s.snap);
     for (const s of result.saved) {
       const detail = s.name || s.path.replace(/^.*\//, "") || "workflow";
       ggToast("Saved", detail, "ok");
