@@ -158,7 +158,7 @@ Shots and Timeline add lightweight production tracking on top of the existing sc
 - **Project due date** and **completion %** in the Shots header (`due_date` on native projects; share projects when present in timeline payload).
 - Routes: `POST /gonggan/cut/update` `{pid, cut_id, fields}` · `POST /gonggan/project/update` `{pid, fields}` (Python route changes need a ComfyUI restart).
 
-Pure helpers: `web/gg_cuts_core.js`. Headless UI checks: `tests/e2e/cut_mgmt_test.mjs` (not run automatically).
+Pure helpers: `web/gg_cuts_core.js`. Headless UI checks: `tests/e2e/cut_mgmt_test.mjs`, `tests/e2e/reorder_real_test.mjs` (not run automatically).
 
 ### Missing Load Image guard (0.8.0)
 When a workflow is loaded (including shot workflow load), **Load Image** / **Load Image Mask** nodes are checked against the combo file list and, if needed, `GET`/`HEAD` `/api/view?filename=…&type=input`. Missing files get a **red canvas outline** (not serialized) and toast `Missing image: <file> (node <title>)`. **Queue** is blocked with `Cannot queue: missing image …`, the node is selected, and the canvas centers on it. No auto-replace of filenames. Logic: `web/gg_loadimage_core.js`; wiring: `web/gg_loadimage.js`. E2E: `tests/e2e/loadimage_test.mjs`.
