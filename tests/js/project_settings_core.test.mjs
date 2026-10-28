@@ -10,6 +10,7 @@ import {
   readSettingsFromFormValues,
   clampCutSeconds,
   clampFps,
+  clampCaptionLang,
 } from "../../web/gg_project_settings_core.js";
 
 describe("gg_project_settings_core", () => {
@@ -29,10 +30,12 @@ describe("gg_project_settings_core", () => {
     assert.equal(s.fps, 25);
   });
 
-  it("clamps fps and cut length", () => {
+  it("clamps fps, cut length, and caption language", () => {
     assert.equal(clampFps(99), 24);
     assert.equal(clampCutSeconds(0.5), 1);
     assert.equal(clampCutSeconds(120), 60);
+    assert.equal(clampCaptionLang("Korean"), "Korean");
+    assert.equal(clampCaptionLang("xx"), "English");
   });
 
   it("round-trips preset keys", () => {
@@ -45,9 +48,10 @@ describe("gg_project_settings_core", () => {
   });
 
   it("reads form values", () => {
-    const s = readSettingsFromFormValues(presetKey(RESOLUTION_PRESETS[2]), "30", "4.2", null);
+    const s = readSettingsFromFormValues(presetKey(RESOLUTION_PRESETS[2]), "30", "4.2", "Japanese", null);
     assert.equal(s.fps, 30);
     assert.equal(s.cut_seconds, 4.2);
     assert.equal(s.width, 720);
+    assert.equal(s.caption_lang, "Japanese");
   });
 });

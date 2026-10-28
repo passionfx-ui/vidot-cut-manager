@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatSrtTime, buildSrt, srtFileName } from "../../web/gg_caption_core.js";
+import {
+  formatSrtTime,
+  buildSrt,
+  srtFileName,
+  effectiveCaption,
+  captionFieldPlaceholder,
+} from "../../web/gg_caption_core.js";
 
 describe("formatSrtTime", () => {
   it("formats zero and fractional seconds", () => {
@@ -21,6 +27,13 @@ describe("formatSrtTime", () => {
 });
 
 describe("buildSrt", () => {
+  it("uses caption field only, not notes fallback", () => {
+    assert.equal(buildSrt([{ sec: 2, notes: "legacy notes", caption: "" }]), "");
+    const srt = buildSrt([{ sec: 2, notes: "ignored", caption: "on caption" }]);
+    assert.match(srt, /on caption/);
+    assert.doesNotMatch(srt, /ignored/);
+  });
+
   it("cumulative offsets and skips empty captions", () => {
     const srt = buildSrt([
       { sec: 2, caption: "A" },
@@ -46,6 +59,29 @@ describe("buildSrt", () => {
   it("ends with newline", () => {
     const srt = buildSrt([{ sec: 1, caption: "x" }]);
     assert.ok(srt.endsWith("\n"));
+  });
+});
+
+describe("effectiveCaption", () => {
+  it("prefers caption over notes", () => {
+    assert.equal(effectiveCaption({ caption: "A", notes: "B" }), "A");
+  });
+
+  it("falls back to notes when caption empty", () => {
+    assert.equal(effectiveCaption({ caption: "", notes: "legacy" }), "legacy");
+    assert.equal(effectiveCaption({ caption: "  ", notes: "legacy" }), "legacy");
+  });
+
+  it("returns empty when both empty", () => {
+    assert.equal(effectiveCaption({ caption: "", notes: "" }), "");
+    assert.equal(effectiveCaption(null), "");
+  });
+});
+
+describe("captionFieldPlaceholder", () => {
+  it("includes clamped language", () => {
+    assert.equal(captionFieldPlaceholder("Korean"), "Notes / dialogue (Korean)");
+    assert.equal(captionFieldPlaceholder("bad"), "Notes / dialogue (English)");
   });
 });
 

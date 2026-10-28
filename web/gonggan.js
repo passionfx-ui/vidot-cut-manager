@@ -99,7 +99,7 @@ import {
   isSilentFieldSave,
   autoHeightPx,
 } from "./gg_story_core.js";
-import { buildSrt, srtFileName } from "./gg_caption_core.js";
+import { buildSrt, srtFileName, effectiveCaption, captionFieldPlaceholder } from "./gg_caption_core.js";
 import { decideVideoSync } from "./gg_playback_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
@@ -147,6 +147,7 @@ import {
   normalizeProjectSettings,
   presetKeyForSettings,
   readSettingsFromFormValues,
+  CAPTION_LANG_OPTIONS,
 } from "./gg_project_settings_core.js";
 
 const EXT = "gonggan.cut";
@@ -458,12 +459,19 @@ function projectOptionLabel(p) {
 
 let projectModalEl = null;
 
+function projectCaptionLang() {
+  return normalizeProjectSettings(state.timeline?.project?.settings).caption_lang;
+}
+
 function projectSetupFieldsHtml() {
   const presetOpts = RESOLUTION_PRESETS.map((p) => {
     const k = presetKey(p);
     return `<option value="${esc(k)}">${esc(p.label)}</option>`;
   }).join("");
   const fpsOpts = FPS_OPTIONS.map((f) => `<option value="${f}">${f}</option>`).join("");
+  const langOpts = CAPTION_LANG_OPTIONS.map(
+    (lang) => `<option value="${esc(lang)}">${esc(lang)}</option>`,
+  ).join("");
   return `
       <label class="gg-modal-field">Aspect / resolution
         <select class="gg-modal-resolution">${presetOpts}</select>
@@ -473,6 +481,9 @@ function projectSetupFieldsHtml() {
       </label>
       <label class="gg-modal-field">Default cut length (sec)
         <input type="number" class="gg-modal-cut-sec" min="1" max="60" step="0.1" value="${DEFAULT_PROJECT_SETTINGS.cut_seconds}" />
+      </label>
+      <label class="gg-modal-field">Caption language
+        <select class="gg-modal-caption-lang">${langOpts}</select>
       </label>`;
 }
 
@@ -481,16 +492,25 @@ function applyProjectSetupToModal(wrap, settings) {
   const resSel = wrap.querySelector(".gg-modal-resolution");
   const fpsSel = wrap.querySelector(".gg-modal-fps");
   const cutIn = wrap.querySelector(".gg-modal-cut-sec");
+  const langSel = wrap.querySelector(".gg-modal-caption-lang");
   if (resSel) resSel.value = presetKeyForSettings(s);
   if (fpsSel) fpsSel.value = String(s.fps);
   if (cutIn) cutIn.value = String(s.cut_seconds);
+  if (langSel) langSel.value = s.caption_lang;
 }
 
 function readProjectSetupFromModal(wrap, base) {
   const resSel = wrap.querySelector(".gg-modal-resolution");
   const fpsSel = wrap.querySelector(".gg-modal-fps");
   const cutIn = wrap.querySelector(".gg-modal-cut-sec");
-  return readSettingsFromFormValues(resSel?.value, fpsSel?.value, cutIn?.value, base);
+  const langSel = wrap.querySelector(".gg-modal-caption-lang");
+  return readSettingsFromFormValues(
+    resSel?.value,
+    fpsSel?.value,
+    cutIn?.value,
+    langSel?.value,
+    base,
+  );
 }
 
 function closeProjectModal() {
@@ -3095,31 +3115,19 @@ function bindShotsReorder(root) {
 }
 
 function refreshFieldTextUnsavedClasses() {
-  const notesRoute = cutFieldUi.routeMissing;
   const capDegraded = cutFieldUi.captionDegraded;
-  document.querySelectorAll(".gg-shots .gg-info-notes, .gg-shots .gg-caption-text").forEach((ta) => {
+  document.querySelectorAll(".gg-shots .gg-caption-text").forEach((ta) => {
     const id = ta.closest(".gg-cut")?.dataset?.cutId;
     const pending = id && (cutFieldUi.unsaved[id] || (cutFieldUi.pending?.cutId === id ? cutFieldUi.pending.fields : null));
-    const isCap = ta.classList.contains("gg-caption-text");
-    const degraded = isCap ? capDegraded : notesRoute;
-    const unsaved = degraded || (pending && Object.keys(pending).length);
+    const unsaved = capDegraded || (pending && Object.keys(pending).length);
     ta.classList.toggle("gg-field-unsaved", !!unsaved);
-    if (degraded) {
+    if (capDegraded) {
       ta.title = "Not saved yet – server restart needed";
     } else if (isCardFieldEditing(ta)) {
       ta.title = CARD_EDIT_ACTIVE_TIP;
     } else if (!ta.disabled) {
       ta.title = CARD_EDIT_IDLE_TIP;
     }
-  });
-}
-
-function syncNotesViews(cutId, value, exceptEl) {
-  const panel = document.querySelector(".gg-shots .gg-cutpanel .gg-notes");
-  if (panel && panel !== exceptEl && state.cutId === cutId) panel.value = value;
-  document.querySelectorAll(".gg-shots .gg-info-notes").forEach((ta) => {
-    const li = ta.closest(".gg-cut");
-    if (li?.dataset?.cutId === cutId && ta !== exceptEl) ta.value = value;
   });
 }
 
@@ -3169,7 +3177,7 @@ async function saveCutFields(cutId, fields) {
       if (!routeMissingToastShown) {
         routeMissingToastShown = true;
         ggToast(
-          "Notes can't be saved yet",
+          "Changes can't be saved yet",
           "The server needs a one-time ComfyUI restart to enable saving. Your edits stay in this page until you reload.",
           "warn",
         );
@@ -3252,6 +3260,7 @@ function finalCutListHtml(tl) {
     const cut = tl.cuts.find((c) => c.id === it.cutId) || {};
     const warn = lengthWarning(cut);
     const fname = fileBaseName(cut, null, versionIndexFromList(cut.versions_list, it.versionId));
+    const capLine = effectiveCaption(cut).replace(/\s+/g, " ").trim();
     return `
       <li class="gg-final-item" data-cut-id="${esc(it.cutId)}">
         <span class="gg-num">${formatCutNumber(it.number)}</span>
@@ -3259,6 +3268,7 @@ function finalCutListHtml(tl) {
         <div class="gg-final-meta">
           <div class="gg-final-name">${esc(it.name)}</div>
           <div class="gg-final-sub">${esc(it.sceneName || "—")} · ${effectiveLenLabel(cut)} · ${esc(fname)} · ${esc(it.versionLabel)}</div>
+          ${capLine ? `<div class="gg-final-cap" title="${esc(capLine)}">${esc(capLine)}</div>` : ""}
           ${warn ? `<span class="gg-warn3" title="${esc(warn.message)}">&gt; 3s</span>` : ""}
         </div>
       </li>`;
@@ -3282,7 +3292,6 @@ function bindCutPanelFields(panel, c) {
   const nat = isNativeProject();
   const roTip = NATIVE_READONLY_TIP;
   const lenIn = panel.querySelector(".gg-len-input");
-  const notes = panel.querySelector(".gg-notes");
   const endChk = panel.querySelector("input.gg-endcard-chk");
   const redoChk = panel.querySelector("input.gg-redo-chk");
   const fnameEl = panel.querySelector(".gg-fname");
@@ -3314,19 +3323,6 @@ function bindCutPanelFields(panel, c) {
     };
     lenIn.addEventListener("change", onLen);
     lenIn.addEventListener("blur", onLen);
-  }
-  if (notes) {
-    notes.value = c.notes || "";
-    notes.disabled = !nat;
-    notes.title = nat ? "Cut notes" : roTip;
-    const onNotes = () => {
-      c.notes = notes.value;
-      scheduleCutFieldSave(c.id, { notes: notes.value });
-      syncNotesViews(c.id, notes.value, notes);
-    };
-    notes.addEventListener("input", onNotes);
-    notes.addEventListener("change", onNotes);
-    notes.addEventListener("blur", onNotes);
   }
   if (endChk) {
     endChk.checked = !!c.end_card;
@@ -3400,17 +3396,15 @@ function refreshCutRowBadges(cutId) {
 }
 
 function cutRowHtml(c) {
-  const captionMode = normalizeListMode(shotsUi.listMode) === "caption";
+  const listCaption = normalizeListMode(shotsUi.listMode) === "caption";
   const nat = isNativeProject();
   const timelineOrder = state.timeline?.cuts?.map((x) => x.id) ?? [];
   const canUp = nat && canMoveUp(timelineOrder, [c.id]);
   const canDown = nat && canMoveDown(timelineOrder, [c.id]);
-  const notesTip = nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP;
   const capTip = nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP;
   const roAttr = nat ? " readonly" : " disabled";
-  const bodyArea = captionMode
-    ? `<textarea class="gg-caption-text" rows="3" placeholder="Dialogue / caption"${roAttr} title="${esc(capTip)}">${esc(c.caption || "")}</textarea>`
-    : `<textarea class="gg-info-notes" rows="2" placeholder="Notes…"${roAttr} title="${esc(notesTip)}">${esc(c.notes || "")}</textarea>`;
+  const capPh = captionFieldPlaceholder(projectCaptionLang());
+  const bodyArea = `<textarea class="gg-caption-text" rows="${listCaption ? 3 : 1}" placeholder="${esc(capPh)}"${roAttr} title="${esc(capTip)}">${esc(effectiveCaption(c))}</textarea>`;
   const warn = lengthWarning(c);
   const lenInfo = formatCutHeaderLengths(c);
   const verInfo = formatPickedVersionInfo(c);
@@ -3922,9 +3916,6 @@ function cutPanelHtml(c) {
           <label class="gg-field-end"${metaTip}><input type="checkbox" class="gg-endcard-chk"${c.end_card ? " checked" : ""}${metaDisabled} /> End card</label>
           <label class="gg-field-redo"${metaTip}><input type="checkbox" class="gg-redo-chk"${c.needs_redo ? " checked" : ""}${metaDisabled} /> Needs redo</label>
         </div>
-        <label class="gg-field-notes"${metaTip}>Notes
-          <textarea class="gg-notes" rows="2" placeholder="Notes…"${metaDisabled}>${esc(c.notes || "")}</textarea>
-        </label>
         <div class="gg-fname-row">
           <span class="gg-fname" title="Suggested export base name (read-only)">${esc(fname)}</span>
           <button type="button" class="gg-btn gg-fname-copy"${nat ? "" : ` disabled title="${esc(NATIVE_READONLY_TIP)}"`}>Copy</button>
@@ -3992,16 +3983,16 @@ function mountShots(el) {
     });
     if (c) bindCutPanelFields(panel, c);
   };
-  const FIELD_TEXT_SEL = ".gg-info-notes, .gg-caption-text";
+  const FIELD_TEXT_SEL = ".gg-caption-text";
 
   function captureFieldTextFocus() {
     const el = document.activeElement;
     if (!el || !root.contains(el)) return null;
-    if (!el.classList.contains("gg-info-notes") && !el.classList.contains("gg-caption-text")) return null;
+    if (!el.classList.contains("gg-caption-text")) return null;
     const li = el.closest(".gg-cut");
     return {
       cutId: li?.dataset?.cutId || "",
-      field: el.classList.contains("gg-caption-text") ? "caption" : "notes",
+      field: "caption",
       value: el.value,
       selectionStart: el.selectionStart,
       selectionEnd: el.selectionEnd,
@@ -4012,20 +4003,13 @@ function mountShots(el) {
 
   function restoreFieldTextFocus(cap) {
     if (!cap?.cutId) return;
-    const sel = cap.field === "caption" ? ".gg-caption-text" : ".gg-info-notes";
-    const ta = root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cap.cutId)}"] ${sel}`);
+    const ta = root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cap.cutId)}"] .gg-caption-text`);
     if (!ta) return;
     ta.value = cap.value;
     const c = cutByIdTimeline(cap.cutId);
-    if (c) {
-      if (cap.field === "caption" && c.caption !== cap.value) {
-        c.caption = cap.value;
-        scheduleCutFieldSave(cap.cutId, { caption: cap.value });
-      }
-      if (cap.field === "notes" && c.notes !== cap.value) {
-        c.notes = cap.value;
-        scheduleCutFieldSave(cap.cutId, { notes: cap.value });
-      }
+    if (c && c.caption !== cap.value) {
+      c.caption = cap.value;
+      scheduleCutFieldSave(cap.cutId, { caption: cap.value });
     }
     const nat = isNativeProject() && !ta.disabled;
     if (cap.editing && nat) {
@@ -4060,12 +4044,12 @@ function mountShots(el) {
       (parseFloat(cs.paddingBottom) || 0) +
       (parseFloat(cs.borderTopWidth) || 0) +
       (parseFloat(cs.borderBottomWidth) || 0);
-    const isCap = ta.classList.contains("gg-caption-text");
     const focused = document.activeElement === ta;
-    const minLines = isCap ? 3 : 2;
+    const listCaption = normalizeListMode(shotsUi.listMode) === "caption";
+    const minLines = listCaption || focused ? (listCaption ? 3 : 1) : 1;
     const minPx = lh * minLines + pad;
-    let maxPx = isCap ? window.innerHeight * 0.45 : lh * 2 + pad;
-    if (!isCap && focused) maxPx = lh * 6 + pad;
+    let maxPx = listCaption ? window.innerHeight * 0.45 : lh * 1 + pad;
+    if (!listCaption && focused) maxPx = lh * 6 + pad;
     return { minPx, maxPx };
   }
 
@@ -4176,28 +4160,18 @@ function mountShots(el) {
           enterCardFieldEdit();
           return;
         }
-        if (ta.classList.contains("gg-info-notes")) autoSizeFieldTextarea(ta);
+        autoSizeFieldTextarea(ta);
       });
       ta.addEventListener("blur", () => {
         if (isCardFieldEditing(ta)) exitCardFieldEdit();
-        else if (ta.classList.contains("gg-info-notes")) autoSizeFieldTextarea(ta);
+        else autoSizeFieldTextarea(ta);
       });
-      if (ta.classList.contains("gg-info-notes")) {
-        ta.addEventListener("input", () => {
-          const c = cutByIdTimeline(id);
-          if (c) c.notes = ta.value;
-          scheduleCutFieldSave(id, { notes: ta.value });
-          syncNotesViews(id, ta.value, ta);
-          autoSizeFieldTextarea(ta);
-        });
-      } else {
-        ta.addEventListener("input", () => {
-          const c = cutByIdTimeline(id);
-          if (c) c.caption = ta.value;
-          scheduleCutFieldSave(id, { caption: ta.value });
-          autoSizeFieldTextarea(ta);
-        });
-      }
+      ta.addEventListener("input", () => {
+        const c = cutByIdTimeline(id);
+        if (c) c.caption = ta.value;
+        scheduleCutFieldSave(id, { caption: ta.value });
+        autoSizeFieldTextarea(ta);
+      });
     });
     refreshFieldTextUnsavedClasses();
   }
@@ -5114,7 +5088,10 @@ function mountTimeline(el) {
     $r(".gg-track").innerHTML = cuts.map((c, i) => {
       const run = c.group_id && (i === 0 || cuts[i - 1].group_id !== c.group_id);
       const hue = c.group_id ? groupColor(c.group_id) : 0;
-      const tip = `${c.group_name ? `Scene · ${c.group_name}\n` : ""}${c.pos + 1}. ${c.name}  ${c.sec.toFixed(1)}s${c.src_dur ? ` (src ${c.src_dur}s)` : ""}`;
+      const tip = `${c.group_name ? `Scene · ${c.group_name}\n` : ""}${c.pos + 1}. ${c.name}  ${c.sec.toFixed(1)}s${c.src_dur ? ` (src ${c.src_dur}s)` : ""}${(() => {
+        const cap = effectiveCaption(c).trim();
+        return cap ? `\n${cap}` : "";
+      })()}`;
       return `
       <div class="gg-clip${c.media ? "" : " gg-clip-empty"}${kindOf(c) === "video" ? " gg-clip-video" : ""}${c.pos !== c.index ? " gg-moved" : ""}${c.group_id ? " gg-in-scene" : ""}${run ? " gg-scene-start" : ""}"
            data-cut-id="${esc(c.id)}" style="width:${c.sec * ed.px}px;${c.group_id ? `--gg-grp:${hue}` : ""}"

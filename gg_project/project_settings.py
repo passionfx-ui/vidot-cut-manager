@@ -13,15 +13,20 @@ RESOLUTION_PRESETS: list[dict[str, Any]] = [
 
 FPS_ALLOWED = frozenset({24, 25, 30})
 
+CAPTION_LANG_ALLOWED = frozenset(
+    {"English", "Korean", "Japanese", "Chinese", "Spanish", "French", "German"}
+)
+
 DEFAULT_PROJECT_SETTINGS: dict[str, Any] = {
     "aspect": "16:9",
     "width": 1280,
     "height": 720,
     "fps": 24,
     "cut_seconds": 3.0,
+    "caption_lang": "English",
 }
 
-_SETTING_KEYS = frozenset({"aspect", "width", "height", "fps", "cut_seconds"})
+_SETTING_KEYS = frozenset({"aspect", "width", "height", "fps", "cut_seconds", "caption_lang"})
 
 
 def preset_key(preset: dict[str, Any]) -> str:
@@ -77,6 +82,11 @@ def _clamp_aspect(value: Any) -> str:
     return str(DEFAULT_PROJECT_SETTINGS["aspect"])
 
 
+def _clamp_caption_lang(value: Any) -> str:
+    s = str(value or "").strip()
+    return s if s in CAPTION_LANG_ALLOWED else str(DEFAULT_PROJECT_SETTINGS["caption_lang"])
+
+
 def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     """Merge missing keys and clamp; old docs may use default_sec instead of cut_seconds."""
     out = dict(DEFAULT_PROJECT_SETTINGS)
@@ -93,6 +103,7 @@ def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     out["height"] = _clamp_dim(out.get("height"))
     out["fps"] = _clamp_fps(out.get("fps"))
     out["cut_seconds"] = _clamp_cut_seconds(out.get("cut_seconds"))
+    out["caption_lang"] = _clamp_caption_lang(out.get("caption_lang"))
     return out
 
 
