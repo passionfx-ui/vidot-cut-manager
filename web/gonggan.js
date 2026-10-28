@@ -1157,7 +1157,10 @@ async function runGongganWipAutosave(opts = {}) {
     applyWipStampForWorkflow(wf);
     const deps = buildAutosaveDeps();
     if (typeof deps.saveWorkflow !== "function") throw new Error("saveWorkflow unavailable");
+    const savedSnap = captureWorkflowSnapshotForTab(wf);
     await autosaveWorkflow(wf, deps);
+    // Saved content is the new baseline: a later switch must not re-stamp it with a newer version key.
+    if (resolved?.cutId && savedSnap) ggWorkflowBaselines.set(resolved.cutId, savedSnap);
     ggWipLastAutosaveAt = Date.now();
   } catch (e) {
     console.warn("[gonggan] periodic wip autosave failed", e);
