@@ -183,7 +183,7 @@ async function run() {
     if (text !== "No cuts yet. Right-click here and choose Add Cut.") throw new Error(`hint text: ${text}`);
     console.log("PASS  empty project shows the Add Cut hint");
 
-    await sleep(3000); // let the initial project/timeline loads settle (a click within ~1 s of selecting can race them)
+    // no settle wait: loadTimeline() now drops stale responses (see timeline_race_test.mjs)
     const box = await (await page.$(".gg-list-empty")).boundingBox();
     await page.mouse.click(box.x + 20, box.y + 10, { button: "right" });
     await clickCtxItem(page, "Add Cut");
