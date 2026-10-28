@@ -1,7 +1,7 @@
 /**
  * Headless Chrome: auto-save modified shot tab on cut switch (0.8.2 paths).
  */
-import { shotWorkflowRelPath, shotProjectFolder } from "../../web/gg_shot_names.js";
+import { shotWorkflowRelPathById } from "../../web/gg_shot_names.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -145,14 +145,8 @@ async function pickUsableTemplateRef(page, paths) {
   return pickTemplateRef(paths);
 }
 
-function expectedShotWorkflowRel(pid, projectName, cut) {
-  const pos = cut?.pos ?? cut?.index;
-  return shotWorkflowRelPath({
-    projectName,
-    projectId: pid,
-    cutName: cut?.name,
-    cutNumber: pos != null ? pos + 1 : undefined,
-  });
+function expectedShotWorkflowRel(pid, _projectName, cut) {
+  return shotWorkflowRelPathById({ projectId: pid, cutId: cut.id });
 }
 
 async function deleteWorkflowFile(page, relPath) {
@@ -521,7 +515,7 @@ async function main() {
     await waitForGraphNodes(page);
     const activeA = await getActiveWorkflowInfo(page);
     if (activeA.basename !== wfBasenameA) {
-      throw new Error(`tab label should be cut basename "${wfBasenameA}", got "${activeA.basename}"`);
+      throw new Error(`workflow filename should be "${wfBasenameA}", got "${activeA.basename}"`);
     }
 
     await modifyWorkflowViaWidget(page, MARKER);
@@ -538,7 +532,6 @@ async function main() {
       throw new Error(`after switch: active cut ${activeB.cutId} !== cut B ${cutB.id}`);
     }
 
-    const projFolder = shotProjectFolder({ projectName, projectId: pid });
     const expectedSaved = `workflows/${wfRelA}`;
     const afterPaths = await fetchWorkflowPaths(page);
     const beforeSet = new Set(workflowPathsBefore);
@@ -546,7 +539,7 @@ async function main() {
       expectedSaved,
       wfRelA,
       activeA.path,
-      ...afterPaths.filter((p) => !beforeSet.has(p) && p.includes(`gonggan/${projFolder}/`)),
+      ...afterPaths.filter((p) => !beforeSet.has(p) && p.includes(`gonggan/${pid}/`)),
     ];
     let savedPath = "";
     for (const rel of [...new Set(candidates)]) {

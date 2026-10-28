@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   sanitizeNamePart,
+  sanitizeWorkflowIdSegment,
   shotProjectFolder,
   shotCutFileName,
   shotWorkflowRelPath,
+  shotWorkflowRelPathById,
   projectIdFolderFallback,
   graphExtraMatchesShot,
   shotTabIdentityMatches,
@@ -158,5 +160,40 @@ describe("pickFreeWorkflowPath in gonggan subfolder", () => {
 describe("sanitizeNamePart", () => {
   it("trims leading and trailing dashes and dots", () => {
     assert.equal(sanitizeNamePart("---hello..."), "hello");
+  });
+});
+
+describe("shotWorkflowRelPathById", () => {
+  const pid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const cutId = "11111111-2222-3333-4444-555555555555";
+
+  it("returns gonggan/<projectId>/<cutId>.json", () => {
+    assert.equal(shotWorkflowRelPathById({ projectId: pid, cutId }), `gonggan/${pid}/${cutId}.json`);
+  });
+
+  it("same cut -> same path regardless of cut/project rename (legacy name path differs)", () => {
+    const byId = shotWorkflowRelPathById({ projectId: pid, cutId });
+    const legacyA = shotWorkflowRelPath({
+      projectName: "Alpha",
+      projectId: pid,
+      cutName: "hero",
+      cutNumber: 1,
+    });
+    const legacyB = shotWorkflowRelPath({
+      projectName: "Beta Renamed",
+      projectId: pid,
+      cutName: "renamed cut",
+      cutNumber: 1,
+    });
+    assert.equal(byId, shotWorkflowRelPathById({ projectId: pid, cutId }));
+    assert.notEqual(byId, legacyA);
+    assert.notEqual(byId, legacyB);
+  });
+
+  it("sanitizes unsafe id characters deterministically", () => {
+    const raw = "id/with\\bad";
+    const seg = sanitizeWorkflowIdSegment(raw);
+    assert.match(seg, /^[A-Za-z0-9_-]+$/);
+    assert.equal(shotWorkflowRelPathById({ projectId: raw, cutId: "ok" }), `gonggan/${seg}/ok.json`);
   });
 });
