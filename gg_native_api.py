@@ -288,7 +288,9 @@ def _workflow_from_sha(store: LocalStore, pid: str, sha: str | None) -> dict | N
     return store.get_blob(pid, sha)
 
 
-def native_cut_source_workflow(pid: str, cut_id: str) -> dict:
+def native_cut_source_workflow(pid: str, cut_id: str, kind: str | None = None) -> dict:
+    from gg_project.cut_source import normalize_media_kind, resolve_native_cut_source
+
     store = native_store()
     doc = store.get_project(pid)
     if not doc:
@@ -297,28 +299,21 @@ def native_cut_source_workflow(pid: str, cut_id: str) -> dict:
     cut = cuts.get(cut_id) if isinstance(cuts, dict) else None
     if not cut or cut.get("deleted_at"):
         raise ValueError("cut not found")
-    wf = _workflow_from_sha(store, pid, cut.get("workflow_sha"))
-    if wf:
-        kind = "ui" if gg_template._is_ui_workflow(wf) else "api"
-        return {"ok": True, "source": "stored", "workflow": wf, "kind": kind}
-    pick = cut.get("pick_version_id")
-    if isinstance(pick, str):
-        for ver in store.list_versions(pid, cut_id):
-            if ver.get("id") == pick:
-                wf = _workflow_from_sha(store, pid, ver.get("workflow_sha"))
-                if wf:
-                    kind = "ui" if gg_template._is_ui_workflow(wf) else "api"
-                    return {"ok": True, "source": "stored", "workflow": wf, "kind": kind}
-    for ver in store.list_versions(pid, cut_id):
-        wf = _workflow_from_sha(store, pid, ver.get("workflow_sha"))
-        if wf:
-            kind = "ui" if gg_template._is_ui_workflow(wf) else "api"
-            return {"ok": True, "source": "stored", "workflow": wf, "kind": kind}
+    req = normalize_media_kind(kind)
+    versions = store.list_versions(pid, cut_id)
+
+    def get_workflow(sha: str | None) -> dict | None:
+        return _workflow_from_sha(store, pid, sha)
+
     tpl = native_template_info(pid).get("workflow")
-    if tpl:
-        kind = "ui" if gg_template._is_ui_workflow(tpl) else "api"
-        return {"ok": True, "source": "template", "workflow": tpl, "kind": kind}
-    return {"ok": True, "source": None, "workflow": None, "kind": None}
+    return resolve_native_cut_source(
+        cut,
+        versions,
+        get_workflow,
+        tpl if isinstance(tpl, dict) else None,
+        requested_kind=req,
+        is_ui_workflow=gg_template._is_ui_workflow,
+    )
 
 
 def native_version_workflow(pid: str, cut_id: str, vid: str) -> dict | None:
