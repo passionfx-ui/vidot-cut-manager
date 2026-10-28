@@ -218,8 +218,9 @@ async function run() {
     );
     const pid = await page.$eval(".gg-root.gg-shots .gg-proj", (sel) => sel.value);
     if (pid) createdProjectIds.push(pid);
-    await page.waitForSelector(".gg-root.gg-shots .gg-cut", { timeout: 15000 });
-    const cutId = await page.$eval(".gg-root.gg-shots .gg-cut", (e) => e.dataset.cutId);
+    const tl0 = await getJson(page, `/gonggan/timeline?pid=${encodeURIComponent(pid)}`);
+    const cutId = tl0.data.cuts[0].id;
+    await page.waitForSelector(`.gg-root.gg-shots .gg-cut[data-cut-id="${cutId}"]`, { timeout: 15000 });
     const title = () => page.$eval(`.gg-root.gg-shots .gg-cut[data-cut-id="${cutId}"] .gg-cut-title`, (e) => e.textContent.trim());
     const before = await title();
 
