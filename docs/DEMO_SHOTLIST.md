@@ -5,7 +5,7 @@ Prepare beforehand: a native project "Demo — Rainy Café" with 6 cuts in 2 sce
 
 | # | Time | Screen | Action | On-screen caption |
 |---|------|--------|--------|-------------------|
-| 1 | 0:00–0:06 | Title card over ComfyUI | Fade in logo/name | "comfyui-gonggan-cut — shot list + rough cut inside ComfyUI" |
+| 1 | 0:00–0:06 | Title card over ComfyUI | Fade in logo/name | "Shots — shot list + rough cut inside ComfyUI" |
 | 2 | 0:06–0:16 | Empty ComfyUI | Open **Shots** sidebar, right-click → New Project, type name | "Plan your film as projects, scenes and cuts" |
 | 3 | 0:16–0:28 | Shots list | Add Cut ×3, drag to reorder (numbers update), multi-select → Group into scene | "Drag to reorder — numbers update automatically" |
 | 4 | 0:28–0:42 | Switch to prepared demo project | Click cut 001 → workflow opens; click 002 → same tab switches, label `Project / Cut` | "One click opens each cut's workflow" |

@@ -1,4 +1,4 @@
-"""native_media_path skips legacy 공간쉐어 job/version ids."""
+"""native_media_path skips legacy imported job/version ids."""
 from __future__ import annotations
 
 import sys
