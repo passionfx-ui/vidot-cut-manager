@@ -129,8 +129,8 @@ Also run `node --check web/gonggan.js` and `node --check web/gg_progress_core.js
 ## Auto-save on cut switch (0.8.1)
 Switching to another shot while the Gonggan workflow tab has unsaved edits **auto-saves** via ComfyUI’s workflow store (same as Ctrl+S) instead of a blocking confirm. If save fails, the switch is cancelled and the tab is left unchanged. Logic: `web/gg_autosave_core.js`.
 
-## Shot workflow paths (0.8.2)
-Gonggan saves each shot’s ComfyUI workflow under `workflows/gonggan/<project-folder>/<cut-name>.json` (tab title stays the cut filename only). Project folder names are sanitized from the project title, with an id-based fallback when the title has no ASCII word characters. Logic: `web/gg_shot_names.js`.
+## Shot workflow paths (0.8.2+)
+Each shot’s ComfyUI tab copy is saved at a **stable id-based path**: `workflows/gonggan/<projectId>/<cutId>.json` (one working file per cut; reload/rename does not create `cut6 (2).json` suffixes). The tab bar still shows the display-only **Project / Cut** label from project/cut metadata, not the filename. Legacy name-based helpers remain in `web/gg_shot_names.js` for tests. E2E guard: `tests/e2e/tabfile_dedupe_test.mjs`.
 
 ## Timeline selection without tab switch (0.8.3)
 Clicking a **Timeline** clip updates the selected cut and preview seek only; it does **not** load or switch the Gonggan shot workflow tab. **Shots** list clicks still open the cut workflow as before. When the canvas tab is a different cut than the selection, the Shots list shows a small **Open** marker on the open cut (`web/gg_cut_select_core.js`).

@@ -38,7 +38,7 @@ import {
   pathCollides,
 } from "./gg_autosave_core.js";
 import {
-  shotWorkflowRelPath,
+  shotWorkflowRelPathById,
   shouldSkipShotWorkflowReload,
   gongganExtraProjectId,
 } from "./gg_shot_names.js";
@@ -807,14 +807,7 @@ async function prepareGongganShotTabReplace() {
 }
 
 function shotWorkflowRelPathForCut(cut) {
-  const proj = currentProject();
-  const pos = cut?.pos ?? cut?.index;
-  return shotWorkflowRelPath({
-    projectName: proj?.name || state.timeline?.project?.name || "",
-    projectId: state.pid,
-    cutName: cut?.name,
-    cutNumber: pos != null ? pos + 1 : undefined,
-  });
+  return shotWorkflowRelPathById({ projectId: state.pid, cutId: cut?.id || "" });
 }
 
 function adoptGongganShotWorkflow(relPath) {
@@ -846,8 +839,9 @@ function adoptGongganShotWorkflow(relPath) {
   return found;
 }
 
-async function resolveShotWorkflowStoragePath(relPath) {
+async function resolveShotWorkflowStoragePath(relPath, opts = {}) {
   const desired = normalizeWorkflowPath(String(relPath).replace(/^workflows\//, ""));
+  if (opts.idBased) return desired;
   const existing = await listWorkflowPathsForAutosave();
   const isTaken = (p) => {
     if (isPathGongganOwned(p)) return false;
@@ -1056,7 +1050,7 @@ function setupTabLabels() {
 
 async function loadWorkflowIntoDedicatedTab(workflow, cut) {
   const relPath = shotWorkflowRelPathForCut(cut);
-  const storagePath = await resolveShotWorkflowStoragePath(relPath);
+  const storagePath = await resolveShotWorkflowStoragePath(relPath, { idBased: true });
   const loadName = storagePath.replace(/^workflows\//, "");
   const shotMeta = { projectId: state.pid, cutId: cut?.id || "" };
   if (!(await prepareGongganShotTabReplace())) return false;
