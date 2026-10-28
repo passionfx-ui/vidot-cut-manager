@@ -47,6 +47,10 @@ import {
   pickFreeWorkflowPath,
   pathCollides,
 } from "./gg_autosave_core.js";
+import {
+  filterTabsNeedingAutosave,
+  workflowTabNeedsAutosave,
+} from "./gg_workflow_dirty_core.js";
 import { cutBaseKey, stampWip, shouldRestoreWip } from "./gg_wip_core.js";
 import { GG_VERSION } from "./gg_version.js";
 import {
@@ -815,7 +819,8 @@ function openProjectContextMenu(e) {
 
 const GG_LEGACY_SHOT_WF_FILE = "gonggan-shot.json";
 const GG_LEGACY_SHOT_WF_PATH = "workflows/gonggan-shot.json";
-const WF_LOAD_DEBOUNCE_MS = 250;
+const WF_LOAD_DEBOUNCE_MS = 0;
+let ggCutLoadSeq = Promise.resolve();
 
 /** Monotonic token; only selectCut bumps it to cancel stale debounced/in-flight loads. */
 let wfLoadToken = 0;
@@ -878,6 +883,50 @@ function captureGraphWorkflowSnapshot() {
 function rememberWorkflowBaselineFromActiveGraph(cutId) {
   const snap = captureGraphWorkflowSnapshot();
   if (snap) rememberWorkflowBaselineForCut(cutId, snap);
+}
+
+function autosaveContextForWorkflow(wf) {
+  const resolved = resolveWorkflowCutForWip(wf);
+  const cutId = resolved?.cutId || ggWorkflowBaselineCutId || "";
+  const ws = ggWorkflowStore();
+  const onActiveGraph =
+    wf &&
+    (wf === ggOwnedShotWorkflow || wf === ws?.activeWorkflow) &&
+    wf === ws?.activeWorkflow;
+  return {
+    cutId,
+    baselineCutId: ggWorkflowBaselineCutId,
+    baseline: ggWorkflowBaseline,
+    currentSnapshot: onActiveGraph ? captureGraphWorkflowSnapshot() : null,
+    graphCutId: app.graph?.extra?.gonggan?.cutId || "",
+  };
+}
+
+function clearSpuriousWorkflowModified(wf) {
+  if (!wf?.isModified) return;
+  wf.isModified = false;
+  try {
+    wf.changeTracker?.captureCanvasState?.();
+  } catch (_) {}
+}
+
+function reconcileModifiedAfterShotLoad(cutId) {
+  rememberWorkflowBaselineFromActiveGraph(cutId);
+  const wf = ggOwnedShotWorkflow;
+  if (!wf) return;
+  if (!workflowTabNeedsAutosave(wf, autosaveContextForWorkflow(wf))) {
+    clearSpuriousWorkflowModified(wf);
+  }
+}
+
+function scheduleLoadCutWorkflow(cutId, cut, loadToken) {
+  ggCutLoadSeq = ggCutLoadSeq
+    .then(async () => {
+      if (loadToken !== wfLoadToken) return;
+      await loadCutWorkflow(cutId, cut, loadToken);
+    })
+    .catch((e) => console.warn("[gonggan] cut load failed", e));
+  return ggCutLoadSeq;
 }
 
 function syncEditedMarkerBeforeSave(cutId, cutRec) {
@@ -1085,6 +1134,10 @@ async function runGongganWipAutosave(opts = {}) {
   const wf = ggOwnedShotWorkflow;
   if (!ws || !wf || !(ws.openWorkflows || []).includes(wf)) return;
   if (!isGongganOwnedWorkflow(wf) || !wf.isModified) return;
+  if (!workflowTabNeedsAutosave(wf, autosaveContextForWorkflow(wf))) {
+    clearSpuriousWorkflowModified(wf);
+    return;
+  }
   if (!(ws.isActive?.(wf) ?? ws.activeWorkflow === wf)) return;
   const now = Date.now();
   if (!force && now - ggWipLastAutosaveAt < GG_WIP_AUTOSAVE_MIN_MS) return;
@@ -1145,7 +1198,7 @@ async function tryRestoreCutWorkingCopy(cutId, cutRec, loadToken) {
     if (!loaded) return false;
     markWorkflowLoadComplete(cutId, cut);
     markGraphGongganCut(cutId);
-    rememberWorkflowBaselineFromActiveGraph(cutId);
+    reconcileModifiedAfterShotLoad(cutId);
     sdk.msg = `Canvas: ${shotTitle(cut)} (restored edits)`;
     bus.dispatchEvent(new Event("sdk"));
     bus.dispatchEvent(new Event("gg-opentab"));
@@ -1159,19 +1212,26 @@ async function tryRestoreCutWorkingCopy(cutId, cutRec, loadToken) {
 
 async function prepareGongganShotTabReplace() {
   const tabs = collectGongganShotTabs();
-  if (tabs.some((w) => w.isModified)) {
-    for (const w of tabs) {
+  for (const w of tabs) {
+    if (!w?.isModified) continue;
+    if (!workflowTabNeedsAutosave(w, autosaveContextForWorkflow(w))) {
+      clearSpuriousWorkflowModified(w);
+    }
+  }
+  const dirtyTabs = filterTabsNeedingAutosave(tabs, autosaveContextForWorkflow);
+  if (dirtyTabs.length) {
+    for (const w of dirtyTabs) {
       const resolved = resolveWorkflowCutForWip(w);
       if (resolved) syncEditedMarkerBeforeSave(resolved.cutId, resolved.cut);
     }
-    for (const w of tabs) applyWipStampForWorkflow(w);
+    for (const w of dirtyTabs) applyWipStampForWorkflow(w);
     const deps = buildAutosaveDeps();
     if (typeof deps.saveWorkflow !== "function") {
       ggCutSwitchAutosaveBlocked = true;
       ggToast("Auto-save failed. Switch cancelled.", "saveWorkflow unavailable", "warn");
       return false;
     }
-    const result = await autosaveModifiedTabs(tabs, deps);
+    const result = await autosaveModifiedTabs(dirtyTabs, deps);
     if (!result.ok) {
       ggCutSwitchAutosaveBlocked = true;
       ggToast("Auto-save failed. Switch cancelled.", result.failed?.error || "save failed", "warn");
@@ -1475,9 +1535,11 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut) {
     const open = ws?.openWorkflows || [];
     const newTab = ggOwnedShotWorkflow;
     if (previous && previous !== newTab && open.includes(previous) && isGongganOwnedWorkflow(previous)) {
-      if (previous.isModified) {
+      const prevDirty = workflowTabNeedsAutosave(previous, autosaveContextForWorkflow(previous));
+      if (prevDirty) {
         ggToast("Previous shot tab kept (unsaved changes).", "", "warn");
       } else {
+        clearSpuriousWorkflowModified(previous);
         const active = ws?.isActive?.(previous) ?? ws?.activeWorkflow === previous;
         const decision = shouldClosePreviousShotTab({
           previousOpen: true,
@@ -1495,7 +1557,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut) {
   }
   scheduleTabLabelRefresh();
   scheduleLoadImageScan({ debounceMs: 200 });
-  if (cut?.id) rememberWorkflowBaselineFromActiveGraph(cut.id);
+  if (cut?.id) reconcileModifiedAfterShotLoad(cut.id);
   return true;
 }
 
@@ -1999,15 +2061,18 @@ function selectCut(cutId, opts) {
       }
     } catch (_) {}
     const loadToken = ++wfLoadToken;
-    wfLoadDebounce = setTimeout(() => {
+    const runLoad = () => {
       wfLoadDebounce = 0;
       ggCutLoadsInFlight++;
-      Promise.resolve(loadCutWorkflow(cutId, cut, loadToken))
-        .catch((e) => console.warn("[gonggan] cut load failed", e))
-        .finally(() => {
-          ggCutLoadsInFlight--;
-        });
-    }, WF_LOAD_DEBOUNCE_MS);
+      scheduleLoadCutWorkflow(cutId, cut, loadToken).finally(() => {
+        ggCutLoadsInFlight--;
+      });
+    };
+    if (WF_LOAD_DEBOUNCE_MS > 0) {
+      wfLoadDebounce = setTimeout(runLoad, WF_LOAD_DEBOUNCE_MS);
+    } else {
+      runLoad();
+    }
   }
 }
 
