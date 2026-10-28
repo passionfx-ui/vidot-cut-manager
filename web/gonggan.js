@@ -47,6 +47,10 @@ import {
   pickFreeWorkflowPath,
   pathCollides,
 } from "./gg_autosave_core.js";
+import {
+  filterTabsNeedingAutosave,
+  workflowTabNeedsAutosave,
+} from "./gg_workflow_dirty_core.js";
 import { cutBaseKey, stampWip, shouldRestoreWip } from "./gg_wip_core.js";
 import { GG_VERSION } from "./gg_version.js";
 import {
@@ -815,7 +819,8 @@ function openProjectContextMenu(e) {
 
 const GG_LEGACY_SHOT_WF_FILE = "gonggan-shot.json";
 const GG_LEGACY_SHOT_WF_PATH = "workflows/gonggan-shot.json";
-const WF_LOAD_DEBOUNCE_MS = 250;
+const WF_LOAD_DEBOUNCE_MS = 0;
+let ggCutLoadSeq = Promise.resolve();
 
 /** Monotonic token; only selectCut bumps it to cancel stale debounced/in-flight loads. */
 let wfLoadToken = 0;
@@ -835,6 +840,8 @@ let ggWipAutosaveRunning = false;
 let ggWipLastFailToastAt = 0;
 /** @type {string|null} */
 let ggWorkflowBaselineCutId = null;
+/** @type {Map<string, object>} */
+let ggWorkflowBaselines = new Map();
 /** @type {object|null} */
 let ggWorkflowBaseline = null;
 
@@ -864,6 +871,7 @@ function markCutEditedInStorage(cut) {
 function rememberWorkflowBaselineForCut(cutId, workflowJson) {
   ggWorkflowBaselineCutId = cutId || null;
   ggWorkflowBaseline = workflowJson && typeof workflowJson === "object" ? workflowJson : null;
+  if (cutId && ggWorkflowBaseline) ggWorkflowBaselines.set(cutId, ggWorkflowBaseline);
 }
 
 function captureGraphWorkflowSnapshot() {
@@ -875,20 +883,63 @@ function captureGraphWorkflowSnapshot() {
   }
 }
 
+function captureWorkflowSnapshotForTab(wf) {
+  const ws = ggWorkflowStore();
+  if (wf && wf === ws?.activeWorkflow) {
+    return captureGraphWorkflowSnapshot();
+  }
+  const st = wf?.changeTracker?.activeState ?? wf?.activeState;
+  if (st && typeof st === "object" && Array.isArray(st.nodes)) return st;
+  return null;
+}
+
 function rememberWorkflowBaselineFromActiveGraph(cutId) {
   const snap = captureGraphWorkflowSnapshot();
   if (snap) rememberWorkflowBaselineForCut(cutId, snap);
 }
 
+function autosaveContextForWorkflow(wf) {
+  const resolved = resolveWorkflowCutForWip(wf);
+  const cutId = resolved?.cutId || "";
+  const baseline = cutId ? ggWorkflowBaselines.get(cutId) ?? null : ggWorkflowBaseline;
+  const baselineCutId = baseline && cutId ? cutId : "";
+  const ws = ggWorkflowStore();
+  const onActive = wf && wf === ws?.activeWorkflow;
+  const graphCutId = onActive ? app.graph?.extra?.gonggan?.cutId || "" : cutId;
+  return {
+    cutId,
+    baselineCutId,
+    baseline,
+    currentSnapshot: captureWorkflowSnapshotForTab(wf),
+    graphCutId,
+  };
+}
+
+function reconcileModifiedAfterShotLoad(cutId) {
+  rememberWorkflowBaselineFromActiveGraph(cutId);
+}
+
+function scheduleLoadCutWorkflow(cutId, cut, loadToken) {
+  ggCutLoadSeq = ggCutLoadSeq
+    .then(async () => {
+      if (loadToken !== wfLoadToken) return;
+      await loadCutWorkflow(cutId, cut, loadToken);
+    })
+    .catch((e) => console.warn("[gonggan] cut load failed", e));
+  return ggCutLoadSeq;
+}
+
 function syncEditedMarkerBeforeSave(cutId, cutRec) {
   const cut = cutRec || cutById(cutId);
-  if (!cut?.id || cutId !== ggWorkflowBaselineCutId || !ggWorkflowBaseline) return;
+  if (!cut?.id || cutId !== ggWorkflowBaselineCutId) return;
+  const baseline = ggWorkflowBaselines.get(cutId) ?? ggWorkflowBaseline;
+  if (!baseline) return;
   const current = captureGraphWorkflowSnapshot();
   if (!current) return;
   // Only the graph that actually belongs to this cut counts (a graph mid-switch is empty or another cut's).
   if (!Array.isArray(current.nodes) || !current.nodes.length) return;
   if (app.graph?.extra?.gonggan?.cutId !== cutId) return;
-  if (widgetValuesDiffer(ggWorkflowBaseline, current)) {
+  if (widgetValuesDiffer(baseline, current)) {
     markCutEditedInStorage(cut);
   }
 }
@@ -965,6 +1016,14 @@ function collectGongganShotTabs() {
     else if (w?.path && isPathGongganOwned(w.path)) add(w);
   }
   return out;
+}
+
+async function pruneExtraGongganShotTabs(keep) {
+  for (const w of collectGongganShotTabs()) {
+    if (!w || w === keep) continue;
+    if (workflowTabNeedsAutosave(w, autosaveContextForWorkflow(w))) continue;
+    await closeGongganOwnedTab(w);
+  }
 }
 
 async function closeGongganOwnedTab(wf) {
@@ -1060,7 +1119,8 @@ function resolveWorkflowCutForWip(wf) {
 
 function applyWipStampForWorkflow(wf) {
   const ws = ggWorkflowStore();
-  if (!ws || !wf || !wf.isModified || !app.graph) return;
+  if (!ws || !wf || !app.graph) return;
+  if (!workflowTabNeedsAutosave(wf, autosaveContextForWorkflow(wf))) return;
   const active = ws.activeWorkflow === wf || wf === ggOwnedShotWorkflow;
   if (!active) return;
   const resolved = resolveWorkflowCutForWip(wf);
@@ -1084,7 +1144,8 @@ async function runGongganWipAutosave(opts = {}) {
   const ws = ggWorkflowStore();
   const wf = ggOwnedShotWorkflow;
   if (!ws || !wf || !(ws.openWorkflows || []).includes(wf)) return;
-  if (!isGongganOwnedWorkflow(wf) || !wf.isModified) return;
+  if (!isGongganOwnedWorkflow(wf)) return;
+  if (!workflowTabNeedsAutosave(wf, autosaveContextForWorkflow(wf))) return;
   if (!(ws.isActive?.(wf) ?? ws.activeWorkflow === wf)) return;
   const now = Date.now();
   if (!force && now - ggWipLastAutosaveAt < GG_WIP_AUTOSAVE_MIN_MS) return;
@@ -1096,7 +1157,10 @@ async function runGongganWipAutosave(opts = {}) {
     applyWipStampForWorkflow(wf);
     const deps = buildAutosaveDeps();
     if (typeof deps.saveWorkflow !== "function") throw new Error("saveWorkflow unavailable");
+    const savedSnap = captureWorkflowSnapshotForTab(wf);
     await autosaveWorkflow(wf, deps);
+    // Saved content is the new baseline: a later switch must not re-stamp it with a newer version key.
+    if (resolved?.cutId && savedSnap) ggWorkflowBaselines.set(resolved.cutId, savedSnap);
     ggWipLastAutosaveAt = Date.now();
   } catch (e) {
     console.warn("[gonggan] periodic wip autosave failed", e);
@@ -1139,13 +1203,13 @@ async function tryRestoreCutWorkingCopy(cutId, cutRec, loadToken) {
     const json = await fetchCutWorkingCopyJson(cut);
     if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
     if (!json || !shouldRestoreWip(json, { cutId, baseKey: cutBaseKey(cut) })) return false;
-    const loaded = await loadWorkflowIntoDedicatedTab(json, cut);
+    const loaded = await loadWorkflowIntoDedicatedTab(json, cut, loadToken);
     if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
     if (ggCutSwitchAutosaveBlocked) return false;
     if (!loaded) return false;
     markWorkflowLoadComplete(cutId, cut);
     markGraphGongganCut(cutId);
-    rememberWorkflowBaselineFromActiveGraph(cutId);
+    reconcileModifiedAfterShotLoad(cutId);
     sdk.msg = `Canvas: ${shotTitle(cut)} (restored edits)`;
     bus.dispatchEvent(new Event("sdk"));
     bus.dispatchEvent(new Event("gg-opentab"));
@@ -1159,24 +1223,31 @@ async function tryRestoreCutWorkingCopy(cutId, cutRec, loadToken) {
 
 async function prepareGongganShotTabReplace() {
   const tabs = collectGongganShotTabs();
-  if (tabs.some((w) => w.isModified)) {
-    for (const w of tabs) {
+  const dirtyTabs = filterTabsNeedingAutosave(tabs, autosaveContextForWorkflow);
+  if (dirtyTabs.length) {
+    for (const w of dirtyTabs) {
       const resolved = resolveWorkflowCutForWip(w);
       if (resolved) syncEditedMarkerBeforeSave(resolved.cutId, resolved.cut);
     }
-    for (const w of tabs) applyWipStampForWorkflow(w);
+    for (const w of dirtyTabs) applyWipStampForWorkflow(w);
     const deps = buildAutosaveDeps();
     if (typeof deps.saveWorkflow !== "function") {
       ggCutSwitchAutosaveBlocked = true;
       ggToast("Auto-save failed. Switch cancelled.", "saveWorkflow unavailable", "warn");
       return false;
     }
-    const result = await autosaveModifiedTabs(tabs, deps);
+    const savedSnaps = dirtyTabs.map((w) => ({
+      cutId: resolveWorkflowCutForWip(w)?.cutId || "",
+      snap: captureWorkflowSnapshotForTab(w),
+    }));
+    const result = await autosaveModifiedTabs(dirtyTabs, deps);
     if (!result.ok) {
       ggCutSwitchAutosaveBlocked = true;
       ggToast("Auto-save failed. Switch cancelled.", result.failed?.error || "save failed", "warn");
       return false;
     }
+    // Saved content is the new baseline: such a tab is clean now and may be closed/replaced.
+    for (const s of savedSnaps) if (s.cutId && s.snap) ggWorkflowBaselines.set(s.cutId, s.snap);
     for (const s of result.saved) {
       const detail = s.name || s.path.replace(/^.*\//, "") || "workflow";
       ggToast("Saved", detail, "ok");
@@ -1433,15 +1504,42 @@ function setupTabLabels() {
   }
 }
 
-async function loadWorkflowIntoDedicatedTab(workflow, cut) {
+function isLoadTokenStale(loadToken) {
+  return loadToken !== undefined && loadToken !== wfLoadToken;
+}
+
+async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   const relPath = shotWorkflowRelPathForCut(cut);
   const storagePath = await resolveShotWorkflowStoragePath(relPath, { idBased: true });
+  if (isLoadTokenStale(loadToken)) return false;
   const loadName = storagePath.replace(/^workflows\//, "");
   const shotMeta = { projectId: state.pid, cutId: cut?.id || "" };
   if (!(await prepareGongganShotTabReplace())) return false;
+  if (isLoadTokenStale(loadToken)) return false;
   const previous = ggOwnedShotWorkflow;
   const ws = ggWorkflowStore();
-  if (
+  const normKey = normalizeWorkflowPath(loadName).toLowerCase();
+  let existingAtPath =
+    adoptGongganShotWorkflow(loadName) ||
+    ws?.getWorkflowByPath?.(loadName) ||
+    ws?.getWorkflowByPath?.(`workflows/${loadName}`);
+  if (!existingAtPath && ws?.openWorkflows) {
+    existingAtPath =
+      ws.openWorkflows.find((w) => {
+        const p = normalizeWorkflowPath(String(w.path || "").replace(/^workflows\//, "")).toLowerCase();
+        return p === normKey;
+      }) ?? null;
+  }
+  if (existingAtPath && (ws?.openWorkflows || []).includes(existingAtPath)) {
+    ggOwnedShotWorkflow = existingAtPath;
+    if (typeof ws.setActiveWorkflow === "function") {
+      try {
+        ws.setActiveWorkflow(existingAtPath);
+      } catch (e) {
+        console.warn("[gonggan] focus existing shot tab failed", e);
+      }
+    }
+  } else if (
     ggOwnedShotWorkflow &&
     (ws?.openWorkflows || []).includes(ggOwnedShotWorkflow) &&
     typeof ws.setActiveWorkflow === "function"
@@ -1453,6 +1551,8 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut) {
     }
   }
   ensureWorkflowManagerActive();
+  if (isLoadTokenStale(loadToken)) return false;
+  const tabCountBefore = (ws?.openWorkflows || []).length;
   try {
     if (isUiWorkflowGraph(workflow)) {
       if (typeof app.loadGraphData !== "function") return false;
@@ -1469,13 +1569,49 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut) {
     ggToast("Workflow", e?.message || String(e), "warn");
     return false;
   }
+  if (isLoadTokenStale(loadToken)) {
+    adoptGongganShotWorkflow(loadName);
+    const orphan = ggOwnedShotWorkflow;
+    const openAfter = ws?.openWorkflows || [];
+    if (orphan && orphan !== previous && openAfter.includes(orphan)) {
+      await closeGongganOwnedTab(orphan);
+    } else if ((openAfter.length || 0) > tabCountBefore) {
+      const extra = openAfter[openAfter.length - 1];
+      if (extra && extra !== previous && isGongganOwnedWorkflow(extra)) {
+        await closeGongganOwnedTab(extra);
+      }
+    }
+    return false;
+  }
   adoptGongganShotWorkflow(loadName);
   markWorkflowGongganOwned(ggOwnedShotWorkflow, storagePath, shotMeta);
   try {
     const open = ws?.openWorkflows || [];
     const newTab = ggOwnedShotWorkflow;
     if (previous && previous !== newTab && open.includes(previous) && isGongganOwnedWorkflow(previous)) {
-      if (previous.isModified) {
+      let prevDirty = workflowTabNeedsAutosave(previous, autosaveContextForWorkflow(previous));
+      if (prevDirty) {
+        const deps = buildAutosaveDeps();
+        if (typeof deps.saveWorkflow === "function") {
+          try {
+            if (typeof ws.setActiveWorkflow === "function") ws.setActiveWorkflow(previous);
+            const resolved = resolveWorkflowCutForWip(previous);
+            if (resolved) syncEditedMarkerBeforeSave(resolved.cutId, resolved.cut);
+            applyWipStampForWorkflow(previous);
+            const result = await autosaveModifiedTabs([previous], deps);
+            if (result.ok) {
+              prevDirty = false;
+              for (const s of result.saved) {
+                const detail = s.name || s.path.replace(/^.*\//, "") || "workflow";
+                ggToast("Saved", detail, "ok");
+              }
+            }
+          } catch (e) {
+            console.warn("[gonggan] save previous shot tab failed", e);
+          }
+        }
+      }
+      if (prevDirty) {
         ggToast("Previous shot tab kept (unsaved changes).", "", "warn");
       } else {
         const active = ws?.isActive?.(previous) ?? ws?.activeWorkflow === previous;
@@ -1495,7 +1631,9 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut) {
   }
   scheduleTabLabelRefresh();
   scheduleLoadImageScan({ debounceMs: 200 });
-  if (cut?.id) rememberWorkflowBaselineFromActiveGraph(cut.id);
+  if (cut?.id) reconcileModifiedAfterShotLoad(cut.id);
+  if (isLoadTokenStale(loadToken)) return false;
+  await pruneExtraGongganShotTabs(ggOwnedShotWorkflow);
   return true;
 }
 
@@ -1681,7 +1819,7 @@ async function tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken, effectiveKin
     const wf = extractPngWorkflow(buf);
     if (!wf || !isUiWorkflowGraph(wf)) return false;
     if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
-    const loaded = await loadWorkflowIntoDedicatedTab(wf, cut);
+    const loaded = await loadWorkflowIntoDedicatedTab(wf, cut, loadToken);
     if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
     if (ggCutSwitchAutosaveBlocked) return false;
     if (!loaded) return false;
@@ -1706,7 +1844,7 @@ async function loadEmptyCutWorkflow(cutId, cutRec, loadToken, title) {
     templateWf = await fetchProjectTemplatePayload();
   } catch (_) {}
   const { kind, workflow } = resolveEmptyCutWorkflow({ templateWorkflow: templateWf });
-  const loaded = await loadWorkflowIntoDedicatedTab(workflow, cutRec);
+  const loaded = await loadWorkflowIntoDedicatedTab(workflow, cutRec, loadToken);
   if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
   if (ggCutSwitchAutosaveBlocked) return false;
   if (!loaded) return false;
@@ -1736,7 +1874,7 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
     try {
       const hit = await src.resolve(cutId);
       if (loadToken !== wfLoadToken) return;
-      const loaded = await loadWorkflowIntoDedicatedTab(hit.workflow, cutRec);
+      const loaded = await loadWorkflowIntoDedicatedTab(hit.workflow, cutRec, loadToken);
       if (loadToken !== wfLoadToken) return;
       if (ggCutSwitchAutosaveBlocked) return;
       if (!loaded) {
@@ -1764,7 +1902,7 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
           try {
             const hit = await leg.resolve(cutId);
             if (loadToken !== wfLoadToken) return;
-            const loaded = await loadWorkflowIntoDedicatedTab(hit.workflow, cutRec);
+            const loaded = await loadWorkflowIntoDedicatedTab(hit.workflow, cutRec, loadToken);
             if (loadToken !== wfLoadToken) return;
             if (ggCutSwitchAutosaveBlocked) return;
             if (!loaded) {
@@ -1999,15 +2137,18 @@ function selectCut(cutId, opts) {
       }
     } catch (_) {}
     const loadToken = ++wfLoadToken;
-    wfLoadDebounce = setTimeout(() => {
+    const runLoad = () => {
       wfLoadDebounce = 0;
       ggCutLoadsInFlight++;
-      Promise.resolve(loadCutWorkflow(cutId, cut, loadToken))
-        .catch((e) => console.warn("[gonggan] cut load failed", e))
-        .finally(() => {
-          ggCutLoadsInFlight--;
-        });
-    }, WF_LOAD_DEBOUNCE_MS);
+      scheduleLoadCutWorkflow(cutId, cut, loadToken).finally(() => {
+        ggCutLoadsInFlight--;
+      });
+    };
+    if (WF_LOAD_DEBOUNCE_MS > 0) {
+      wfLoadDebounce = setTimeout(runLoad, WF_LOAD_DEBOUNCE_MS);
+    } else {
+      runLoad();
+    }
   }
 }
 
