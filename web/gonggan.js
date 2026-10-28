@@ -39,6 +39,7 @@ import {
   pathCollides,
 } from "./gg_autosave_core.js";
 import { cutBaseKey, stampWip, shouldRestoreWip } from "./gg_wip_core.js";
+import { GG_VERSION } from "./gg_version.js";
 import {
   extractPngWorkflow,
   isCutEdited,
