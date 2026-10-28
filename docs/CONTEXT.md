@@ -4,7 +4,7 @@
 
 ## 1. 무엇을 만드는가
 - ComfyUI 안에서 쓰는 **샷 관리 + 가편집(rough-cut) 편집기** 커스텀 노드 팩.
-- 출발점은 사용자의 웹앱 **공간쉐어**(별도 프로젝트, `server.py`가 8765 포트로 웹 UI를 띄우고 ComfyUI 8188에 작업을 보냄). 공간쉐어의 샷 관리 개념을 ComfyUI 탭으로 옮긴 것.
+- 출발점은 별도 **legacy imported project tool**(웹앱, `server.py`가 8765 포트로 UI를 띄우고 ComfyUI 8188에 작업을 보냄). 그 도구의 샷 관리 개념을 ComfyUI 탭으로 옮긴 것.
 - 강점: **프리미어처럼 간단한 편집** — 타임라인, 자르기(trim), 순서 바꾸기, 이어서 재생, 내보내기를 ComfyUI 안에서 바로.
 - 포지셔닝: 새 모델이나 단일 기능이 아니라 **UI/UX 혁신**. ComfyUI 기본 UI는 샷/버전 관리와 편집이 약하다("컴피쪽이 아주 구려").
 - ComfyUI의 App Mode / App Builder(워크플로 하나를 간단한 입력·출력 화면으로 감싸는 기능)와는 겹치지 않는다. 그건 "한 번 뽑는 화면"이고, 우리는 여러 결과를 모아 정리·편집하는 쪽. 사용자는 App Builder가 복잡해서 잘 안 쓸 것 같다고 봄.
@@ -33,7 +33,7 @@
   - 빈에서 끌어서 타임라인에 놓고 → 자르고 → 내보내기
   - 프로젝트/컷 관리는 원하는 사람만 쓰는 선택 기능.
   사용자 반응은 긍정적("좀더 다듬으면 너무 좋은 기능"). 다음 작업 1순위 후보.
-- **2026-10-24: 씬(Scene) = 컷 그룹.** UI 라벨은 **씬/Scene**. 데이터 모델: **프로젝트 > 씬(프로젝트별) > 샷(Shot)**. **샷** = 선택된 결과 미디어(영상/이미지) + 그걸 만든 워크플로/버전 한 묶음. 초기 씬 구성은 공간쉐어 `cut.scene` / `cut.scene_id` 연속 구간에서 읽고, 사용자가 만든 씬·이름·재배치·접기 상태는 팩 `edits/edit_<pid>.json`의 `groups: [{id,name,cut_ids,collapsed}]`에만 저장(타임라인 순서/trim `reset`과 별개로 유지). `POST /gonggan/groups`로 저장·검증.
+- **2026-10-24: 씬(Scene) = 컷 그룹.** UI 라벨은 **씬/Scene**. 데이터 모델: **프로젝트 > 씬(프로젝트별) > 샷(Shot)**. **샷** = 선택된 결과 미디어(영상/이미지) + 그걸 만든 워크플로/버전 한 묶음. 초기 씬 구성은 legacy import 데이터의 `cut.scene` / `cut.scene_id` 연속 구간에서 읽고, 사용자가 만든 씬·이름·재배치·접기 상태는 팩 `edits/edit_<pid>.json`의 `groups: [{id,name,cut_ids,collapsed}]`에만 저장(타임라인 순서/trim `reset`과 별개로 유지). `POST /gonggan/groups`로 저장·검증.
 - **2026-10-24: 제품 원칙 — "정리를 같이 하면서 만드는 UI".** 새 결과가 해당 샷/씬에 바로 붙고, 승격(pick)·씬 묶기·순서 변경을 결과가 보이는 곳에서 한 번에. 따로 정리 단계 없음.
 - 저장소: 이 비공개 저장소는 개발용(전체 기록 + 맥락). 공개는 **새 공개 저장소에 깨끗한 코드만 한 커밋으로**.
 - 팩/저장소 이름은 아직 임시. 10/26 이전(README·데모 전)에 확정 예정. 바꿀 때 저장소·폴더·탭 이름을 함께 바꿀 것.
@@ -45,27 +45,26 @@
 2. GPU 무리 금지: 테스트는 짧고 가볍게, 긴 연속 부하·반복 전체 재생성 금지, 실패하면 처음부터 재시도하지 말고 멈추고 보고.
 3. 생성 전 보고: 컷, 모델, 설정, 시드, 프롬프트를 사용자에게 먼저 알리고 허락받은 뒤 **한 작업만** 큐. 자동 재시도는 최대 1회까지만, 허락 범위 안에서.
 4. ComfyUI는 항상 보이는 창으로 실행하고 Chrome에서 `http://127.0.0.1:8188/`. 작업 후 내가 띄운 ComfyUI·프록시·Chrome은 끄고 8188/8189 포트가 내려갔는지 확인. **사용자가 직접 띄운 ComfyUI는 건드리지 않는다.**
-5. 공간쉐어 서버(8765)와 그 데이터는 건드리지 않음(읽기 전용).
+5. legacy import 서버(8765)와 `<LEGACY_DATA_DIR>` 데이터는 건드리지 않음(읽기 전용).
 6. Comfy Cloud를 쓸 경우 개인 워크스페이스만. 회사 계정 절대 금지.
 7. 파일 수정은 UTF-8로, 수정 후 파일 크기/내용이 비지 않았는지 확인.
 8. 영상 생성 테스트는 하지 않는다(가상 세트 작업 관련 지시).
 9. 큰 문제가 아니면 묻지 말고 진행, 단 큰 방향 전환은 신중히. 진행은 짧게 보고.
 
-## 5. 환경 (사용자 Windows PC)
-- PC: DESKTOP-MKI867B, 사용자 `msk`. GPU는 Intel Arc Pro B70 (XPU), **NVIDIA 없음** → CUDA 전용 도구 불가.
-- ComfyUI: `C:\ComfyUI_windows_portable\ComfyUI` (0.41.2, frontend 1.55.17, 내장 Python 3.13), 실행은 `run_intel_gpu.bat`.
-- 이 팩 위치: `C:\dev\comfyui-gonggan-cut`, `custom_nodes`에 junction으로 연결:
-  `mklink /J C:\ComfyUI_windows_portable\ComfyUI\custom_nodes\comfyui-gonggan-cut C:\dev\comfyui-gonggan-cut`
+## 5. 환경 (개발자 PC)
+- 개발 머신: Windows PC, Intel Arc Pro B70 (XPU), **NVIDIA 없음** → CUDA 전용 도구 불가.
+- ComfyUI: portable 설치 경로(예: `<COMFYUI_ROOT>`, 0.41.2, frontend 1.55.17, 내장 Python 3.13), GPU에 맞는 실행 스크립트 사용.
+- 이 팩: 로컬 클론을 `custom_nodes`에 junction/symlink로 연결(예: `custom_nodes/comfyui-gonggan-cut` → 저장소 루트).
 - ffmpeg가 PATH에 있음, PyAV 사용.
 - SDK용 별도 venv `.venv-sdk` (Python 3.13.6, comfy-sdk 0.5.0, comfy-api-proxy 0.1.6). ComfyUI 자체 Python은 건드리지 않음.
-- 공간쉐어: `C:\Users\msk\Desktop\gonggan-share-bot` (`server.py`, `static/app.js`), 데이터 `data\<uid>\_workspace.json` (uid `demo`). 공간쉐어 영상 워커는 8188 ComfyUI를 종료시키므로 ComfyUI 프로세스 안에서 같이 돌릴 수 없다.
-- 맥(128GB Mac Studio)도 있고 상시 전원이지만, 2026-10-19 기준 개발은 계속 Windows PC에서 하기로 함. 맥에서 할 경우 ComfyUI를 맥에 설치하면 탭·편집·내보내기 테스트 가능(공간쉐어 데이터는 맥에 없음 → 미디어 에셋 방식이면 해결).
+- legacy imported project tool: 별도 저장소(`server.py`, `static/app.js`), 데이터 `<LEGACY_DATA_DIR>/<uid>/_workspace.json`. 그 도구의 영상 워커는 8188 ComfyUI를 종료시키므로 ComfyUI 프로세스 안에서 같이 돌릴 수 없다.
+- 다른 OS에서도 ComfyUI만 설치하면 탭·편집·내보내기 테스트 가능(legacy import 데이터가 없으면 네이티브 프로젝트만 사용).
 
 ## 6. 구조
 ```
 __init__.py                    WEB_DIRECTORY="./web", routes는 try 안에서 import
 routes.py                      aiohttp 라우트 (/gonggan/*, /api/gonggan/* 동일)
-gg_data.py                     공간쉐어 _workspace.json 읽기 전용 로더
+gg_data.py                     legacy import _workspace.json 읽기 전용 로더
 gg_export.py                   mp4 내보내기 워커 (libx264 veryfast, 4 threads, 낮은 우선순위)
 gg_sdk.py                      SDK venv 호출, 재생성 워크플로 구성, 프롬프트 정리
 sdk_runner.py                  .venv-sdk에서 실행되는 comfy-sdk 러너 (1,500초 타임아웃 후 취소)
@@ -85,14 +84,14 @@ UI:
 - `POST /gonggan/export`, `GET /export/status`, `POST /export/cancel`, `GET /export/file` → 결과 `ComfyUI\output\gonggan\`
 - `GET /gonggan/sdk/status`, `POST /gonggan/regen`(기본 드라이런, `{"dry_run": false, "confirm": true, "seed": ...}`일 때만 큐), `GET /regen/status`
 - `GET /gonggan/last-output`, `POST /gonggan/send-output`(ComfyUI 마지막 결과를 컷 버전으로 복사)
-- 새 버전은 `versions/<pid>/<cut_id>/`에 저장되고 `edits/edit_<pid>.json`에서 그 컷의 선택본이 됨. 공간쉐어 데이터에는 절대 쓰지 않음.
+- 새 버전은 `versions/<pid>/<cut_id>/`에 저장되고 `edits/edit_<pid>.json`에서 그 컷의 선택본이 됨. legacy import 데이터에는 절대 쓰지 않음.
 
 SDK 경로:
 ```
 ComfyUI(팩 라우트) -> .venv-sdk python sdk_runner.py -> comfy-sdk (COMFY_BASE_URL=http://127.0.0.1:8189)
                    -> comfy-api-proxy :8189 -> ComfyUI :8188
 ```
-초안 재생성 워크플로: Qwen-Image 2.1 + turbo LoRA, 4 steps, cfg 1, euler/simple, 약 0.25MP(공간쉐어와 같은 그래프).
+초안 재생성 워크플로: Qwen-Image 2.1 + turbo LoRA, 4 steps, cfg 1, euler/simple, 약 0.25MP(legacy draft 그래프와 동일).
 
 ## 7. 진행 상태 (태그)
 - `mvp-day1` 팩 뼈대, 읽기 전용 라우트, Shots 탭 + Timeline 탭, 썸네일 캐시
