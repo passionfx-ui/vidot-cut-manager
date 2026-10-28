@@ -373,7 +373,7 @@ async function main() {
       throw new Error("expected * to disappear after timeline refresh with new version");
     }
 
-    console.log("OK wf_marker_test");
+    console.log("PASS  wf marker: * on edit, cleared by new version");
   } finally {
     try {
       await cleanupProjects(page);
