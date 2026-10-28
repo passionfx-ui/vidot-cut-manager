@@ -184,6 +184,41 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
     }
 
 
+def native_import_structure(pid: str, payload: dict) -> dict:
+    store = native_store()
+    doc = store.get_project(pid)
+    if not doc:
+        raise ValueError("project not found")
+    graph = None
+    ref = doc.get("template_ref")
+    if isinstance(ref, str) and ref:
+        graph = resolve_template_graph(ref)
+    if graph is None:
+        graph = gg_template.get_template(pid)
+    store.import_structure(
+        pid,
+        payload.get("scenes"),
+        payload.get("loose"),
+        payload.get("references"),
+        template_graph=graph or None,
+    )
+    return {"ok": True, "timeline": store.to_timeline(pid)}
+
+
+def native_rename_cut(pid: str, cut_id: str, name: str) -> dict | None:
+    store = native_store()
+    if store.get_project(pid) is None:
+        return None
+    if not isinstance(cut_id, str) or not cut_id:
+        raise ValueError("cut_id required")
+    if not isinstance(name, str):
+        raise ValueError("name must be a string")
+    name = name.strip()
+    if not name or len(name) > 80:
+        raise ValueError("name must be 1-80 characters")
+    store.rename_cut(pid, cut_id, name)
+    return {"ok": True, "timeline": store.to_timeline(pid)}
+
 def native_delete_cuts(pid: str, cut_ids: list) -> dict | None:
     store = native_store()
     if store.get_project(pid) is None:

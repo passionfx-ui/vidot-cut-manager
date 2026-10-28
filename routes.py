@@ -490,6 +490,50 @@ async def gg_project_update(request):
     return web.json_response(res)
 
 
+@routes.post("/gonggan/project/import")
+async def gg_project_import(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    if not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid required")
+    try:
+        res = await asyncio.to_thread(gg_native_api.native_import_structure, pid, data)
+    except FileNotFoundError:
+        return _err(404, "project not found")
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] project import failed")
+        return _err(500, str(ex))
+    return web.json_response(res)
+
+
+@routes.post("/gonggan/cut/rename")
+async def gg_cut_rename(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    cut_id = data.get("cut_id")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    if not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid required")
+    if not isinstance(cut_id, str) or not cut_id:
+        return _err(400, "cut_id required")
+    try:
+        res = await asyncio.to_thread(gg_native_api.native_rename_cut, pid, cut_id, data.get("name"))
+    except FileNotFoundError:
+        return _err(404, "project not found")
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] cut rename failed")
+        return _err(500, str(ex))
+    if res is None:
+        return _err(404, "project not found")
+    return web.json_response(res)
+
 @routes.post("/gonggan/cut/add")
 async def gg_cut_add(request):
     data = await _json_body(request)
