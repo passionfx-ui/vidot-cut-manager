@@ -396,7 +396,9 @@ async function timelineCutsSorted(page, pid) {
 
 async function waitForCutLoaded(page, cutId) {
   await page.waitForFunction(
-    (id) => window.app.graph?.extra?.gonggan?.cutId === id,
+    (id) =>
+      window.app.graph?.extra?.gonggan?.cutId === id &&
+      String(window.app.extensionManager.workflow.activeWorkflow?.path || "").includes(id),
     { timeout: 90000 },
     cutId
   );
@@ -519,6 +521,10 @@ async function measuredSwitch(page, cutId, { modify, modifyMarker, phase, cycle,
   const net = summarizeNetwork(t0, t1);
   const tabsAfter = await getWorkflowTabState(page);
   const ownedAfter = await countOwnedTabs(page);
+  if (process.env.GG_DEBUG) {
+    const dump = await page.evaluate(() => (window.app.extensionManager.workflow.openWorkflows || []).map((w) => `${w.path}|mod=${w.isModified}|own=${!!w.ggGongganOwned}|act=${window.app.extensionManager.workflow.activeWorkflow === w}`));
+    console.log(`DBG ${phase} c${cycle} s${step} ${Date.now() - t0}ms modify=${!!modify}\n  tabs: ${dump.join(" ; ")}\n  req: ${net.requests.join(" , ")}`);
+  }
 
   return {
     phase,
