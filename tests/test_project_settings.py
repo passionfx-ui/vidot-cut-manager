@@ -39,6 +39,13 @@ class ProjectSettingsTests(unittest.TestCase):
         self.assertEqual(s["cut_seconds"], 3.0)
         self.assertEqual(s["width"], 1280)
         self.assertEqual(s["height"], 720)
+        self.assertEqual(s["caption_lang"], "English")
+
+    def test_caption_lang_clamp(self):
+        s = normalize_settings({"caption_lang": "Korean"})
+        self.assertEqual(s["caption_lang"], "Korean")
+        s2 = normalize_settings({"caption_lang": "NotALanguage"})
+        self.assertEqual(s2["caption_lang"], "English")
 
     def test_old_default_sec_maps_to_cut_seconds(self):
         doc = self.store.create_project("OldSec")
