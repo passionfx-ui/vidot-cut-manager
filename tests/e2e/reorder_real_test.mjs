@@ -596,7 +596,7 @@ async function main() {
     await sleep(300);
     const from = await handleCenter(page, n - 1);
     const topEdge = await wrapEdgeY(page, "top");
-    await dragWithCdp(page, from, topEdge, { holdAtEdgeMs: 400 });
+    await dragWithCdp(page, from, topEdge, { holdAtEdgeMs: 1500 });
     await sleep(3000);
     const afterDrag = await fetchServerOrder(page, testPid);
     if (afterDrag[0] !== lastId) throw new Error("caption mode drag should move last to top");
