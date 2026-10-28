@@ -153,3 +153,25 @@ class NativeCutSourceIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ImportStyleGuard(unittest.TestCase):
+    """ComfyUI loads this pack as a package: top-level 'from gg_project' inside a function must have a relative try-first."""
+
+    def test_native_api_has_no_bare_gg_project_import(self):
+        import ast
+        src = Path(__file__).resolve().parent.parent.joinpath("gg_native_api.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        bad = []
+        for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+            for node in ast.walk(fn):
+                if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("gg_project") and node.level == 0:
+                    # allowed only inside an `except ImportError` handler
+                    in_handler = any(
+                        isinstance(h, ast.ExceptHandler) and node in list(ast.walk(h))
+                        for t in ast.walk(fn) if isinstance(t, ast.Try) for h in t.handlers
+                    )
+                    if not in_handler:
+                        bad.append(node.lineno)
+        self.assertEqual(bad, [])
+
