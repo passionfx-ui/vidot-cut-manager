@@ -34,16 +34,29 @@ describe("workflowTabNeedsAutosave", () => {
       true
     );
   });
+
+  it("returns true when content differs but isModified is false (missed dirty flag)", () => {
+    const baseline = { nodes: [{ id: 1, widgets_values: ["a"] }] };
+    const current = { nodes: [{ id: 1, widgets_values: ["edited"] }] };
+    assert.equal(
+      workflowTabNeedsAutosave(
+        { isModified: false },
+        { cutId: "c1", baselineCutId: "c1", baseline, currentSnapshot: current, graphCutId: "c1" }
+      ),
+      true
+    );
+  });
 });
 
 describe("filterTabsNeedingAutosave", () => {
   it("filters tabs using ctx callback", () => {
     const tabs = [{ isModified: true }, { isModified: false }];
-    const out = filterTabsNeedingAutosave(tabs, () => ({
+    const snap = { nodes: [{ id: 1, widgets_values: ["a"] }] };
+    const out = filterTabsNeedingAutosave(tabs, (wf) => ({
       cutId: "x",
       baselineCutId: "x",
-      baseline: { nodes: [] },
-      currentSnapshot: { nodes: [{ id: 1, widgets_values: [] }] },
+      baseline: snap,
+      currentSnapshot: wf.isModified ? { nodes: [{ id: 1, widgets_values: ["b"] }] } : snap,
       graphCutId: "x",
     }));
     assert.equal(out.length, 1);
