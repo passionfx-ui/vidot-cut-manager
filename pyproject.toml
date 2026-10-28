@@ -1,0 +1,17 @@
+[project]
+name = "comfyui-gonggan-cut"
+version = "0.9.29"
+description = "Shot list and rough-cut timeline inside ComfyUI"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/passionfx-ui/comfyui-gonggan-cut"
+
+[tool.comfy]
+# TODO: replace with your Comfy Registry publisher id before publishing
+PublisherId = "TODO-publisher"
+DisplayName = "Shots - shot list and rough-cut timeline"
+Icon = ""
