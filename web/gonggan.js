@@ -639,7 +639,7 @@ function openNewProjectModal() {
           });
           splitNote = ` (${summarizeImport(splitResult).replace(" will be created", " created")})`;
         } catch (err) {
-          const hint = err.status === 404 ? "Restart ComfyUI to enable Auto Cut Split." : err.message;
+          const hint = (err.status === 404 || err.status === 405) ? "Restart ComfyUI to enable Auto Cut Split." : err.message;
           ggToast("Auto Cut Split", `Project created, but the split failed: ${hint}`, "warn");
         }
       }

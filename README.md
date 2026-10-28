@@ -25,6 +25,7 @@ Plan a short film as projects, scenes and cuts, open each cut's workflow on the 
 - **Production tracking** - summary bar `Image a/N · Video b/N · Best c/N`, project completion %, due date, *Needs redo* flag, **Show redo cuts only** filter, 3-second rule warning (with *End card* exemption).
 - **Caption field** - one text area per cut for director notes and dialogue (placeholder includes the project caption language). **Info** vs **Caption** list modes change layout only; **Export captions (.srt)** uses stored caption text only, timed from cut order and lengths.
 - **New project & Project Settings** - name, aspect/resolution preset, FPS, default cut length, default workflow template, and caption language (project selector / header context menu).
+- **Auto Cut Split** - in the New Project dialog: 1. Copy the prompt and paste it into your LLM together with your story. 2. Paste the LLM's result into the box to split it into scenes and cuts (with captions and a reference name list) automatically. The preview shows e.g. `3 scenes, 12 cuts, 4 references will be created`; Create stays disabled while a line has an error.
 - **Project templates** - link a saved ComfyUI workflow as the starting graph for new cuts.
 - **Missing Load Image guard** - highlights `Load Image` nodes whose file is missing and blocks queueing until fixed.
 - **Safe by design** - all edit data is stored inside the plugin folder; it never queues a generation on its own (you press *Run*).
