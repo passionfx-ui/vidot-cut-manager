@@ -66,7 +66,7 @@ Then run `start_proxy.bat` (proxy on `127.0.0.1:8189`). Regenerate is a dry run 
 <!-- TODO: screenshot or GIF — timeline playback with trims -->
 
 ### Settings (optional)
-Copy `gonggan_settings.default.json` to `gonggan_settings.json` to point `data_root` / `uid` at an external *gonggan-share* data folder (read-only import of older projects). Leave `data_root` empty to use native projects only.
+Copy `gonggan_settings.default.json` to `gonggan_settings.json` to point `data_root` / `uid` at an external legacy project data folder (read-only import of older projects). Leave `data_root` empty to use native projects only.
 
 ## Where data is stored
 Everything is written under the plugin folder (all gitignored): `projects/`, `edits/`, `versions/`, `workflows/`, `templates/`, `cache/`, `trash/`. Shot workflows are also saved through ComfyUI's workflow store under `user/default/workflows/gonggan/<project>/<cut>.json`. Deleting a project moves it to `trash/` first.

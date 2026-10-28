@@ -1,6 +1,8 @@
 # comfyui-gonggan-cut
 
-Rough-cut (가편집) editor inside ComfyUI for 공간쉐어 shot projects.
+**Branding:** User-visible strings use neutral **Shots** / **Cut** wording. Internal ids (HTTP routes, storage keys, node extension names, workflow paths under `gonggan/`) are unchanged.
+
+Rough-cut (가편집) editor inside ComfyUI for Shots projects (native and read-only imported).
 
 - **Shots** sidebar tab: project picker + cut list with thumbnails.
 - **Timeline** bottom panel tab: cuts in order on one video track, widths from each cut's `tl_sec`.
@@ -19,7 +21,7 @@ Copy `gonggan_settings.default.json` to `gonggan_settings.json` (gitignored) and
 All routes are also available under `/api/gonggan/*`.
 
 ## Shots selection & context menu (0.5.0)
-In the **Shots** list: click selects one cut (preview + workflow load, debounced). **Ctrl/Cmd+click** toggles multi-select; **Shift+click** selects a range in on-screen scene order. **Right-click** a cut or scene header for actions (group, ungroup, add local cut, soft delete). **Delete** / menu **Delete** hides cuts from Shots, Timeline, and export; pack-local cuts move to `trash/<pid>/<stamp>/<cut_id>/` with `manifest.json` (공간쉐어 files are never touched).
+In the **Shots** list: click selects one cut (preview + workflow load, debounced). **Ctrl/Cmd+click** toggles multi-select; **Shift+click** selects a range in on-screen scene order. **Right-click** a cut or scene header for actions (group, ungroup, add local cut, soft delete). **Delete** / menu **Delete** hides cuts from Shots, Timeline, and export; pack-local cuts move to `trash/<pid>/<stamp>/<cut_id>/` with `manifest.json` (legacy imported project files are never touched).
 
 - `POST /gonggan/cut/delete` `{pid, cuts:[...]}` → `{ok, timeline}`
 - `POST /gonggan/cut/restore` `{pid, cuts?}` → `{ok, timeline}` (omit `cuts` to restore all hidden)
@@ -37,7 +39,7 @@ Each project links one of ComfyUI’s saved user workflows. The pack stores only
 Older files that contain a full workflow graph still load. The graph is read from ComfyUI `user/default/workflows/` (same files as **GET** `/api/userdata?dir=workflows&recurse=true&split=false`).
 
 - In the **Shots** header, **Template:** dropdown lists saved workflows; choosing one saves immediately. Pick **(none)** to clear.
-- **+ Cut** adds a pack-local shot (stored in `edits/edit_<pid>.json` as `local_cuts`, never in 공간쉐어 data). If the project has a template, the graph is copied to `workflows/<pid>/<cut_id>/initial.workflow.json` for that cut.
+- **+ Cut** adds a pack-local shot (stored in `edits/edit_<pid>.json` as `local_cuts`, never in legacy imported project data). If the project has a template, the graph is copied to `workflows/<pid>/<cut_id>/initial.workflow.json` for that cut.
 
 ## Per-version workflow store (0.4.0)
 Each pack version under `versions/<pid>/<cut_id>/` can have a sidecar workflow file at `workflows/<pid>/<cut_id>/<vid>.workflow.json` (gitignored). It stores the UI graph and/or API prompt used for that take (`source`: `generated` or `png-backfill`). New SDK/send-output versions save automatically; existing PNGs can be backfilled without modifying the PNG bytes.
@@ -75,15 +77,15 @@ Tested with Python 3.13.6, comfy-sdk 0.5.0, comfy-api-proxy 0.1.6.
 
 - `GET /gonggan/sdk/status` - venv + proxy health + an SDK `list_jobs` round trip (no generation).
 - `POST /gonggan/regen {pid, cut_id}` - **dry run by default**: builds the draft workflow
-  (Qwen-Image 2.1 + turbo LoRA, 4 steps, ~0.25 MP, same graph as 공간쉐어) and validates it against `/object_info`.
+  (Qwen-Image 2.1 + turbo LoRA, 4 steps, ~0.25 MP, same graph as the legacy draft pipeline) and validates it against `/object_info`.
   Queues only with `{"dry_run": false, "confirm": true, "seed": <seed from the dry run>}`; the UI asks first.
 - `POST /gonggan/send-output {pid, cut_id}` - copies ComfyUI's last output (in-memory `/history`, else newest file in `output/`) into the cut.
-- New takes are stored in the pack's `versions/<pid>/<cut_id>/` (gitignored), never in 공간쉐어 data, and become the cut's pick in `edits/edit_<pid>.json`.
+- New takes are stored in the pack's `versions/<pid>/<cut_id>/` (gitignored), never in legacy imported project data, and become the cut's pick in `edits/edit_<pid>.json`.
 
 ## Native projects (0.6.0)
-Native projects live entirely in the pack folder (no 공간쉐어 `_workspace.json` writes). Gonggan-share projects stay **read-only** in the project list.
+Native projects live entirely in the pack folder (no legacy `_workspace.json` writes). Read-only imported projects stay **read-only** in the project list.
 
-- **Shots** header: native projects appear first with a `[Native]` prefix; Gonggan-share entries show `(read-only)`.
+- **Shots** header: native projects appear first with a `[Native]` prefix; Imported entries show `(read-only)`.
 - Right-click the project row (selector area): **New Project…**, **Rename Project…**, **Delete Project** (rename/delete only for native projects).
 - Native projects support scenes, add cut, template dropdown, timeline edit, **Send last ComfyUI output**, and shot workflow load via `cut-source-workflow`. SDK **Regenerate** and timeline **Export mp4** are disabled for native projects (for now).
 
@@ -112,7 +114,7 @@ Routes (in addition to existing `/gonggan/*`):
 ## Work stages & progress (0.7.0)
 Each shot shows **Image / Video / Best** stage pills (from `versions_list` kinds and `pick`). The Shots header shows `Image a/N · Video b/N · Best c/N` (plus `· Empty k` when any cut has no versions), a single stacked bar (Best → Video → Image → empty track), and scene headers show **n/m** (Best picks in scene / cuts in scene). Trashed cuts (`deleted_at`) are excluded from N. **Timeline** clips show a small stage dot (gray / blue / purple / green).
 
-**Live run chip** (only for jobs linked to a cut): pulsing dot + percent while running, `Queued #n` in queue, red **Failed** on error. Stage pills stay visible; the live chip hides when the run ends and the UI reloads timeline data (throttled **GET** `/gonggan/timeline`). Jobs started from the Gonggan shot workflow tab are linked via `api.queuePrompt` and `localStorage` key `gonggan.jobs` (max 200). Unmapped ComfyUI jobs appear as **Other job running** / **Other jobs: N running, M queued** in the Shots header (read-only).
+**Live run chip** (only for jobs linked to a cut): pulsing dot + percent while running, `Queued #n` in queue, red **Failed** on error. Stage pills stay visible; the live chip hides when the run ends and the UI reloads timeline data (throttled **GET** `/gonggan/timeline`). Jobs started from the Shots workflow tab are linked via `api.queuePrompt` and `localStorage` key `gonggan.jobs` (max 200). Unmapped ComfyUI jobs appear as **Other job running** / **Other jobs: N running, M queued** in the Shots header (read-only).
 
 Events (read-only sync): Comfy `api` WebSocket types `status`, `execution_start`, `execution_cached`, `executing`, `progress`, `progress_state`, `executed`, `execution_success`, `execution_error`, `execution_interrupted`; plus **GET** `/queue` (on panel open and debounced on `status`) and **GET** `/history?max_items=30` on open. Never writes to `/queue` or `/history`.
 
@@ -127,9 +129,9 @@ node --test tests/js/progress_core.test.mjs tests/js/progress_summary.test.mjs t
 Also run `node --check web/gonggan.js` and `node --check web/gg_progress_core.js` after UI edits.
 
 ## Auto-save on cut switch (0.8.1)
-Switching to another shot while the Gonggan workflow tab has unsaved edits **auto-saves** via ComfyUI’s workflow store (same as Ctrl+S) instead of a blocking confirm. If save fails, the switch is cancelled and the tab is left unchanged. Logic: `web/gg_autosave_core.js`.
+Switching to another shot while the Shots workflow tab has unsaved edits **auto-saves** via ComfyUI’s workflow store (same as Ctrl+S) instead of a blocking confirm. If save fails, the switch is cancelled and the tab is left unchanged. Logic: `web/gg_autosave_core.js`.
 
-While the Gonggan shot tab is active and modified, the same save path runs at most every **2 s** (1 s poll), on **tab hide** (`visibilitychange` / `pagehide`), and still on **cut switch**. Each save stamps `extra.ggWip` (`web/gg_wip_core.js`) so reload can restore the working copy only when pick/version state matches. Opening a shot tries `workflows/gonggan/<projectId>/<cutId>.json` before embedded PNG workflow (picked image `workflow` chunk via `web/gg_wf_source_core.js`, only when the effective kind is image) and **GET** `/gonggan/cut-source-workflow` (native: version workflow by REP/switch kind, with `fallback` in the toast when a substitute source was used). Changing **Rep** on the cut whose workflow is open reloads the owned tab after autosave (`web/gg_rep_wf_core.js`; tests `tests/js/rep_wf_core.test.mjs`, `tests/test_cut_source_workflow.py`). E2E `tests/e2e/rep_workflow_test.mjs` is optional (needs ComfyUI restart for the new query param).
+While the Shots workflow tab is active and modified, the same save path runs at most every **2 s** (1 s poll), on **tab hide** (`visibilitychange` / `pagehide`), and still on **cut switch**. Each save stamps `extra.ggWip` (`web/gg_wip_core.js`) so reload can restore the working copy only when pick/version state matches. Opening a shot tries `workflows/gonggan/<projectId>/<cutId>.json` before embedded PNG workflow (picked image `workflow` chunk via `web/gg_wf_source_core.js`, only when the effective kind is image) and **GET** `/gonggan/cut-source-workflow` (native: version workflow by REP/switch kind, with `fallback` in the toast when a substitute source was used). Changing **Rep** on the cut whose workflow is open reloads the owned tab after autosave (`web/gg_rep_wf_core.js`; tests `tests/js/rep_wf_core.test.mjs`, `tests/test_cut_source_workflow.py`). E2E `tests/e2e/rep_workflow_test.mjs` is optional (needs ComfyUI restart for the new query param).
 
 **Edited marker (`*`):** When widget values differ from the baseline captured at load, `localStorage` key `gg.edited` stores `{cutId: cutBaseKey}` (`web/gg_wf_source_core.js`). The star appears on the cut card title, timeline clip label, Info panel header, and shot tab label; it clears automatically when `cutBaseKey` changes (new pick/version). Unit tests: `tests/js/wf_source_core.test.mjs`. E2E: `tests/e2e/wf_marker_test.mjs` (blocks `/prompt` and `/gonggan/regen`).
 
@@ -137,7 +139,7 @@ While the Gonggan shot tab is active and modified, the same save path runs at mo
 Each shot’s ComfyUI tab copy is saved at a **stable id-based path**: `workflows/gonggan/<projectId>/<cutId>.json` (one working file per cut; reload/rename does not create `cut6 (2).json` suffixes). The tab bar still shows the display-only **Project / Cut** label from project/cut metadata, not the filename. Legacy name-based helpers remain in `web/gg_shot_names.js` for tests. E2E guard: `tests/e2e/tabfile_dedupe_test.mjs`.
 
 ## Timeline selection without tab switch (0.8.3)
-Clicking a **Timeline** clip updates the selected cut and preview seek only; it does **not** load or switch the Gonggan shot workflow tab. **Shots** list clicks still open the cut workflow as before. When the canvas tab is a different cut than the selection, the Shots list shows a small **Open** marker on the open cut (`web/gg_cut_select_core.js`).
+Clicking a **Timeline** clip updates the selected cut and preview seek only; it does **not** load or switch the Shots workflow tab. **Shots** list clicks still open the cut workflow as before. When the canvas tab is a different cut than the selection, the Shots list shows a small **Open** marker on the open cut (`web/gg_cut_select_core.js`).
 
 ## Timeline panel toggle
 **Shots** header **Timeline** button (and **T** / **Alt+T** when Shots or the Timeline panel is active) shows on/off state (`aria-pressed`, tooltip `Timeline: on (T)` / `Timeline: off (T)`). Off fully collapses the ComfyUI bottom panel via `Workspace.ToggleBottomPanelTab.gg-timeline`; on restores the previous height (`gg.timelineHeight`, min 220px, capped at ~70% viewport). Preference `gg.timelineOpen` (`1`/`0`, default on). Auto-open on Shots show or cut select respects off. Helpers: `web/gg_timeline_toggle_core.js`; unit tests `tests/js/timeline_toggle_core.test.mjs`; E2E `tests/e2e/timeline_toggle_test.mjs` (blocks `/prompt` and `/gonggan/regen`).
@@ -152,7 +154,7 @@ Each cut row shows a single compact header (number, name, picked version summary
 Shots **Info | Caption** toggle (legacy localStorage `story` → Caption). Caption mode highlights the active cut during timeline playback. **Send last ComfyUI output** attaches to the cut that queued the job when known. Pure helpers: `web/gg_story_core.js`, `web/gg_send_target_core.js`; tests `tests/js/story_core.test.mjs`, `tests/js/send_target_core.test.mjs`.
 
 ## Single shot tab and tab label (0.8.4)
-Switching shots in the **Shots** list reuses **one** Gonggan-owned workflow tab: after a successful load the previous owned tab is closed (auto-save first; unsaved tabs that could not be saved are kept with a warning toast). The ComfyUI tab bar shows a **display-only** label `Project / Cut` for Gonggan shot tabs (`workflow.filename` and saved paths are unchanged). Pure helpers: `web/gg_tab_close_core.js`, `web/gg_tab_label_core.js`.
+Switching shots in the **Shots** list reuses **one** pack-owned Shots workflow tab: after a successful load the previous owned tab is closed (auto-save first; unsaved tabs that could not be saved are kept with a warning toast). The ComfyUI tab bar shows a **display-only** label `Project / Cut` for Shots workflow tabs (`workflow.filename` and saved paths are unchanged). Pure helpers: `web/gg_tab_close_core.js`, `web/gg_tab_label_core.js`.
 
 ## Empty cuts (contest fix)
 Shots with no stored/version workflow and no draft still open the **owned** shot tab (`loadWorkflowIntoDedicatedTab`): project **template** graph when linked, otherwise a **blank** UI graph (zero nodes) stamped with `ggGongganMeta`. Switching between empty and worked cuts never spawns extra workflow tabs. **New Project** / project template **(none)** is remembered in `gonggan-cut.lastTemplate` (explicit none vs never chosen). Pure: `web/gg_empty_cut_core.js`, `web/gg_template_pick_core.js`; unit `tests/js/empty_cut_core.test.mjs`; e2e `tests/e2e/empty_cut_test.mjs` (blocks `/prompt`, `/gonggan/regen`).
@@ -191,17 +193,17 @@ Headless Chrome scenarios live under `tests/e2e/` (manual / CI optional).
 - **0.9.2** — Story mode: length label beside cut name; Notes textarea full width with content/viewport auto-height and scroll; `autoHeightPx` in `gg_story_core.js`.
 - **0.9.1** — Denser Shots cut info panel (collapsible header, compact summary row, smaller version strip); removed in-panel preview and scene button row; **Split scene** in cut context menu; `gg_panel_core.js`, `tests/js/panel_core.test.mjs`.
 - **0.9.0** — Shots **Info | Story** list toggle (reuses cut `notes`, playback follow + highlight); send-last-output targets the cut that queued the prompt; `gg_story_core.js`, `gg_send_target_core.js`, `tests/js/story_core.test.mjs`, `tests/js/send_target_core.test.mjs`.
-- **0.8.4** — One Gonggan shot workflow tab per session (close previous owned tab after cut switch); display-only `Project / Cut` tab labels; `gg_tab_close_core.js`, `gg_tab_label_core.js`, `tests/js/tab_close_core.test.mjs`, `tests/js/tab_label_core.test.mjs`, e2e `tab_label_test.mjs`.
+- **0.8.4** — One Shots workflow tab per session (close previous owned tab after cut switch); display-only `Project / Cut` tab labels; `gg_tab_close_core.js`, `gg_tab_label_core.js`, `tests/js/tab_close_core.test.mjs`, `tests/js/tab_label_core.test.mjs`, e2e `tab_label_test.mjs`.
 - **0.8.3** — Timeline clip click follows selection/seek only (no workflow tab switch); **Open** marker on the Shots card whose workflow is on canvas; `gg_cut_select_core.js`, `tests/js/cut_select_core.test.mjs`.
 - **0.8.0** — Cut management UI (drag reorder, auto numbers, length/notes, 3 s rule + End card, Final list + total, Needs redo filter, `S01_003_v02` naming display, due date + completion %); `POST /gonggan/cut/update`, `/gonggan/project/update`; missing Load Image scan + queue guard (`gg_loadimage_core.js`, `gg_loadimage.js`); tests `cuts_core`, `loadimage_core`, e2e `cut_mgmt_test`, `loadimage_test`.
 - **0.7.0** — Per-cut work stages (Image/Video/Best pills, project summary bar), live run chip, timeline stage dots; `gg_progress_core.js`; JS tests `tests/js/progress_core.test.mjs`, `tests/js/cut_stage.test.mjs`.
-- **0.6.0** — Native projects stored under `projects/` with full timeline/edit/scene/cut/template APIs; Gonggan-share list unchanged (read-only); project CRUD UI; send-last-output for native cuts; tests in `tests/test_project_routes.py`.
-- **0.5.2** — Shot click loads API/stored workflows with a string filename (`loadApiJson` / `loadGraphData`); one Gonggan-owned canvas tab per session, renamed per cut (closes the previous tab). Reloads after the tab was closed; surfaces load errors in toast/console. Removed the "+ Cut" / "+ Scene" header buttons (use empty-area right-click Add Cut, and Group from the selection bar or menu).
+- **0.6.0** — Native projects stored under `projects/` with full timeline/edit/scene/cut/template APIs; Read-only imported list unchanged; project CRUD UI; send-last-output for native cuts; tests in `tests/test_project_routes.py`.
+- **0.5.2** — Shot click loads API/stored workflows with a string filename (`loadApiJson` / `loadGraphData`); one pack-owned Shots canvas tab per session, renamed per cut (closes the previous tab). Reloads after the tab was closed; surfaces load errors in toast/console. Removed the "+ Cut" / "+ Scene" header buttons (use empty-area right-click Add Cut, and Group from the selection bar or menu).
 - **0.5.1** — Shots multi-select bar: shown only for 2+ cuts (original styling); context menus opaque Comfy background at ~70% scale; empty Shots panel right-click (**Add Cut**, **New Scene** when cuts are selected); plugin UI strings in English. Fix: template dropdown now lists ComfyUI saved workflows (fetchApi path double /api and array response).
 - **0.5.0** — Shots multi-select (Ctrl/Shift), context menus, soft delete + trash restore APIs; hidden cuts excluded from timeline/export.
 - **0.4.1** — Template is a ComfyUI saved-workflow ref; Shots template dropdown; pack-local **+ Cut** with `local_cuts` and optional `initial.workflow.json` from template.
 - **0.4.0** — Per-version workflow JSON under `workflows/`; generation-time save; PNG metadata backfill; `cut-source-workflow` resolver (stored → template → draft).
 - **0.3.0** — Per-project workflow template (save canvas / load JSON, indicator dot). Empty cuts fall back to the project template on shot click (ordered resolver; cut workflow always wins when available).
-- **0.2.2** — Shot click reuses one gonggan workflow tab (no tab pile-up); debounced. Closing the Shots panel also closes the Timeline panel.
+- **0.2.2** — Shot click reuses one Shots workflow tab (no tab pile-up); debounced. Closing the Shots panel also closes the Timeline panel.
 - **0.2.1** — Promote save-failure rollback + warn toast; wider trim hit zones at clip edges.
 - **0.2.0** — Integration: shot click → canvas, scenes/groups, Shots → Timeline tab, promote (대표), trim cursors.

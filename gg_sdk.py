@@ -78,7 +78,7 @@ _EMPTY_FRAG = re.compile(r"\s*([;,])\s*(?=[.;,!?])")                            
 
 
 def clean_prompt(text: str) -> str:
-    """Drop None/null/empty fragments that 공간쉐어 templates leave behind (e.g. 'trousers; None.')."""
+    """Drop None/null/empty fragments that legacy imported templates leave behind (e.g. 'trousers; None.')."""
     t = str(text or "")
     for _ in range(3):
         t2 = _NULL_FRAG.sub("", t)
@@ -93,7 +93,7 @@ def clean_prompt(text: str) -> str:
 
 
 def build_draft_workflow(prompt: str, seed: int, aspect: str, prefix: str) -> dict:
-    """Same graph as 공간쉐어 _build_qwen_image_workflow (server.py:3226), with draft steps/size."""
+    """Same graph as the legacy draft Qwen workflow (server.py:3226), with draft steps/size."""
     return {
         "13": {"class_type": "ResolutionSelector",
                "inputs": {"aspect_ratio": ASPECTS.get(aspect) or ASPECTS["16:9"],
@@ -152,7 +152,7 @@ def cut_workflow(pid: str, cut_id: str, seed: int | None = None, *, save_file: b
         raise ValueError("cut not found")
     prompt = clean_prompt(cut.get("prompt") or "")
     if not prompt:
-        raise ValueError("cut has no prompt in 공간쉐어")
+        raise ValueError("cut has no prompt in imported project data")
     aspect = cut.get("prompt_aspect") if cut.get("prompt_aspect") in ASPECTS else "16:9"
     if seed is None:
         seed = _default_seed(pid, cut)
