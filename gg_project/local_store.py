@@ -19,6 +19,7 @@ from .entities import (
 )
 from .errors import ConflictError
 from .ids import now_iso, uuid7
+from .project_settings import merge_settings_patch, normalize_settings
 from .timeline import build_timeline, timeline_order
 from .workflow_hash import workflow_sha256
 
@@ -207,6 +208,7 @@ class LocalStore:
         name: str,
         template_ref: str | None = None,
         template_graph: dict | None = None,
+        settings: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             pid = uuid7()
@@ -214,14 +216,15 @@ class LocalStore:
             workflow_sha = None
             if template_graph is not None:
                 workflow_sha = self.put_blob(pid, template_graph)
-            cut = new_cut(scene["id"], "cut1", default_settings()["default_sec"], workflow_sha)
+            proj_settings = normalize_settings(settings)
+            cut = new_cut(scene["id"], "cut1", proj_settings["cut_seconds"], workflow_sha)
             scene["cut_order"] = [cut["id"]]
             doc = entity_base(pid)
             doc.update({
                 "name": name,
                 "template_ref": template_ref,
                 "due_date": None,
-                "settings": default_settings(),
+                "settings": proj_settings,
                 "scenes": [scene],
                 "loose_order": [],
                 "cuts": {cut["id"]: cut},
@@ -394,7 +397,7 @@ class LocalStore:
                     ref_sid = ref.get("scene_id")
                     if isinstance(ref_sid, str) and self._scene(doc, ref_sid):
                         sid = ref_sid
-            cut = new_cut(sid, cut_name, doc.get("settings", {}).get("default_sec", 3.0), workflow_sha)
+            cut = new_cut(sid, cut_name, normalize_settings(doc.get("settings")).get("cut_seconds", 3.0), workflow_sha)
             cuts = self._cuts_map(doc)
             cuts[cut["id"]] = cut
             doc["cuts"] = cuts
@@ -492,7 +495,7 @@ class LocalStore:
     ) -> dict[str, Any]:
         if not isinstance(fields, dict) or not fields:
             raise ValueError("fields required")
-        allowed = {"due_date"}
+        allowed = {"due_date", "settings", "aspect", "width", "height", "fps", "cut_seconds"}
         unknown = set(fields) - allowed
         if unknown:
             raise ValueError(f"unsupported project fields: {', '.join(sorted(unknown))}")
@@ -503,6 +506,14 @@ class LocalStore:
             self._check_rev(doc, expected_rev)
             if "due_date" in fields:
                 doc["due_date"] = self._validate_due_date(fields["due_date"])
+            patch: dict[str, Any] = {}
+            if isinstance(fields.get("settings"), dict):
+                patch.update(fields["settings"])
+            for key in ("aspect", "width", "height", "fps", "cut_seconds"):
+                if key in fields:
+                    patch[key] = fields[key]
+            if patch:
+                doc["settings"] = merge_settings_patch(doc.get("settings"), patch)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "update_project", pid)
             return doc
