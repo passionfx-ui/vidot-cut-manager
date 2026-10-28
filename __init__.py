@@ -1,6 +1,6 @@
 """comfyui-gonggan-cut - shot list + rough-cut timeline tab for ComfyUI, reading 공간쉐어 project data."""
 
-__version__ = "0.9.21"
+__version__ = "0.9.22"
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
