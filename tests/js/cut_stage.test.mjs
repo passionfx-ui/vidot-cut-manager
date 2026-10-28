@@ -126,11 +126,12 @@ describe("projectSummary + formatSummary", () => {
     assert.equal(sum.video, 6);
     assert.equal(sum.image, 1);
     assert.equal(sum.done, 4);
-    assert.equal(formatSummary(sum), "Done 4/14 · Video 6/14 · Image 1/14");
+    assert.equal(sum.empty, 7);
+    assert.equal(formatSummary(sum), "Image 1/14 · Video 6/14 · Best 4/14 · Empty 7");
   });
 
   it("zero cuts", () => {
     const sum = projectSummary([]);
-    assert.equal(formatSummary(sum), "Done 0/0 · Video 0/0 · Image 0/0");
+    assert.equal(formatSummary(sum), "Image 0/0 · Video 0/0 · Best 0/0");
   });
 });

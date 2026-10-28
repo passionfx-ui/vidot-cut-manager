@@ -84,9 +84,12 @@
 .gg-shots .gg-summary-bar { display: flex; height: 4px; border-radius: 2px; overflow: hidden; background: #1a1c20; gap: 1px; }
 .gg-shots .gg-summary-bar[hidden] { display: none !important; }
 .gg-shots .gg-seg { min-width: 0; height: 100%; }
+.gg-shots .gg-seg-best,
 .gg-shots .gg-seg-done { background: #4caf6a; }
 .gg-shots .gg-seg-video { background: #9b6ed4; }
 .gg-shots .gg-seg-image { background: #5a8fd4; }
+.gg-shots .gg-seg-empty { background: #2a2e34; min-width: 0; }
+.gg-shots .gg-grp-prog { color: var(--gg-dim); font-size: 10px; font-variant-numeric: tabular-nums; margin-left: 4px; }
 .gg-shots .gg-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gg-root .gg-thumb-empty { display: flex; align-items: center; justify-content: center; color: var(--gg-dim); font-size: 10px; width: 100%; height: 100%; background: repeating-linear-gradient(45deg, #2a2d33 0 6px, #24272c 6px 12px); }
 .gg-shots .gg-badge { position: absolute; right: 3px; bottom: 2px; font-size: 9px; background: rgba(0,0,0,.6); border-radius: 3px; padding: 0 3px; }
