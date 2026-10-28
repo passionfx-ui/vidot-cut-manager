@@ -18,4 +18,4 @@ Prepare beforehand: ComfyUI running, the Shots sidebar closed, a story and a rea
 - Total about 1 min 55 s at normal speed.
 - Step 2 needs the ready answer in the clipboard; use the **Copy prompt** button in the dialog to get the prompt for your LLM beforehand.
 - Hide toasts or paths that show a local folder before recording.
-- The README screenshots in `docs/images` are regenerated with `node tests/e2e/readme_shots.mjs` (creates and deletes a temporary demo project; no generation).
+- The README screenshots in `docs/images` are regenerated with `node tests/e2e/readme_shots.mjs` (creates and deletes a temporary demo project; no generation; the four thumbnails are synthetic gradient placeholders seeded by `tests/e2e/seed_demo_thumbs.py`, not real renders).
