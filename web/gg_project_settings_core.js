@@ -27,9 +27,10 @@ export const DEFAULT_PROJECT_SETTINGS = {
   fps: 24,
   cut_seconds: 3,
   caption_lang: "English",
+  project_folder: "",
 };
 
-const SETTING_KEYS = ["aspect", "width", "height", "fps", "cut_seconds", "caption_lang"];
+const SETTING_KEYS = ["aspect", "width", "height", "fps", "cut_seconds", "caption_lang", "project_folder"];
 
 /** @param {{ aspect: string, width: number, height: number }} preset */
 export function presetKey(preset) {
@@ -82,6 +83,11 @@ export function clampCaptionLang(value) {
   return CAPTION_LANG_OPTIONS.includes(s) ? s : DEFAULT_PROJECT_SETTINGS.caption_lang;
 }
 
+/** Optional local folder path (display + future sync target only). @param {unknown} value */
+export function clampProjectFolder(value) {
+  return String(value ?? "").replace(/[\u0000-\u001f]/g, "").trim().slice(0, 260);
+}
+
 /**
  * @param {Record<string, unknown>|null|undefined} raw
  * @returns {typeof DEFAULT_PROJECT_SETTINGS}
@@ -99,6 +105,7 @@ export function normalizeProjectSettings(raw) {
   out.fps = clampFps(out.fps);
   out.cut_seconds = clampCutSeconds(out.cut_seconds);
   out.caption_lang = clampCaptionLang(out.caption_lang);
+  out.project_folder = clampProjectFolder(out.project_folder);
   return out;
 }
 
@@ -146,13 +153,14 @@ export function settingsFromPresetSelectValue(value, settings) {
 /**
  * @param {typeof DEFAULT_PROJECT_SETTINGS|null|undefined} settings
  */
-export function readSettingsFromFormValues(presetValue, fpsValue, cutSecondsValue, captionLangValue, base) {
+export function readSettingsFromFormValues(presetValue, fpsValue, cutSecondsValue, captionLangValue, base, projectFolderValue) {
   let s = settingsFromPresetSelectValue(presetValue, base);
   s = normalizeProjectSettings({
     ...s,
     fps: fpsValue,
     cut_seconds: cutSecondsValue,
     caption_lang: captionLangValue,
+    ...(projectFolderValue === undefined ? {} : { project_folder: projectFolderValue }),
   });
   return s;
 }
