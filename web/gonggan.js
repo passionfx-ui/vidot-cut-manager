@@ -959,7 +959,6 @@ async function tryRestoreCutWorkingCopy(cutId, cutRec, loadToken) {
     wfLastLoadedProjectId = state.pid;
     markGraphGongganCut(cutId);
     rememberWorkflowBaselineFromActiveGraph(cutId);
-    markCutEditedInStorage(cut);
     sdk.msg = `Canvas: ${shotTitle(cut)} (restored edits)`;
     bus.dispatchEvent(new Event("sdk"));
     bus.dispatchEvent(new Event("gg-opentab"));
@@ -1477,7 +1476,7 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
   const cutRec = cut || cutById(cutId);
   const title = shotTitle(cutRec);
   if (await tryRestoreCutWorkingCopy(cutId, cutRec, loadToken)) return;
-  //DBGif (await tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken)) return;
+  if (await tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken)) return;
   let lastErr = null;
   for (const src of CUT_WORKFLOW_SOURCES) {
     try {
