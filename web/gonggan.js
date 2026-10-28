@@ -40,6 +40,7 @@ import {
   movedToTrashToastMessage,
 } from "./gg_trash_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
+import { parseImportList, summarizeImport, buildLlmPrompt } from "./gg_import_core.js";
 import {
   autosaveModifiedTabs,
   autosaveWorkflow,
@@ -540,9 +541,16 @@ function openNewProjectModal() {
         <span class="gg-modal-tpl-hint" aria-live="polite"></span>
         <select class="gg-modal-tpl"><option value="">(none)</option></select>
       </label>
+      <div class="gg-modal-field gg-split">
+        <span>Auto Cut Split (optional)</span>
+        <span class="gg-split-hint">1. Copy the prompt and paste it into your LLM together with your story.<br>2. Paste the LLM's result here to split it into scenes and cuts automatically.</span>
+        <button type="button" class="gg-btn gg-split-copy">Copy prompt</button>
+        <textarea class="gg-split-text" rows="6" spellcheck="false" aria-label="Auto Cut Split result"></textarea>
+        <span class="gg-split-preview" aria-live="polite"></span>
+      </div>
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
-        <button type="submit" class="gg-btn gg-primary">Create</button>
+        <button type="submit" class="gg-btn gg-primary gg-modal-create">Create</button>
       </div>
     </form>`;
   document.body.appendChild(wrap);
@@ -571,6 +579,42 @@ function openNewProjectModal() {
   fetchUserWorkflowPaths().then(() => {
     refreshModalTplOptions(pickInitialTemplate(userWorkflowPaths, loadLastTemplate(localStorage)));
   });
+  const splitText = wrap.querySelector(".gg-split-text");
+  const splitPreview = wrap.querySelector(".gg-split-preview");
+  const createBtn = wrap.querySelector(".gg-modal-create");
+  /** @type {ReturnType<typeof parseImportList> | null} */
+  let splitResult = null;
+  const refreshSplitPreview = () => {
+    const raw = splitText.value;
+    if (!raw.trim()) {
+      splitResult = null;
+      splitPreview.textContent = "";
+      splitPreview.classList.remove("gg-split-err");
+      createBtn.disabled = false;
+      return;
+    }
+    const sec = Number(wrap.querySelector(".gg-modal-cut-sec")?.value);
+    splitResult = parseImportList(raw, { defaultSec: Number.isFinite(sec) && sec > 0 ? sec : DEFAULT_PROJECT_SETTINGS.cut_seconds });
+    const errs = splitResult.errors || [];
+    if (errs.length) {
+      const shown = errs.slice(0, 3).map((e) => `Line ${e.line}: ${e.message}`);
+      if (errs.length > 3) shown.push(`+${errs.length - 3} more`);
+      splitPreview.textContent = shown.join("\n");
+      splitPreview.classList.add("gg-split-err");
+      createBtn.disabled = true;
+    } else {
+      splitPreview.textContent = summarizeImport(splitResult);
+      splitPreview.classList.remove("gg-split-err");
+      createBtn.disabled = false;
+    }
+  };
+  splitText.addEventListener("input", refreshSplitPreview);
+  wrap.querySelector(".gg-modal-cut-sec")?.addEventListener("input", refreshSplitPreview);
+  wrap.querySelector(".gg-split-copy")?.addEventListener("click", () => {
+    navigator.clipboard?.writeText(buildLlmPrompt())
+      .then(() => ggToast("Copied", "Prompt copied", "ok"))
+      .catch(() => ggToast("Copy failed", "Select the text and copy it manually.", "warn"));
+  });
   applyProjectSetupToModal(wrap, DEFAULT_PROJECT_SETTINGS);
   wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeProjectModal(); });
   wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", closeProjectModal);
@@ -584,9 +628,24 @@ function openNewProjectModal() {
     try {
       const d = await postJson("/gonggan/project/create", { name, template_ref, settings });
       closeProjectModal();
+      let splitNote = "";
+      if (splitResult && !(splitResult.errors || []).length && d.project?.id) {
+        try {
+          await postJson("/gonggan/project/import", {
+            pid: d.project.id,
+            scenes: splitResult.scenes,
+            loose: splitResult.loose,
+            references: splitResult.references,
+          });
+          splitNote = ` (${summarizeImport(splitResult).replace(" will be created", " created")})`;
+        } catch (err) {
+          const hint = (err.status === 404 || err.status === 405) ? "Restart ComfyUI to enable Auto Cut Split." : err.message;
+          ggToast("Auto Cut Split", `Project created, but the split failed: ${hint}`, "warn");
+        }
+      }
       await loadProjects();
       if (d.project?.id) selectProject(d.project.id);
-      ggToast("Project", `Created "${name}"`, "ok");
+      ggToast("Project", `Created "${name}"${splitNote}`, "ok");
     } catch (err) {
       ggToast("Project", err.message, "warn");
     }
