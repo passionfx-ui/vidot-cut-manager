@@ -1,4 +1,24 @@
-/** SRT caption export (pure, no DOM). */
+/** SRT caption export and caption display helpers (pure, no DOM). */
+
+import { clampCaptionLang } from "./gg_project_settings_core.js";
+
+/**
+ * Display caption text: stored `caption`, or legacy `notes` when caption is empty (display only).
+ * @param {{ caption?: string, notes?: string } | null | undefined} cut
+ * @returns {string}
+ */
+export function effectiveCaption(cut) {
+  const cap = cut?.caption;
+  if (cap != null && String(cap).trim() !== "") return String(cap);
+  const notes = cut?.notes;
+  if (notes != null && String(notes).trim() !== "") return String(notes);
+  return cap != null ? String(cap) : "";
+}
+
+/** @param {unknown} captionLang */
+export function captionFieldPlaceholder(captionLang) {
+  return `Notes / dialogue (${clampCaptionLang(captionLang)})`;
+}
 
 /**
  * @param {number} sec

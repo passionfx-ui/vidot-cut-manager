@@ -10,15 +10,26 @@ export const RESOLUTION_PRESETS = [
 
 export const FPS_OPTIONS = [24, 25, 30];
 
+export const CAPTION_LANG_OPTIONS = [
+  "English",
+  "Korean",
+  "Japanese",
+  "Chinese",
+  "Spanish",
+  "French",
+  "German",
+];
+
 export const DEFAULT_PROJECT_SETTINGS = {
   aspect: "16:9",
   width: 1280,
   height: 720,
   fps: 24,
   cut_seconds: 3,
+  caption_lang: "English",
 };
 
-const SETTING_KEYS = ["aspect", "width", "height", "fps", "cut_seconds"];
+const SETTING_KEYS = ["aspect", "width", "height", "fps", "cut_seconds", "caption_lang"];
 
 /** @param {{ aspect: string, width: number, height: number }} preset */
 export function presetKey(preset) {
@@ -65,6 +76,12 @@ export function clampAspect(value) {
   return RESOLUTION_PRESETS.some((p) => p.aspect === s) ? s : DEFAULT_PROJECT_SETTINGS.aspect;
 }
 
+/** @param {unknown} value */
+export function clampCaptionLang(value) {
+  const s = String(value ?? "").trim();
+  return CAPTION_LANG_OPTIONS.includes(s) ? s : DEFAULT_PROJECT_SETTINGS.caption_lang;
+}
+
 /**
  * @param {Record<string, unknown>|null|undefined} raw
  * @returns {typeof DEFAULT_PROJECT_SETTINGS}
@@ -81,6 +98,7 @@ export function normalizeProjectSettings(raw) {
   out.height = clampDim(out.height);
   out.fps = clampFps(out.fps);
   out.cut_seconds = clampCutSeconds(out.cut_seconds);
+  out.caption_lang = clampCaptionLang(out.caption_lang);
   return out;
 }
 
@@ -128,8 +146,13 @@ export function settingsFromPresetSelectValue(value, settings) {
 /**
  * @param {typeof DEFAULT_PROJECT_SETTINGS|null|undefined} settings
  */
-export function readSettingsFromFormValues(presetValue, fpsValue, cutSecondsValue, base) {
+export function readSettingsFromFormValues(presetValue, fpsValue, cutSecondsValue, captionLangValue, base) {
   let s = settingsFromPresetSelectValue(presetValue, base);
-  s = normalizeProjectSettings({ ...s, fps: fpsValue, cut_seconds: cutSecondsValue });
+  s = normalizeProjectSettings({
+    ...s,
+    fps: fpsValue,
+    cut_seconds: cutSecondsValue,
+    caption_lang: captionLangValue,
+  });
   return s;
 }
