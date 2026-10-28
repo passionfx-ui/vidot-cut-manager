@@ -549,11 +549,12 @@ async def gg_version_workflow(request):
 async def gg_cut_source_workflow(request):
     pid = request.query.get("pid", "")
     cut = request.query.get("cut", "")
+    kind = request.query.get("kind", "") or None
     if not pid or not cut:
         return _err(400, "pid and cut required")
     try:
         if gg_native_api.is_native_pid(pid):
-            data = await asyncio.to_thread(gg_native_api.native_cut_source_workflow, pid, cut)
+            data = await asyncio.to_thread(gg_native_api.native_cut_source_workflow, pid, cut, kind)
         else:
             data = await asyncio.to_thread(gg_wfstore.cut_source_workflow, pid, cut)
     except ValueError as ex:
