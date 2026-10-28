@@ -741,7 +741,9 @@ async function main() {
     });
     if (!state.allDone) throw new Error("gg-stage-all-done not set with Best pick");
     // gg-done-glow was removed in 0.9.3 (stage dots + gg-stage-all-done replaced it).
-    if (!/^Done\s+1\//i.test(state.sum)) throw new Error(`summary wrong: "${state.sum}"`);
+    if (!/^Best\s+1\//i.test(state.sum) && !/Best 1\//.test(state.sum)) {
+      throw new Error(`summary wrong: "${state.sum}"`);
+    }
     if (!/Video/i.test(state.sum) || !/Image/i.test(state.sum)) {
       throw new Error(`summary missing Video/Image: "${state.sum}"`);
     }
@@ -754,7 +756,7 @@ async function main() {
     await clickCut(page, 0);
     await sleep(600);
     const before = await page.$eval(".gg-root.gg-shots .gg-summary-text", (el) => el.textContent.trim());
-    if (/Done\s+[1-9]/i.test(before)) throw new Error(`expected 0 done before pick, got: ${before}`);
+    if (/Best\s+[1-9]/i.test(before)) throw new Error(`expected 0 best before pick, got: ${before}`);
     const bestVid = mock.cuts[0].versions_list[2].id;
     const btn = await page.waitForSelector(
       `.gg-cutpanel .gg-ver-wrap[data-vid="${bestVid}"] .gg-promote:not([disabled])`,
@@ -763,7 +765,7 @@ async function main() {
     await btn.click();
     await sleep(800);
     const after = await page.$eval(".gg-root.gg-shots .gg-summary-text", (el) => el.textContent.trim());
-    if (!/^Done\s+1\//i.test(after)) throw new Error(`summary did not update after pick: "${after}"`);
+    if (!/Best 1\//.test(after)) throw new Error(`summary did not update after pick: "${after}"`);
     timelineMocks.delete(mainPid);
     await reloadShots(page);
   });
@@ -776,7 +778,7 @@ async function main() {
       sum: document.querySelector(".gg-root.gg-shots .gg-summary-text")?.textContent?.trim() || "",
     }));
     if (!state.allDone) throw new Error("Done styling not shown for auto-pick");
-    if (!/^Done\s+1\/1/i.test(state.sum)) throw new Error(`summary: "${state.sum}"`);
+    if (!/Best 1\/1/.test(state.sum)) throw new Error(`summary: "${state.sum}"`);
     timelineMocks.delete(mainPid);
     await reloadShots(page);
   });
