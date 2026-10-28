@@ -697,6 +697,9 @@ function syncEditedMarkerBeforeSave(cutId, cutRec) {
   if (!cut?.id || cutId !== ggWorkflowBaselineCutId || !ggWorkflowBaseline) return;
   const current = captureGraphWorkflowSnapshot();
   if (!current) return;
+  // Only the graph that actually belongs to this cut counts (a graph mid-switch is empty or another cut's).
+  if (!Array.isArray(current.nodes) || !current.nodes.length) return;
+  if (app.graph?.extra?.gonggan?.cutId !== cutId) return;
   if (widgetValuesDiffer(ggWorkflowBaseline, current)) {
     markCutEditedInStorage(cut);
   }
@@ -1474,7 +1477,7 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
   const cutRec = cut || cutById(cutId);
   const title = shotTitle(cutRec);
   if (await tryRestoreCutWorkingCopy(cutId, cutRec, loadToken)) return;
-  if (await tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken)) return;
+  //DBGif (await tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken)) return;
   let lastErr = null;
   for (const src of CUT_WORKFLOW_SOURCES) {
     try {
