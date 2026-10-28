@@ -121,6 +121,17 @@ import {
   SCENE_NAME_MAX_LEN,
   PROJECT_NAME_MAX_LEN,
 } from "./gg_ask_text_core.js";
+import {
+  TIMELINE_MIN_HEIGHT,
+  loadTimelineOpen,
+  saveTimelineOpen,
+  loadTimelineHeight,
+  saveTimelineHeight,
+  clampHeight,
+  shouldIgnoreShortcut,
+  timelineShortcutAllowed,
+  timelineToggleTooltip,
+} from "./gg_timeline_toggle_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -3279,22 +3290,148 @@ function timelineBottomTabActive() {
   return !!bp.bottomPanelVisible && bp.activeBottomPanelTabId === TIMELINE_TAB;
 }
 
+function isTimelinePanelOpen() {
+  const bp = app.extensionManager?.bottomPanel;
+  return !!(bp?.bottomPanelVisible && bp.activeBottomPanelTabId === TIMELINE_TAB);
+}
+
 function shotsSidebarActive() {
   return app.extensionManager?.sidebarTab?.activeSidebarTabId === SHOTS_TAB;
 }
 
-function openTimelinePanel() {
+function ggModalOpen() {
+  return !!document.querySelector(".gg-modal-backdrop");
+}
+
+function comfyPromptDialogOpen() {
+  return !!document.querySelector(".p-dialog-mask, .p-dialog-enter-active, .p-dialog-visible");
+}
+
+function measureBottomPanelHeight() {
+  const panel = document.querySelector(".bottom-panel");
+  if (!panel || !isTimelinePanelOpen()) return 0;
+  return panel.getBoundingClientRect().height;
+}
+
+let timelineHeightRestoreRaf = 0;
+let timelineHeightObserver = null;
+
+function applyStoredTimelinePanelHeight() {
+  if (!isTimelinePanelOpen()) return;
+  const stored = loadTimelineHeight(localStorage);
+  const want = clampHeight(stored || TIMELINE_MIN_HEIGHT, window.innerHeight, TIMELINE_MIN_HEIGHT);
+  const panel = document.querySelector(".bottom-panel");
+  if (!panel) return;
+  const cur = panel.getBoundingClientRect().height;
+  if (cur >= want - 8 && cur >= TIMELINE_MIN_HEIGHT) return;
+  const gutter = document.querySelector('[data-testid="graph-canvas-gutter"]');
+  const splitter = gutter?.closest(".p-splitter");
+  if (splitter) {
+    const total = splitter.getBoundingClientRect().height;
+    if (total > want + 40) {
+      const bottomPct = Math.min(70, Math.max((want / total) * 100, (TIMELINE_MIN_HEIGHT / total) * 100));
+      try {
+        localStorage.setItem("bottom-panel-splitter", JSON.stringify([100 - bottomPct, bottomPct]));
+      } catch (_) {}
+    }
+  }
+  panel.style.minHeight = `${want}px`;
+  window.dispatchEvent(new Event("resize"));
+}
+
+function scheduleRestoreTimelinePanelHeight() {
+  cancelAnimationFrame(timelineHeightRestoreRaf);
+  let frames = 0;
+  const step = () => {
+    applyStoredTimelinePanelHeight();
+    frames += 1;
+    if (frames < 10) timelineHeightRestoreRaf = requestAnimationFrame(step);
+  };
+  timelineHeightRestoreRaf = requestAnimationFrame(step);
+}
+
+function startTimelineHeightObserver() {
+  if (timelineHeightObserver) return;
+  const panel = document.querySelector(".bottom-panel");
+  if (!panel || !window.ResizeObserver) return;
+  timelineHeightObserver = new ResizeObserver(() => {
+    if (!isTimelinePanelOpen()) return;
+    const h = measureBottomPanelHeight();
+    if (h >= TIMELINE_MIN_HEIGHT) {
+      saveTimelineHeight(localStorage, clampHeight(h, window.innerHeight, TIMELINE_MIN_HEIGHT));
+    }
+  });
+  timelineHeightObserver.observe(panel);
+}
+
+function syncTimelineToggleButtons() {
+  const open = loadTimelineOpen(localStorage);
+  document.querySelectorAll(".gg-timeline-toggle").forEach((btn) => {
+    btn.setAttribute("aria-pressed", open ? "true" : "false");
+    btn.classList.toggle("gg-on", open);
+    btn.title = timelineToggleTooltip(open);
+  });
+}
+
+function openTimelinePanelInternal() {
   const cmd = app.extensionManager?.command;
   if (!cmd?.execute) return;
-  if (timelinePanelVisible()) return;
+  if (isTimelinePanelOpen()) {
+    scheduleRestoreTimelinePanelHeight();
+    return;
+  }
   cmd.execute(`Workspace.ToggleBottomPanelTab.${TIMELINE_TAB}`);
+  scheduleRestoreTimelinePanelHeight();
+  requestAnimationFrame(startTimelineHeightObserver);
+}
+
+function openTimelinePanelIfAllowed() {
+  if (!loadTimelineOpen(localStorage)) return;
+  openTimelinePanelInternal();
 }
 
 function closeTimelinePanel() {
   const cmd = app.extensionManager?.command;
   if (!cmd?.execute) return;
-  if (!timelineBottomTabActive()) return;
+  if (!isTimelinePanelOpen()) return;
+  const h = measureBottomPanelHeight();
+  if (h >= TIMELINE_MIN_HEIGHT) {
+    saveTimelineHeight(localStorage, clampHeight(h, window.innerHeight, TIMELINE_MIN_HEIGHT));
+  }
   cmd.execute(`Workspace.ToggleBottomPanelTab.${TIMELINE_TAB}`);
+}
+
+function setTimelineUserOpen(open) {
+  saveTimelineOpen(localStorage, open);
+  if (open) openTimelinePanelInternal();
+  else closeTimelinePanel();
+  syncTimelineToggleButtons();
+}
+
+function toggleTimelinePanel() {
+  setTimelineUserOpen(!loadTimelineOpen(localStorage));
+}
+
+function onTimelineToggleKey(e) {
+  if (shouldIgnoreShortcut({
+    key: e.key,
+    ctrlKey: e.ctrlKey,
+    metaKey: e.metaKey,
+    altKey: e.altKey,
+    target: e.target,
+    isComposing: e.isComposing,
+    modalOpen: ggModalOpen(),
+    promptDialogOpen: comfyPromptDialogOpen(),
+  })) return;
+  const allowed = timelineShortcutAllowed({
+    shotsSidebarActive: shotsSidebarActive(),
+    timelinePanelOpen: isTimelinePanelOpen(),
+    timelineDomPresent: !!document.querySelector(".gg-timeline")?.isConnected,
+  });
+  if (!allowed) return;
+  e.preventDefault();
+  e.stopPropagation();
+  toggleTimelinePanel();
 }
 
 /** Open Timeline when Shots becomes visible; close when Shots sidebar deactivates (if Timeline tab is active). */
@@ -3305,7 +3442,7 @@ function bindShotsTabActivated(hostEl, onCleanup) {
     const r = hostEl.getBoundingClientRect();
     const shown = r.width > 0 && r.height > 0 && hostEl.offsetParent !== null;
     if (shown && !wasShown) {
-      openTimelinePanel();
+      openTimelinePanelIfAllowed();
       syncProgressWireState();
     } else if (wasShown && !shown && !shotsSidebarActive()) closeTimelinePanel();
     wasShown = shown;
@@ -3984,6 +4121,7 @@ function mountShots(el) {
         </label>
         <span class="gg-sdk-slot"></span>
         <span class="gg-other-chip" hidden title="Not started from a Gonggan cut"></span>
+        <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
       </div>
       ${state.error ? `<div class="gg-error">${esc(state.error)}</div>` : ""}
@@ -4079,13 +4217,18 @@ function mountShots(el) {
     root.querySelectorAll(".gg-final-item").forEach((li) => {
       li.addEventListener("click", () => {
         selectCut(li.dataset.cutId);
-        openTimelinePanel();
+        openTimelinePanelIfAllowed();
         paintSelection(root);
         paintPanel();
       });
     });
     root.querySelector(".gg-trash-btn")?.addEventListener("click", () => openTrashModal());
     syncTrashButton(root);
+    syncTimelineToggleButtons();
+    root.querySelector(".gg-timeline-toggle")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleTimelinePanel();
+    });
     root.querySelector(".gg-scene-add")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-group")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-ungroup")?.addEventListener("click", () => ungroupCuts(cutSelIds()));
@@ -4109,7 +4252,8 @@ function mountShots(el) {
         const id = li.dataset.cutId;
         if (e.shiftKey) selectCut(id, { range: true });
         else selectCut(id, { multi: e.ctrlKey || e.metaKey });
-        openTimelinePanel();
+        openTimelinePanelIfAllowed();
+        if (isTimelinePanelOpen()) scheduleRestoreTimelinePanelHeight();
         paintSelection(root);
         paintPanel();
       });
@@ -4471,6 +4615,7 @@ function wireViewerMedia(vid, next, blank) {
 }
 
 function paintHead() {
+  if (!document.querySelector(".gg-timeline")?.isConnected) return;
   const total = totalSec();
   document.querySelectorAll(".gg-timeline .gg-head-line").forEach((h) => { h.style.left = play.t * ed.px + "px"; });
   document.querySelectorAll(".gg-timeline .gg-clock").forEach((el) => { el.textContent = `${fmtClock(play.t)} / ${fmtClock(total)}`; });
@@ -4774,10 +4919,11 @@ function mountTimeline(el) {
   // The panel host has no definite height; size the root from it so the viewer can fill the panel.
   const host = el.parentElement || el;
   const fit = () => {
-    const h = host.clientHeight || el.clientHeight;
+    const raw = host.clientHeight || el.clientHeight;
+    const h = raw > 60 ? Math.max(raw, TIMELINE_MIN_HEIGHT) : raw;
     if (h > 60) root.style.height = h + "px";
     const scr = root.querySelector(".gg-screen");
-    const w = Math.max(200, Math.min(host.clientWidth * 0.4, ((h || 220) - 46) * 16 / 9));
+    const w = Math.max(200, Math.min(host.clientWidth * 0.4, ((h || TIMELINE_MIN_HEIGHT) - 46) * 16 / 9));
     if (scr) { scr.style.width = Math.round(w) + "px"; scr.style.height = Math.round(w * 9 / 16) + "px"; }
   };
   const ro = window.ResizeObserver ? new ResizeObserver(fit) : null;
@@ -5031,6 +5177,16 @@ app.registerExtension({
     globalThis.__gongganReloadShotsData = () => loadProjects();
     setupTabLabels();
     setupWipPeriodicAutosave();
+    window.addEventListener("keydown", onTimelineToggleKey, true);
+    if (!loadTimelineOpen(localStorage)) {
+      queueMicrotask(() => {
+        if (isTimelinePanelOpen()) closeTimelinePanel();
+        syncTimelineToggleButtons();
+      });
+    } else {
+      syncTimelineToggleButtons();
+    }
+    requestAnimationFrame(startTimelineHeightObserver);
     let lastShotTabActive = isGongganShotTabOpenAndActive();
     setInterval(() => {
       const active = isGongganShotTabOpenAndActive();

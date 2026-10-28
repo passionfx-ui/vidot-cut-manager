@@ -11,6 +11,8 @@
 /* Shots sidebar */
 .gg-shots { display: flex; flex-direction: column; overflow: hidden; position: relative; }
 .gg-shots .gg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; border-bottom: 1px solid var(--gg-line); }
+.gg-shots .gg-head .gg-timeline-toggle { margin-left: auto; flex-shrink: 0; }
+.gg-shots .gg-head .gg-timeline-toggle.gg-on { background: var(--gg-acc); color: #1a1a1a; border-color: var(--gg-acc); }
 .gg-shots .gg-tpl-wrap { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--gg-muted, #888); }
 .gg-shots .gg-tpl-select { max-width: 11rem; font-size: 11px; padding: 2px 4px; }
 .gg-shots .gg-proj { flex: 1 1 100%; min-width: 0; background: var(--gg-panel); color: var(--gg-fg); border: 1px solid var(--gg-line); border-radius: 4px; padding: 3px 4px; }
