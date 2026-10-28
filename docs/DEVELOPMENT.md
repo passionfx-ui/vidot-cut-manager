@@ -51,7 +51,7 @@ Routes:
 - `POST /gonggan/template` `{pid, ref}` (`ref` `""` clears; legacy `{pid, workflow}` still writes a full graph)
 - `POST /gonggan/cut/add` `{pid, group?, after?}` → `{ok, cut, template_copied, timeline}`
 - `GET /gonggan/version-workflow?pid=&cut=&vid=` → stored record for one version
-- `GET /gonggan/cut-source-workflow?pid=&cut=` → `{ok, source, workflow, kind}` (`stored`|`template`|`draft`|null)
+- `GET /gonggan/cut-source-workflow?pid=&cut=` → `{ok, source, workflow, kind}` (`stored`|`template`|`draft`|null). Native projects also accept optional `kind=image|video` (explicit Image/Video mode or REP kind from the client) and return `kind_used` plus `fallback` (English toast detail when a lower-priority source was opened).
 - `POST /gonggan/wfstore/backfill` `{pid?, dry_run?}` → `{ok, counts}`
 
 ## Install (dev)
@@ -129,7 +129,7 @@ Also run `node --check web/gonggan.js` and `node --check web/gg_progress_core.js
 ## Auto-save on cut switch (0.8.1)
 Switching to another shot while the Gonggan workflow tab has unsaved edits **auto-saves** via ComfyUI’s workflow store (same as Ctrl+S) instead of a blocking confirm. If save fails, the switch is cancelled and the tab is left unchanged. Logic: `web/gg_autosave_core.js`.
 
-While the Gonggan shot tab is active and modified, the same save path runs at most every **2 s** (1 s poll), on **tab hide** (`visibilitychange` / `pagehide`), and still on **cut switch**. Each save stamps `extra.ggWip` (`web/gg_wip_core.js`) so reload can restore the working copy only when pick/version state matches. Opening a shot tries `workflows/gonggan/<projectId>/<cutId>.json` before embedded PNG workflow (picked image `workflow` chunk via `web/gg_wf_source_core.js`) and server cut-source paths.
+While the Gonggan shot tab is active and modified, the same save path runs at most every **2 s** (1 s poll), on **tab hide** (`visibilitychange` / `pagehide`), and still on **cut switch**. Each save stamps `extra.ggWip` (`web/gg_wip_core.js`) so reload can restore the working copy only when pick/version state matches. Opening a shot tries `workflows/gonggan/<projectId>/<cutId>.json` before embedded PNG workflow (picked image `workflow` chunk via `web/gg_wf_source_core.js`, only when the effective kind is image) and **GET** `/gonggan/cut-source-workflow` (native: version workflow by REP/switch kind, with `fallback` in the toast when a substitute source was used). Changing **Rep** on the cut whose workflow is open reloads the owned tab after autosave (`web/gg_rep_wf_core.js`; tests `tests/js/rep_wf_core.test.mjs`, `tests/test_cut_source_workflow.py`). E2E `tests/e2e/rep_workflow_test.mjs` is optional (needs ComfyUI restart for the new query param).
 
 **Edited marker (`*`):** When widget values differ from the baseline captured at load, `localStorage` key `gg.edited` stores `{cutId: cutBaseKey}` (`web/gg_wf_source_core.js`). The star appears on the cut card title, timeline clip label, Info panel header, and shot tab label; it clears automatically when `cutBaseKey` changes (new pick/version). Unit tests: `tests/js/wf_source_core.test.mjs`. E2E: `tests/e2e/wf_marker_test.mjs` (blocks `/prompt` and `/gonggan/regen`).
 
