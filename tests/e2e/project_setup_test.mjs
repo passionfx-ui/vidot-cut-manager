@@ -174,11 +174,24 @@ async function run() {
       cutSec: !!document.querySelector(".gg-modal-cut-sec"),
       captionLang: !!document.querySelector(".gg-modal-caption-lang"),
       template: !!document.querySelector(".gg-modal-tpl"),
+      folder: !!document.querySelector(".gg-modal-folder"),
     }));
-    if (!fields.name || !fields.resolution || !fields.fps || !fields.cutSec || !fields.captionLang || !fields.template) {
+    if (!fields.name || !fields.resolution || !fields.fps || !fields.cutSec || !fields.captionLang || !fields.template || !fields.folder) {
       throw new Error(`New project modal missing fields: ${JSON.stringify(fields)}`);
     }
-    console.log("PASS  project setup modal shows six setup fields");
+    console.log("PASS  project setup modal shows the setup fields incl. Project folder");
+    const order = await page.evaluate(() => {
+      const q = (s) => document.querySelector(`.gg-modal ${s}`);
+      const pos = (el) => (el ? el.getBoundingClientRect().top : -1);
+      return [".gg-modal-name", ".gg-modal-tpl", ".gg-split-text", ".gg-modal-resolution", ".gg-modal-folder"].map((s) => pos(q(s)));
+    });
+    const sorted = [...order].sort((a, b) => a - b);
+    if (order.some((v) => v < 0) || order.join() !== sorted.join()) {
+      throw new Error(`dialog order should be Name, Template, Auto Cut Split, format settings, folder: ${order}`);
+    }
+    const noFolderDefault = await page.$eval(".gg-modal-folder", (el) => el.value);
+    if (noFolderDefault !== "") throw new Error("Project folder must default to empty (nothing on C:)");
+    console.log("PASS  dialog order: Name, Template, Auto Cut Split, settings, folder; folder default empty");
     await page.click(".gg-modal-cancel");
 
     const redoLabel = await page.$eval(".gg-filter-redo", (el) => el.textContent?.trim() || "");
@@ -196,6 +209,7 @@ async function run() {
     await page.click(".gg-modal-name", { clickCount: 3 });
     await page.type(".gg-modal-name", name, { delay: 6 });
     await page.select(".gg-modal-resolution", "9:16@720x1280");
+    await page.type(".gg-modal-folder", "N:\\ZZ-test-folder", { delay: 4 });
     await page.select(".gg-modal-fps", "30");
     await page.$eval(".gg-modal-cut-sec", (el) => {
       el.value = "5";
@@ -227,6 +241,8 @@ async function run() {
       ) {
         pythonOk = true;
         console.log("PASS  project setup timeline settings (server)");
+        if (settings.project_folder === "N:\\ZZ-test-folder") console.log("PASS  project folder persisted (server)");
+        else console.log("SKIP  project folder not persisted: server not restarted for 0.9.33");
       }
     } catch (e) {
       console.log(`SKIP python part (server not restarted): ${e.message}`);

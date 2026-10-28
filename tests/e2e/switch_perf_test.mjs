@@ -383,8 +383,17 @@ async function rightClickEmptyShots(page) {
 
 async function clickCutById(page, cutId) {
   const sel = `.gg-root.gg-shots .gg-cut[data-cut-id="${cutId}"]`;
-  await page.waitForSelector(sel, { timeout: 15000 });
-  await page.click(sel);
+  // The list may re-render between locating and clicking the card (stale handle): retry, same real mouse click.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await page.waitForSelector(sel, { timeout: 15000 });
+    try {
+      await page.click(sel);
+      return;
+    } catch (e) {
+      if (!/detached|not clickable|not visible/i.test(String(e?.message || e)) || attempt === 3) throw e;
+      await sleep(150);
+    }
+  }
 }
 
 async function timelineCutsSorted(page, pid) {

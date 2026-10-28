@@ -491,6 +491,9 @@ function projectSetupFieldsHtml() {
       </label>
       <label class="gg-modal-field">Caption language
         <select class="gg-modal-caption-lang">${langOpts}</select>
+      </label>
+      <label class="gg-modal-field">Project folder (optional)
+        <input type="text" class="gg-modal-folder" maxlength="260" spellcheck="false" placeholder="e.g. N:\Projects\My Film" />
       </label>`;
 }
 
@@ -500,6 +503,8 @@ function applyProjectSetupToModal(wrap, settings) {
   const fpsSel = wrap.querySelector(".gg-modal-fps");
   const cutIn = wrap.querySelector(".gg-modal-cut-sec");
   const langSel = wrap.querySelector(".gg-modal-caption-lang");
+  const folderIn = wrap.querySelector(".gg-modal-folder");
+  if (folderIn) folderIn.value = s.project_folder || "";
   if (resSel) resSel.value = presetKeyForSettings(s);
   if (fpsSel) fpsSel.value = String(s.fps);
   if (cutIn) cutIn.value = String(s.cut_seconds);
@@ -517,6 +522,7 @@ function readProjectSetupFromModal(wrap, base) {
     cutIn?.value,
     langSel?.value,
     base,
+    wrap.querySelector(".gg-modal-folder")?.value ?? "",
   );
 }
 
@@ -535,7 +541,6 @@ function openNewProjectModal() {
     <form class="gg-modal" role="dialog" aria-label="New project">
       <h3 class="gg-modal-title">New Project</h3>
       <label class="gg-modal-field">Name <input type="text" class="gg-modal-name" required maxlength="120" /></label>
-      ${projectSetupFieldsHtml()}
       <label class="gg-modal-field">Template
         <input type="search" class="gg-modal-tpl-filter" placeholder="Filter templates..." autocomplete="off" />
         <span class="gg-modal-tpl-hint" aria-live="polite"></span>
@@ -548,6 +553,7 @@ function openNewProjectModal() {
         <textarea class="gg-split-text" rows="6" spellcheck="false" aria-label="Auto Cut Split result"></textarea>
         <span class="gg-split-preview" aria-live="polite"></span>
       </div>
+      ${projectSetupFieldsHtml()}
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
         <button type="submit" class="gg-btn gg-primary gg-modal-create">Create</button>

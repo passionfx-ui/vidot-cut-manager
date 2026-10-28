@@ -403,6 +403,8 @@
 .gg-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .gg-ask-dialog .gg-ask-ok:disabled { opacity: 0.45; cursor: not-allowed; }
 .gg-root .gg-primary { border-color: var(--gg-acc, #f2b84b); }
+.gg-modal { max-height: calc(100vh - 32px); overflow-y: auto; }
+.gg-modal-field input[type="text"] { width: 100%; box-sizing: border-box; }
 .gg-split { gap: 6px; }
 .gg-split-hint { font-size: 10px; line-height: 1.4; }
 .gg-split-copy { align-self: flex-start; }
