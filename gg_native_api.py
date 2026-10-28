@@ -289,7 +289,10 @@ def _workflow_from_sha(store: LocalStore, pid: str, sha: str | None) -> dict | N
 
 
 def native_cut_source_workflow(pid: str, cut_id: str, kind: str | None = None) -> dict:
-    from gg_project.cut_source import normalize_media_kind, resolve_native_cut_source
+    try:
+        from .gg_project.cut_source import normalize_media_kind, resolve_native_cut_source
+    except ImportError:  # unittest / plain script
+        from gg_project.cut_source import normalize_media_kind, resolve_native_cut_source  # type: ignore
 
     store = native_store()
     doc = store.get_project(pid)
