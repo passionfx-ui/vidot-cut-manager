@@ -1,4 +1,4 @@
-"""Read-only access to 공간쉐어 data (data/<uid>/_workspace.json + j*_*.{png,mp4} results).
+"""Read-only access to legacy imported project data (data/<uid>/_workspace.json + j*_*.{png,mp4} results).
 
 Never writes into the data root. Pure stdlib so it can be tested outside ComfyUI.
 """
@@ -208,7 +208,7 @@ def list_projects() -> dict:
     try:
         d = user_dir(s)
     except (FileNotFoundError, ValueError) as ex:
-        # No 공간쉐어 data configured: native (pack-local) projects still work.
+        # No legacy imported data configured: native (pack-local) projects still work.
         return {"ok": True, "uid": s.get("uid"), "active_project_id": None, "projects": [],
                 "legacy_unavailable": str(ex)}
     ws = _load_workspace(d)
@@ -372,7 +372,7 @@ def _scene_id_of(cut: dict) -> str:
 
 
 def default_groups_from_cuts(src_cuts: list) -> list:
-    """Initial scene groups from 공간쉐어 cut.scene / cut.scene_id (consecutive runs)."""
+    """Initial scene groups from legacy imported cut.scene / cut.scene_id (consecutive runs)."""
     groups: list = []
     cur: dict | None = None
     for c in src_cuts:
@@ -515,7 +515,7 @@ def timeline(pid: str) -> dict | None:
                  "height": v.get("height")} for v in _versions_of(c, by_cut, jobs)]
         cur_in, cur_sec = clamp_clip(kind, cur_in, cur_sec, src_dur)
         base.append({
-            "index": i,                       # position in 공간쉐어 order
+            "index": i,                       # position in imported project order
             "id": c.get("id"),
             "name": c.get("name") or "",
             "scene": c.get("scene") or "",
@@ -905,7 +905,7 @@ def new_group_id() -> str:
 
 
 def reset_edit(pid: str) -> dict | None:
-    """Back to 공간쉐어 order/trims. The old edit is kept as edit_<pid>.reset-<ts>.json (reversible)."""
+    """Back to imported project order/trims. The old edit is kept as edit_<pid>.reset-<ts>.json (reversible)."""
     import time
     f = _edit_file(pid)
     if f.is_file():
@@ -914,7 +914,7 @@ def reset_edit(pid: str) -> dict | None:
 
 
 def media_path(job_id: str) -> Path | None:
-    """Resolve a result file by id: 공간쉐어 job ids under <data_root>/<uid>/, version ids under versions/."""
+    """Resolve a result file by id: legacy imported job ids under <data_root>/<uid>/, version ids under versions/."""
     if isinstance(job_id, str) and VER_ID_RE.fullmatch(job_id):
         v = _load_versions().get(job_id)
         if not v:

@@ -1,4 +1,4 @@
-"""Fresh installs without legacy (gonggan-share) data must still list projects."""
+"""Fresh installs without legacy imported project data must still list projects."""
 from __future__ import annotations
 
 import sys

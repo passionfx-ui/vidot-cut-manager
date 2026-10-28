@@ -359,7 +359,7 @@ def maybe_save_for_new_version(
 
 
 def _main() -> int:
-    parser = argparse.ArgumentParser(description="Gonggan per-version workflow store")
+    parser = argparse.ArgumentParser(description="Shots per-version workflow store")
     sub = parser.add_subparsers(dest="cmd")
     bf = sub.add_parser("backfill", help="Backfill workflow JSON from version PNG metadata")
     bf.add_argument("--dry-run", action="store_true", help="Report counts only; do not write files")
