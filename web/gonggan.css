@@ -40,7 +40,6 @@
   display: flex; gap: 8px; align-items: center; padding: 4px; border-radius: 6px; cursor: pointer; border: 1px solid transparent;
   -webkit-user-drag: none; user-drag: none; user-select: none;
 }
-.gg-shots .gg-cut textarea.gg-info-notes.gg-field-editing,
 .gg-shots .gg-cut textarea.gg-caption-text.gg-field-editing,
 .gg-shots .gg-cut input,
 .gg-shots .gg-cut select { user-select: text; }
@@ -206,7 +205,6 @@
 .gg-shots .gg-list-toggle .gg-btn { font-size: 10px; padding: 2px 6px; }
 .gg-shots .gg-list-toggle .gg-btn.gg-on { background: var(--gg-acc); color: #1a1a1a; }
 .gg-shots .gg-cut { align-items: flex-start; }
-.gg-shots .gg-info-notes,
 .gg-shots .gg-caption-text {
   width: 100%;
   box-sizing: border-box;
@@ -220,21 +218,21 @@
   border-radius: 4px;
   padding: 2px 4px;
 }
-.gg-shots .gg-info-notes.gg-field-editing:focus,
 .gg-shots .gg-caption-text.gg-field-editing:focus { border-color: var(--gg-acc); outline: none; }
-.gg-shots .gg-info-notes:not(.gg-field-editing):not(:disabled),
 .gg-shots .gg-caption-text:not(.gg-field-editing):not(:disabled) {
   cursor: default;
 }
-.gg-shots .gg-info-notes:not(.gg-field-editing):not(:disabled):hover,
 .gg-shots .gg-caption-text:not(.gg-field-editing):not(:disabled):hover {
   border-color: #4a5568;
 }
-.gg-shots .gg-info-notes.gg-field-editing,
 .gg-shots .gg-caption-text.gg-field-editing { cursor: text; }
 .gg-shots .gg-field-unsaved { border-style: dashed; }
-.gg-shots .gg-info-notes:disabled,
 .gg-shots .gg-caption-text:disabled { opacity: 0.55; }
+.gg-shots:not(.gg-list-caption) .gg-caption-text:not(.gg-field-editing) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .gg-shots.gg-list-caption .gg-caption-text {
   min-height: 4.6em;
   max-height: clamp(6em, 45vh, 70em);
@@ -256,6 +254,7 @@
 .gg-shots .gg-final-meta { min-width: 0; flex: 1; }
 .gg-shots .gg-final-name { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gg-shots .gg-final-sub { font-size: 10px; color: var(--gg-dim); }
+.gg-shots .gg-final-cap { font-size: 10px; color: var(--gg-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gg-shots .gg-final-total { font-size: 10px; margin-top: 8px; color: var(--gg-fg); font-variant-numeric: tabular-nums; }
 .gg-shots .gg-final-miss { font-size: 10px; color: var(--gg-dim); margin-top: 4px; }
 .gg-shots .gg-cut-fields { display: grid; gap: 4px; margin: 4px 0 0; font-size: 11px; }

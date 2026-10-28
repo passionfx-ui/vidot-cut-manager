@@ -172,12 +172,13 @@ async function run() {
       resolution: !!document.querySelector(".gg-modal-resolution"),
       fps: !!document.querySelector(".gg-modal-fps"),
       cutSec: !!document.querySelector(".gg-modal-cut-sec"),
+      captionLang: !!document.querySelector(".gg-modal-caption-lang"),
       template: !!document.querySelector(".gg-modal-tpl"),
     }));
-    if (!fields.name || !fields.resolution || !fields.fps || !fields.cutSec || !fields.template) {
+    if (!fields.name || !fields.resolution || !fields.fps || !fields.cutSec || !fields.captionLang || !fields.template) {
       throw new Error(`New project modal missing fields: ${JSON.stringify(fields)}`);
     }
-    console.log("PASS  project setup modal shows five setup fields");
+    console.log("PASS  project setup modal shows six setup fields");
     await page.click(".gg-modal-cancel");
 
     const redoLabel = await page.$eval(".gg-filter-redo", (el) => el.textContent?.trim() || "");
@@ -246,9 +247,10 @@ async function run() {
       resolution: !!document.querySelector(".gg-modal-resolution"),
       fps: !!document.querySelector(".gg-modal-fps"),
       cutSec: !!document.querySelector(".gg-modal-cut-sec"),
+      captionLang: !!document.querySelector(".gg-modal-caption-lang"),
       template: !!document.querySelector(".gg-modal-tpl"),
     }));
-    if (!settingsFields.name || !settingsFields.resolution) {
+    if (!settingsFields.name || !settingsFields.resolution || !settingsFields.captionLang) {
       throw new Error("Project settings dialog incomplete");
     }
     console.log("PASS  project setup settings dialog");
