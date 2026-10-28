@@ -652,7 +652,10 @@ async function main() {
     const info = await page.evaluate(() => {
       const ws = window.app?.extensionManager?.workflow;
       const active = ws?.activeWorkflow;
-      const base = active?.filename || String(active?.path || "").replace(/^.*\//, "");
+      const tabEls = [...document.querySelectorAll('[data-testid="workflow-tab"]')];
+      const activeEl = tabEls.find((el) => /active|selected|p-tab-active/.test(el.className + " " + (el.getAttribute("aria-selected") || ""))) || tabEls[tabEls.length - 1];
+      // 0.9.18: file name is the stable cutId; the human-readable name is the displayed tab label.
+      const base = activeEl?.querySelector(".workflow-label")?.textContent?.trim() || active?.filename || "";
       const nameEl = document.querySelector(".gg-root.gg-shots .gg-cut .gg-cut-title");
       const raw = nameEl?.textContent?.replace(/^\d+\s*/, "").trim() || "";
       return { tab: base, cutName: raw };
