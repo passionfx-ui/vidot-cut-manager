@@ -236,6 +236,7 @@ async function run() {
       if (poster.status !== 200 || !/^image\//.test(poster.type) || poster.size < 500) throw new Error(`poster: ${JSON.stringify(poster)}`);
       if (tl.cuts.length !== 4) throw new Error("send-output on a reference changed the cut count");
       await openShotsTab(page);
+      await page.waitForFunction((p) => [...document.querySelectorAll(".gg-root.gg-shots .gg-proj option")].some((o) => o.value === p), { timeout: 15000 }, pid);
       await page.select(".gg-root.gg-shots .gg-proj", pid);
       await sleep(1500);
       await page.evaluate(() => {
