@@ -66,6 +66,32 @@ function assertSafePathSegment(segment, label) {
 }
 
 /**
+ * Sanitize a project or cut id for use as a single path segment (deterministic).
+ * @param {string} id
+ * @returns {string}
+ */
+export function sanitizeWorkflowIdSegment(id) {
+  const s = String(id ?? "").trim();
+  if (!s) throw new Error("invalid id segment");
+  if (/^[A-Za-z0-9_-]+$/.test(s)) return s;
+  const cleaned = s.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!cleaned) throw new Error("invalid id segment after sanitize");
+  return cleaned;
+}
+
+/**
+ * Stable shot tab copy path keyed by project and cut ids (one file per cut).
+ * @param {{ projectId: string, cutId: string }} opts
+ * @returns {string} e.g. gonggan/<projectId>/<cutId>.json
+ */
+export function shotWorkflowRelPathById(opts) {
+  const { projectId, cutId } = opts || {};
+  const folder = assertSafePathSegment(sanitizeWorkflowIdSegment(projectId), "project id");
+  const file = assertSafePathSegment(`${sanitizeWorkflowIdSegment(cutId)}.json`, "cut file");
+  return `${GONGGAN_PREFIX}/${folder}/${file}`;
+}
+
+/**
  * @param {{ projectName?: string, projectId?: string, cutName?: string, cutNumber?: number }} opts
  * @returns {string} e.g. gonggan/my-project/cut1.json
  */

@@ -1,7 +1,7 @@
 /**
  * Headless Chrome: single Gonggan shot tab + display-only Project / Cut labels (0.8.4).
  */
-import { shotWorkflowRelPath } from "../../web/gg_shot_names.js";
+import { shotWorkflowRelPathById } from "../../web/gg_shot_names.js";
 import { formatShotTabLabel } from "../../web/gg_tab_label_core.js";
 
 // Expected tab text goes through the same length budget as the plugin (long project names are shortened).
@@ -418,15 +418,12 @@ function normWorkflowRelPath(p) {
     .replace(/^workflows\//, "");
 }
 
-/** True for paths under gonggan/<folder>/… where folder is this run's ZZ-tablabel-* test project. */
-function isRunZzGongganPath(p) {
+/** True for paths under gonggan/<projectId>/… for projects created in this run. */
+function isRunGongganPath(p) {
   const norm = normWorkflowRelPath(p);
   const m = norm.match(/^gonggan\/([^/]+)(?:\/|$)/);
   if (!m) return false;
-  const folder = m[1];
-  if (!folder.startsWith("ZZ-")) return false;
-  const stamp = String(runStamp);
-  return folder === `ZZ-tablabel-${stamp}` || folder === `ZZ-tablabel-${stamp}-Renamed`;
+  return createdProjectIds.includes(m[1]);
 }
 
 async function cleanupNewWorkflows(page) {
@@ -437,7 +434,7 @@ async function cleanupNewWorkflows(page) {
   const created = [];
   for (const p of afterList) {
     const n = normalize(p);
-    if (!before.has(n) && isRunZzGongganPath(n)) created.push(n);
+    if (!before.has(n) && isRunGongganPath(n)) created.push(n);
   }
   for (const p of created.sort((a, b) => b.length - a.length)) {
     try {
@@ -455,7 +452,7 @@ async function cleanupNewWorkflows(page) {
   }
   for (const d of [...dirs].sort((a, b) => b.length - a.length)) {
     if (!d.startsWith("gonggan/")) continue;
-    if (!isRunZzGongganPath(`${d}/`)) continue;
+    if (!isRunGongganPath(`${d}/`)) continue;
     const enc = encodeURIComponent(d);
     await page.evaluate(async (pathEnc) => {
       await fetch(`${location.origin}/api/userdata/${pathEnc}`, { method: "DELETE" });
@@ -465,7 +462,7 @@ async function cleanupNewWorkflows(page) {
   afterList = await fetchWorkflowPaths(page);
   for (const p of afterList) {
     const n = normalize(p);
-    if (!before.has(n) && isRunZzGongganPath(n)) {
+    if (!before.has(n) && isRunGongganPath(n)) {
       try {
         await deleteWorkflowFile(page, n);
       } catch (e) {
@@ -574,12 +571,7 @@ async function main() {
     const st = await getWorkflowTabState(page);
     const hasLabel = st.labels.some((l) => l === expected);
     if (!hasLabel) throw new Error(`label "${expected}" not in [${st.labels.join(", ")}]`);
-    const rel = shotWorkflowRelPath({
-      projectName,
-      projectId: pid,
-      cutName: c.name,
-      cutNumber: (c.pos ?? c.index ?? 0) + 1,
-    });
+    const rel = shotWorkflowRelPathById({ projectId: pid, cutId: c.id });
     const base = rel.replace(/^.*\//, "");
     if (!st.activeFilename.includes(base.replace(/\.json$/i, "")) && st.activeFilename !== base) {
       if (!st.activePath.includes(base.replace(/\.json$/, ""))) {
