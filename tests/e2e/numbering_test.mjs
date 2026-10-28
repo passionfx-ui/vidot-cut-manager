@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
 import { submitAskDialog } from "./ask_text_helpers.mjs";
+import { waitForDomCutCountSync } from "./dom_sync_helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -159,6 +160,7 @@ async function createProjectViaUi(page, name) {
   );
   const pid = await page.$eval(".gg-root.gg-shots .gg-proj", (sel) => sel.value);
   if (pid) createdProjectIds.push(pid);
+  await waitForDomCutCountSync(page);
   return pid;
 }
 
@@ -252,6 +254,7 @@ async function main() {
     while ((await countCuts(page)) < 4) {
       await rightClickEmptyShots(page);
       await clickCtxItem(page, "Add Cut");
+    await waitForDomCutCountSync(page);
       await sleep(500);
     }
 
