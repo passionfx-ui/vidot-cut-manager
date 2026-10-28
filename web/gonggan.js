@@ -40,6 +40,13 @@ import {
 } from "./gg_autosave_core.js";
 import { cutBaseKey, stampWip, shouldRestoreWip } from "./gg_wip_core.js";
 import {
+  extractPngWorkflow,
+  isCutEdited,
+  loadEditedMap,
+  saveEditedMap,
+  widgetValuesDiffer,
+} from "./gg_wf_source_core.js";
+import {
   shotWorkflowRelPathById,
   shouldSkipShotWorkflowReload,
   gongganExtraProjectId,
@@ -638,6 +645,65 @@ const GG_WIP_AUTOSAVE_MIN_MS = 2000;
 let ggWipLastAutosaveAt = 0;
 let ggWipAutosaveRunning = false;
 let ggWipLastFailToastAt = 0;
+/** @type {string|null} */
+let ggWorkflowBaselineCutId = null;
+/** @type {object|null} */
+let ggWorkflowBaseline = null;
+
+function ggEditedStorageMap() {
+  return loadEditedMap(localStorage);
+}
+
+function cutShowsEditedMarker(cut) {
+  if (!cut?.id) return false;
+  return isCutEdited(ggEditedStorageMap(), cut.id, cutBaseKey(cut));
+}
+
+function displayCutName(c) {
+  const base = c?.name || "(untitled)";
+  return cutShowsEditedMarker(c) ? `${base} *` : base;
+}
+
+function markCutEditedInStorage(cut) {
+  if (!cut?.id) return;
+  const map = ggEditedStorageMap();
+  map[cut.id] = cutBaseKey(cut);
+  saveEditedMap(localStorage, map);
+  bus.dispatchEvent(new Event("timeline"));
+  scheduleTabLabelRefresh();
+}
+
+function rememberWorkflowBaselineForCut(cutId, workflowJson) {
+  ggWorkflowBaselineCutId = cutId || null;
+  ggWorkflowBaseline = workflowJson && typeof workflowJson === "object" ? workflowJson : null;
+}
+
+function captureGraphWorkflowSnapshot() {
+  try {
+    if (!app.graph || typeof app.graph.serialize !== "function") return null;
+    return app.graph.serialize();
+  } catch {
+    return null;
+  }
+}
+
+function rememberWorkflowBaselineFromActiveGraph(cutId) {
+  const snap = captureGraphWorkflowSnapshot();
+  if (snap) rememberWorkflowBaselineForCut(cutId, snap);
+}
+
+function syncEditedMarkerBeforeSave(cutId, cutRec) {
+  const cut = cutRec || cutById(cutId);
+  if (!cut?.id || cutId !== ggWorkflowBaselineCutId || !ggWorkflowBaseline) return;
+  const current = captureGraphWorkflowSnapshot();
+  if (!current) return;
+  // Only the graph that actually belongs to this cut counts (a graph mid-switch is empty or another cut's).
+  if (!Array.isArray(current.nodes) || !current.nodes.length) return;
+  if (app.graph?.extra?.gonggan?.cutId !== cutId) return;
+  if (widgetValuesDiffer(ggWorkflowBaseline, current)) {
+    markCutEditedInStorage(cut);
+  }
+}
 let ggToastTimer = 0;
 let trashCount = 0;
 let trashRefreshTimer = 0;
@@ -837,6 +903,8 @@ async function runGongganWipAutosave(opts = {}) {
 
   ggWipAutosaveRunning = true;
   try {
+    const resolved = resolveWorkflowCutForWip(wf);
+    if (resolved) syncEditedMarkerBeforeSave(resolved.cutId, resolved.cut);
     applyWipStampForWorkflow(wf);
     const deps = buildAutosaveDeps();
     if (typeof deps.saveWorkflow !== "function") throw new Error("saveWorkflow unavailable");
@@ -890,6 +958,7 @@ async function tryRestoreCutWorkingCopy(cutId, cutRec, loadToken) {
     wfLastLoadedCutId = cutId;
     wfLastLoadedProjectId = state.pid;
     markGraphGongganCut(cutId);
+    rememberWorkflowBaselineFromActiveGraph(cutId);
     sdk.msg = `Canvas: ${shotTitle(cut)} (restored edits)`;
     bus.dispatchEvent(new Event("sdk"));
     bus.dispatchEvent(new Event("gg-opentab"));
@@ -904,6 +973,10 @@ async function tryRestoreCutWorkingCopy(cutId, cutRec, loadToken) {
 async function prepareGongganShotTabReplace() {
   const tabs = collectGongganShotTabs();
   if (tabs.some((w) => w.isModified)) {
+    for (const w of tabs) {
+      const resolved = resolveWorkflowCutForWip(w);
+      if (resolved) syncEditedMarkerBeforeSave(resolved.cutId, resolved.cut);
+    }
     for (const w of tabs) applyWipStampForWorkflow(w);
     const deps = buildAutosaveDeps();
     if (typeof deps.saveWorkflow !== "function") {
@@ -1030,6 +1103,7 @@ function resolveShotTabLabel(wf) {
     projectName,
     cutName: c.name,
     cutNumber: pos != null ? pos + 1 : undefined,
+    edited: cutShowsEditedMarker(c),
   });
   if (label) wf.ggTabLabelCache = label;
   return label;
@@ -1230,6 +1304,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut) {
   }
   scheduleTabLabelRefresh();
   scheduleLoadImageScan({ debounceMs: 200 });
+  if (cut?.id) rememberWorkflowBaselineFromActiveGraph(cut.id);
   return true;
 }
 
@@ -1363,6 +1438,35 @@ const CUT_WORKFLOW_SOURCES = [
   ...LEGACY_CUT_WORKFLOW_SOURCES,
 ];
 
+async function tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken) {
+  const cut = cutRec || cutById(cutId);
+  if (!cut?.media || cut.media.kind === "video") return false;
+  try {
+    const res = await api.fetchApi(`/gonggan/media?id=${encodeURIComponent(cut.media.id)}`);
+    if (!res.ok) return false;
+    const buf = await res.arrayBuffer();
+    const wf = extractPngWorkflow(buf);
+    if (!wf || !isUiWorkflowGraph(wf)) return false;
+    if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
+    const loaded = await loadWorkflowIntoDedicatedTab(wf, cut);
+    if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
+    if (ggCutSwitchAutosaveBlocked) return false;
+    if (!loaded) return false;
+    wfLastLoadedCutId = cutId;
+    wfLastLoadedProjectId = state.pid;
+    markGraphGongganCut(cutId);
+    const title = shotTitle(cut);
+    sdk.msg = `Canvas: ${title} (embedded in result)`;
+    bus.dispatchEvent(new Event("sdk"));
+    bus.dispatchEvent(new Event("gg-opentab"));
+    ggToast("Shot", `${title} — embedded in result`, "ok");
+    return true;
+  } catch (e) {
+    console.warn("[gonggan] embedded rep workflow load failed", e);
+    return false;
+  }
+}
+
 async function loadCutWorkflow(cutId, cut, loadToken) {
   const tl = state.timeline;
   if (!tl || !cutId) return;
@@ -1372,6 +1476,7 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
   const cutRec = cut || cutById(cutId);
   const title = shotTitle(cutRec);
   if (await tryRestoreCutWorkingCopy(cutId, cutRec, loadToken)) return;
+  if (await tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken)) return;
   let lastErr = null;
   for (const src of CUT_WORKFLOW_SOURCES) {
     try {
@@ -3067,7 +3172,7 @@ function cutRowHtml(c) {
         <div class="gg-cut-header" title="${esc(nameTitle)}">
           ${isNativeProject() ? '<span class="gg-drag-handle" title="Drag to reorder (or Alt+Up/Down)" aria-hidden="true">\u22EE\u22EE</span>' : ""}
           <span class="gg-num">${formatCutNumber(c.number ?? (c.pos ?? c.index ?? 0) + 1)}</span>
-          <span class="gg-cut-title">${esc(c.name || "(untitled)")}</span>
+          <span class="gg-cut-title">${esc(displayCutName(c))}</span>
           ${verInfo.text ? `<span class="gg-cut-ver" title="${esc(verInfo.title)}">${esc(verInfo.text)}</span>` : ""}
           <span class="gg-cut-len" title="${esc(lenInfo.title)}">${esc(lenInfo.text)}</span>
           ${headerBadges ? `<span class="gg-cut-header-badges">${headerBadges}</span>` : ""}
@@ -3404,7 +3509,7 @@ function cutPanelHtml(c) {
     <header class="gg-panel-head">
       <button type="button" class="gg-panel-fold" title="Collapse or expand panel">${panelOpen ? "▾" : "▸"}</button>
       <span class="gg-num">${formatCutNumber(c.number ?? c.pos + 1)}</span>
-      <span class="gg-panel-name">${esc(c.name)}</span>
+      <span class="gg-panel-name">${esc(displayCutName(c))}</span>
       <span class="gg-panel-len">${esc(effectiveLenLabel(c))}</span>
       <span class="gg-panel-dots">${dotEnd}${dotRedo}</span>
       <div class="gg-panel-tools">
@@ -4608,7 +4713,7 @@ function mountTimeline(el) {
         ${run ? `<div class="gg-scene-band">Scene · ${esc(c.group_name)}</div>` : ""}
         ${thumbHtml(c.media, "gg-clip-thumb")}
         <span class="gg-clip-dot gg-dot-empty"></span>
-        <div class="gg-clip-label"><span class="gg-no">${c.pos + 1}</span>${esc(c.name)}</div>
+        <div class="gg-clip-label"><span class="gg-no">${c.pos + 1}</span>${esc(displayCutName(c))}</div>
         <div class="gg-clip-in">${kindOf(c) === "video" && c.in > 0 ? `in ${c.in.toFixed(1)}` : ""}</div>
         <div class="gg-clip-dur">${c.sec.toFixed(1)}s</div>
         <div class="gg-clip-prog" hidden><div class="gg-prog-bar"><div class="gg-prog-fill"></div></div></div>
