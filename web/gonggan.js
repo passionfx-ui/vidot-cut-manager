@@ -4638,7 +4638,10 @@ function mountShots(el) {
     const cutLabels = computeCutLabels(tl || { cuts: [] });
     const viewFinal = shotsUi.view === "final";
     const listCaption = normalizeListMode(shotsUi.listMode) === "caption";
-    const listHtml = sections.map((sec) => {
+    const emptyHint = tl && isNativeProject() && !tl.cuts.length
+      ? '<div class="gg-dim gg-list-empty">No cuts yet. Right-click here and choose Add Cut.</div>'
+      : "";
+    const listHtml = emptyHint || sections.map((sec) => {
       if (sec.type === "ungrouped") {
         return `<section class="gg-grp-sec gg-grp-loose"><header class="gg-grp-head">Ungrouped <span class="gg-grp-meta">${sec.cuts.length}</span></header><ol class="gg-cutlist">${sec.cuts.map((c) => cutRowHtml(c, cutLabels)).join("")}</ol></section>`;
       }
