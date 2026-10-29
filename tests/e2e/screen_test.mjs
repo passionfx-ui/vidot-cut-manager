@@ -494,7 +494,7 @@ function buildMockTimelineFirstResult(pid, stamp) {
     cuts: [
       {
         id: cutId,
-        name: "cut1",
+        name: "New cut",
         pos: 0,
         index: 0,
         sec: 3,
