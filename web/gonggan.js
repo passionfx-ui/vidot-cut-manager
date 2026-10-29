@@ -151,6 +151,7 @@ import {
   saveTimelineHeight,
   clampHeight,
   shouldIgnoreShortcut,
+  pluginKeyScopeActive,
   timelineShortcutAllowed,
   timelineToggleTooltip,
 } from "./gg_timeline_toggle_core.js";
@@ -4006,6 +4007,16 @@ function shotsSidebarActive() {
   return app.extensionManager?.sidebarTab?.activeSidebarTabId === SHOTS_TAB;
 }
 
+/** Hover flag (mouseenter/mouseleave) counts only while the element is still laid out. */
+function ggElHovered(el) {
+  return !!(el && el._ggHover && el.isConnected && el.getClientRects().length > 0);
+}
+
+function ggElHasFocus(el) {
+  const ae = document.activeElement;
+  return !!(el && ae && ae !== document.body && el.contains(ae));
+}
+
 function ggModalOpen() {
   return !!document.querySelector(".gg-modal-backdrop");
 }
@@ -4130,10 +4141,13 @@ function onTimelineToggleKey(e) {
     modalOpen: ggModalOpen(),
     promptDialogOpen: comfyPromptDialogOpen(),
   })) return;
+  const shots = [...document.querySelectorAll(".gg-root.gg-shots")];
+  const tls = [...document.querySelectorAll(".gg-timeline")];
   const allowed = timelineShortcutAllowed({
-    shotsSidebarActive: shotsSidebarActive(),
-    timelinePanelOpen: isTimelinePanelOpen(),
-    timelineDomPresent: !!document.querySelector(".gg-timeline")?.isConnected,
+    hoverShots: shots.some(ggElHovered),
+    focusShots: shots.some(ggElHasFocus),
+    hoverTimeline: tls.some(ggElHovered),
+    focusTimeline: tls.some(ggElHasFocus),
   });
   if (!allowed) return;
   e.preventDefault();
@@ -5019,14 +5033,14 @@ function mountShots(el) {
   refreshSdk(false);
   const timer = setInterval(() => refreshSdk(false), 20000);
   const onShotsKey = (e) => {
-    if (!shotsSidebarActive() && !root.isConnected) return;
+    if (e.key === "Escape" && shotsUi.dragSession) {
+      shotsUi.dragSession.cancel();
+      return;
+    }
+    if (!pluginKeyScopeActive({ hoverShots: ggElHovered(root), focusShots: ggElHasFocus(root) })) return;
     const tag = (e.target && e.target.tagName) || "";
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable) return;
     if (e.key === "Escape") {
-      if (shotsUi.dragSession) {
-        shotsUi.dragSession.cancel();
-        return;
-      }
       closeCtxMenu();
       if (state.cutSel.size) {
         state.cutSel.clear();
@@ -5068,6 +5082,8 @@ function mountShots(el) {
     if (e.target.closest(".gg-cut") || e.target.closest(".gg-grp-sec[data-group-id] .gg-grp-head")) return;
     openShotsPanelContextMenu(e);
   };
+  root.addEventListener("mouseenter", () => { root._ggHover = true; });
+  root.addEventListener("mouseleave", () => { root._ggHover = false; });
   root.addEventListener("mousedown", onShotsEmptyClick);
   root.addEventListener("contextmenu", onShotsPanelContextMenu);
   document.addEventListener("keydown", onShotsKey);
