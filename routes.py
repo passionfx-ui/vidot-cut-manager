@@ -721,8 +721,8 @@ async def gg_regen_status(request):
 
 @routes.get("/gonggan/last-output")
 async def gg_last_output(request):
-    lo = await asyncio.to_thread(gg_sdk.last_output)
-    return web.json_response({"ok": bool(lo), "output": lo})
+    info = await asyncio.to_thread(gg_sdk.last_output_info)
+    return web.json_response({"ok": bool(info["output"]), "output": info["output"], "reason": info["reason"]})
 
 
 @routes.post("/gonggan/send-output")

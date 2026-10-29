@@ -4367,7 +4367,9 @@ async function sendLastOutput(cutId) {
     const targetCut = tl.cuts.find((c) => c.id === sendId);
     const num = cutDisplayLabel(targetCut, computeCutLabels(tl));
     const name = targetCut?.name || "";
-    sdk.msg = `Added ${d.output.name} (${d.output.from}) to cut ${num}. ${name}${redirected ? " (the cut that queued it)" : ""}`;
+    const age = Number(d.output?.age_sec);
+    const ageTxt = Number.isFinite(age) ? `, made ${age < 90 ? `${Math.round(age)} s` : age < 5400 ? `${Math.round(age / 60)} min` : `${Math.round(age / 3600)} h`} ago` : "";
+    sdk.msg = `Added ${d.output.name} (${d.output.from}${ageTxt}) to cut ${num}. ${name}${redirected ? " (the cut that queued it)" : ""}`;
     await loadTimeline();
   } catch (e) {
     sdk.msg = "Send failed: " + e.message;
