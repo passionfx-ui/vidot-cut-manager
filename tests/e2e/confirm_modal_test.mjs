@@ -1,5 +1,5 @@
 /**
- * In-app confirm modal (replaces window.confirm): scene delete, timeline reset, project delete.
+ * In-app confirm modal (replaces window.confirm): scene delete and project delete (Reset is disabled on native projects).
  * Cancel / Esc / backdrop do nothing (no request), Enter or OK acts, Korean IME Enter does not confirm,
  * OK is emphasized for deletes, no native dialog ever opens. ZZ-test- projects only. Blocks POST /prompt and /gonggan/regen.
  */
@@ -243,28 +243,7 @@ async function run() {
     if (posts.groups !== 1) throw new Error(`Enter should save groups once (got ${posts.groups})`);
     console.log("PASS  scene delete: IME Enter ignored, Enter confirms and deletes the scene");
 
-    // ---- 2) timeline reset
-    await page.waitForSelector(".gg-timeline .gg-reset", { timeout: 15000 });
-    const resetBtn = async () => { await page.evaluate(() => document.querySelector(".gg-timeline .gg-reset")?.click()); };
-    await resetBtn();
-    m = await waitModal();
-    if (!m.title.startsWith("Reset this timeline to the original order and lengths?")) throw new Error(`reset wording: ${m.title}`);
-    await page.keyboard.press("Escape");
-    await noModal();
-    await resetBtn();
-    await waitModal();
-    await page.click(".gg-confirm-cancel");
-    await noModal();
-    await sleep(500);
-    if (posts.reset !== 0) throw new Error(`cancelled reset sent ${posts.reset} request(s)`);
-    await resetBtn();
-    await waitModal();
-    await page.click(".gg-confirm-ok");
-    await noModal();
-    const t1 = Date.now();
-    while (!posts.reset && Date.now() - t1 < 8000) await sleep(100);
-    if (posts.reset !== 1) throw new Error(`OK should reset once (got ${posts.reset})`);
-    console.log("PASS  timeline reset: Esc / Cancel do nothing, OK resets once");
+    // timeline Reset is disabled on native projects, so it is not reachable here (same askConfirm path).
 
     // ---- 3) delete project (ctx menu)
     const openDeleteProject = async () => {
