@@ -52,6 +52,13 @@ import {
   sceneCutIds,
   attachMenuActions,
 } from "./gg_ctx_menu_core.js";
+import {
+  regenConfirmMessage,
+  regenKnownNodeCount,
+  isRegenEmptyCut,
+  nativeRegenQueueCheck,
+  REGEN_SKIP_MESSAGE,
+} from "./gg_native_regen_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import { parseImportList, summarizeImport, buildLlmPrompt, REFERENCE_CATEGORIES } from "./gg_import_core.js";
 import {
@@ -1199,6 +1206,10 @@ let wfLastLoadedProjectId = "";
 let wfLastLoadedRepId = "";
 /** Version whose workflow was explicitly opened from its thumbnail; cleared by any other cut load. */
 let wfOpenVersion = null;
+/** `${projectId}\n${cutId}` -> graph node count when that cut was last opened or left (empty-cut Regen). */
+const ggCutGraphNodeCounts = new Map();
+/** Last prompt the api.queuePrompt patch registered to a cut. */
+let ggLastRegisteredPrompt = null;
 /** ComfyWorkflow tab last opened by Gonggan shot load (never user workflows). */
 let ggOwnedShotWorkflow = null;
 /** Paths Gonggan created/renamed this session (lowercase) -> { projectId, cutId }. */
@@ -1898,6 +1909,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   if (isLoadTokenStale(loadToken)) return false;
   const loadName = storagePath.replace(/^workflows\//, "");
   const shotMeta = { projectId: state.pid, cutId: cut?.id || "" };
+  noteLeavingCutGraphNodeCount();
   if (!(await prepareGongganShotTabReplace())) return false;
   if (isLoadTokenStale(loadToken)) return false;
   const previous = ggOwnedShotWorkflow;
@@ -2104,6 +2116,35 @@ function markWorkflowLoadComplete(cutId, cutRec, openedVid) {
   wfLastLoadedProjectId = state.pid;
   wfLastLoadedRepId = repIdOf(cutRec || cutById(cutId));
   wfOpenVersion = openedVid ? { projectId: state.pid, cutId, vid: openedVid } : null;
+  ggCutGraphNodeCounts.set(`${state.pid}\n${cutId}`, activeGraphNodeCount());
+}
+
+function activeGraphNodeCount() {
+  const g = app.graph;
+  return (g?._nodes || g?.nodes || []).length;
+}
+
+/** Live node count when the cut's graph is the active shot tab, else null. */
+function liveCutGraphNodeCount(cutId) {
+  const g = app.graph?.extra?.gonggan;
+  if (!cutId || g?.cutId !== cutId || wfLastLoadedCutId !== cutId || wfLastLoadedProjectId !== state.pid) return null;
+  if (!isGongganShotTabOpenAndActive()) return null;
+  return activeGraphNodeCount();
+}
+
+/** Remember the node count of the cut graph about to be replaced (it may have been edited since it opened). */
+function noteLeavingCutGraphNodeCount() {
+  const n = liveCutGraphNodeCount(wfLastLoadedCutId);
+  if (n !== null) ggCutGraphNodeCounts.set(`${state.pid}\n${wfLastLoadedCutId}`, n);
+}
+
+function regenEmptyCut(cutId) {
+  const c = cutById(cutId);
+  const nodeCount = regenKnownNodeCount({
+    live: liveCutGraphNodeCount(cutId),
+    remembered: ggCutGraphNodeCounts.get(`${state.pid}\n${cutId}`),
+  });
+  return isRegenEmptyCut({ versionCount: (c?.versions_list || []).length || c?.versions || 0, nodeCount });
 }
 
 async function reloadOpenCutWorkflowIfRepChanged() {
@@ -2877,12 +2918,14 @@ function selectOnlyCut(cutId) {
 }
 
 function cutMenuCtx(cutId, multi) {
+  const native = isNativeProject();
   return {
-    native: isNativeProject(),
+    native,
     multi,
     needsRedo: !!cutById(cutId)?.needs_redo,
     sdkBusy: !!sdk.busy,
     sdkOk: !!(sdk.st && sdk.st.ok),
+    emptyCut: native && regenEmptyCut(cutId),
     readonlyTip: NATIVE_READONLY_TIP,
   };
 }
@@ -2891,7 +2934,7 @@ function cutMenuActions(cutId) {
   return {
     redo: () => toggleNeedsRedo(cutId),
     rename: () => renameCut(cutId),
-    regen: () => regenCut(cutId),
+    regen: () => (isNativeProject() ? regenNativeCut(cutId) : regenCut(cutId)),
     send: () => sendLastOutput(cutId),
   };
 }
@@ -4617,6 +4660,74 @@ async function regenCut(cutId) {
   }
 }
 
+/** Resolves once no cut/version workflow load is queued or debounced. */
+async function waitCutLoadsSettled() {
+  for (;;) {
+    const seq = ggCutLoadSeq;
+    await seq;
+    if (seq === ggCutLoadSeq && !wfLoadDebounce) return;
+  }
+}
+
+function nativeRegenCheck(cutId, token) {
+  const g = app.graph?.extra?.gonggan;
+  return nativeRegenQueueCheck({
+    token,
+    currentToken: wfLoadToken,
+    cutId,
+    projectId: state.pid,
+    loadedCutId: wfLastLoadedCutId,
+    loadedProjectId: wfLastLoadedProjectId,
+    graphCutId: g?.cutId || "",
+    graphProjectId: gongganExtraProjectId(g) || "",
+    tabActive: isGongganShotTabOpenAndActive(),
+    nodeCount: activeGraphNodeCount(),
+  });
+}
+
+/**
+ * Native Regen: open the cut's current workflow through the normal cut-open path (the same cut already
+ * open is queued as is), confirm, then queue it like ComfyUI's Queue button so the prompt is tied to the cut.
+ */
+async function regenNativeCut(cutId) {
+  const cut = cutById(cutId);
+  if (!cut || !state.timeline || sdk.busy) return;
+  const title = shotTitle(cut);
+  sdk.busy = "regen";
+  bus.dispatchEvent(new Event("sdk"));
+  try {
+    selectCut(cutId);
+    const token = wfLoadToken;
+    await waitCutLoadsSettled();
+    let check = nativeRegenCheck(cutId, token);
+    if (check.ok) {
+      if (!(await askConfirm({ message: regenConfirmMessage(title) }))) {
+        sdk.msg = "Not queued (cancelled).";
+        return;
+      }
+      check = nativeRegenCheck(cutId, token);
+    }
+    if (!check.ok) {
+      sdk.msg = REGEN_SKIP_MESSAGE[check.reason];
+      ggToast("Regen", `${title} — ${sdk.msg}`, "warn");
+      return;
+    }
+    const before = ggLastRegisteredPrompt;
+    await app.queuePrompt(0, 1);
+    const reg = ggLastRegisteredPrompt;
+    if (reg && reg !== before && reg.cutId === cutId && reg.projectId === state.pid) {
+      sdk.msg = `Queued: ${title}`;
+      ggToast("Queued", title, "ok");
+    }
+  } catch (e) {
+    sdk.msg = "Regen failed: " + (e?.message || e);
+    ggToast("Regen", sdk.msg, "warn");
+  } finally {
+    sdk.busy = "";
+    bus.dispatchEvent(new Event("sdk"));
+  }
+}
+
 function readJobsList() {
   try {
     const raw = localStorage.getItem(JOBS_KEY);
@@ -6295,6 +6406,7 @@ app.registerExtension({
           if (res?.prompt_id && wfLastLoadedCutId && state.pid && isGongganShotTabOpenAndActive()) {
             progressTracker.registerPrompt(res.prompt_id, wfLastLoadedCutId, state.pid);
             persistJob(res.prompt_id, wfLastLoadedCutId, state.pid);
+            ggLastRegisteredPrompt = { promptId: res.prompt_id, cutId: wfLastLoadedCutId, projectId: state.pid };
             syncProgressWireState();
           }
         } catch (_) {}
