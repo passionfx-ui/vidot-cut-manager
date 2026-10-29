@@ -3,7 +3,9 @@
 import { clampCaptionLang } from "./gg_project_settings_core.js";
 
 /**
- * Display caption text: stored `caption`, or legacy `notes` when caption is empty (display only).
+ * Caption editor / display text: stored `caption`, or legacy `notes` when caption is empty.
+ * The editor is seeded with this, so the first caption edit saves the notes text into `caption`.
+ * `notes` is never written or cleared by the UI.
  * @param {{ caption?: string, notes?: string } | null | undefined} cut
  * @returns {string}
  */
@@ -13,6 +15,11 @@ export function effectiveCaption(cut) {
   const notes = cut?.notes;
   if (notes != null && String(notes).trim() !== "") return String(notes);
   return cap != null ? String(cap) : "";
+}
+
+/** True when editor text differs from what the card shows (seeded legacy notes alone is not an edit). */
+export function captionEditChanged(cut, text) {
+  return String(text ?? "") !== effectiveCaption(cut);
 }
 
 /** @param {unknown} captionLang */
