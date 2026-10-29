@@ -185,8 +185,17 @@ import {
   filterTemplatePaths,
   pickInitialTemplate,
   shortTemplateName,
+  templateComboItems,
   userTemplatePaths,
 } from "./gg_template_pick_core.js";
+import { comboFilter, comboActiveIndex, comboKey } from "./gg_combo_core.js";
+import {
+  folderListUrl,
+  folderListError,
+  folderPickerView,
+  folderPickTarget,
+  startPathCandidates,
+} from "./gg_folder_pick_core.js";
 import {
   isEmptyCutSourcePayload,
   resolveEmptyCutWorkflow,
@@ -674,6 +683,7 @@ function readProjectSetupFromModal(wrap, base) {
 }
 
 function closeProjectModal() {
+  closeFolderPicker();
   if (projectModalEl) {
     projectModalEl.remove();
     projectModalEl = null;
@@ -826,41 +836,220 @@ function openNewProjectModal() {
   nameIn.focus();
 }
 
-/** Template field of the Project Settings modal; a change links the template right away (no Save needed). */
+/**
+ * Default template combobox of the Project Settings modal: typing filters the list, arrows + Enter or a click pick,
+ * Escape closes. A pick links the template right away (no Save needed).
+ */
 function wireProjectTemplateField(wrap) {
-  const tplSel = wrap.querySelector(".gg-tpl-select");
-  const tplFilter = wrap.querySelector(".gg-modal-tpl-filter");
-  const tplHint = wrap.querySelector(".gg-modal-tpl-hint");
-  if (!tplSel) return;
-  const refreshOptions = () => {
-    const cur = tplSel.value || projectTemplateRef || "";
-    const q = tplFilter?.value || "";
-    tplSel.innerHTML = templateSelectOptionsHtml(q);
-    tplSel.value = cur;
-    if (tplHint) {
-      const userTotal = userTemplatePaths(userWorkflowPaths, cur).length;
-      const shown = filterTemplatePaths(userWorkflowPaths, q, cur).length;
-      if (q.trim() && userTotal) tplHint.textContent = `${shown} of ${userTotal}`;
-      else if (userTotal) tplHint.textContent = `${userTotal} templates`;
-      else tplHint.textContent = "";
+  const input = wrap.querySelector(".gg-tpl-combo");
+  const list = wrap.querySelector(".gg-tpl-list");
+  if (!input || !list) return;
+  const ui = { open: false, active: -1, items: [] };
+  const current = () => projectTemplateRef || "";
+  const showValue = () => {
+    input.value = current();
+    input.title = current() || "(none)";
+  };
+  const render = () => {
+    input.setAttribute("aria-expanded", ui.open ? "true" : "false");
+    list.hidden = !ui.open;
+    input.removeAttribute("aria-activedescendant");
+    if (!ui.open) return;
+    const cur = current();
+    list.innerHTML = ui.items.length
+      ? ui.items.map((it, i) => {
+        const cls = `gg-combo-opt${i === ui.active ? " gg-active" : ""}${it.value === cur ? " gg-cur" : ""}`;
+        return `<li role="option" id="gg-tpl-opt-${i}" class="${cls}" data-i="${i}" aria-selected="${i === ui.active}" title="${esc(it.label)}">${esc(it.label)}</li>`;
+      }).join("")
+      : `<li class="gg-combo-empty">No matches</li>`;
+    if (ui.active >= 0) {
+      input.setAttribute("aria-activedescendant", `gg-tpl-opt-${ui.active}`);
+      list.children[ui.active]?.scrollIntoView({ block: "nearest" });
     }
-    syncTplUseLastButton(wrap);
+  };
+  const openList = (query) => {
+    ui.items = comboFilter(templateComboItems(userWorkflowPaths, current()), query);
+    ui.active = comboActiveIndex(ui.items, current(), query);
+    ui.open = true;
+    render();
+  };
+  const close = (revert) => {
+    ui.open = false;
+    render();
+    if (revert) showValue();
   };
   const apply = async (ref) => {
-    await setProjectTemplateRef(ref);
+    if (ref !== current()) await setProjectTemplateRef(ref);
     if (!wrap.isConnected) return;
-    tplSel.value = projectTemplateRef || "";
+    showValue();
     syncTplUseLastButton(wrap);
   };
-  tplSel.addEventListener("focus", () => { fetchUserWorkflowPaths().then(refreshOptions); });
-  tplFilter?.addEventListener("input", refreshOptions);
-  fetchUserWorkflowPaths().then(refreshOptions);
+  const pick = (i) => {
+    const it = ui.items[i];
+    close(!it);
+    if (!it) return;
+    input.value = it.value;
+    void apply(it.value);
+  };
+  input.addEventListener("click", () => {
+    if (ui.open) return;
+    input.select();
+    openList("");
+    fetchUserWorkflowPaths().then(() => { if (ui.open && wrap.isConnected) openList(input.value === current() ? "" : input.value); });
+  });
+  input.addEventListener("input", () => openList(input.value));
+  input.addEventListener("keydown", (e) => {
+    const wasOpen = ui.open;
+    const r = comboKey({ open: ui.open, active: ui.active, count: ui.items.length }, e.key);
+    if (r.handled) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (r.pick >= 0) pick(r.pick);
+    else if (!r.open) { if (wasOpen) close(r.revert); }
+    else if (!wasOpen) openList(input.value === current() ? "" : input.value);
+    else {
+      ui.active = r.active;
+      render();
+    }
+  });
+  input.addEventListener("blur", () => { if (ui.open) close(true); });
+  list.addEventListener("mousedown", (e) => e.preventDefault());
+  list.addEventListener("click", (e) => {
+    const li = e.target.closest?.(".gg-combo-opt");
+    if (li) pick(Number(li.dataset.i));
+  });
+  showValue();
+  fetchUserWorkflowPaths().then(() => { if (wrap.isConnected) syncTplUseLastButton(wrap); });
   syncTplUseLastButton(wrap);
   wrap.querySelector(".gg-tpl-use-last")?.addEventListener("click", (e) => {
     const ref = e.currentTarget?.dataset?.ref;
     if (ref) void apply(ref);
   });
-  tplSel.addEventListener("change", (e) => { void apply(e.target.value); });
+}
+
+let folderPickerEl = null;
+
+function closeFolderPicker() {
+  if (folderPickerEl) {
+    folderPickerEl.remove();
+    folderPickerEl = null;
+  }
+}
+
+async function fetchFolderList(path) {
+  let res;
+  let data = {};
+  try {
+    res = await api.fetchApi(folderListUrl(path));
+    data = await res.json().catch(() => ({}));
+  } catch (_) {
+    return { ok: false, ...folderListError(0, null) };
+  }
+  if (!res.ok || data.ok === false) return { ok: false, ...folderListError(res.status, data) };
+  return { ok: true, view: folderPickerView(data) };
+}
+
+/** In-app folder picker (folders only). Opens at `startValue` (or its nearest existing parent, else the drive list). */
+function openFolderPicker(startValue, onSelect) {
+  closeFolderPicker();
+  const wrap = document.createElement("div");
+  wrap.className = "gg-modal-backdrop";
+  wrap.innerHTML = `
+    <div class="gg-modal gg-folder-picker" role="dialog" aria-label="Choose folder">
+      <h3 class="gg-modal-title">Choose Folder</h3>
+      <div class="gg-fp-bar">
+        <button type="button" class="gg-btn gg-fp-up" title="Up one level">Up</button>
+        <span class="gg-fp-path">Loading…</span>
+      </div>
+      <ul class="gg-fp-list" role="listbox" aria-label="Folders" tabindex="0"></ul>
+      <span class="gg-modal-hint gg-split-err gg-fp-err" aria-live="polite"></span>
+      <div class="gg-modal-actions">
+        <button type="button" class="gg-btn gg-fp-cancel">Cancel</button>
+        <button type="button" class="gg-btn gg-primary gg-fp-select" disabled>Select</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  folderPickerEl = wrap;
+  const listEl = wrap.querySelector(".gg-fp-list");
+  const pathEl = wrap.querySelector(".gg-fp-path");
+  const upBtn = wrap.querySelector(".gg-fp-up");
+  const selBtn = wrap.querySelector(".gg-fp-select");
+  const errEl = wrap.querySelector(".gg-fp-err");
+  let view = null;
+  let sel = -1;
+  let seq = 0;
+  const syncButtons = () => {
+    upBtn.disabled = !view?.canUp;
+    selBtn.disabled = !folderPickTarget(view, sel);
+  };
+  const paint = () => {
+    pathEl.textContent = view ? view.title : "";
+    pathEl.title = view?.path || "";
+    listEl.innerHTML = !view
+      ? ""
+      : view.items.length
+        ? view.items.map((it, i) => `<li role="option" class="gg-fp-item" data-i="${i}" title="${esc(it.path)}">${esc(it.name)}</li>`).join("")
+        : `<li class="gg-fp-empty">No folders</li>`;
+    listEl.scrollTop = 0;
+    syncButtons();
+  };
+  const markSel = (i) => {
+    sel = i;
+    for (const li of listEl.querySelectorAll(".gg-fp-item")) {
+      const on = Number(li.dataset.i) === i;
+      li.classList.toggle("gg-active", on);
+      li.setAttribute("aria-selected", on ? "true" : "false");
+    }
+    syncButtons();
+  };
+  const load = async (paths) => {
+    const my = ++seq;
+    errEl.textContent = "";
+    let fail = null;
+    for (const p of paths) {
+      const r = await fetchFolderList(p);
+      if (my !== seq || !wrap.isConnected) return;
+      if (r.ok) {
+        view = r.view;
+        sel = -1;
+        paint();
+        return;
+      }
+      fail = r;
+      if (r.routeMissing) break;
+    }
+    errEl.textContent = fail?.message || "";
+    if (!view) pathEl.textContent = "";
+    syncButtons();
+  };
+  listEl.addEventListener("click", (e) => {
+    const li = e.target.closest?.(".gg-fp-item");
+    if (li) markSel(Number(li.dataset.i));
+  });
+  listEl.addEventListener("dblclick", (e) => {
+    const li = e.target.closest?.(".gg-fp-item");
+    const it = li && view?.items[Number(li.dataset.i)];
+    if (it) void load([it.path]);
+  });
+  upBtn.addEventListener("click", () => { if (view?.canUp) void load([view.parent]); });
+  wrap.querySelector(".gg-fp-cancel").addEventListener("click", closeFolderPicker);
+  selBtn.addEventListener("click", () => {
+    const target = folderPickTarget(view, sel);
+    if (!target) return;
+    closeFolderPicker();
+    onSelect(target);
+  });
+  wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeFolderPicker(); });
+  wrap.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeFolderPicker();
+  });
+  syncButtons();
+  listEl.focus();
+  void load(startPathCandidates(startValue));
 }
 
 function openProjectSettingsModal() {
@@ -874,18 +1063,21 @@ function openProjectSettingsModal() {
     <form class="gg-modal gg-proj-settings-modal" role="dialog" aria-label="Project settings">
       <h3 class="gg-modal-title">Project Settings</h3>
       ${nat ? `<label class="gg-modal-field">Output folder
-        <input type="text" class="gg-modal-folder" maxlength="260" spellcheck="false" autocomplete="off" placeholder="e.g. D:\\Films\\My Film" />
+        <span class="gg-folder-row">
+          <input type="text" class="gg-modal-folder" maxlength="260" spellcheck="false" autocomplete="off" placeholder="e.g. D:\\Films\\My Film" />
+          <button type="button" class="gg-btn gg-modal-folder-browse">Browse…</button>
+        </span>
         <span class="gg-modal-hint">Where results are organized by project / scene / cut. Empty = default: the plugin's own projects folder (custom_nodes/comfyui-gonggan-cut/projects).</span>
         <span class="gg-modal-hint gg-split-err gg-modal-folder-err" aria-live="polite"></span>
       </label>` : ""}
       <div class="gg-modal-field" title="ComfyUI saved workflow used as this project's template">
         <span class="gg-tpl-label">Default template</span>
-        <input type="search" class="gg-modal-tpl-filter" placeholder="Filter templates..." autocomplete="off" aria-label="Filter templates" />
-        <span class="gg-modal-tpl-hint" aria-live="polite"></span>
         <span class="gg-tpl-wrap">
-          <select class="gg-tpl-select" aria-label="Default template">${templateSelectOptionsHtml()}</select>
+          <input type="text" class="gg-tpl-combo" role="combobox" aria-label="Default template" aria-autocomplete="list"
+            aria-expanded="false" aria-controls="gg-tpl-list" placeholder="(none)" autocomplete="off" spellcheck="false" />
           <button type="button" class="gg-btn gg-tpl-use-last" hidden>Use last</button>
         </span>
+        <ul class="gg-tpl-list" id="gg-tpl-list" role="listbox" aria-label="Templates" hidden></ul>
       </div>
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-modal-cancel">${nat ? "Cancel" : "Close"}</button>
@@ -901,7 +1093,7 @@ function openProjectSettingsModal() {
   const folderIn = wrap.querySelector(".gg-modal-folder");
   if (!nat || !folderIn) {
     form.addEventListener("submit", (e) => e.preventDefault());
-    wrap.querySelector(".gg-tpl-select")?.focus();
+    wrap.querySelector(".gg-tpl-combo")?.focus();
     return;
   }
   const folderErr = wrap.querySelector(".gg-modal-folder-err");
@@ -912,6 +1104,14 @@ function openProjectSettingsModal() {
   };
   folderIn.value = curSettings.project_folder;
   folderIn.addEventListener("input", () => { if (folderErr) folderErr.textContent = ""; });
+  wrap.querySelector(".gg-modal-folder-browse")?.addEventListener("click", () => {
+    openFolderPicker(folderIn.value, (path) => {
+      if (!wrap.isConnected) return;
+      folderIn.value = path;
+      folderIn.dispatchEvent(new Event("input", { bubbles: true }));
+      folderIn.focus();
+    });
+  });
   let saving = false;
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -2566,18 +2766,6 @@ async function fetchUserWorkflowPaths() {
     userWorkflowPaths = [];
   }
   return userWorkflowPaths;
-}
-
-function templateSelectOptionsHtml(query = "") {
-  const opts = [`<option value="">(none)</option>`];
-  const cur = projectTemplateRef || "";
-  for (const p of filterTemplatePaths(userWorkflowPaths, query, cur)) {
-    opts.push(`<option value="${esc(p)}"${p === cur ? " selected" : ""}>${esc(p)}</option>`);
-  }
-  if (cur && !userWorkflowPaths.includes(cur)) {
-    opts.push(`<option value="${esc(cur)}" selected>${esc(cur)}</option>`);
-  }
-  return opts.join("");
 }
 
 function syncTplUseLastButton(root) {

@@ -47,6 +47,21 @@ function isBlockedPost(url, method) {
   }
 }
 
+/** Fake folder tree for GET /gonggan/folder/list while `folderMockOn` (the real route needs a ComfyUI restart). */
+let folderMockOn = false;
+const FOLDER_MOCK = {
+  "": { path: "", parent: null, folders: ["C:\\", "D:\\"] },
+  "C:\\": { path: "C:\\", parent: "", folders: ["Films", "Locked"] },
+  "C:\\Films": { path: "C:\\Films", parent: "C:\\", folders: ["A", "B"] },
+};
+
+function folderMockResponse(url) {
+  const p = new URL(url).searchParams.get("path") || "";
+  if (p === "C:\\Locked") return { status: 403, body: { ok: false, message: "Permission denied: this folder cannot be opened" } };
+  const hit = FOLDER_MOCK[p];
+  return hit ? { status: 200, body: { ok: true, ...hit } } : { status: 404, body: { ok: false, message: "Folder not found" } };
+}
+
 function attachRequestGuard(page) {
   page.on("request", (req) => {
     const url = req.url();
@@ -55,6 +70,11 @@ function attachRequestGuard(page) {
       blockedPromptAttempts += 1;
       console.error(`BLOCKED UNSAFE POST: ${method} ${url}`);
       req.abort("blockedbyclient");
+      return;
+    }
+    if (folderMockOn && method === "GET" && /\/gonggan\/folder\/list$/.test(new URL(url).pathname)) {
+      const { status, body } = folderMockResponse(url);
+      req.respond({ status, contentType: "application/json", body: JSON.stringify(body) });
       return;
     }
     req.continue();
@@ -261,7 +281,7 @@ async function run() {
       return {
         projectLabel: h?.querySelector(".gg-proj-label")?.textContent?.trim() || "",
         gearTitle: gear?.getAttribute("title") || "",
-        headTemplate: !!h?.querySelector(".gg-tpl-select"),
+        headTemplate: !!h?.querySelector(".gg-tpl-combo"),
       };
     });
     if (head.projectLabel !== "Project:") throw new Error(`header Project label wrong: "${head.projectLabel}"`);
@@ -278,9 +298,10 @@ async function run() {
         fieldCount: m?.querySelectorAll(":scope > .gg-modal-field").length ?? 0,
         folderLabel: m?.querySelector(".gg-modal-folder")?.closest(".gg-modal-field")?.firstChild?.textContent?.trim() || "",
         folderValue: m?.querySelector(".gg-modal-folder")?.value ?? null,
-        folderHint: m?.querySelector(".gg-modal-folder ~ .gg-modal-hint")?.textContent || "",
+        folderHint: m?.querySelector(".gg-folder-row ~ .gg-modal-hint")?.textContent || "",
+        browse: m?.querySelector(".gg-modal-folder-browse")?.textContent?.trim() || "",
         templateLabel: m?.querySelector(".gg-tpl-label")?.textContent?.trim() || "",
-        template: !!m?.querySelector(".gg-tpl-select"),
+        template: !!m?.querySelector(".gg-tpl-combo") && !m?.querySelector(".gg-tpl-select, .gg-modal-tpl-filter"),
         useLast: !!m?.querySelector(".gg-tpl-use-last"),
         removed: [".gg-modal-name", ".gg-modal-resolution", ".gg-modal-fps", ".gg-modal-cut-sec", ".gg-modal-caption-lang"]
           .filter((s) => m?.querySelector(s)),
@@ -294,12 +315,106 @@ async function run() {
       throw new Error(`template field incomplete: ${JSON.stringify(settingsFields)}`);
     }
     if (settingsFields.removed.length) throw new Error(`removed fields still shown: ${settingsFields.removed}`);
+    if (settingsFields.browse !== "Browse…") throw new Error(`Browse… button missing: "${settingsFields.browse}"`);
     if (!/Empty = default/.test(settingsFields.folderHint)) throw new Error(`folder hint missing: "${settingsFields.folderHint}"`);
     if (settingsFields.buttons.join() !== "Cancel,Save") throw new Error(`buttons wrong: ${settingsFields.buttons}`);
     if (pythonOk && settingsFields.folderValue !== "N:\\ZZ-test-folder") {
       throw new Error(`Output folder should show the saved path: "${settingsFields.folderValue}"`);
     }
     console.log("PASS  gear opens Project Settings: Output folder + Default template only, Cancel / Save");
+
+    const comboBefore = await page.$eval(".gg-tpl-combo", (el) => el.value);
+    await page.click(".gg-tpl-combo");
+    await page.waitForFunction(() => !document.querySelector(".gg-tpl-list")?.hidden, { timeout: 5000 });
+    const firstOpt = await page.$eval(".gg-tpl-list li", (el) => el.textContent);
+    await page.keyboard.type("zz-no-such-template-zz", { delay: 2 });
+    const filtered = await page.$$eval(".gg-tpl-list li", (els) => els.map((el) => el.className));
+    await page.keyboard.press("Escape");
+    const combo = await page.evaluate(() => ({
+      hidden: document.querySelector(".gg-tpl-list")?.hidden,
+      value: document.querySelector(".gg-tpl-combo")?.value,
+      modal: !!document.querySelector('.gg-modal[aria-label="Project settings"]'),
+    }));
+    if (firstOpt !== "(none)") throw new Error(`template list should start with (none): "${firstOpt}"`);
+    if (filtered.join() !== "gg-combo-empty") throw new Error(`typing should filter the list live: ${filtered}`);
+    if (!combo.hidden || combo.value !== comboBefore || !combo.modal) throw new Error(`Escape should close + revert: ${JSON.stringify(combo)}`);
+    console.log("PASS  Default template combobox: typing filters live, Escape closes and restores the value");
+
+    await page.click(".gg-modal-folder-browse");
+    await page.waitForSelector('.gg-modal[aria-label="Choose folder"]', { timeout: 5000 });
+    const picker = await (await page.waitForFunction(() => {
+      const m = document.querySelector('.gg-modal[aria-label="Choose folder"]');
+      const err = m?.querySelector(".gg-fp-err")?.textContent?.trim();
+      const items = m?.querySelectorAll(".gg-fp-list li").length || 0;
+      if (!err && !items) return null;
+      return { err, items, title: m.querySelector(".gg-fp-path")?.textContent, up: m.querySelector(".gg-fp-up")?.disabled };
+    }, { timeout: 10000 })).jsonValue();
+    if (picker.err && /Restart ComfyUI/.test(picker.err)) {
+      console.log("SKIP  folder list route not loaded yet (restart ComfyUI for 0.9.94); picker shows the restart hint");
+    } else if (picker.err) {
+      throw new Error(`folder picker failed: ${picker.err}`);
+    } else {
+      console.log(`PASS  Browse… opens the folder picker at "${picker.title}" (${picker.items} rows)`);
+    }
+    await page.click(".gg-fp-cancel");
+    const afterCancel = await page.evaluate(() => ({
+      picker: !!document.querySelector('.gg-modal[aria-label="Choose folder"]'),
+      settings: !!document.querySelector('.gg-modal[aria-label="Project settings"]'),
+    }));
+    if (afterCancel.picker || !afterCancel.settings) throw new Error(`Cancel should close only the picker: ${JSON.stringify(afterCancel)}`);
+    console.log("PASS  folder picker Cancel closes it and keeps Project Settings open");
+
+    folderMockOn = true;
+    const FP = '.gg-modal[aria-label="Choose folder"]';
+    const fpState = () => page.evaluate((sel) => {
+      const m = document.querySelector(sel);
+      if (!m) return null;
+      return {
+        title: m.querySelector(".gg-fp-path")?.textContent || "",
+        rows: [...m.querySelectorAll(".gg-fp-item")].map((li) => li.textContent),
+        err: m.querySelector(".gg-fp-err")?.textContent || "",
+        up: !m.querySelector(".gg-fp-up")?.disabled,
+        select: !m.querySelector(".gg-fp-select")?.disabled,
+      };
+    }, FP);
+    const waitTitle = (t) => page.waitForFunction(
+      (sel, want) => document.querySelector(`${sel} .gg-fp-path`)?.textContent === want, { timeout: 5000 }, FP, t);
+    const dbl = async (name) => {
+      const items = await page.$$(`${FP} .gg-fp-item`);
+      for (const li of items) {
+        if ((await li.evaluate((el) => el.textContent)) === name) return li.click({ clickCount: 2 });
+      }
+      throw new Error(`no folder row "${name}"`);
+    };
+    await page.$eval(".gg-modal-folder", (el) => { el.value = "Q:\\Missing\\Out"; });
+    await page.click(".gg-modal-folder-browse");
+    await waitTitle("Drives");
+    let st = await fpState();
+    if (st.rows.join() !== "C:\\,D:\\" || st.up || st.select) throw new Error(`picker should fall back to the drive list: ${JSON.stringify(st)}`);
+    await dbl("C:\\");
+    await waitTitle("C:\\");
+    await dbl("Locked");
+    await page.waitForFunction((sel) => document.querySelector(`${sel} .gg-fp-err`)?.textContent, { timeout: 5000 }, FP);
+    st = await fpState();
+    if (st.title !== "C:\\" || !/Permission denied/.test(st.err)) throw new Error(`permission error should show and stay put: ${JSON.stringify(st)}`);
+    await dbl("Films");
+    await waitTitle("C:\\Films");
+    st = await fpState();
+    if (st.err || !st.up || !st.select || st.rows.join() !== "A,B") throw new Error(`Films view wrong: ${JSON.stringify(st)}`);
+    await page.click(`${FP} .gg-fp-up`);
+    await waitTitle("C:\\");
+    await dbl("Films");
+    await waitTitle("C:\\Films");
+    const rowB = (await page.$$(`${FP} .gg-fp-item`))[1];
+    await rowB.click();
+    await page.click(`${FP} .gg-fp-select`);
+    const picked = await page.evaluate((sel) => ({
+      picker: !!document.querySelector(sel),
+      value: document.querySelector(".gg-modal-folder")?.value,
+    }), FP);
+    folderMockOn = false;
+    if (picked.picker || picked.value !== "C:\\Films\\B") throw new Error(`Select should fill the Output folder: ${JSON.stringify(picked)}`);
+    console.log("PASS  folder picker (mocked route): drives fallback, open, permission message, Up, Select fills the path");
 
     const SAVE_BTN = '.gg-modal[aria-label="Project settings"] button[type=submit]';
     const setFolder = (v) =>
