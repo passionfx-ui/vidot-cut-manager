@@ -77,7 +77,7 @@ class ImportStructureTests(unittest.TestCase):
             native_import_structure(self.pid, bad)
         doc = self.store.get_project(self.pid)
         self.assertEqual(len(doc["cuts"]), 1)
-        self.assertEqual(next(iter(doc["cuts"].values()))["name"], "cut1")
+        self.assertEqual(next(iter(doc["cuts"].values()))["name"], "New cut")
 
     def test_empty_payload_rejected(self):
         with self.assertRaises(ValueError):

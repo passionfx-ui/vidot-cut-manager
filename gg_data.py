@@ -638,11 +638,10 @@ def add_local_cut(pid: str, group_id: str | None = None, after_cut_id: str | Non
     edit = load_edit(pid) or {}
     local = _local_cut_records(edit)
     valid = project_cut_ids(proj, edit)
-    n = len(valid) + 1
     cut_id = f"L{int(time.time() * 1000)}_{secrets.token_hex(3)}"
     while cut_id in valid:
         cut_id = f"L{int(time.time() * 1000)}_{secrets.token_hex(3)}"
-    entry = {"id": cut_id, "name": f"cut{n}", "created": time.time()}
+    entry = {"id": cut_id, "name": "New cut", "created": time.time()}
     if isinstance(group_id, str) and group_id.strip() and GID_RE.fullmatch(group_id.strip()):
         entry["group_id"] = group_id.strip()
     local.append(entry)
