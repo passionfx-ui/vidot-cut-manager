@@ -1,7 +1,5 @@
 /** SRT caption export and caption display helpers (pure, no DOM). */
 
-import { clampCaptionLang } from "./gg_project_settings_core.js";
-
 /**
  * Caption editor / display text: stored `caption`, or legacy `notes` when caption is empty.
  * The editor is seeded with this, so the first caption edit saves the notes text into `caption`.
@@ -24,7 +22,7 @@ export function captionEditChanged(cut, text) {
 
 /** @param {unknown} captionLang */
 export function captionFieldPlaceholder(captionLang) {
-  return `Notes / dialogue (${clampCaptionLang(captionLang)})`;
+  return "Caption";
 }
 
 /**
