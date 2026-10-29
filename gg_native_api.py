@@ -461,9 +461,10 @@ def native_send_last_output(pid: str, cut_id: str) -> dict:
     except ImportError:
         import gg_sdk  # type: ignore
 
-    lo = gg_sdk.last_output()
+    info = gg_sdk.last_output_info()
+    lo = info["output"]
     if not lo:
-        return {"ok": False, "message": "no ComfyUI output found"}
+        return {"ok": False, "message": info["reason"]}
     path = Path(lo["path"])
     meta = gg_wfstore.extract_png_meta(path) if path.suffix.lower() == ".png" else {}
     ui = meta.get("workflow") if isinstance(meta.get("workflow"), dict) else None
