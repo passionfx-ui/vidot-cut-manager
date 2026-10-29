@@ -15,6 +15,7 @@ import {
   finalCutList,
   filterCuts,
   redoFilterOn,
+  shotsViewOf,
   fileBaseName,
   sanitizeNamePart,
   projectCompletion,
@@ -260,6 +261,14 @@ describe("filterCuts", () => {
     assert.equal(redoFilterOn(true, true), true);
     assert.equal(redoFilterOn(true, "true"), false);
     assert.equal(filterCuts(cuts, { needsRedoOnly: redoFilterOn(false, true) }).length, 2);
+  });
+  it("shotsViewOf: hidden Final cut list always falls back to cuts", () => {
+    assert.equal(shotsViewOf(false, "final"), "cuts");
+    assert.equal(shotsViewOf(false, "cuts"), "cuts");
+    assert.equal(shotsViewOf(true, "final"), "final");
+    assert.equal(shotsViewOf(true, "cuts"), "cuts");
+    assert.equal(shotsViewOf(true, undefined), "cuts");
+    assert.equal(shotsViewOf(true, "bogus"), "cuts");
   });
 });
 
