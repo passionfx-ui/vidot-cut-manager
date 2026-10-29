@@ -278,9 +278,6 @@
 .gg-shots .gg-field-end, .gg-shots .gg-field-redo { flex-direction: row; align-items: center; gap: 4px; white-space: nowrap; }
 .gg-shots .gg-field-len { flex: 0 0 auto; }
 .gg-shots .gg-len-input { width: 4.5em; }
-.gg-shots .gg-field-notes { width: 100%; }
-.gg-shots .gg-notes { resize: none; min-height: 2.5em; max-height: 2.5em; font: inherit; width: 100%; transition: max-height 0.15s ease; }
-.gg-shots .gg-notes:focus { max-height: 5em; }
 .gg-shots .gg-fname-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .gg-shots .gg-fname { font-family: ui-monospace, monospace; font-size: 10px; color: var(--gg-fg); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gg-shots .gg-fname-copy { font-size: 9px; padding: 1px 5px; flex-shrink: 0; }
