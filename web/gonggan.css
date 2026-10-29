@@ -108,7 +108,15 @@
 .gg-timeline .gg-dot-image { background: #5a8fd4; }
 .gg-timeline .gg-dot-video { background: #9b6ed4; }
 .gg-timeline .gg-dot-done { background: #5fe07a; box-shadow: 0 0 4px 1px rgba(95, 224, 122, 0.5); }
-.gg-shots .gg-other-chip { font-size: 10px; color: var(--gg-dim); white-space: nowrap; flex-shrink: 0; font-variant-numeric: tabular-nums; cursor: help; }
+.gg-render-badge { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; padding: 0 4px; border-radius: 3px; font-size: 9px; line-height: 14px; white-space: nowrap; font-variant-numeric: tabular-nums; color: #cfe0f5; background: #22303f; cursor: default; }
+.gg-render-badge[hidden] { display: none !important; }
+.gg-render-badge .gg-rs-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; box-sizing: border-box; background: #7aa2d6; }
+.gg-render-badge.gg-rs-rendering { color: #d8f5dc; background: #1f3524; }
+.gg-render-badge.gg-rs-rendering .gg-rs-dot { width: 8px; height: 8px; background: none; border: 1.5px solid #6ee07a; border-right-color: transparent; animation: gg-rs-spin 0.8s linear infinite; }
+@keyframes gg-rs-spin { to { transform: rotate(360deg); } }
+.gg-shots .gg-render-global { font-size: 10px; cursor: help; }
+.gg-timeline .gg-clip-rs { position: absolute; left: 6px; bottom: 16px; z-index: 3; max-width: calc(100% - 12px); overflow: hidden; text-overflow: ellipsis; pointer-events: none; background: rgba(20, 30, 40, 0.85); }
+.gg-timeline .gg-clip-rs.gg-rs-rendering { background: rgba(25, 50, 30, 0.88); }
 .gg-shots .gg-cut-text { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; }
 .gg-shots .gg-cut-header {
   display: flex;
