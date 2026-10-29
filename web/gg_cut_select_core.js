@@ -81,20 +81,24 @@ function isLetterKey(e, letter) {
 }
 
 /**
- * Shots sidebar key -> action name. Ctrl/Meta combos belong to ComfyUI and always map to null.
+ * Shots sidebar key -> action name. Ctrl/Meta combos belong to ComfyUI and map to null, except plain
+ * Ctrl/Cmd+A (select all cuts; repeats included so the browser never selects the page text).
  * Scope (hover/focus) and typing checks are done by the caller; `modalOpen` / `menuOpen` /
  * `fieldEditing` may be passed on the event-like object.
  * @param {{ key?: string, code?: string, altKey?: boolean, shiftKey?: boolean, ctrlKey?: boolean,
  *   metaKey?: boolean, isComposing?: boolean, repeat?: boolean, modalOpen?: boolean, menuOpen?: boolean,
  *   fieldEditing?: boolean }} e
- * @returns {"prev" | "next" | "open" | "rename" | "group" | "ungroup" | "add" | "delete" | "move-up" | "move-down" | "escape" | null}
+ * @returns {"prev" | "next" | "open" | "rename" | "group" | "ungroup" | "add" | "delete" | "move-up" | "move-down" | "escape" | "select-all" | null}
  */
 export function shotsKeyAction(e) {
   if (!e || e.isComposing || e.key === "Process") return null;
   if (e.modalOpen) return null;
   const key = e.key || "";
   if (key === "Escape") return "escape";
-  if (e.ctrlKey || e.metaKey) return null;
+  if (e.ctrlKey || e.metaKey) {
+    const plain = !e.altKey && !e.shiftKey && !e.menuOpen && !e.fieldEditing;
+    return plain && isLetterKey(e, "a") ? "select-all" : null;
+  }
   if (key === "Delete") return "delete";
   if (e.menuOpen || e.fieldEditing) return null;
   const alt = !!e.altKey;
@@ -113,6 +117,16 @@ export function shotsKeyAction(e) {
   }
   if (action && e.repeat && NO_REPEAT_ACTIONS.has(action)) return null;
   return action;
+}
+
+/**
+ * Ctrl+A: every cut shown in the list, in list order (cuts inside collapsed scenes stay unselected).
+ * @param {string[]} order
+ * @param {Iterable<string>} [hidden]
+ */
+export function selectAllCutIds(order, hidden) {
+  const skip = new Set(hidden || []);
+  return (Array.isArray(order) ? order : []).filter((id) => id && !skip.has(id));
 }
 
 /**

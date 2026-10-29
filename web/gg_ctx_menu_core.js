@@ -1,5 +1,7 @@
 /** Pure context-menu item lists for cut cards, timeline clips and scene headers (no DOM). */
 
+import { renderButtonState } from "./gg_batch_render_core.js";
+
 export const SINGLE_CUT_TIP = "Select a single cut";
 export const SDK_BUSY_TIP = "Comfy SDK is busy";
 export const SDK_OFF_TIP = "Comfy SDK not ready";
@@ -58,11 +60,12 @@ export function cutActionItems(ctx = {}) {
 /**
  * @param {{ native?: boolean, multi?: boolean, needsRedo?: boolean, sdkBusy?: boolean, sdkOk?: boolean,
  *   emptyCut?: boolean, readonlyTip?: string, canMoveUp?: boolean, canMoveDown?: boolean, inScene?: boolean, anyInScene?: boolean,
- *   trashLabel?: string, trashCount?: number }} ctx
+ *   trashLabel?: string, trashCount?: number, renderCount?: number }} ctx  renderCount: selected cuts (default 1)
  */
 export function cutCardMenuItems(ctx = {}) {
   const nat = !!ctx.native;
   const a = cutActionItems(ctx);
+  const r = renderButtonState({ count: ctx.renderCount ?? 1, native: nat, busy: ctx.sdkBusy });
   const moveItems = nat
     ? [
         { key: "moveUp", label: "Move up", disabled: !ctx.canMoveUp },
@@ -79,6 +82,7 @@ export function cutCardMenuItems(ctx = {}) {
     a.rename,
     { key: "addCut", label: "Add Cut" },
     a.regen,
+    { key: "renderSel", label: "Render selected", disabled: r.disabled, title: r.title },
     a.send,
     a.del,
     {
