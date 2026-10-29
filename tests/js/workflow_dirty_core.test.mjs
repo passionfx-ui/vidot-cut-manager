@@ -92,6 +92,31 @@ describe("graphContentDiffers (no edit may be missed)", () => {
     assert.equal(graphContentDiffers(base(), d), true);
   });
   it("group added", () => { const c = base(); c.groups = [{ title: "g", bounding: [0, 0, 1, 1] }]; assert.equal(graphContentDiffers(base(), c), true); });
+  it("wildcard slot type resolving after reload (* -> MODEL) => clean, also inside subgraphs", () => {
+    const b = base();
+    b.nodes[0].inputs[0].type = "*";
+    b.nodes[1].outputs = [{ name: "o", type: "*", links: [5] }];
+    b.definitions = { subgraphs: [{ nodes: [{ id: 9, outputs: [{ name: "img", type: "*" }], widgets_values: [1] }] }] };
+    const c = JSON.parse(JSON.stringify(b));
+    c.nodes[0].inputs[0].type = "MODEL";
+    c.nodes[1].outputs[0].type = "MODEL";
+    c.definitions.subgraphs[0].nodes[0].outputs[0].type = "IMAGE";
+    assert.equal(graphContentDiffers(b, c), false);
+  });
+  it("slot link change or subgraph widget edit still counts", () => {
+    const b = base();
+    b.nodes[1].outputs = [{ name: "o", type: "*", links: [5] }];
+    b.definitions = { subgraphs: [{ nodes: [{ id: 9, widgets_values: [1] }] }] };
+    const c = JSON.parse(JSON.stringify(b));
+    c.nodes[1].outputs[0].links = [];
+    assert.equal(graphContentDiffers(b, c), true);
+    const d = JSON.parse(JSON.stringify(b));
+    d.definitions.subgraphs[0].nodes[0].widgets_values = [2];
+    assert.equal(graphContentDiffers(b, d), true);
+    const e = JSON.parse(JSON.stringify(b));
+    e.links[0][5] = "LATENT";
+    assert.equal(graphContentDiffers(b, e), true);
+  });
   it("unreadable => differs (safe side)", () => {
     assert.equal(graphContentDiffers(null, base()), true);
     assert.equal(graphContentDiffers(base(), undefined), true);
