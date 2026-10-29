@@ -75,6 +75,20 @@ export function filterTemplatePaths(paths, query, keep) {
 }
 
 /**
+ * Default template combobox items: (none) first, then user templates A–Z. The current ref is always listed
+ * (also an internal or since-deleted workflow), so a saved value still shows and stays selectable.
+ * @param {string[]} paths
+ * @param {string} current saved template ref ("" = none)
+ * @returns {{ value: string, label: string }[]}
+ */
+export function templateComboItems(paths, current) {
+  const cur = String(current ?? "").trim();
+  const list = [...userTemplatePaths(paths, cur)].sort((a, b) => a.localeCompare(b));
+  if (cur && !list.includes(cur)) list.push(cur);
+  return [{ value: "", label: "(none)" }, ...list.map((p) => ({ value: p, label: p }))];
+}
+
+/**
  * @param {string[]} paths
  * @param {string|undefined} last from loadLastTemplate
  * @returns {string} '' preselects (none); template ref when last is in paths

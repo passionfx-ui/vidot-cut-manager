@@ -728,12 +728,12 @@ async function main() {
     }  });
 
   await runScenario("08", "Template dropdown (Project Settings gear) matches saved workflows", async () => {
-    if (await page.$(".gg-root.gg-shots .gg-tpl-select")) {
+    if (await page.$(".gg-root.gg-shots .gg-tpl-combo")) {
       throw new Error("Template selector should be in the Project Settings modal, not the sidebar header");
     }
     const paths = await fetchWorkflowPaths(page);
     await page.click(".gg-root.gg-shots .gg-proj-settings");
-    await page.waitForSelector('.gg-modal[aria-label="Project settings"] .gg-tpl-select', { timeout: 8000 });
+    await page.waitForSelector('.gg-modal[aria-label="Project settings"] .gg-tpl-combo', { timeout: 8000 });
     const layout = await page.evaluate(() => {
       const m = document.querySelector('.gg-modal[aria-label="Project settings"]');
       return {
@@ -748,11 +748,12 @@ async function main() {
     if (layout.native && (!layout.folder || layout.fields !== 2)) {
       throw new Error(`Project Settings should be Output folder + Default template: ${JSON.stringify(layout)}`);
     }
-    await page.focus(".gg-modal .gg-tpl-select");
+    await page.click(".gg-modal .gg-tpl-combo");
     await sleep(400);
-    const opts = await page.$$eval(".gg-modal .gg-tpl-select option", (els) =>
-      els.map((o) => o.value).filter((v) => v)
+    const opts = await page.$$eval(".gg-modal .gg-tpl-list .gg-combo-opt", (els) =>
+      els.map((o) => o.textContent).filter((v) => v && v !== "(none)")
     );
+    await page.keyboard.press("Escape");
     await page.click(".gg-modal .gg-modal-cancel");
     await page.waitForFunction(() => !document.querySelector(".gg-modal-backdrop"), { timeout: 5000 });
     if (paths.length > 0 && opts.length === 0) throw new Error("dropdown empty but userdata has workflows");
