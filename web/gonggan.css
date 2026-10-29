@@ -311,6 +311,7 @@
 .gg-shots .gg-caption-text.gg-field-editing { cursor: text; }
 .gg-shots .gg-field-unsaved { border-style: dashed; }
 .gg-shots .gg-caption-text:disabled { opacity: 0.55; }
+.gg-shots .gg-cut.gg-cut-caption { align-items: flex-start; }
 .gg-shots .gg-cut-caption .gg-caption-text { flex: 1 1 auto; min-width: 0; }
 .gg-shots.gg-list-caption .gg-caption-text {
   min-height: 4.6em;
