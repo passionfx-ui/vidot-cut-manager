@@ -1,5 +1,5 @@
 /**
- * Shots list card Notes/Caption edit mode (pure logic, no DOM).
+ * Shots list card Caption edit mode (pure logic, no DOM).
  */
 
 export const CARD_EDIT_IDLE_TIP = "Double-click to edit";

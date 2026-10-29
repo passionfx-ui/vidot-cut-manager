@@ -5,6 +5,7 @@ import {
   buildSrt,
   srtFileName,
   effectiveCaption,
+  captionEditChanged,
   captionFieldPlaceholder,
 } from "../../web/gg_caption_core.js";
 
@@ -67,6 +68,12 @@ describe("effectiveCaption", () => {
     assert.equal(effectiveCaption({ caption: "A", notes: "B" }), "A");
   });
 
+  it("does not modify the cut (notes stays intact)", () => {
+    const cut = { caption: "", notes: "legacy" };
+    effectiveCaption(cut);
+    assert.deepEqual(cut, { caption: "", notes: "legacy" });
+  });
+
   it("falls back to notes when caption empty", () => {
     assert.equal(effectiveCaption({ caption: "", notes: "legacy" }), "legacy");
     assert.equal(effectiveCaption({ caption: "  ", notes: "legacy" }), "legacy");
@@ -75,6 +82,27 @@ describe("effectiveCaption", () => {
   it("returns empty when both empty", () => {
     assert.equal(effectiveCaption({ caption: "", notes: "" }), "");
     assert.equal(effectiveCaption(null), "");
+  });
+});
+
+describe("captionEditChanged", () => {
+  it("seeded legacy notes is not an edit", () => {
+    assert.equal(captionEditChanged({ caption: "", notes: "legacy" }, "legacy"), false);
+  });
+
+  it("edited seeded notes is an edit", () => {
+    assert.equal(captionEditChanged({ caption: "", notes: "legacy" }, "legacy + line"), true);
+    assert.equal(captionEditChanged({ caption: "", notes: "legacy" }, ""), true);
+  });
+
+  it("compares against caption when both are set", () => {
+    assert.equal(captionEditChanged({ caption: "A", notes: "B" }, "A"), false);
+    assert.equal(captionEditChanged({ caption: "A", notes: "B" }, "B"), true);
+  });
+
+  it("tolerates null", () => {
+    assert.equal(captionEditChanged(null, ""), false);
+    assert.equal(captionEditChanged(null, undefined), false);
   });
 });
 
