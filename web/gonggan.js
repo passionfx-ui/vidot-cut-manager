@@ -5904,20 +5904,20 @@ function mountShots(el) {
     root.className = `gg-root gg-shots${listCaption ? " gg-list-caption" : ""}${CUT_PANEL_ROOT_CLASS}`;
     root.innerHTML = `
       <div class="gg-head">
-        <div class="gg-proj-row">
-          <label class="gg-proj-wrap">
-            <span class="gg-proj-label">Project:</span>
-            <select class="gg-proj" title="Project">${opts}</select>
-          </label>
-          <button type="button" class="gg-btn gg-proj-settings" title="Project settings" aria-label="Project settings"${state.pid ? "" : " disabled"}>⚙</button>
-        </div>
         <span class="gg-sdk-slot"></span>
         <div class="gg-render-row">
           <button type="button" class="gg-btn gg-primary gg-render-btn" disabled title="Select cuts to render">Render</button>
           <span class="gg-render-badge gg-render-global" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
           <span class="gg-batch-prog" hidden></span>
         </div>
-        <button class="gg-btn gg-reload" title="Reload">⟳</button>
+        <div class="gg-proj-row">
+          <label class="gg-proj-wrap">
+            <span class="gg-proj-label">Project:</span>
+            <select class="gg-proj" title="Project">${opts}</select>
+          </label>
+          <button type="button" class="gg-btn gg-proj-settings" title="Project settings" aria-label="Project settings"${state.pid ? "" : " disabled"}>⚙</button>
+          <button class="gg-btn gg-reload" title="Reload">⟳</button>
+        </div>
       </div>
       ${state.error ? `<div class="gg-error">${esc(state.error)}</div>` : ""}
       <div class="gg-shot-summary">
