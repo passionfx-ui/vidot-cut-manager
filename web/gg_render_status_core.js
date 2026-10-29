@@ -2,7 +2,9 @@
  * Render status per cut (pure logic, no DOM): which cut's prompt is waiting in the ComfyUI queue
  * ('queued') or executing ('rendering', optional percent from progress events).
  * Prompts are linked to cuts when queued; prompts without a cut in the shown project count toward
- * the global indicator. Finished prompts (success / error / interrupted, or gone from the queue) are dropped.
+ * the global indicator. Finished prompts (success / error / interrupted, or gone from the queue) are dropped;
+ * a cut whose last prompt errored or was interrupted shows 'failed' until it is queued again or succeeds.
+ * The last Render batch is tracked for the "N / M done" counter.
  */
 
 import { gongganExtraProjectId } from "./gg_shot_names.js";
@@ -61,6 +63,17 @@ export function createRenderStatus(opts = {}) {
   const finished = new Set();
   /** Pending order from the last /queue reply (positions are unknown until then). */
   let pending = [];
+  /** @type {Map<string, { promptId: string, error: string }>} "projectId\ncutId" -> last failed prompt */
+  const failedCuts = new Map();
+  /** Prompt ids of the last Render batch (null = no batch yet). */
+  let batch = null;
+
+  const cutKey = (projectId, cutId) => `${projectId}\n${cutId}`;
+
+  function clearFailed(promptId) {
+    const l = links.get(promptId);
+    return l ? failedCuts.delete(cutKey(l.projectId, l.cutId)) : false;
+  }
 
   /** 1-based place among still-queued prompts, or null when not known. */
   function positionOf(promptId) {
@@ -104,6 +117,7 @@ export function createRenderStatus(opts = {}) {
   /** Only one prompt executes at a time: starting `promptId` ends any other 'rendering' prompt. */
   function setRendering(promptId, now) {
     const changed = [promptId];
+    clearFailed(promptId);
     for (const [id, j] of jobs) {
       if (id !== promptId && j.state === "rendering") {
         drop(id, true);
@@ -137,8 +151,53 @@ export function createRenderStatus(opts = {}) {
     const id = String(promptId);
     if (target?.cutId && target?.projectId) link(id, target.cutId, target.projectId);
     if (finished.has(id) || jobs.has(id)) return touched([id]);
+    clearFailed(id);
     jobs.set(id, { state: "queued", percent: null, node: null, at: now });
     return touched([id]);
+  }
+
+  /** Prompts deleted from the ComfyUI queue by us: dropped and left out of the batch count. */
+  function removed(promptIds) {
+    const ids = (Array.isArray(promptIds) ? promptIds : []).map(String);
+    for (const id of ids) drop(id, true);
+    if (batch) batch = batch.filter((id) => !ids.includes(id));
+    return touched(ids);
+  }
+
+  /** Still-queued (not running) prompt ids of a cut. */
+  function queuedPromptIds(projectId, cutId) {
+    const out = [];
+    for (const [id, j] of jobs) {
+      const l = links.get(id);
+      if (j.state === "queued" && l && l.cutId === String(cutId) && l.projectId === String(projectId)) out.push(id);
+    }
+    return out;
+  }
+
+  function isFailed(projectId, cutId) {
+    return failedCuts.has(cutKey(String(projectId), String(cutId)));
+  }
+
+  /** A new Render batch starts (replaces the last one); its prompts are added as they are queued. */
+  function startBatch() {
+    batch = [];
+  }
+
+  function addToBatch(promptId) {
+    if (batch && promptId != null && !batch.includes(String(promptId))) batch.push(String(promptId));
+  }
+
+  /** @returns {{ done: number, total: number, failed: number } | null} null = no batch prompts */
+  function batchView() {
+    if (!batch || !batch.length) return null;
+    const failedIds = new Set([...failedCuts.values()].map((f) => f.promptId));
+    let done = 0;
+    let failed = 0;
+    for (const id of batch) {
+      if (!jobs.has(id)) done++;
+      if (failedIds.has(id)) failed++;
+    }
+    return { done, total: batch.length, failed };
   }
 
   /**
@@ -187,6 +246,12 @@ export function createRenderStatus(opts = {}) {
         const id = pidOf(detail) || runningId();
         if (!id) return [];
         drop(id, true);
+        const l = links.get(id);
+        if (type === "execution_success") clearFailed(id);
+        else if (l) {
+          const msg = type === "execution_error" ? detail?.exception_message || detail?.message || "" : "Interrupted";
+          failedCuts.set(cutKey(l.projectId, l.cutId), { promptId: id, error: String(msg) });
+        }
         return touched([id]);
       }
       default:
@@ -227,7 +292,8 @@ export function createRenderStatus(opts = {}) {
 
   /**
    * position: 1-based queue place of the cut's earliest waiting prompt (queued only, null when unknown).
-   * @returns {{ state: 'queued'|'rendering', percent: number|null, count: number, position: number|null } | null}
+   * 'failed' only when nothing of the cut is queued or rendering (count 0, error = message or "").
+   * @returns {{ state: 'queued'|'rendering'|'failed', percent: number|null, count: number, position: number|null, error?: string } | null}
    */
   function cutView(projectId, cutId) {
     if (!projectId || !cutId) return null;
@@ -242,7 +308,10 @@ export function createRenderStatus(opts = {}) {
       const p = j.state === "queued" ? positionOf(id) : null;
       if (p != null && (position == null || p < position)) position = p;
     }
-    if (!best) return null;
+    if (!best) {
+      const f = failedCuts.get(cutKey(String(projectId), String(cutId)));
+      return f ? { state: "failed", percent: null, count: 0, position: null, error: f.error } : null;
+    }
     const rendering = best.state === "rendering";
     return { state: best.state, percent: rendering ? best.percent : null, count, position: rendering ? null : position };
   }
@@ -263,12 +332,15 @@ export function createRenderStatus(opts = {}) {
     return { state: rendering ? "rendering" : queuedN ? "queued" : null, rendering, queued: queuedN };
   }
 
-  return { link, queued, handle, syncQueue, cutView, globalView };
+  return { link, queued, removed, handle, syncQueue, cutView, globalView, queuedPromptIds, isFailed, startBatch, addToBatch, batchView };
 }
 
 /** Badge text for a cut view (null = hidden). `pos` (`#N`) is the queue place, shown only on cut cards. */
 export function renderBadgeView(v) {
   if (!v) return { show: false, mode: "", text: "", pos: "", title: "" };
+  if (v.state === "failed") {
+    return { show: true, mode: "failed", text: "Failed", pos: "", title: `Last render failed${v.error ? `: ${v.error}` : ""} (right-click: Re-queue)` };
+  }
   if (v.state === "rendering") {
     const pct = Number.isFinite(v.percent) ? ` ${v.percent}%` : "";
     return { show: true, mode: "rendering", text: `Rendering${pct}`, pos: "", title: `Rendering in ComfyUI${pct}` };
@@ -300,4 +372,11 @@ export function renderGlobalView(g) {
   const title = `Not from a cut in this project: ${parts.join(", ")}`;
   if (g.state === "rendering") return { show: true, mode: "rendering", text: "Rendering\u2026", title };
   return { show: true, mode: "queued", text: "Queued", title };
+}
+
+/** "N / M done" counter next to the Render button (hidden with no batch). */
+export function batchProgressView(b) {
+  if (!b || !(b.total > 0)) return { show: false, text: "", title: "" };
+  const failed = b.failed > 0 ? `, ${b.failed} failed` : "";
+  return { show: true, text: `${b.done} / ${b.total} done`, title: `Last Render batch: ${b.done} of ${b.total} prompts finished${failed}` };
 }

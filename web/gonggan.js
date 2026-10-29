@@ -114,6 +114,7 @@ import {
   batchRenderConfirmMessage,
   batchRenderSummary,
   renderButtonState,
+  queueDeleteBody,
 } from "./gg_batch_render_core.js";
 import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
 import {
@@ -160,7 +161,7 @@ import { buildSrt, srtFileName, effectiveCaption, captionEditChanged, captionFie
 import { rowContentKind, cutRowShellHtml, captionRowContentHtml, groupedListHtml } from "./gg_group_list_core.js";
 import { decideVideoSync } from "./gg_playback_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
-import { createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
+import { batchProgressView, createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
 import {
   stepMove,
@@ -3148,6 +3149,7 @@ function openCutContextMenu(e, cutId) {
   const c = cutById(cutId);
   const nat = isNativeProject();
   const order = state.timeline ? state.timeline.cuts.map((x) => x.id) : [];
+  const failedIds = ids.filter((id) => renderStatus.isFailed(state.pid, id));
   const items = cutCardMenuItems({
     ...cutMenuCtx(cutId, ids.length > 1),
     canMoveUp: canMoveUp(order, ids),
@@ -3157,6 +3159,8 @@ function openCutContextMenu(e, cutId) {
     trashLabel: trashMenuLabel(),
     trashCount,
     renderCount: ids.length,
+    queuedCount: ids.filter((id) => renderStatus.queuedPromptIds(state.pid, id).length).length,
+    failedCount: failedIds.length,
   });
   showCtxMenu(
     e.clientX,
@@ -3166,6 +3170,8 @@ function openCutContextMenu(e, cutId) {
       {
         ...cutMenuActions(cutId),
         renderSel: () => renderSelectedCuts(),
+        removeQueue: () => removeCutsFromQueue(ids),
+        requeue: () => renderSelectedCuts(failedIds),
         moveUp: () => applyStepMove(-1),
         moveDown: () => applyStepMove(1),
         group: () => createSceneGroup(ids),
@@ -3665,6 +3671,7 @@ function paintRenderBadge(badge, v) {
   badge.hidden = !v.show;
   badge.classList.toggle("gg-rs-rendering", v.mode === "rendering");
   badge.classList.toggle("gg-rs-queued", v.mode === "queued");
+  badge.classList.toggle("gg-rs-failed", v.mode === "failed");
   const text = badge.querySelector(".gg-rs-text");
   if (text) text.textContent = v.text;
   const pos = badge.querySelector(".gg-rs-pos");
@@ -3676,6 +3683,12 @@ function paintRenderBadge(badge, v) {
 function paintRenderGlobal() {
   const v = renderGlobalView(renderStatus.globalView(state.pid));
   document.querySelectorAll(".gg-shots .gg-render-global").forEach((el) => paintRenderBadge(el, v));
+  const b = batchProgressView(renderStatus.batchView());
+  document.querySelectorAll(".gg-shots .gg-batch-prog").forEach((el) => {
+    el.hidden = !b.show;
+    el.textContent = b.text;
+    el.title = b.title;
+  });
 }
 
 /** Badge-only update for the given cuts (cut cards + timeline clips) and the header indicator. */
@@ -4831,7 +4844,10 @@ function bindShotsTabActivated(hostEl, onCleanup) {
   }
 }
 
-/** Bottom bar of the Shots sidebar: always shown so the list never shifts; actions off with nothing selected. */
+/**
+ * Bottom bar of the Shots sidebar: always shown so the list never shifts; actions off with nothing selected.
+ * Also sets the top Render button, which acts on the same selection.
+ */
 function updateSelectionBar(root) {
   if (!root) return;
   const bar = root.querySelector(".gg-selbar");
@@ -4852,7 +4868,11 @@ function updateSelectionBar(root) {
   set(".gg-sel-ungroup", !ids.some((id) => cutById(id)?.group_id));
   set(".gg-sel-x", state.cutSel.size === 0);
   const r = renderButtonState({ count: n, native: isNativeProject(), busy: !!sdk.busy });
-  set(".gg-sel-render", r.disabled, r.title);
+  const renderBtn = root.querySelector(".gg-render-btn");
+  if (renderBtn) {
+    renderBtn.disabled = r.disabled;
+    renderBtn.title = r.title;
+  }
 }
 
 function paintSelection(root) {
@@ -5108,12 +5128,12 @@ function shotsNavOrder() {
 /**
  * Render: queue each selected cut's current workflow in Shots display order, through the native Regen
  * path (open the cut in its shot tab, then queue like ComfyUI's Queue button). One confirm for the batch;
- * empty cuts are skipped. The selection is restored afterwards.
+ * empty cuts are skipped. The selection is restored afterwards. `cutIds` (Re-queue) replaces the selection.
  */
-async function renderSelectedCuts() {
+async function renderSelectedCuts(cutIds) {
   const tl = state.timeline;
   if (!tl || !isNativeProject() || sdk.busy || batchRenderUi.running) return;
-  const selected = cutSelIds();
+  const selected = cutIds || cutSelIds();
   const ids = selectedInDisplayOrder(shotsNavOrder().order, tl.cuts.map((c) => c.id), selected);
   if (!ids.length) return;
   const plan = batchRenderPlan(ids, (id) => {
@@ -5143,6 +5163,8 @@ async function renderSelectedCuts() {
   let i = 0;
   batchRenderUi.running = true;
   sdk.busy = "regen";
+  renderStatus.startBatch();
+  paintRenderGlobal();
   bus.dispatchEvent(new Event("sdk"));
   try {
     for (; i < total; i++) {
@@ -5166,7 +5188,9 @@ async function renderSelectedCuts() {
       await app.queuePrompt(0, 1);
       const reg = ggLastRegisteredPrompt;
       if (reg && reg !== before && reg.cutId === cutId && reg.projectId === pid) {
-        paintRenderStatus(renderStatus.queued(reg.promptId, { cutId, projectId: pid }));
+        const changed = renderStatus.queued(reg.promptId, { cutId, projectId: pid });
+        renderStatus.addToBatch(reg.promptId);
+        paintRenderStatus(changed);
         queued++;
       } else failed++;
     }
@@ -5186,6 +5210,27 @@ async function renderSelectedCuts() {
     bus.dispatchEvent(new Event("sdk"));
     ggToast(s.summary, s.detail, s.kind);
   }
+}
+
+/** Cut menu Remove from queue: delete the cuts' still-waiting prompts (POST /queue) and clear their badges. */
+async function removeCutsFromQueue(cutIds) {
+  const pid = state.pid;
+  const promptIds = cutIds.flatMap((id) => renderStatus.queuedPromptIds(pid, id));
+  if (!promptIds.length) return;
+  try {
+    const res = await api.fetchApi("/queue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(queueDeleteBody(promptIds)),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch (e) {
+    ggToast("Remove from queue failed", String(e?.message || e), "warn");
+    return;
+  }
+  paintRenderStatus(renderStatus.removed(promptIds));
+  ggToast(`Removed ${promptIds.length} from queue`, "", "ok");
+  syncProgressQueue();
 }
 
 function readJobsList() {
@@ -5644,8 +5689,11 @@ function mountShots(el) {
           <button type="button" class="gg-btn gg-proj-settings" title="Project settings" aria-label="Project settings"${state.pid ? "" : " disabled"}>⚙</button>
         </div>
         <span class="gg-sdk-slot"></span>
-        <span class="gg-render-badge gg-render-global" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
-        <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>
+        <div class="gg-render-row">
+          <button type="button" class="gg-btn gg-primary gg-render-btn" disabled title="Select cuts to render">Render</button>
+          <span class="gg-render-badge gg-render-global" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
+          <span class="gg-batch-prog" hidden></span>
+        </div>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
       </div>
       ${state.error ? `<div class="gg-error">${esc(state.error)}</div>` : ""}
@@ -5680,9 +5728,9 @@ function mountShots(el) {
         <button type="button" class="gg-btn gg-sel-group" disabled>Group</button>
         <button type="button" class="gg-btn gg-sel-ungroup" disabled>Ungroup</button>
         <button type="button" class="gg-btn gg-sel-x" disabled title="Clear selection">×</button>
-        <button type="button" class="gg-btn gg-primary gg-sel-render" disabled>Render</button>
         <span class="gg-version" title="Shots plugin version — if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>
-      </div>`;
+      </div>
+      <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>`;
     const projSel = root.querySelector(".gg-proj");
     projSel?.addEventListener("change", (e) => selectProject(e.target.value));
     root.querySelector(".gg-head")?.addEventListener("contextmenu", (e) => {
@@ -5738,7 +5786,7 @@ function mountShots(el) {
     root.querySelector(".gg-scene-add")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-group")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-ungroup")?.addEventListener("click", () => ungroupCuts(cutSelIds()));
-    root.querySelector(".gg-sel-render")?.addEventListener("click", () => void renderSelectedCuts());
+    root.querySelector(".gg-render-btn")?.addEventListener("click", () => void renderSelectedCuts());
     root.querySelector(".gg-sel-x")?.addEventListener("click", () => {
       state.cutSel.clear();
       cutSelAnchor = "";
@@ -5960,7 +6008,7 @@ function mountShots(el) {
   };
   const onShotsEmptyClick = (e) => {
     if (!root.contains(e.target)) return;
-    if (e.target.closest(".gg-cut") || e.target.closest(".gg-selbar") || e.target.closest(".gg-ctx")) return;
+    if (e.target.closest(".gg-cut") || e.target.closest(".gg-selbar") || e.target.closest(".gg-render-row") || e.target.closest(".gg-ctx")) return;
     if (!state.cutSel.size) return;
     state.cutSel.clear();
     cutSelAnchor = "";

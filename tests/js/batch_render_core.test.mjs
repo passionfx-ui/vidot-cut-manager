@@ -6,6 +6,7 @@ import {
   batchRenderConfirmMessage,
   batchRenderSummary,
   renderButtonState,
+  queueDeleteBody,
   RENDER_EMPTY_TIP,
   RENDER_NATIVE_TIP,
   RENDER_BUSY_TIP,
@@ -38,6 +39,13 @@ describe("batchRenderPlan", () => {
   it("unknown info counts as a candidate", () => {
     assert.deepEqual(batchRenderPlan(["x"], () => null), { queue: ["x"], skipped: [] });
     assert.deepEqual(batchRenderPlan(null, null), { queue: [], skipped: [] });
+  });
+});
+
+describe("queueDeleteBody", () => {
+  it("ComfyUI /queue delete body: string ids, no duplicates or empties", () => {
+    assert.deepEqual(queueDeleteBody(["a", "b", "a", "", null, 7]), { delete: ["a", "b", "7"] });
+    assert.deepEqual(queueDeleteBody(null), { delete: [] });
   });
 });
 

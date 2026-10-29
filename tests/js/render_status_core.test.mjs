@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  batchProgressView,
   createRenderStatus,
   idleStateView,
   promptCutTarget,
@@ -37,13 +38,19 @@ describe("createRenderStatus: cut lifecycle", () => {
     assert.deepEqual(rs.handle("execution_success", { prompt_id: "a" }), ["c1"]);
     assert.equal(rs.cutView("p", "c1"), null);
   });
-  it("error and interrupted clear too", () => {
+  it("error and interrupted end the job and leave the cut failed", () => {
     for (const t of ["execution_error", "execution_interrupted"]) {
       const rs = createRenderStatus();
       rs.queued("a", { cutId: "c1", projectId: "p" });
       rs.handle("execution_start", { prompt_id: "a" });
-      rs.handle(t, { prompt_id: "a" });
-      assert.equal(rs.cutView("p", "c1"), null, t);
+      assert.deepEqual(rs.handle(t, { prompt_id: "a", exception_message: "boom" }), ["c1"], t);
+      const v = rs.cutView("p", "c1");
+      assert.equal(v.state, "failed", t);
+      assert.equal(v.count, 0);
+      assert.equal(v.error, t === "execution_error" ? "boom" : "Interrupted");
+      assert.equal(rs.isFailed("p", "c1"), true);
+      assert.equal(rs.isFailed("p", "c2"), false);
+      assert.equal(rs.globalView("p").state, null);
     }
   });
   it("a new node resets the percent; progress without prompt_id hits the running prompt", () => {
@@ -88,6 +95,70 @@ describe("createRenderStatus: cut lifecycle", () => {
     assert.deepEqual(rs.link("a", "c1", "p"), ["c1"]);
     assert.equal(rs.cutView("p", "c1").state, "rendering");
     assert.equal(rs.globalView("p").state, null);
+  });
+});
+
+describe("createRenderStatus: failed, remove from queue, batch", () => {
+  it("failed clears when the cut is queued again, starts rendering, or succeeds", () => {
+    const rs = createRenderStatus();
+    rs.queued("a", { cutId: "c1", projectId: "p" });
+    rs.handle("execution_error", { prompt_id: "a" });
+    rs.queued("b", { cutId: "c1", projectId: "p" });
+    assert.equal(rs.cutView("p", "c1").state, "queued");
+    assert.equal(rs.isFailed("p", "c1"), false);
+    rs.handle("execution_interrupted", { prompt_id: "b" });
+    assert.equal(rs.isFailed("p", "c1"), true);
+    rs.link("c", "c1", "p");
+    rs.handle("execution_start", { prompt_id: "c" });
+    assert.equal(rs.cutView("p", "c1").state, "rendering");
+    rs.handle("execution_success", { prompt_id: "c" });
+    assert.equal(rs.cutView("p", "c1"), null);
+  });
+  it("an unlinked prompt error does not mark any cut", () => {
+    const rs = createRenderStatus();
+    rs.handle("execution_start", { prompt_id: "x" });
+    rs.handle("execution_error", { prompt_id: "x" });
+    assert.equal(rs.cutView("p", "c1"), null);
+  });
+  it("queuedPromptIds lists only waiting prompts of the cut; removed drops them", () => {
+    const rs = createRenderStatus();
+    rs.queued("a", { cutId: "c1", projectId: "p" });
+    rs.queued("b", { cutId: "c1", projectId: "p" });
+    rs.queued("c", { cutId: "c2", projectId: "p" });
+    rs.queued("d", { cutId: "c1", projectId: "q" });
+    rs.handle("execution_start", { prompt_id: "a" });
+    assert.deepEqual(rs.queuedPromptIds("p", "c1"), ["b"]);
+    assert.deepEqual(rs.removed(["b"]), ["c1"]);
+    assert.deepEqual(rs.queuedPromptIds("p", "c1"), []);
+    assert.equal(rs.cutView("p", "c1").state, "rendering");
+    rs.removed(["c"]);
+    assert.equal(rs.cutView("p", "c2"), null, "badge cleared, not failed");
+    rs.queued("c", { cutId: "c2", projectId: "p" });
+    assert.equal(rs.cutView("p", "c2"), null, "late reply for a removed prompt is ignored");
+  });
+  it("batch counts finished prompts of the last batch only; removed prompts leave the batch", () => {
+    const rs = createRenderStatus();
+    assert.equal(rs.batchView(), null);
+    rs.queued("old", { cutId: "c9", projectId: "p" });
+    rs.startBatch();
+    assert.equal(rs.batchView(), null, "no prompts yet");
+    for (const [id, c] of [["a", "c1"], ["b", "c2"], ["c", "c3"]]) {
+      rs.queued(id, { cutId: c, projectId: "p" });
+      rs.addToBatch(id);
+    }
+    rs.addToBatch("a");
+    assert.deepEqual(rs.batchView(), { done: 0, total: 3, failed: 0 });
+    rs.handle("execution_start", { prompt_id: "a" });
+    rs.handle("execution_success", { prompt_id: "a" });
+    rs.handle("execution_start", { prompt_id: "b" });
+    rs.handle("execution_error", { prompt_id: "b" });
+    assert.deepEqual(rs.batchView(), { done: 2, total: 3, failed: 1 });
+    rs.removed(["c"]);
+    assert.deepEqual(rs.batchView(), { done: 2, total: 2, failed: 1 });
+    rs.startBatch();
+    rs.queued("e", { cutId: "c2", projectId: "p" });
+    rs.addToBatch("e");
+    assert.deepEqual(rs.batchView(), { done: 0, total: 1, failed: 0 }, "new batch replaces the last; re-queue clears failed");
   });
 });
 
@@ -160,6 +231,15 @@ describe("badge views", () => {
     assert.equal(renderBadgeView({ state: "queued", count: 1 }).text, "Queued");
     assert.equal(renderBadgeView({ state: "rendering", percent: null }).text, "Rendering");
     assert.equal(renderBadgeView({ state: "rendering", percent: 40 }).text, "Rendering 40%");
+    const f = renderBadgeView({ state: "failed", count: 0, error: "OOM" });
+    assert.deepEqual([f.show, f.mode, f.text, f.pos], [true, "failed", "Failed", ""]);
+    assert.match(f.title, /failed: OOM/);
+  });
+  it("batch counter text, hidden with no batch", () => {
+    assert.equal(batchProgressView(null).show, false);
+    assert.equal(batchProgressView({ done: 0, total: 0, failed: 0 }).show, false);
+    assert.equal(batchProgressView({ done: 3, total: 10, failed: 0 }).text, "3 / 10 done");
+    assert.match(batchProgressView({ done: 3, total: 10, failed: 1 }).title, /1 failed/);
   });
   it("queue position goes to pos (text stays Queued)", () => {
     const v = renderBadgeView({ state: "queued", count: 1, position: 2 });
