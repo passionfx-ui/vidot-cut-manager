@@ -192,7 +192,9 @@ async function run() {
     await page.select(sel, pid);
     await page.waitForSelector(".gg-timeline .gg-clip .gg-edge[data-side='r']", { timeout: 15000 });
 
-    const srvSec = async () => (await getJson(page, `/gonggan/timeline?pid=${encodeURIComponent(pid)}`)).data.cuts[0].sec;
+    const tlNow = async () => (await getJson(page, `/gonggan/timeline?pid=${encodeURIComponent(pid)}`)).data;
+    const srvSec = async () => (await tlNow()).cuts[0].sec;
+    const ownSec0 = (await tlNow()).cuts[0].tl_sec;
     const clipSec = () => page.$eval(".gg-timeline .gg-clip .gg-clip-dur", (e) => parseFloat(e.textContent));
     const drag = async (dx) => {
       const box = await (await page.$(".gg-timeline .gg-clip .gg-edge[data-side='r']")).boundingBox();
@@ -225,6 +227,67 @@ async function run() {
     if (Math.abs(shown - sec2) > 0.051) throw new Error(`old reply overwrote the newer trim: shown ${shown}, newest local ${sec2}`);
     if (Math.abs(srv - sec2) > 0.051) throw new Error(`server did not end with the newest trim: server ${srv}, newest local ${sec2}`);
     console.log(`PASS  overlapping trim saves: panel ${shown}s and server ${srv}s both end at the newest trim (${sec0} -> ${sec1} -> ${sec2})`);
+    if ((await tlNow()).cuts[0].tl_sec !== ownSec0) throw new Error("a timeline trim changed the cut's own length");
+    console.log("PASS  timeline trim leaves the cut's own length alone");
+
+    // 2) 0.9.78: the timeline is independent of the Shots cut list
+    const row = (t, id) => t.cuts.find((c) => c.id === id);
+    const ids = (t) => t.cuts.map((c) => c.id).join();
+    await postJson(page, "/gonggan/cut/add", { pid });
+    await page.click(".gg-timeline .gg-reload");
+    await page.waitForFunction(() => document.querySelectorAll(".gg-timeline .gg-track .gg-clip").length === 2, { timeout: 15000 });
+    let tl = await tlNow();
+    const [c1, c2] = tl.cuts.map((c) => c.id);
+    const dragClipBy = async (id, dx) => {
+      const b = await (await page.$(`.gg-timeline .gg-clip[data-cut-id="${id}"]`)).boundingBox();
+      const x = b.x + b.width / 2, y = b.y + b.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + dx / 2, y, { steps: 4 });
+      await page.mouse.move(x + dx, y, { steps: 4 });
+      await page.mouse.up();
+      await sleep(1500); // 400 ms save debounce + request
+    };
+    await dragClipBy(c2, 120);
+    tl = await tlNow();
+    const gap = row(tl, c2).start - (row(tl, c1).start + row(tl, c1).sec);
+    if (!(gap > 0.2)) throw new Error(`moving a clip right should leave a gap (gap ${gap})`);
+    if (Math.abs(tl.total_sec - (row(tl, c2).start + row(tl, c2).sec)) > 0.011) throw new Error(`total ${tl.total_sec} must include the gap`);
+    if (ids(tl) !== [c1, c2].join()) throw new Error("a timeline move reordered the cut list");
+    console.log(`PASS  free move: ${gap.toFixed(2)}s gap kept, total ${tl.total_sec}s, cut list unchanged`);
+
+    const trackX = (await (await page.$(".gg-timeline .gg-track")).boundingBox()).x;
+    const b2 = await (await page.$(`.gg-timeline .gg-clip[data-cut-id="${c2}"]`)).boundingBox();
+    await dragClipBy(c2, trackX + 2 - b2.x);
+    tl = await tlNow();
+    if (tl.track_order.join() !== [c2, c1].join()) throw new Error(`drop over clip 1 should insert before it: ${tl.track_order.join()}`);
+    if (row(tl, c1).start < row(tl, c2).start + row(tl, c2).sec - 0.011) throw new Error("clips overlap after the drop");
+    if (ids(tl) !== [c1, c2].join()) throw new Error("a timeline reorder changed the cut list");
+    if (row(tl, c1).number !== 1 || row(tl, c2).number !== 2) throw new Error("a timeline reorder renumbered the cuts");
+    console.log("PASS  drop over another clip inserts before it and pushes it; cut list and numbers unchanged");
+
+    await page.click(`.gg-timeline .gg-clip[data-cut-id="${c2}"]`, { button: "right" });
+    await clickCtxItem(page, "Apply order to cuts");
+    await page.waitForSelector(".gg-confirm-dialog", { timeout: 8000 });
+    const title = await page.$eval(".gg-confirm-title", (e) => e.textContent);
+    if (title !== "Cut numbers will be renumbered. Continue?") throw new Error(`apply order confirm: ${title}`);
+    await page.click(".gg-confirm-ok");
+    await sleep(1200);
+    tl = await tlNow();
+    if (ids(tl) !== [c2, c1].join()) throw new Error(`Apply order to cuts: cut list ${ids(tl)}`);
+    if (tl.track_order.join() !== [c2, c1].join()) throw new Error("Apply order to cuts changed the timeline");
+    console.log("PASS  Apply order to cuts: cut list follows the timeline, timeline unchanged");
+
+    await page.click(".gg-timeline .gg-reset");
+    await page.waitForSelector(".gg-confirm-dialog", { timeout: 8000 });
+    await page.click(".gg-confirm-ok");
+    await sleep(1200);
+    tl = await tlNow();
+    if (tl.track_order.join() !== ids(tl)) throw new Error("Reset: timeline order should follow the cut list");
+    if (row(tl, c2).start !== 0 || Math.abs(row(tl, c1).start - row(tl, c2).sec) > 0.011) throw new Error("Reset: clips should be packed with no gaps");
+    if (tl.cuts.some((c) => c.in !== 0)) throw new Error("Reset: trims should be cleared");
+    if (Math.abs(row(tl, c1).sec - ownSec0) > 0.011) throw new Error(`Reset: clip 1 should be back to ${ownSec0}s (got ${row(tl, c1).sec})`);
+    console.log("PASS  timeline Reset (native): cut list order, original lengths, no gaps");
     console.log("PASS  edit overlap e2e complete");
   } finally {
     try { await cleanupProjects(page); } catch (_) {}

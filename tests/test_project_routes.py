@@ -115,8 +115,9 @@ class NativeApiTests(unittest.TestCase):
             cut1: {"in": 0, "sec": 4.0},
             cut2_id: {"in": 0, "sec": 2.5},
         })
-        self.assertEqual(tl2["cuts"][0]["id"], cut2_id)
-        self.assertEqual(tl2["cuts"][0]["sec"], 2.5)
+        self.assertEqual(tl2["track_order"], [cut2_id, cut1])
+        self.assertEqual([c["id"] for c in tl2["cuts"]], [cut1, cut2_id])  # the cut list is not reordered
+        self.assertEqual(next(c for c in tl2["cuts"] if c["id"] == cut2_id)["sec"], 2.5)
 
     def test_cut_source_workflow_template(self):
         wf_dir = Path(self._tmp.name) / "userwf"

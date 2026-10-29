@@ -21,7 +21,7 @@ from .entities import (
 from .errors import ConflictError
 from .ids import is_uuid_id, now_iso, uuid7
 from .project_settings import merge_settings_patch, normalize_settings
-from .timeline import build_timeline, timeline_order
+from .timeline import build_timeline, clip_start, reset_track, stored_track, timeline_order, track_order
 from .workflow_hash import workflow_sha256
 
 NEW_CUT_NAME = "New cut"
@@ -227,9 +227,9 @@ class LocalStore:
             order.append(cut_id)
         else:
             order.append(cut_id)
-        self._apply_timeline_order(doc, order)
+        self._apply_cut_order(doc, order)
 
-    def _apply_timeline_order(self, doc: dict[str, Any], order: list[str]) -> None:
+    def _apply_cut_order(self, doc: dict[str, Any], order: list[str]) -> None:
         active = self._active_cut_ids(doc)
         order = [x for x in order if x in active]
         cuts = self._cuts_map(doc)
@@ -708,6 +708,11 @@ class LocalStore:
                 c["deleted_at"] = now_iso()
                 bump_entity(c)
                 self._remove_cut_from_orders(doc, cid)
+                track = stored_track(doc)
+                if track is not None:  # a restored cut comes back at the timeline end
+                    track["order"] = [x for x in (track.get("order") or []) if x != cid]
+                    if isinstance(track.get("clips"), dict):
+                        track["clips"].pop(cid, None)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "delete_cuts", pid)
             return doc
@@ -782,7 +787,7 @@ class LocalStore:
             active = self._active_cut_ids(doc)
             if set(order) != active:
                 raise ValueError("order must list all active cuts exactly once")
-            self._apply_timeline_order(doc, order)
+            self._apply_cut_order(doc, order)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "reorder", pid)
             return doc
@@ -892,38 +897,93 @@ class LocalStore:
         return build_timeline(self.root, doc)
 
     def apply_timeline_edit(self, pid: str, order: list[str], clips: dict) -> dict:
-        """Reorder cuts and update per-cut trim + pick_version_id (validated against versions)."""
+        """Timeline track only: clip order and per-clip in/sec/start go to doc["timeline"]. The cut list
+        (scene cut_order, loose_order) and the cut's own sec/in are never changed here. A clip `pick`
+        still sets the cut's pick_version_id (validated against its versions). A clip without "start"
+        keeps its stored start; "start": null packs it after the previous clip."""
         with self._lock:
             doc = self._load_project_doc(pid)
             if not doc or doc.get("deleted_at"):
                 raise FileNotFoundError(pid)
             active = self._active_cut_ids(doc)
-            order = [x for x in dict.fromkeys(order) if isinstance(x, str) and x in active]
-            order += [cid for cid in active if cid not in order]
-            if set(order) != active:
-                raise ValueError("order must list all active cuts exactly once")
+            order = [x for x in dict.fromkeys(order or []) if isinstance(x, str) and x in active]
+            order += [cid for cid in track_order(doc) if cid not in order]
+            old = stored_track(doc) or {}
+            old_clips = old.get("clips") if isinstance(old.get("clips"), dict) else {}
             cuts_map = self._cuts_map(doc)
-            for cid, e in (clips or {}).items():
-                if not isinstance(cid, str) or cid not in active or not isinstance(e, dict):
+            new_clips: dict[str, dict[str, float]] = {}
+            for cid in order:
+                prev = old_clips.get(cid) if isinstance(old_clips.get(cid), dict) else {}
+                e = (clips or {}).get(cid)
+                if not isinstance(e, dict):
+                    if prev:
+                        new_clips[cid] = prev
                     continue
-                c = cuts_map[cid]
-                if "sec" in e and isinstance(e.get("sec"), (int, float)):
-                    c["sec"] = float(e["sec"])
-                if "in" in e and isinstance(e.get("in"), (int, float)):
-                    c["in"] = float(e["in"])
+                entry: dict[str, float] = {}
+                for k in ("in", "sec"):
+                    v = e.get(k, prev.get(k))
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        entry[k] = float(v)
+                st = clip_start(e) if "start" in e else clip_start(prev)
+                if st is not None:
+                    entry["start"] = round(st, 2)
+                if entry:
+                    new_clips[cid] = entry
                 pick = e.get("pick")
-                if pick is None or pick == "":
-                    pass
-                elif isinstance(pick, str):
+                if isinstance(pick, str) and pick:
+                    c = cuts_map[cid]
                     vers = self.list_versions(pid, cid)
-                    if any(v.get("id") == pick for v in vers):
-                        c["pick_version_id"] = pick
-                    else:
-                        c["pick_version_id"] = None
-                bump_entity(c)
-            self._apply_timeline_order(doc, order)
+                    new_pick = pick if any(v.get("id") == pick for v in vers) else None
+                    if c.get("pick_version_id") != new_pick:
+                        c["pick_version_id"] = new_pick
+                        bump_entity(c)
+            doc["timeline"] = {"order": order, "clips": new_clips}
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "edit", pid)
+            return doc
+
+    def reset_timeline(self, pid: str) -> dict:
+        """Rebuild the timeline from the cut list (order, original lengths, no trims, no gaps).
+        The previous timeline is kept in journal.ndjson as a "timeline_backup" line."""
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                raise FileNotFoundError(pid)
+            old = stored_track(doc)
+            doc["timeline"] = reset_track(self.root, doc)
+            self._bump_project(doc)
+            self._save_project_doc(pid, doc, "timeline_reset", pid)
+            if old is not None:
+                self._append_journal(pid, "timeline_backup", "timeline", pid, int(doc.get("rev") or 0), old)
+            return doc
+
+    def apply_track_order_to_cuts(self, pid: str) -> dict:
+        """Shots cut list follows the timeline clip order (gaps ignored); the timeline is unchanged.
+        Scenes stay together: each scene's cuts are sorted by timeline position, scenes are ordered by
+        their earliest clip, and ungrouped cuts (listed after the scenes) are sorted the same way."""
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                raise FileNotFoundError(pid)
+            rank = {cid: i for i, cid in enumerate(track_order(doc))}
+            far = len(rank)
+
+            def key(cid: Any) -> int:
+                return rank.get(cid, far)
+
+            for s in self._active_scenes(doc):
+                s["cut_order"] = sorted(s.get("cut_order") or [], key=key)
+                bump_entity(s)
+
+            def scene_key(item: tuple[int, Any]) -> tuple[int, int, int]:
+                i, s = item
+                live = [] if not isinstance(s, dict) or s.get("deleted_at") else [c for c in s.get("cut_order") or [] if c in rank]
+                return (0, min(key(c) for c in live), i) if live else (1, 0, i)
+
+            doc["scenes"] = [s for _, s in sorted(enumerate(doc.get("scenes") or []), key=scene_key)]
+            doc["loose_order"] = sorted(doc.get("loose_order") or [], key=key)
+            self._bump_project(doc)
+            self._save_project_doc(pid, doc, "apply_track_order", pid)
             return doc
 
     def sync_scene_groups(self, pid: str, groups: list[dict]) -> dict:
