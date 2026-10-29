@@ -42,6 +42,7 @@
 .gg-shots .gg-grp-fold:hover, .gg-shots .gg-grp-ren:hover, .gg-shots .gg-grp-del:hover { color: var(--gg-acc); }
 .gg-shots .gg-grp-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .gg-shots .gg-grp-meta { color: var(--gg-dim); font-variant-numeric: tabular-nums; }
+.gg-shots .gg-grp-loose > .gg-grp-head .gg-grp-title { color: var(--gg-dim); font-weight: 500; }
 /* Bottom bar: always present so the cut list never shifts; dim with nothing selected. */
 .gg-shots .gg-selbar { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; min-width: 0; padding: 4px 6px; border-top: 1px solid var(--gg-line); background: #1f2228; font-size: 11px; }
 .gg-shots .gg-selbar .gg-sel-label { white-space: nowrap; margin-right: 2px; font-variant-numeric: tabular-nums; }

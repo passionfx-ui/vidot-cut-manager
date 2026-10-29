@@ -9,6 +9,7 @@ import {
   moveCut,
   moveCuts,
   shotsDropTarget,
+  dropRestIndex,
   clientYToWrapY,
   autoScrollDelta,
   finalCutList,
@@ -86,7 +87,7 @@ describe("computeCutLabels", () => {
     assert.equal(m.get("b")?.label, "1-2");
   });
 
-  it("mixed grouped and ungrouped blocks in order", () => {
+  it("ungrouped cuts between scenes are numbered as one last block, like the Ungrouped section", () => {
     const tl = {
       cuts: [
         { id: "a", group_id: "g1" },
@@ -94,14 +95,22 @@ describe("computeCutLabels", () => {
         { id: "c", group_id: "" },
         { id: "d", group_id: "" },
         { id: "e", group_id: "g2" },
+        { id: "f" },
       ],
     };
     const m = computeCutLabels(tl);
     assert.equal(m.get("a")?.label, "1-1");
     assert.equal(m.get("b")?.label, "1-2");
-    assert.equal(m.get("c")?.label, "2-1");
-    assert.equal(m.get("d")?.label, "2-2");
-    assert.equal(m.get("e")?.label, "3-1");
+    assert.equal(m.get("e")?.label, "2-1");
+    assert.equal(m.get("c")?.label, "3-1");
+    assert.equal(m.get("d")?.label, "3-2");
+    assert.equal(m.get("f")?.label, "3-3");
+    assert.deepEqual([...m.keys()], ["a", "b", "c", "d", "e", "f"]);
+  });
+
+  it("a scene split by other cuts keeps one number", () => {
+    const m = computeCutLabels({ cuts: [{ id: "a", group_id: "g1" }, { id: "b", group_id: "g2" }, { id: "c", group_id: "g1" }] });
+    assert.deepEqual([m.get("a").label, m.get("c").label, m.get("b").label], ["1-1", "1-2", "2-1"]);
   });
 
   it("reorder changes labels within scene", () => {
@@ -338,6 +347,35 @@ describe("shotsDropTarget", () => {
     assert.equal(t.toIndex, 0);
     assert.equal(t.toGroupId, "scene1");
     assert.equal(t.lineY, 0);
+  });
+});
+
+describe("dropRestIndex (drag into / out of Ungrouped lands at the line)", () => {
+  const order = ["a1", "a2", "b1", "x", "y"];
+  const groups = [{ id: "A", cut_ids: ["a1", "a2"] }, { id: "B", cut_ids: ["b1"] }];
+  const rows = order.map((id, i) => ({ id, top: i * 10, bottom: i * 10 + 10, groupId: id[0] === "a" ? "A" : id[0] === "b" ? "B" : null }));
+  const drop = (ids, wrapY) => {
+    const t = shotsDropTarget(order, rows, wrapY);
+    return moveCuts(order, groups, ids, { toIndex: dropRestIndex(order, ids, t.toIndex), toGroupId: t.toGroupId });
+  };
+
+  it("scene cut dragged down to just before an ungrouped cut lands before it, ungrouped", () => {
+    const r = drop(["a1"], 31);
+    assert.deepEqual(r.order, ["a2", "b1", "a1", "x", "y"]);
+    assert.deepEqual(r.groups.find((g) => g.id === "A").cut_ids, ["a2"]);
+  });
+  it("dragged below the last row = end of Ungrouped", () => {
+    assert.deepEqual(drop(["a1", "b1"], 99).order, ["a2", "x", "y", "a1", "b1"]);
+  });
+  it("ungrouped cut dragged up into a scene", () => {
+    const r = drop(["y"], 11);
+    assert.deepEqual(r.order, ["a1", "y", "a2", "b1", "x"]);
+    assert.deepEqual(r.groups.find((g) => g.id === "A").cut_ids, ["a1", "y", "a2"]);
+  });
+  it("upward drops keep the index; moving cuts are not counted", () => {
+    assert.equal(dropRestIndex(order, ["y"], 1), 1);
+    assert.equal(dropRestIndex(order, ["a1", "a2"], 3), 1);
+    assert.equal(dropRestIndex(order, ["a1"], 0), 0);
   });
 });
 

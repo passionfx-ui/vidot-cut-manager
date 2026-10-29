@@ -18,31 +18,28 @@ function cutSceneBlockKey(cut) {
 }
 
 /**
- * Per-scene display labels (1-1, 1-2, 2-1…) in timeline order.
- * Each consecutive run in the same group is one scene block; each consecutive run of ungrouped cuts is one implicit scene block.
+ * Per-scene display labels (1-1, 1-2, 2-1…) matching the Shots list sections: scenes numbered in order
+ * of their first cut, cuts in cut list order within a scene, and all ungrouped cuts as one last block.
  * @param {{ cuts?: object[] }} timeline
  * @returns {Map<string, { scene: number, cut: number, label: string }>}
  */
 export function computeCutLabels(timeline) {
-  const cuts = Array.isArray(timeline?.cuts) ? timeline.cuts : [];
+  const cuts = (Array.isArray(timeline?.cuts) ? timeline.cuts : []).filter((c) => c?.id);
+  const blocks = [];
+  for (const cut of cuts) {
+    const block = cutSceneBlockKey(cut);
+    if (block !== "u" && !blocks.includes(block)) blocks.push(block);
+  }
+  if (cuts.some((c) => cutSceneBlockKey(c) === "u")) blocks.push("u");
   /** @type {Map<string, { scene: number, cut: number, label: string }>} */
   const map = new Map();
-  let sceneNum = 0;
-  let cutInScene = 0;
-  /** @type {string|null} */
-  let prevBlock = null;
-
+  const counts = new Map();
   for (const cut of cuts) {
-    if (!cut?.id) continue;
     const block = cutSceneBlockKey(cut);
-    if (prevBlock === null || block !== prevBlock) {
-      sceneNum += 1;
-      cutInScene = 1;
-      prevBlock = block;
-    } else {
-      cutInScene += 1;
-    }
-    map.set(cut.id, { scene: sceneNum, cut: cutInScene, label: `${sceneNum}-${cutInScene}` });
+    const scene = blocks.indexOf(block) + 1;
+    const n = (counts.get(block) || 0) + 1;
+    counts.set(block, n);
+    map.set(cut.id, { scene, cut: n, label: `${scene}-${n}` });
   }
   return map;
 }
@@ -341,6 +338,18 @@ export function shotsDropTarget(order, rows, wrapY) {
     toGroupId: last.groupId,
     lineY: last.bottom,
   };
+}
+
+/**
+ * shotsDropTarget's `toIndex` (a slot in the full order) as moveCuts' index among the cuts that stay,
+ * so a cut dragged down lands at the drop line instead of one row past it.
+ * @param {string[]} order
+ * @param {string[]} movingIds
+ * @param {number} toIndex
+ */
+export function dropRestIndex(order, movingIds, toIndex) {
+  const moving = new Set(movingIds || []);
+  return (order || []).slice(0, Math.max(0, toIndex)).filter((id) => !moving.has(id)).length;
 }
 
 /** @param {number} sec */

@@ -5,6 +5,7 @@ import {
   cutRowShellHtml,
   captionRowContentHtml,
   groupedListHtml,
+  shotsSections,
 } from "../../web/gg_group_list_core.js";
 
 const count = (s, sub) => s.split(sub).length - 1;
@@ -66,6 +67,31 @@ describe("groupedListHtml", () => {
 
   it("empty sections render nothing", () => {
     assert.equal(groupedListHtml([], { cutHtml: () => "x" }), "");
+  });
+});
+
+describe("shotsSections (one Ungrouped section at the bottom)", () => {
+  const ids = (secs) => secs.map((s) => `${s.type === "group" ? s.group.id : "U"}:${s.cuts.map((c) => c.id).join("")}`);
+  const cuts = ["x", "a", "y", "b", "c", "z"].map((id) => ({ id }));
+  const groups = [{ id: "g2", cut_ids: ["c"] }, { id: "g1", cut_ids: ["b", "a"] }];
+
+  it("gathers cuts in no scene into one last section, whatever their position", () => {
+    assert.deepEqual(ids(shotsSections(cuts, groups)), ["g1:ab", "g2:c", "U:xyz"]);
+  });
+  it("no Ungrouped section when every cut is in a scene; only Ungrouped when there are no scenes", () => {
+    assert.deepEqual(ids(shotsSections(cuts.slice(1, 2).concat(cuts.slice(3, 5)), groups)), ["g1:ab", "g2:c"]);
+    assert.deepEqual(ids(shotsSections(cuts, [])), ["U:xaybcz"]);
+  });
+  it("drops empty scenes, unknown ids and duplicate membership", () => {
+    const secs = shotsSections(cuts, [{ id: "g0", cut_ids: ["nope"] }, { id: "g1", cut_ids: ["a", "a"] }, { id: "g2", cut_ids: ["a", "b"] }]);
+    assert.deepEqual(ids(secs), ["g1:a", "g2:b", "U:xycz"]);
+  });
+  it("the Ungrouped header is plain: no scene id, rename, delete, fold or drag handle", () => {
+    const html = groupedListHtml(shotsSections(cuts, groups), { cutHtml: (c) => `<li data-cut-id="${c.id}"></li>` });
+    const loose = html.slice(html.indexOf("gg-grp-loose"));
+    assert.equal(html.lastIndexOf("<section"), html.indexOf('<section class="gg-grp-sec gg-grp-loose"'));
+    assert.match(loose, /<span class="gg-grp-title">Ungrouped<\/span><span class="gg-grp-meta">3<\/span>/);
+    assert.doesNotMatch(loose, /data-group-id|gg-grp-ren|gg-grp-del|gg-grp-fold|Scene ·/);
   });
 });
 
