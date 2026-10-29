@@ -238,6 +238,20 @@ async function run() {
     const cap = srvA.cuts[0]?.caption || "";
     if (cap !== text) throw new Error(`caption typed right before a project switch was lost: server has "${cap}"`);
     console.log("PASS  caption typed right before a project switch is saved to its own project");
+
+    // 3) back in A (still Caption view): the field shows the saved caption; Info view lists the same cut, no field
+    await pick(pidA);
+    await page.waitForFunction(
+      (v) => document.querySelector(".gg-root.gg-shots .gg-cut .gg-caption-text")?.value === v,
+      { timeout: 8000 },
+      text,
+    );
+    await page.click('.gg-root.gg-shots .gg-list-toggle [data-mode="info"]');
+    await page.waitForFunction(
+      () => document.querySelectorAll(".gg-root.gg-shots .gg-cut").length === 1 && !document.querySelector(".gg-root.gg-shots .gg-caption-text"),
+      { timeout: 5000 },
+    );
+    console.log("PASS  switching back shows the saved caption; Info view has the same row without the field");
     console.log("PASS  project switch race e2e complete");
   } finally {
     try { await cleanupProjects(page); } catch (_) {}

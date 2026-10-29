@@ -237,6 +237,18 @@ async function run() {
     if ((cuts[0].caption || "") !== t3) throw new Error(`blur save lost: ${cuts[0].caption}`);
     console.log(`PASS  blur flushes the edit immediately (${lag} ms)`);
 
+    // Info and Caption share the group list: same rows, Info has no field, saved captions come back in Caption
+    const rowIds = () => page.$$eval(".gg-root.gg-shots .gg-cut", (els) => els.map((e) => e.dataset.cutId).join());
+    const capIds = await rowIds();
+    await page.click('.gg-root.gg-shots .gg-list-toggle [data-mode="info"]');
+    await page.waitForFunction(() => !document.querySelector(".gg-root.gg-shots .gg-cut .gg-caption-text"), { timeout: 5000 });
+    if ((await rowIds()) !== capIds) throw new Error("Info view lists different cut rows than Caption view");
+    await page.click('.gg-root.gg-shots .gg-list-toggle [data-mode="caption"]');
+    await page.waitForFunction(() => document.querySelectorAll(".gg-root.gg-shots .gg-cut .gg-caption-text").length === 2, { timeout: 5000 });
+    const shown = await page.$$eval(".gg-root.gg-shots .gg-cut .gg-caption-text", (els) => els.map((e) => e.value));
+    if (shown[0] !== t3 || shown[1] !== t2) throw new Error(`captions after Info -> Caption: ${JSON.stringify(shown)}`);
+    console.log("PASS  Info <-> Caption keeps the same rows and the saved captions");
+
     // 3) page hide (tab switch / close) sends a waiting edit
     const t4 = `hide-${runStamp}`;
     await typeCaption(1, t4);

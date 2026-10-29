@@ -280,6 +280,17 @@ async function setListMode(page, mode) {
   await sleep(300);
 }
 
+/** Scene headers (each once) and cuts per section, as shown by the shared group renderer. */
+async function listShape(page) {
+  return page.evaluate(() => {
+    const secs = [...document.querySelectorAll(".gg-root.gg-shots .gg-grp-sec")];
+    return {
+      heads: secs.map((s) => `${s.dataset.groupId || "loose"}:${s.querySelectorAll(":scope > .gg-grp-head").length}`),
+      cuts: secs.map((s) => [...s.querySelectorAll(".gg-cut")].map((li) => li.dataset.cutId).join(",")),
+    };
+  });
+}
+
 async function createProjectViaUi(page, name) {
   await page.evaluate(() => {
     document.querySelector(".gg-root.gg-shots .gg-head")?.dispatchEvent(
@@ -537,10 +548,25 @@ async function main() {
     if (!hidden) throw new Error("warning should hide for end card");
   });
 
-  await runScenario("06", "Caption persists after reload (Caption mode)", async () => {
+  await runScenario("06", "Caption view: same scene groups as Info, field-only rows, cut drag, caption persists", async () => {
     const note = `note-${runStamp}`;
+    await setListMode(page, "info");
+    const infoShape = await listShape(page);
     await setListMode(page, "caption");
     try {
+      const capShape = await listShape(page);
+      if (JSON.stringify(capShape) !== JSON.stringify(infoShape)) {
+        throw new Error(`Caption groups differ from Info: ${JSON.stringify(capShape)} vs ${JSON.stringify(infoShape)}`);
+      }
+      if (capShape.heads.some((h) => !h.endsWith(":1"))) throw new Error(`scene header not shown once: ${capShape.heads}`);
+      const extra = await page.$$eval(".gg-root.gg-shots .gg-cut", (els) =>
+        els.filter((li) => li.children.length !== 1 || !li.firstElementChild.classList.contains("gg-caption-text")).length
+      );
+      if (extra) throw new Error(`${extra} Caption row(s) show more than the caption field`);
+      const before = await cutIdOrder(page);
+      await dragCut(page, 0, 2);
+      const after = await cutIdOrder(page);
+      if (after.join() === before.join()) throw new Error(`cut drag did nothing in Caption view: ${before}`);
       const cuts = await page.$$(".gg-root.gg-shots .gg-cut");
       if (!cuts.length) throw new Error("need a cut");
       const capBox = await cuts[0].$(".gg-caption-text");
@@ -622,19 +648,16 @@ async function main() {
     try {
       const cuts = await page.$$(".gg-root.gg-shots .gg-cut");
       if (cuts.length < 2) throw new Error("need 2+ cuts");
-      const secondName = await cuts[1].$eval(
-        ".gg-cut-title",
-        (el) => el.textContent?.trim() || ""
-      );
+      const secondId = await page.evaluate((el) => el.dataset.cutId, cuts[1]);
       const capBox = await cuts[1].$(".gg-caption-text");
       if (!capBox) throw new Error("card caption textarea missing");
       const nb = await capBox.boundingBox();
       if (!nb) throw new Error("caption box missing");
       await page.mouse.click(nb.x + nb.width / 2, nb.y + nb.height / 2);
       await sleep(400);
-      const selName = await page.$eval(".gg-root.gg-shots .gg-cut.gg-on .gg-cut-title", (el) => el.textContent?.trim() || "").catch(() => "");
-      if (selName !== secondName) {
-        throw new Error(`single click on caption should select cut: selected=${selName} expected=${secondName}`);
+      const selId = await page.$eval(".gg-root.gg-shots .gg-cut.gg-on", (el) => el.dataset.cutId).catch(() => "");
+      if (selId !== secondId) {
+        throw new Error(`single click on caption should select cut: selected=${selId} expected=${secondId}`);
       }
       const focusedAfterClick = await page.evaluate(
         () => document.activeElement?.classList?.contains("gg-caption-text") ?? false
