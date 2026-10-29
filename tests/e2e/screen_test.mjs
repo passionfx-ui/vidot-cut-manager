@@ -710,6 +710,20 @@ async function main() {
     const paths = await fetchWorkflowPaths(page);
     await page.click(".gg-root.gg-shots .gg-proj-settings");
     await page.waitForSelector('.gg-modal[aria-label="Project settings"] .gg-tpl-select', { timeout: 8000 });
+    const layout = await page.evaluate(() => {
+      const m = document.querySelector('.gg-modal[aria-label="Project settings"]');
+      return {
+        fields: m.querySelectorAll(":scope > .gg-modal-field").length,
+        folder: !!m.querySelector(".gg-modal-folder"),
+        native: !!m.querySelector("button[type=submit]"),
+        removed: [".gg-modal-name", ".gg-modal-resolution", ".gg-modal-fps", ".gg-modal-cut-sec", ".gg-modal-caption-lang"]
+          .filter((s) => m.querySelector(s)),
+      };
+    });
+    if (layout.removed.length) throw new Error(`Project Settings still shows removed fields: ${layout.removed}`);
+    if (layout.native && (!layout.folder || layout.fields !== 2)) {
+      throw new Error(`Project Settings should be Output folder + Default template: ${JSON.stringify(layout)}`);
+    }
     await page.focus(".gg-modal .gg-tpl-select");
     await sleep(400);
     const opts = await page.$$eval(".gg-modal .gg-tpl-select option", (els) =>

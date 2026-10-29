@@ -267,23 +267,73 @@ async function run() {
 
     await page.click(".gg-root.gg-shots .gg-proj-settings");
     await page.waitForSelector('.gg-modal[aria-label="Project settings"]', { timeout: 8000 });
-    const settingsFields = await page.evaluate(() => ({
-      title: document.querySelector(".gg-modal .gg-modal-title")?.textContent?.trim() || "",
-      name: !!document.querySelector(".gg-modal-name"),
-      resolution: !!document.querySelector(".gg-modal-resolution"),
-      fps: !!document.querySelector(".gg-modal-fps"),
-      cutSec: !!document.querySelector(".gg-modal-cut-sec"),
-      captionLang: !!document.querySelector(".gg-modal-caption-lang"),
-      folder: !!document.querySelector(".gg-modal-folder"),
-      template: !!document.querySelector(".gg-modal .gg-tpl-select"),
-      useLast: !!document.querySelector(".gg-modal .gg-tpl-use-last"),
-    }));
+    const settingsFields = await page.evaluate(() => {
+      const m = document.querySelector('.gg-modal[aria-label="Project settings"]');
+      return {
+        title: m?.querySelector(".gg-modal-title")?.textContent?.trim() || "",
+        fieldCount: m?.querySelectorAll(":scope > .gg-modal-field").length ?? 0,
+        folderLabel: m?.querySelector(".gg-modal-folder")?.closest(".gg-modal-field")?.firstChild?.textContent?.trim() || "",
+        folderValue: m?.querySelector(".gg-modal-folder")?.value ?? null,
+        folderHint: m?.querySelector(".gg-modal-folder ~ .gg-modal-hint")?.textContent || "",
+        templateLabel: m?.querySelector(".gg-tpl-label")?.textContent?.trim() || "",
+        template: !!m?.querySelector(".gg-tpl-select"),
+        useLast: !!m?.querySelector(".gg-tpl-use-last"),
+        removed: [".gg-modal-name", ".gg-modal-resolution", ".gg-modal-fps", ".gg-modal-cut-sec", ".gg-modal-caption-lang"]
+          .filter((s) => m?.querySelector(s)),
+        buttons: [...(m?.querySelectorAll(".gg-modal-actions button") || [])].map((b) => b.textContent?.trim()),
+      };
+    });
     if (settingsFields.title !== "Project Settings") throw new Error(`modal title wrong: "${settingsFields.title}"`);
-    if (Object.entries(settingsFields).some(([k, v]) => k !== "title" && !v)) {
-      throw new Error(`Project settings dialog incomplete: ${JSON.stringify(settingsFields)}`);
+    if (settingsFields.fieldCount !== 2) throw new Error(`Project Settings should have exactly 2 settings: ${JSON.stringify(settingsFields)}`);
+    if (settingsFields.folderLabel !== "Output folder") throw new Error(`folder label wrong: "${settingsFields.folderLabel}"`);
+    if (settingsFields.templateLabel !== "Default template" || !settingsFields.template || !settingsFields.useLast) {
+      throw new Error(`template field incomplete: ${JSON.stringify(settingsFields)}`);
     }
-    console.log("PASS  gear opens Project Settings with name, setup fields and template selector");
-    await page.click(".gg-modal-cancel");
+    if (settingsFields.removed.length) throw new Error(`removed fields still shown: ${settingsFields.removed}`);
+    if (!/Empty = default/.test(settingsFields.folderHint)) throw new Error(`folder hint missing: "${settingsFields.folderHint}"`);
+    if (settingsFields.buttons.join() !== "Cancel,Save") throw new Error(`buttons wrong: ${settingsFields.buttons}`);
+    if (pythonOk && settingsFields.folderValue !== "N:\\ZZ-test-folder") {
+      throw new Error(`Output folder should show the saved path: "${settingsFields.folderValue}"`);
+    }
+    console.log("PASS  gear opens Project Settings: Output folder + Default template only, Cancel / Save");
+
+    const SAVE_BTN = '.gg-modal[aria-label="Project settings"] button[type=submit]';
+    const setFolder = (v) =>
+      page.$eval(".gg-modal-folder", (el, val) => {
+        el.value = val;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      }, v);
+    await setFolder("relative\\folder");
+    await page.click(SAVE_BTN);
+    const badFolder = await (await page.waitForFunction(
+      () => document.querySelector(".gg-modal-folder-err")?.textContent?.trim(),
+      { timeout: 8000 },
+    )).jsonValue();
+    if (!(await page.$('.gg-modal[aria-label="Project settings"]'))) throw new Error("modal closed on an invalid folder");
+    console.log(`PASS  invalid Output folder blocks Save with an inline message: "${badFolder}"`);
+
+    const okFolder = path.join(os.tmpdir(), `${TEST_PREFIX}-${runStamp}`, "Out");
+    await setFolder(okFolder);
+    await page.click(SAVE_BTN);
+    const outcome = await (await page.waitForFunction(
+      () => (!document.querySelector(".gg-modal-backdrop") ? "closed" : document.querySelector(".gg-modal-folder-err")?.textContent?.trim()),
+      { timeout: 15000 },
+    )).jsonValue();
+    const saved = outcome === "closed" ? "" : outcome;
+    if (saved && /Restart ComfyUI/.test(saved)) {
+      console.log("SKIP  folder check route not loaded yet (restart ComfyUI for 0.9.82)");
+      await page.click(".gg-modal-cancel");
+    } else if (saved) {
+      throw new Error(`valid Output folder rejected: ${saved}`);
+    } else {
+      const s2 = (await getJson(page, `/gonggan/timeline?pid=${encodeURIComponent(pid)}`)).data?.project?.settings || {};
+      if (s2.project_folder !== okFolder) throw new Error(`Output folder not saved: ${s2.project_folder}`);
+      if (s2.fps !== 30 || Number(s2.cut_seconds) !== 5 || s2.width !== 720 || s2.height !== 1280) {
+        throw new Error(`hidden settings changed by Save: ${JSON.stringify(s2)}`);
+      }
+      if (fs.existsSync(okFolder)) throw new Error("Save must not create the Output folder");
+      console.log("PASS  Output folder saved (other stored settings untouched, folder not created)");
+    }
 
     await page.evaluate(() => {
       document.querySelector(".gg-root.gg-shots .gg-head")?.dispatchEvent(
@@ -292,12 +342,34 @@ async function run() {
     });
     await page.waitForSelector(".gg-ctx", { timeout: 8000 });
     const menuLabels = await page.$$eval(".gg-ctx-item", (els) => els.map((el) => el.textContent?.trim()));
-    if (menuLabels.includes("Rename Project…")) throw new Error("Rename Project… should be in Project Settings now");
+    if (!menuLabels.includes("Rename Project…")) throw new Error("Rename Project… should be back in the project menu");
     if (!menuLabels.includes("Delete Project")) throw new Error("Delete Project should stay in the project menu");
     await clickCtxItem(page, "Project Settings…");
     await page.waitForSelector('.gg-modal[aria-label="Project settings"]', { timeout: 8000 });
-    console.log("PASS  project menu: Project Settings… opens the same modal, Delete Project kept, Rename moved");
+    console.log("PASS  project menu: Project Settings… opens the same modal, Rename Project… and Delete Project kept");
     await page.click(".gg-modal-cancel");
+
+    await page.evaluate(() => {
+      document.querySelector(".gg-root.gg-shots .gg-head")?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 40 })
+      );
+    });
+    await clickCtxItem(page, "Rename Project…");
+    await page.waitForSelector(".gg-ask-dialog .gg-ask-input", { timeout: 8000 });
+    const askValue = await page.$eval(".gg-ask-dialog .gg-ask-input", (el) => el.value);
+    if (askValue !== name) throw new Error(`rename prompt should show the current name: "${askValue}"`);
+    await page.keyboard.press("End");
+    await page.type(".gg-ask-dialog .gg-ask-input", " R", { delay: 5 });
+    await page.click(".gg-ask-dialog .gg-ask-ok");
+    await page.waitForFunction(
+      (n) => {
+        const sel = document.querySelector(".gg-root.gg-shots .gg-proj");
+        return sel?.options[sel.selectedIndex]?.textContent.includes(n);
+      },
+      { timeout: 15000 },
+      `${name} R`
+    );
+    console.log("PASS  Rename Project… renames via the in-app prompt");
 
     if (blockedPromptAttempts > 0) {
       throw new Error(`unexpected blocked posts: ${blockedPromptAttempts}`);

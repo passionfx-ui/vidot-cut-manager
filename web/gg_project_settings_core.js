@@ -89,6 +89,23 @@ export function clampProjectFolder(value) {
 }
 
 /**
+ * Settings patch for the Project Settings modal: only the Output folder (other stored keys are left as they are).
+ * @returns {{ project_folder: string } | null} null when the folder is unchanged
+ */
+export function projectSettingsModalPatch(current, folderValue) {
+  const folder = clampProjectFolder(folderValue);
+  if (folder === normalizeProjectSettings(current).project_folder) return null;
+  return { project_folder: folder };
+}
+
+/** Inline message for a failed POST /gonggan/folder/check. @param {{ status?: number, message?: string }|null|undefined} err */
+export function folderCheckErrorText(err) {
+  const st = err?.status;
+  if (st === 404 || st === 405) return "Restart ComfyUI to enable the folder check, then Save again.";
+  return String(err?.message || "Folder check failed");
+}
+
+/**
  * @param {Record<string, unknown>|null|undefined} raw
  * @returns {typeof DEFAULT_PROJECT_SETTINGS}
  */
