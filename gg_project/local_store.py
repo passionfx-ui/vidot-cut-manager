@@ -229,6 +229,17 @@ class LocalStore:
             order.append(cut_id)
         self._apply_cut_order(doc, order)
 
+    def _keep_track_order(self, doc: dict[str, Any], before: list[str]) -> None:
+        """A never-edited timeline (no doc["timeline"]) follows the cut list. Once the cut list order
+        changes, store `before` (the track order before the change) so the timeline keeps it; cuts
+        not in `before` (new / restored) end up at the timeline end."""
+        if stored_track(doc) is not None:
+            return
+        now = timeline_order(doc)
+        live, old = set(now), set(before)
+        if now != [c for c in before if c in live] + [c for c in now if c not in old]:
+            doc["timeline"] = {"order": list(before), "clips": {}}
+
     def _apply_cut_order(self, doc: dict[str, Any], order: list[str]) -> None:
         active = self._active_cut_ids(doc)
         order = [x for x in order if x in active]
@@ -370,6 +381,7 @@ class LocalStore:
             doc = self._load_project_doc(pid)
             if not doc or doc.get("deleted_at"):
                 raise FileNotFoundError(pid)
+            before = track_order(doc)
             scene = new_scene(name)
             doc.setdefault("scenes", []).append(scene)
             cuts = self._cuts_map(doc)
@@ -381,6 +393,7 @@ class LocalStore:
                 c["scene_id"] = scene["id"]
                 bump_entity(c)
                 scene["cut_order"].append(cid)
+            self._keep_track_order(doc, before)
             self._bump_project(doc)
             bump_entity(scene)
             self._save_project_doc(pid, doc, "add_scene", scene["id"])
@@ -408,6 +421,7 @@ class LocalStore:
             scene = self._scene(doc, scene_id)
             if not scene:
                 raise ValueError("scene not found")
+            before = track_order(doc)
             order = timeline_order(doc)
             try:
                 pos = order.index(scene["cut_order"][0]) if scene.get("cut_order") else len(order)
@@ -423,6 +437,7 @@ class LocalStore:
             loose = [x for x in (doc.get("loose_order") or []) if x not in cut_ids]
             new_loose = loose[:pos] + cut_ids + loose[pos:]
             doc["loose_order"] = new_loose
+            self._keep_track_order(doc, before)
             bump_entity(scene)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "ungroup_scene", scene_id)
@@ -440,6 +455,7 @@ class LocalStore:
             doc = self._load_project_doc(pid)
             if not doc or doc.get("deleted_at"):
                 raise FileNotFoundError(pid)
+            before = track_order(doc)
             workflow_sha = None
             if template_graph is not None:
                 workflow_sha = self.put_blob(pid, template_graph)
@@ -458,6 +474,7 @@ class LocalStore:
             cuts[cut["id"]] = cut
             doc["cuts"] = cuts
             self._insert_cut_in_order(doc, cut["id"], sid, after)
+            self._keep_track_order(doc, before)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "add_cut", cut["id"])
             return doc
@@ -756,6 +773,7 @@ class LocalStore:
             if not doc or doc.get("deleted_at"):
                 raise FileNotFoundError(pid)
             cuts = self._cuts_map(doc)
+            before = track_order(doc)
             target = ids
             if target is None:
                 target = [cid for cid, c in cuts.items() if c.get("deleted_at")]
@@ -775,6 +793,7 @@ class LocalStore:
                     loose = doc.get("loose_order") or []
                     if cid not in loose:
                         doc["loose_order"] = list(loose) + [cid]
+            self._keep_track_order(doc, before)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "restore_cuts", pid)
             return doc
@@ -787,7 +806,9 @@ class LocalStore:
             active = self._active_cut_ids(doc)
             if set(order) != active:
                 raise ValueError("order must list all active cuts exactly once")
+            before = track_order(doc)
             self._apply_cut_order(doc, order)
+            self._keep_track_order(doc, before)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "reorder", pid)
             return doc
@@ -993,6 +1014,7 @@ class LocalStore:
             if not doc or doc.get("deleted_at"):
                 raise FileNotFoundError(pid)
             active = self._active_cut_ids(doc)
+            before = track_order(doc)
             order = timeline_order(doc)
             seen_gids: set[str] = set()
             assigned: set[str] = set()
@@ -1054,6 +1076,7 @@ class LocalStore:
                     bump_entity(c)
             doc["scenes"] = new_scenes
             doc["loose_order"] = loose
+            self._keep_track_order(doc, before)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "sync_groups", pid)
             return doc
