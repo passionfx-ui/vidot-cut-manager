@@ -43,12 +43,13 @@ export function sceneLabelOrDefault(sceneName) {
 }
 
 /**
- * Cut card header parts `<cutLabel> <Scene>` (same scene rule as the tab label).
- * @returns {{ cutLabel: string, scene: string }}
+ * Cut card header parts `<cutLabel> <CutName>`; the scene name is shown only on the scene group header.
+ * @returns {{ cutLabel: string, name: string }}
  */
 export function cutHeaderParts(cut, timeline, labels) {
   const p = shotTabCutParts(cut, timeline, labels);
-  return { cutLabel: collapseWs(p.cutLabel), scene: sceneLabelOrDefault(p.sceneName) };
+  if (cut?.kind === "reference") return { cutLabel: collapseWs(p.cutLabel), name: "" };
+  return { cutLabel: collapseWs(p.cutLabel), name: collapseWs(cut?.name) || "(untitled)" };
 }
 
 function truncateWithEllipsis(s, maxLen) {
