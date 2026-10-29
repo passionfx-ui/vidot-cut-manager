@@ -28,7 +28,7 @@ import {
   formatMinSecDot,
   versionIndexFromList,
   formatCutHeaderLengths,
-  formatPickedVersionInfo,
+  formatCutVersionStatus,
   versionRepState,
   plannedLenInputPlaceholder,
   addCutTarget,
@@ -127,6 +127,7 @@ import {
   workflowFromVersionRecord,
 } from "./gg_rep_wf_core.js";
 import {
+  cutHeaderParts,
   formatShotTabLabel,
   formatShotTabTitle,
   normalizeTabDescriptor,
@@ -156,7 +157,7 @@ import {
 import { buildSrt, srtFileName, effectiveCaption, captionEditChanged, captionFieldPlaceholder } from "./gg_caption_core.js";
 import { decideVideoSync } from "./gg_playback_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
-import { createRenderStatus, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
+import { createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
 import {
   stepMove,
@@ -3437,7 +3438,7 @@ function paintAllCutProgress() {
 
 function paintRenderBadge(badge, v) {
   if (!badge) return;
-  const key = v.show ? `${v.mode}|${v.text}|${v.title}` : "";
+  const key = v.show ? `${v.mode}|${v.text}|${v.pos || ""}|${v.title}` : "";
   if (badge.dataset.rs === key) return;
   badge.dataset.rs = key;
   badge.hidden = !v.show;
@@ -3445,6 +3446,8 @@ function paintRenderBadge(badge, v) {
   badge.classList.toggle("gg-rs-queued", v.mode === "queued");
   const text = badge.querySelector(".gg-rs-text");
   if (text) text.textContent = v.text;
+  const pos = badge.querySelector(".gg-rs-pos");
+  if (pos) pos.textContent = v.pos || "";
   if (v.title) badge.title = v.title;
   else badge.removeAttribute("title");
 }
@@ -4227,9 +4230,12 @@ function refreshCutRowBadges(cutId) {
   const c = cutByIdTimeline(cutId);
   if (!c) return;
   const labels = computeCutLabels(state.timeline);
+  const head = cutHeaderParts(c, state.timeline, labels);
   document.querySelectorAll(`.gg-cut[data-cut-id="${CSS.escape(cutId)}"]`).forEach((li) => {
     const num = li.querySelector(".gg-num");
-    if (num) num.textContent = cutDisplayLabel(c, labels);
+    if (num) num.textContent = head.cutLabel;
+    const scene = li.querySelector(".gg-cut-scene");
+    if (scene) scene.textContent = head.scene;
     const len = li.querySelector(".gg-cut-len");
     if (len) {
       const liInfo = formatCutHeaderLengths(c);
@@ -4283,7 +4289,9 @@ function cutRowHtml(c, labels) {
   const bodyArea = `<textarea class="gg-caption-text" rows="${listCaption ? 3 : 1}" placeholder="${esc(capPh)}"${roAttr} title="${esc(capTip)}">${esc(effectiveCaption(c))}</textarea>`;
   const warn = lengthWarning(c);
   const lenInfo = formatCutHeaderLengths(c);
-  const verInfo = formatPickedVersionInfo(c);
+  const verInfo = formatCutVersionStatus(c);
+  const head = cutHeaderParts(c, state.timeline, labels);
+  const idle = idleStateView(!!c.media?.id);
   const grpTip = c.group_name ? `${c.group_name} · ` : "";
   const nameTitle = `${grpTip}${c.story || c.prompt || c.name || ""}`.trim();
   const headerBadges = [
@@ -4301,13 +4309,16 @@ function cutRowHtml(c, labels) {
       <div class="gg-cut-text">
         <div class="gg-cut-header" title="${esc(nameTitle)}">
           ${isNativeProject() ? '<span class="gg-drag-handle" title="Drag to reorder (or Alt+Up/Down)" aria-hidden="true">\u22EE\u22EE</span>' : ""}
-          <span class="gg-num">${esc(cutDisplayLabel(c, labels))}</span>
+          <span class="gg-cut-head"><span class="gg-num">${esc(head.cutLabel)}</span> <span class="gg-cut-scene">${esc(head.scene)}</span></span>
           <span class="gg-cut-title">${esc(displayCutName(c))}</span>
-          ${verInfo.text ? `<span class="gg-cut-ver" title="${esc(verInfo.title)}">${esc(verInfo.text)}</span>` : ""}
-          <span class="gg-cut-len" title="${esc(lenInfo.title)}">${esc(lenInfo.text)}</span>
-          <span class="gg-render-badge" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
           ${headerBadges ? `<span class="gg-cut-header-badges">${headerBadges}</span>` : ""}
           <div class="gg-stage-row" title="">${stageDots}</div>
+        </div>
+        <div class="gg-cut-status">
+          <span class="gg-cut-state"><span class="gg-render-badge" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span><span class="gg-rs-pos"></span></span><span class="gg-cut-idle" title="${esc(idle.title)}">${esc(idle.text)}</span></span>
+          <span class="gg-cut-cur" title="${esc(verInfo.title)}">${esc(verInfo.text || "—")}</span>
+          <span class="gg-cut-ver" title="${esc(verInfo.title)}">${esc(verInfo.detail)}</span>
+          <span class="gg-cut-len" title="${esc(lenInfo.title)}">${esc(lenInfo.text)}</span>
         </div>
         ${bodyArea}
       </div>

@@ -21,7 +21,9 @@ import {
   versionIndexFromList,
   formatCutHeaderLengths,
   cutBaseSec,
+  cutOriginalSec,
   cutTimelineSec,
+  formatCutVersionStatus,
   formatPickedVersionInfo,
   versionRepState,
   plannedLenInputPlaceholder,
@@ -121,9 +123,28 @@ describe("computeCutLabels", () => {
 });
 
 describe("cut header lengths", () => {
-  it("shows edited length when trim differs", () => {
+  it("shows only the original length, never the timeline trim", () => {
     const r = formatCutHeaderLengths({ tl_sec: 4, sec: 3.2 });
-    assert.equal(r.text, "4.0s > 3.2s");
+    assert.equal(r.text, "4.0s");
+    assert.equal(r.title, "Original length 4.0s");
+    assert.equal(formatCutHeaderLengths({ sec: 2.3 }).text, "2.3s");
+  });
+  it("video: original is the media length, not the trimmed clip", () => {
+    const c = { tl_sec: 3, sec: 1.5, media: { id: "v1", kind: "video", seconds: 5.04 } };
+    assert.equal(cutOriginalSec(c), 5.04);
+    assert.equal(formatCutHeaderLengths(c).text, "5.0s");
+    assert.equal(cutOriginalSec({ planned_sec: 2, sec: 1, media: { id: "i", kind: "image", seconds: 9 } }), 2);
+    assert.equal(cutOriginalSec({ tl_sec: 3, media: { id: "v", kind: "video", seconds: 0 } }), 3);
+  });
+  it("version status: Best vN with a pick, Latest vN without", () => {
+    const vl = [{ id: "a", created: 1 }, { id: "b", created: 2 }, { id: "c", created: 3 }];
+    const best = formatCutVersionStatus({ pick: "b", media: { id: "b", kind: "image", width: 1024, height: 576 }, versions_list: vl });
+    assert.equal(best.text, "Best v02");
+    assert.equal(best.detail, "image · 1024x576");
+    const latest = formatCutVersionStatus({ pick: null, media: { id: "c", kind: "video" }, versions_list: vl });
+    assert.equal(latest.text, "Latest v03");
+    assert.equal(latest.detail, "video");
+    assert.deepEqual(formatCutVersionStatus({ media: null }), { text: "", detail: "", title: "No versions yet" });
   });
   it("uses planned_sec as base", () => {
     assert.equal(cutBaseSec({ planned_sec: 5, tl_sec: 4, sec: 3 }), 5);

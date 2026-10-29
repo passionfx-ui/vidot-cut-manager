@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  cutHeaderParts,
   displayWorkflowFilename,
   formatShotTabLabel,
   formatShotTabTitle,
   normalizeTabDescriptor,
   planTabLabels,
+  sceneLabelOrDefault,
   shotTabCutParts,
 } from "../../web/gg_tab_label_core.js";
+import { computeCutLabels } from "../../web/gg_cuts_core.js";
 
 describe("shotTabCutParts", () => {
   const tl = (cuts, groups = []) => ({ cuts, groups });
@@ -82,6 +85,31 @@ describe("shotTabCutParts", () => {
       sceneName: "",
       cutLabel: "Hero",
     });
+  });
+});
+
+describe("cutHeaderParts (cut card header, same Scene rule as the tab label)", () => {
+  const groups = [{ id: "g1", name: "Scene1" }, { id: "g2", name: "  " }];
+  const cuts = [
+    { id: "a", group_id: "g1" },
+    { id: "b", group_id: "g1" },
+    { id: "c", group_id: "g1" },
+    { id: "d", group_id: "g1" },
+    { id: "e", group_id: "" },
+    { id: "f", group_id: "g2" },
+  ];
+  const t = { cuts, groups };
+  it("<cutLabel> <SceneName>", () => {
+    assert.deepEqual(cutHeaderParts(cuts[3], t), { cutLabel: "1-4", scene: "Scene1" });
+  });
+  it("no scene or empty scene name -> literal Scene", () => {
+    assert.deepEqual(cutHeaderParts(cuts[4], t), { cutLabel: "2-1", scene: "Scene" });
+    assert.deepEqual(cutHeaderParts(cuts[5], t), { cutLabel: "3-1", scene: "Scene" });
+    assert.equal(sceneLabelOrDefault(""), "Scene");
+    assert.equal(sceneLabelOrDefault("  Intro  "), "Intro");
+  });
+  it("precomputed labels give the same result", () => {
+    assert.deepEqual(cutHeaderParts(cuts[1], t, computeCutLabels(t)), cutHeaderParts(cuts[1], t));
   });
 });
 
