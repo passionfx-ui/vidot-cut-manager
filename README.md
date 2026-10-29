@@ -20,7 +20,7 @@ Plan a short film as projects, scenes and cuts, open each cut's workflow on the 
 
 - **Shots sidebar tab** - projects, scenes, and cuts with thumbnails, drag-to-reorder (drag a cut, or drag a scene header to move the whole scene; **Esc** cancels), and **per-scene cut labels** (`1-1`, `1-2`, `2-1`, …) derived from scene blocks and timeline order.
 - **One click, one workflow** - clicking a cut opens that cut's workflow in a single reusable canvas tab (labelled `Project / Cut`). Unsaved edits are auto-saved when you switch cuts.
-- **Takes / versions** - *Send last ComfyUI output* attaches your latest render to the cut that queued it. Every take is kept; until you mark one as **Best** (manual only), the newest take is shown. Click a take's thumbnail to open the workflow that made it (embedded in the image, else the saved one) in the same canvas tab; this does not change Best.
+- **Takes / versions** - *Send last ComfyUI output* attaches your latest render to the cut that queued it. Every take is kept; until you mark one as **Best** (manual only), the newest take is shown. Click a take's thumbnail to open the workflow that made it (embedded in the image, else the saved one) in the same canvas tab; this does not change Best. Right-click a cut (or its timeline clip) > **Regen** opens the cut's current workflow and, after you confirm, queues it once; the result comes back through *Send last output* (if that cut is already open, the open graph is queued as is).
 - **Timeline bottom panel** - toggle with the **Timeline** button or **T**. All cuts in order on one track, trim handles, playback of the picked takes as a continuous rough cut.
 - **Production tracking** - summary bar `Image a/N · Video b/N · Best c/N`, project completion %, *Needs redo* flag, **Show redo cuts only** filter, 3-second rule warning (with *End card* exemption).
 - **Caption field** - one text area per cut for director notes and dialogue (placeholder includes the project caption language). **Info** vs **Caption** list modes change layout only; **Export captions (.srt)** uses stored caption text only, timed from cut order and lengths.
@@ -31,7 +31,7 @@ Plan a short film as projects, scenes and cuts, open each cut's workflow on the 
 - **Keyboard shortcuts** (Shots list, while the pointer is over it or focus is inside; not while typing) - **Up / Down** previous / next cut, **Enter** open the selected cut, **F2** rename, **Alt+G** group into a scene, **Alt+Shift+G** remove from scene, **Alt+N** add a cut after the selected one, **Alt+Up / Alt+Down** move cuts, **Delete** move to Trash, **Esc** clear selection, **T** toggle Timeline.
 - **Project templates** - link a saved ComfyUI workflow as the starting graph for new cuts.
 - **Missing Load Image guard** - highlights `Load Image` nodes whose file is missing and blocks queueing until fixed.
-- **Safe by design** - all edit data is stored inside the plugin folder; it never queues a generation on its own (you press *Run*).
+- **Safe by design** - all edit data is stored inside the plugin folder; it never queues a generation on its own (you press *Run* or confirm *Regen*).
 
 ![Cut list with status dots](docs/images/shots.png)
 
@@ -85,7 +85,7 @@ Everything is written under the plugin folder (all gitignored): `projects/`, `ed
 ## Notes for judges / reviewers
 
 - Runs **locally** against your ComfyUI instance; the plugin does not call out to the network for core Shots/Timeline features.
-- Nothing is queued unless **you** press Run in ComfyUI (Regenerate requires an explicit confirm after a dry run).
+- Nothing is queued unless **you** press Run in ComfyUI or confirm **Regen** (legacy Regenerate also shows a dry run first).
 - Project edits, versions, and cache files stay under this custom node's folder (plus ComfyUI's normal output/user workflow paths when you save or export).
 - Automated tests (no GPU, no generation):
   ```bash
