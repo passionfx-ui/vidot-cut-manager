@@ -24,6 +24,7 @@ import {
   finalCutList,
   filterCuts,
   redoFilterOn,
+  shotsViewOf,
   fileBaseName,
   projectCompletion,
   formatDueDisplay,
@@ -256,6 +257,8 @@ const SHOW_STATUS_PANEL = true;
 const CUT_PANEL_ROOT_CLASS = SHOW_CUT_PANEL ? "" : SHOW_STATUS_PANEL ? " gg-cutpanel-status" : " gg-cutpanel-off";
 /** "Show redo cuts only" option in the Shots toolbar. Off = not shown and the filter is forced off. */
 const SHOW_REDO_FILTER = false;
+/** "Cuts | Final cut list" toggle in the Shots toolbar. Off = not shown and the view is forced to "cuts". */
+const SHOW_FINAL_LIST = false;
 const bus = new EventTarget();
 const state = { projects: [], projectsLoaded: false, pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
 // Every assignment to state.timeline that is not a load result counts as a mutation (see gg_timeline_guard_core.js).
@@ -5111,7 +5114,7 @@ const batchRenderUi = { running: false };
 function shotsNavOrder() {
   const tl = state.timeline;
   if (!tl) return { order: [], hidden: [] };
-  if (shotsUi.view === "final") return { order: finalCutList(tl).items.map((it) => it.cutId), hidden: [] };
+  if (shotsViewOf(SHOW_FINAL_LIST, shotsUi.view) === "final") return { order: finalCutList(tl).items.map((it) => it.cutId), hidden: [] };
   const cuts = redoFilterOn(SHOW_REDO_FILTER, shotsUi.needsRedoOnly) ? filterCuts(tl.cuts, { needsRedoOnly: true }) : tl.cuts;
   const order = [];
   const hidden = [];
@@ -5696,7 +5699,7 @@ function mountShots(el) {
     const groups = tl ? tl.groups || [] : [];
     const sections = shotsSections(cuts, groups);
     const cutLabels = computeCutLabels(tl || { cuts: [] });
-    const viewFinal = shotsUi.view === "final";
+    const viewFinal = shotsViewOf(SHOW_FINAL_LIST, shotsUi.view) === "final";
     const listCaption = normalizeListMode(shotsUi.listMode) === "caption";
     const hintInfo = emptyListHint({ projectsLoaded: state.projectsLoaded, projectCount: state.projects.length, timeline: tl, native: !!tl && isNativeProject() });
     const emptyHint = hintInfo
@@ -5738,10 +5741,10 @@ function mountShots(el) {
         <div class="gg-summary-bar"${(tl?.cuts?.length || 0) ? "" : " hidden"}><span class="gg-seg gg-seg-best"></span><span class="gg-seg gg-seg-video"></span><span class="gg-seg gg-seg-image"></span><span class="gg-seg gg-seg-empty"></span></div>
       </div>
       <div class="gg-shots-toolbar">
-        <div class="gg-view-toggle">
+        ${SHOW_FINAL_LIST ? `<div class="gg-view-toggle">
           <button type="button" class="gg-btn gg-view-cuts${viewFinal ? "" : " gg-on"}" data-view="cuts">Cuts</button>
           <button type="button" class="gg-btn gg-view-final${viewFinal ? " gg-on" : ""}" data-view="final">Final cut list</button>
-        </div>
+        </div>` : ""}
         <div class="gg-list-toggle"${viewFinal ? " hidden" : ""}>
           <button type="button" class="gg-btn${listCaption ? "" : " gg-on"}" data-mode="info" title="Show cut details">Info</button>
           <button type="button" class="gg-btn${listCaption ? " gg-on" : ""}" data-mode="caption" title="Edit dialogue / captions per cut">Caption</button>

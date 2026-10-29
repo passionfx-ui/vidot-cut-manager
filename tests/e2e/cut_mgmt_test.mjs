@@ -614,6 +614,21 @@ async function main() {
     timelineMocks.set(mainPid, buildMockTimelineWithBest(mainPid, runStamp));
     await page.click(".gg-root.gg-shots .gg-reload");
     await sleep(1200);
+    if (!(await page.$(".gg-root.gg-shots .gg-view-final"))) {
+      // Hidden view must be forced off: the scene list shows, the final list does not.
+      const shown = await page.evaluate(() => {
+        const root = document.querySelector(".gg-root.gg-shots");
+        return {
+          toggle: !!root?.querySelector(".gg-view-toggle"),
+          list: !!root?.querySelector(".gg-grp-wrap")?.getClientRects().length,
+          final: !!root?.querySelector(".gg-final-wrap")?.getClientRects().length,
+        };
+      });
+      if (shown.toggle || !shown.list || shown.final) throw new Error(`Final cut list hidden but view not forced to cuts: ${JSON.stringify(shown)}`);
+      const err = new Error("SKIP Final cut list hidden (SHOW_FINAL_LIST = false); scene list shown, final list not rendered");
+      err.skipped = true;
+      throw err;
+    }
     await page.click(".gg-view-final");
     await sleep(400);
     const total = await page.$eval(".gg-final-total", (el) => el.textContent);
