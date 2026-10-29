@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   createRenderStatus,
+  idleStateView,
   promptCutTarget,
   renderBadgeView,
   renderGlobalView,
@@ -27,9 +28,9 @@ describe("createRenderStatus: cut lifecycle", () => {
   it("queued -> rendering -> percent -> cleared on success", () => {
     const rs = createRenderStatus();
     assert.deepEqual(rs.queued("a", { cutId: "c1", projectId: "p" }, 0), ["c1"]);
-    assert.deepEqual(rs.cutView("p", "c1"), { state: "queued", percent: null, count: 1 });
+    assert.deepEqual(rs.cutView("p", "c1"), { state: "queued", percent: null, count: 1, position: null });
     assert.deepEqual(rs.handle("execution_start", { prompt_id: "a" }), ["c1"]);
-    assert.deepEqual(rs.cutView("p", "c1"), { state: "rendering", percent: null, count: 1 });
+    assert.deepEqual(rs.cutView("p", "c1"), { state: "rendering", percent: null, count: 1, position: null });
     rs.handle("executing", { prompt_id: "a", node: "3" });
     rs.handle("progress", { prompt_id: "a", node: "3", value: 4, max: 10 });
     assert.equal(rs.cutView("p", "c1").percent, 40);
@@ -71,7 +72,7 @@ describe("createRenderStatus: cut lifecycle", () => {
     rs.queued("b", { cutId: "c1", projectId: "p" });
     assert.equal(renderBadgeView(rs.cutView("p", "c1")).title, "Waiting in the ComfyUI queue (2 prompts)");
     rs.handle("execution_start", { prompt_id: "b" });
-    assert.deepEqual(rs.cutView("p", "c1"), { state: "rendering", percent: null, count: 2 });
+    assert.deepEqual(rs.cutView("p", "c1"), { state: "rendering", percent: null, count: 2, position: null });
   });
   it("a late queuePrompt reply after the prompt already finished is ignored", () => {
     const rs = createRenderStatus();
@@ -116,6 +117,22 @@ describe("createRenderStatus: queue status", () => {
     assert.equal(rs.cutView("p", "c1"), null);
     assert.equal(rs.globalView("p").state, null);
   });
+  it("/queue sync: queue position by queue number among still-queued prompts", () => {
+    const rs = createRenderStatus();
+    rs.link("a", "c1", "p");
+    rs.link("b", "c2", "p");
+    rs.link("c", "c2", "p");
+    const q = { queue_running: [[1, "r", {}]], queue_pending: [[5, "c", {}], [3, "b", {}], [2, "u", {}], [4, "a", {}]] };
+    rs.syncQueue(q, 0);
+    assert.equal(rs.cutView("p", "c1").position, 3);
+    assert.equal(rs.cutView("p", "c2").position, 2, "earliest of the cut's prompts");
+    rs.handle("execution_start", { prompt_id: "u" });
+    assert.equal(rs.cutView("p", "c1").position, 2, "moves up when the prompt ahead starts");
+    assert.deepEqual(rs.syncQueue({ queue_running: [[3, "b", {}]], queue_pending: [[4, "a", {}], [5, "c", {}]] }, 0).sort(), ["c1", "c2"]);
+    assert.equal(rs.cutView("p", "c1").position, 1);
+    assert.equal(rs.cutView("p", "c2").state, "rendering");
+    assert.equal(rs.cutView("p", "c2").position, null, "no position while rendering");
+  });
   it("sync keeps the percent of a prompt already rendering", () => {
     const rs = createRenderStatus();
     rs.queued("a", { cutId: "c1", projectId: "p" });
@@ -143,6 +160,18 @@ describe("badge views", () => {
     assert.equal(renderBadgeView({ state: "queued", count: 1 }).text, "Queued");
     assert.equal(renderBadgeView({ state: "rendering", percent: null }).text, "Rendering");
     assert.equal(renderBadgeView({ state: "rendering", percent: 40 }).text, "Rendering 40%");
+  });
+  it("queue position goes to pos (text stays Queued)", () => {
+    const v = renderBadgeView({ state: "queued", count: 1, position: 2 });
+    assert.equal(v.text, "Queued");
+    assert.equal(v.pos, "#2");
+    assert.equal(v.title, "Waiting in the ComfyUI queue, position 2");
+    assert.equal(renderBadgeView({ state: "queued", count: 1, position: null }).pos, "");
+    assert.equal(renderBadgeView({ state: "rendering", percent: 10, position: 1 }).pos, "");
+  });
+  it("idle word: Done with a version, else Idle", () => {
+    assert.equal(idleStateView(true).text, "Done");
+    assert.equal(idleStateView(false).text, "Idle");
   });
   it("global indicator text", () => {
     assert.equal(renderGlobalView({ state: null }).show, false);

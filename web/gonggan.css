@@ -127,23 +127,53 @@
 .gg-shots .gg-cut-text { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; }
 .gg-shots .gg-cut-header {
   display: flex;
-  align-items: center;
-  gap: 4px;
+  align-items: baseline;
+  gap: 5px;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   font-size: 11px;
-  line-height: 1.25;
+  line-height: 16px;
 }
-.gg-shots .gg-cut-title {
-  flex: 1 1 6em;
-  min-width: 6em;
+.gg-shots .gg-cut-head {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
 }
-.gg-shots .gg-cut-ver { flex: 0 1 auto; max-width: 38%; overflow: hidden; text-overflow: ellipsis; color: var(--gg-dim); font-size: 10px; }
-.gg-shots .gg-cut-len { flex: 0 0 auto; color: var(--gg-dim); font-size: 10px; font-variant-numeric: tabular-nums; }
-.gg-shots .gg-cut-header-badges { display: flex; gap: 3px; flex-shrink: 0; font-size: 8px; }
+.gg-shots .gg-cut-head .gg-num { font-size: inherit; }
+.gg-shots .gg-cut-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--gg-dim);
+}
+.gg-shots .gg-cut-header .gg-drag-handle,
+.gg-shots .gg-cut-header .gg-stage-row,
+.gg-shots .gg-cut-header-badges { align-self: center; }
+.gg-shots .gg-cut-status {
+  display: grid;
+  grid-template-columns: 7.4em 5.2em minmax(0, 1fr) 3.4em;
+  column-gap: 4px;
+  align-items: center;
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--gg-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.gg-shots .gg-cut-status > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.gg-shots .gg-cut-state { display: flex; align-items: center; }
+.gg-shots .gg-cut-state .gg-render-badge { line-height: 13px; padding: 0 3px; max-width: 100%; overflow: hidden; }
+.gg-shots .gg-cut-state .gg-render-badge:not([hidden]) + .gg-cut-idle { display: none; }
+.gg-shots .gg-rs-pos:empty { display: none; }
+.gg-shots .gg-cut-len { text-align: right; }
+.gg-shots .gg-cut-header-badges { display: flex; gap: 3px; flex-shrink: 0; font-size: 8px; line-height: 12px; }
 .gg-shots .gg-num { font-variant-numeric: tabular-nums; color: var(--gg-acc); flex-shrink: 0; font-size: 11px; }
 .gg-root .gg-thumb-broken { opacity: 0.35; background: repeating-linear-gradient(45deg, #2a2d33 0 6px, #24272c 6px 12px); }
 .gg-shots .gg-warn3 { color: #ffb347; background: #3d3020; border-radius: 3px; padding: 0 4px; cursor: help; }
