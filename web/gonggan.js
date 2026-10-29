@@ -2410,7 +2410,7 @@ async function loadVersionWorkflow(cutId, vid, loadToken) {
     ggToast("Shot", `${name} — ${VERSION_SOURCE_DETAIL[src]}`, "ok");
     return;
   }
-  ggToast(VERSION_WF_MISSING, name, "warn");
+  ggToast("Workflow", sentence(VERSION_WF_MISSING, name), "warn");
 }
 
 function openVersionWorkflow(cutId, vid) {
