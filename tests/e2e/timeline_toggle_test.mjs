@@ -357,12 +357,15 @@ async function main() {
         atBottom: Math.abs(rr.bottom - r.bottom) <= 1,
         underSelbar: r.top >= bar.bottom - 1,
         pressed: btn.getAttribute("aria-pressed"),
+        color: getComputedStyle(btn).color,
       };
     });
     if (!place || !place.direct || place.inHead || !place.fullWidth || !place.atBottom || !place.underSelbar || place.pressed !== "true") {
       throw new Error(`Timeline toggle should be the full-width bar at the very bottom (on): ${JSON.stringify(place)}`);
     }
     console.log("PASS  Timeline toggle is the full-width bottom bar under the selection bar");
+    if (place.color !== "rgb(26, 26, 26)") throw new Error(`open Timeline bar text should be dark #1a1a1a (got ${place.color})`);
+    console.log("PASS  open Timeline bar has dark text on yellow");
 
     const heightBeforeOff = m.height;
     await page.click(".gg-root.gg-shots .gg-timeline-toggle");
