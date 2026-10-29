@@ -349,7 +349,15 @@ async function run() {
 
     // delete
     await openRefs(page);
+    const refsBefore = await page.evaluate(() => document.querySelectorAll(".gg-refs .gg-ref").length);
     await page.click('.gg-ref[data-ref-id] .gg-ref-del');
+    await page.waitForSelector(".gg-confirm-dialog", { timeout: 8000 }); // in-app confirm, not a native dialog
+    await page.click(".gg-confirm-cancel");
+    await sleep(600);
+    if ((await page.evaluate(() => document.querySelectorAll(".gg-refs .gg-ref").length)) !== refsBefore) throw new Error("Cancel must not delete the reference");
+    await page.click('.gg-ref[data-ref-id] .gg-ref-del');
+    await page.waitForSelector(".gg-confirm-dialog", { timeout: 8000 });
+    await page.click(".gg-confirm-ok");
     await page.waitForFunction(() => document.querySelectorAll(".gg-refs .gg-ref").length === 1, { timeout: 10000 });
     console.log("PASS  delete");
 
