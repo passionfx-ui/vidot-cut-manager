@@ -16,10 +16,10 @@ export function cutRowShellHtml({ id, kind, selected, content }) {
   return `<li class="${cls}" data-cut-id="${escHtml(id)}">${content}</li>`;
 }
 
-/** Caption view row content: the caption text field and nothing else. */
-export function captionRowContentHtml({ text, placeholder, title, native }) {
+/** Caption view row content: the Info view's thumbnail (`thumb` is its `.gg-cut-thumb` HTML) beside the caption field. */
+export function captionRowContentHtml({ thumb = "", text, placeholder, title, native }) {
   const ro = native ? " readonly" : " disabled";
-  return `<textarea class="gg-caption-text" rows="3" placeholder="${escHtml(placeholder)}"${ro} title="${escHtml(title)}">${escHtml(text)}</textarea>`;
+  return `<div class="gg-cut-thumb-col">${thumb}</div><textarea class="gg-caption-text" rows="3" placeholder="${escHtml(placeholder)}"${ro} title="${escHtml(title)}">${escHtml(text)}</textarea>`;
 }
 
 /**
