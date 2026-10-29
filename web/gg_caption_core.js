@@ -1,5 +1,7 @@
 /** SRT caption export and caption display helpers (pure, no DOM). */
 
+import { clipAtTime } from "./gg_tl_place_core.js";
+
 /**
  * Caption editor / display text: stored `caption`, or legacy `notes` when caption is empty.
  * The editor is seeded with this, so the first caption edit saves the notes text into `caption`.
@@ -93,6 +95,18 @@ export function buildSrt(cuts) {
   }
   if (!blocks.length) return "";
   return `${blocks.join("\n\n")}\n`;
+}
+
+/**
+ * Caption overlaid on the timeline viewer at time t: the caption of the clip under t (same lookup as
+ * playback, so gaps and trims match), "" in a gap, on an empty track or for a blank caption.
+ * @param {{ start?: number, sec: number, caption?: string }[]} clips track order
+ * @param {number} t
+ */
+export function captionAtTime(clips, t) {
+  const { i } = clipAtTime(clips, Number(t) || 0);
+  if (i < 0) return "";
+  return normalizeCaptionText(clips[i]?.caption);
 }
 
 /** @param {string} projectName */
