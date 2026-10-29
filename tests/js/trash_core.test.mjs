@@ -3,9 +3,22 @@ import { describe, it } from "node:test";
 import {
   trashButtonLabel,
   movedToTrashToastMessage,
+  deleteCutsConfirmMessage,
   normalizeTrashItems,
   formatTrashItem,
 } from "../../web/gg_trash_core.js";
+import { splitConfirmMessage } from "../../web/gg_confirm_core.js";
+
+describe("deleteCutsConfirmMessage", () => {
+  it("singular / plural heading with a Trash note", () => {
+    assert.deepEqual(splitConfirmMessage(deleteCutsConfirmMessage(1)), { title: "Delete 1 cut?", body: "It moves to Trash." });
+    assert.deepEqual(splitConfirmMessage(deleteCutsConfirmMessage(3)), { title: "Delete 3 cuts?", body: "They move to Trash." });
+  });
+  it("invalid counts read as one cut", () => {
+    assert.equal(deleteCutsConfirmMessage(0), deleteCutsConfirmMessage(1));
+    assert.equal(deleteCutsConfirmMessage("x"), deleteCutsConfirmMessage(1));
+  });
+});
 
 describe("trashButtonLabel", () => {
   it("returns empty for zero or invalid", () => {

@@ -8,6 +8,8 @@ export const SDK_OFF_TIP = "Comfy SDK not ready";
 export const BUSY_TIP = "Busy, try again in a moment";
 export const REGEN_EMPTY_TIP = "Empty cut: no workflow to queue";
 export const TRASH_TIP = "Deleted cuts – click to restore";
+/** Divider line between menu items (no action). */
+export const MENU_SEPARATOR = Object.freeze({ key: "sep", separator: true });
 
 function nativeRegenTitle(ctx) {
   if (ctx.multi) return SINGLE_CUT_TIP;
@@ -81,10 +83,11 @@ export function cutCardMenuItems(ctx = {}) {
       ]
     : [];
   return [
+    { key: "group", label: "Group" },
+    { key: "ungroup", label: "Ungroup", disabled: !ctx.inScene && !ctx.anyInScene },
+    MENU_SEPARATOR,
     ...moveItems,
-    { key: "group", label: "Group into Scene" },
     { key: "split", label: "Split scene", disabled: !ctx.inScene },
-    { key: "removeFromScene", label: "Remove from Scene", disabled: !ctx.inScene && !ctx.anyInScene },
     a.redo,
     a.rename,
     { key: "addCut", label: "Add Cut" },
@@ -119,7 +122,6 @@ export function sceneMenuItems(ctx = {}) {
     { key: "toggleCollapse", label: ctx.collapsed ? "Expand" : "Collapse" },
     { key: "rename", label: "Rename" },
     { key: "ungroup", label: "Ungroup" },
-    { key: "deleteScene", label: "Delete Scene", danger: true },
   ];
 }
 
@@ -136,6 +138,7 @@ export function sceneCutIds(timelineCuts, group) {
 export function attachMenuActions(items, actions = {}, submenus = {}) {
   return (items || []).map(({ key, ...it }) => {
     const out = { ...it };
+    if (out.separator) return out;
     const sub = submenus[key];
     if (sub) out.submenu = sub;
     else if (typeof actions[key] === "function") out.action = actions[key];

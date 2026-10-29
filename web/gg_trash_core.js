@@ -14,6 +14,12 @@ export function movedToTrashToastMessage(count) {
   return `Moved ${n} cuts to Trash`;
 }
 
+/** Confirm text before soft-deleting cuts (first line = heading). */
+export function deleteCutsConfirmMessage(count) {
+  const n = Math.max(1, Math.floor(Number(count)) || 1);
+  return n === 1 ? "Delete 1 cut?\nIt moves to Trash." : `Delete ${n} cuts?\nThey move to Trash.`;
+}
+
 export function normalizeTrashItems(resp) {
   if (!resp || resp.ok === false) return [];
   const items = resp.items;

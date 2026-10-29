@@ -1,11 +1,13 @@
 /**
- * Headless Chrome (0.9.97): the Shots cut list does not move when the selection changes.
- * A ZZ-test project with 16 empty cuts, list scrolled to the middle. For 0 -> 1 -> 2 selected, × back to
- * the current cut, and a click on a partly visible row: the list box (top, bottom, clientHeight), its
- * scrollTop, the selection bar height and the status panel height stay the same. The bar stays shown
- * with class `gg-selbar` only, Group/Ungroup disabled at 0; the status panel shows the cut /
- * "2 cuts selected" and the Queue button (none in the header). Clicks use mouse coordinates (no
- * automatic scroll into view).
+ * Headless Chrome (0.9.97, icon row 0.9.98): the Shots cut list does not move when the selection changes.
+ * A ZZ-test project with 16 empty cuts, list scrolled to the middle. For 0 -> 1 -> 2 selected, a click on
+ * empty space back to the current cut, and a click on a partly visible row: the list box (top, bottom,
+ * clientHeight), its scrollTop, the icon row height and the status panel height stay the same. The large
+ * selection bar is not rendered; the icon row (New scene / New cut / Delete, English tooltips) is always
+ * shown, New scene / Delete disabled at 0; the status panel shows the cut / "2 cuts selected" and the
+ * Queue button (none in the header). Delete opens the in-app confirm (cancelled: nothing deleted), New
+ * scene the scene name prompt (cancelled), New cut adds one cut. The cut menu starts with Group, Ungroup
+ * and a separator. Clicks use mouse coordinates (no automatic scroll into view).
  * POST /prompt and /gonggan/regen are blocked (nothing is queued).
  */
 import fs from "node:fs";
@@ -137,8 +139,9 @@ async function measure(page) {
   return page.evaluate(() => {
     const root = document.querySelector(".gg-root.gg-shots");
     const wrap = root.querySelector(".gg-grp-wrap");
-    const bar = root.querySelector(".gg-selbar");
+    const bar = root.querySelector(".gg-iconrow");
     const panel = root.querySelector(":scope > .gg-cutpanel");
+    const btn = (sel) => bar.querySelector(sel);
     const w = wrap.getBoundingClientRect();
     const queue = panel?.querySelector(".gg-queue-btn");
     const info = panel?.querySelector(".gg-sp-info");
@@ -162,9 +165,12 @@ async function measure(page) {
       panelHeight: panel ? panel.getBoundingClientRect().height : -1,
       barShown: bar.getClientRects().length > 0 && getComputedStyle(bar).visibility !== "hidden",
       barClass: bar.className,
-      count: parseInt(bar.querySelector(".gg-sel-count")?.textContent || "-1", 10),
-      groupDisabled: !!bar.querySelector(".gg-sel-group")?.disabled,
-      ungroupDisabled: !!bar.querySelector(".gg-sel-ungroup")?.disabled,
+      selBarRendered: !!root.querySelector(".gg-selbar"),
+      tips: [".gg-ir-scene", ".gg-ir-cut", ".gg-ir-del"].map((s) => btn(s)?.title || ""),
+      sceneDisabled: !!btn(".gg-ir-scene")?.disabled,
+      cutDisabled: !!btn(".gg-ir-cut")?.disabled,
+      delDisabled: !!btn(".gg-ir-del")?.disabled,
+      cutCount: root.querySelectorAll(".gg-cut[data-cut-id]").length,
       info: panel?.querySelector(".gg-sp-info")?.textContent.replace(/\s+/g, " ").trim() || "",
       queueText: queue?.textContent.trim() || "",
       queueDisabled: !!queue?.disabled,
@@ -297,44 +303,100 @@ async function main() {
     if (rows.full.length < 3 || !rows.partBottom.length) throw new Error(`need 3 fully and 1 partly visible rows: ${JSON.stringify(rows)}`);
     await sleep(400);
 
+    const center = async (sel) => {
+      const b = await (await page.$(sel)).boundingBox();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    };
+    const iconOn = (m) => !m.sceneDisabled && !m.cutDisabled && !m.delDisabled;
+
     const m0 = await measure(page);
     assertStable(m0, m0, "0 selected");
-    if (!m0.barShown || m0.barClass !== "gg-selbar" || m0.count !== 0 || !m0.groupDisabled || !m0.ungroupDisabled) {
-      throw new Error(`0 selected: bar must be shown with Group/Ungroup disabled: ${JSON.stringify(m0)}`);
+    if (!m0.barShown || m0.barClass !== "gg-iconrow" || m0.selBarRendered) {
+      throw new Error(`0 selected: icon row shown, large selection bar not rendered: ${JSON.stringify(m0)}`);
+    }
+    if (m0.tips.join("|") !== "New scene|New cut|Delete" || !m0.sceneDisabled || m0.cutDisabled || !m0.delDisabled) {
+      throw new Error(`0 selected: icon tooltips / New scene + Delete off, New cut on: ${JSON.stringify(m0)}`);
     }
     if (m0.info !== "No cut selected" || m0.queueText !== "Queue" || !m0.queueDisabled || m0.queueInHead) {
       throw new Error(`0 selected: status panel / Queue: ${JSON.stringify(m0)}`);
     }
-    console.log(`PASS  0 selected: bar shown (Group/Ungroup off), status panel "No cut selected" + Queue off; list h=${m0.listHeight} scrollTop=${m0.scrollTop}`);
+    console.log(`PASS  0 selected: icon row shown (New scene/Delete off), no selection bar, status panel "No cut selected" + Queue off; list h=${m0.listHeight} scrollTop=${m0.scrollTop}`);
 
     await clickAt(page, rows.full[1]);
     const m1 = await measure(page);
     assertStable(m0, m1, "1 selected");
-    if (m1.count !== 1 || m1.groupDisabled || m1.barClass !== "gg-selbar" || m1.queueDisabled || !m1.info || m1.info === "No cut selected") {
+    if (!iconOn(m1) || m1.queueDisabled || !m1.info || m1.info === "No cut selected") {
       throw new Error(`1 selected: ${JSON.stringify(m1)}`);
     }
-    console.log(`PASS  1 selected: list box, scrollTop, bar and panel heights unchanged; panel "${m1.info}", Queue on`);
+    console.log(`PASS  1 selected: list box, scrollTop, icon row and panel heights unchanged; icons on, panel "${m1.info}", Queue on`);
 
     await clickAt(page, rows.full[2], { ctrl: true });
     const m2 = await measure(page);
     assertStable(m0, m2, "2 selected");
-    if (m2.count !== 2 || m2.info !== "2 cuts selected" || m2.queueDisabled) throw new Error(`2 selected: ${JSON.stringify(m2)}`);
+    if (!iconOn(m2) || m2.info !== "2 cuts selected" || m2.queueDisabled) throw new Error(`2 selected: ${JSON.stringify(m2)}`);
     console.log('PASS  2 selected: nothing moved; panel "2 cuts selected", Queue on');
 
-    const x = await (await page.$(".gg-root.gg-shots .gg-sel-x")).boundingBox();
-    await clickAt(page, { x: x.x + x.width / 2, y: x.y + x.height / 2 });
+    // Delete -> in-app confirm for the 2 selected cuts -> Cancel: nothing deleted, selection kept.
+    await clickAt(page, await center(".gg-root.gg-shots .gg-ir-del"));
+    const confirmTitle = await page.$eval(".gg-confirm-backdrop .gg-confirm-title", (el) => el.textContent.trim()).catch(() => "");
+    if (confirmTitle !== "Delete 2 cuts?") throw new Error(`Delete confirm title: "${confirmTitle}"`);
+    await clickAt(page, await center(".gg-confirm-backdrop .gg-confirm-cancel"));
+    const mDel = await measure(page);
+    assertStable(m0, mDel, "Delete cancelled");
+    if (mDel.cutCount !== CUT_COUNT || mDel.info !== "2 cuts selected") throw new Error(`Delete cancel changed data/selection: ${JSON.stringify(mDel)}`);
+    console.log('PASS  Delete icon: in-app confirm "Delete 2 cuts?", Cancel keeps all cuts and the selection');
+
+    // New scene -> scene name prompt -> Cancel: no scene created.
+    const sceneCount = () => page.$$eval(".gg-root.gg-shots .gg-grp-sec[data-group-id]", (els) => els.length);
+    const scenes0 = await sceneCount();
+    await clickAt(page, await center(".gg-root.gg-shots .gg-ir-scene"));
+    const askTitle = await page.$eval(".gg-ask-backdrop .gg-modal-title", (el) => el.textContent.trim()).catch(() => "");
+    if (askTitle !== "Scene name") throw new Error(`New scene prompt: "${askTitle}"`);
+    await clickAt(page, await center(".gg-ask-backdrop .gg-ask-cancel"));
+    const scenes = await sceneCount();
+    if (scenes !== scenes0) throw new Error(`New scene cancelled but scenes ${scenes0} -> ${scenes}`);
+    console.log("PASS  New scene icon: scene name prompt, Cancel creates nothing");
+
+    const m3pre = await measure(page);
+    await clickAt(page, await center(".gg-root.gg-shots .gg-meta-text"));
     const m3 = await measure(page);
-    assertStable(m0, m3, "× (multi-selection cleared)");
-    if (m3.count !== 1 || !m3.barShown || m3.barClass !== "gg-selbar" || m3.info === "2 cuts selected") {
-      throw new Error(`× should leave just the current cut: ${JSON.stringify(m3)}`);
+    assertStable(m0, m3, "empty-space click (multi-selection cleared)");
+    if (!m3.barShown || m3.info === "2 cuts selected" || m3pre.info !== "2 cuts selected") {
+      throw new Error(`empty-space click should leave just the current cut: ${JSON.stringify(m3)}`);
     }
-    console.log("PASS  × clears the multi-selection (current cut stays): nothing moved");
+    console.log("PASS  empty-space click clears the multi-selection (current cut stays): nothing moved");
+
+    // Right-click the current cut: Group, Ungroup, separator at the top; each label once.
+    await page.mouse.click(rows.full[1].x, rows.full[1].y, { button: "right" });
+    await sleep(500);
+    const menu = await page.evaluate(() =>
+      [...document.querySelectorAll(".gg-ctx:not(.gg-ctx-sub) > *")].map((el) => (el.classList.contains("gg-ctx-sep") ? "---" : el.textContent.trim()))
+    );
+    await page.keyboard.press("Escape");
+    await sleep(300);
+    const labels = menu.filter((l) => l !== "---");
+    if (menu.slice(0, 3).join("|") !== "Group|Ungroup|---" || new Set(labels).size !== labels.length) {
+      throw new Error(`cut menu: ${JSON.stringify(menu)}`);
+    }
+    console.log(`PASS  cut menu starts with Group, Ungroup, separator; no duplicates (${labels.length} items)`);
 
     await clickAt(page, rows.partBottom[0]);
     const m4 = await measure(page);
     assertStable(m0, m4, "click on a partly visible row");
-    if (m4.count !== 1 || m4.info === m3.info) throw new Error(`partly visible row not selected: ${JSON.stringify(m4)}`);
+    if (!iconOn(m4) || m4.info === m3.info) throw new Error(`partly visible row not selected: ${JSON.stringify(m4)}`);
     console.log("PASS  click on a partly visible row: selected, list not scrolled");
+
+    // New cut adds one cut (existing Add Cut action); the list box keeps its size.
+    await clickAt(page, await center(".gg-root.gg-shots .gg-ir-cut"));
+    await page.waitForFunction(
+      (n) => document.querySelectorAll(".gg-root.gg-shots .gg-cut[data-cut-id]").length === n,
+      { timeout: 15000 },
+      CUT_COUNT + 1
+    );
+    const m5 = await measure(page);
+    const moved = ["listTop", "listBottom", "listHeight", "barHeight", "panelHeight"].filter((k) => Math.abs(m5[k] - m0[k]) > 0.5);
+    if (moved.length) throw new Error(`New cut moved: ${moved.join(", ")}`);
+    console.log("PASS  New cut icon adds one cut; list box, icon row and panel heights unchanged");
 
     await checkRam("end");
   } finally {
