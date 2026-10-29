@@ -243,6 +243,71 @@ class LocalStoreTests(unittest.TestCase):
         self.assertEqual(timeline_order(self.store.get_project(pid)), [c1, new_id, c2, c3])
         self.assertEqual(self.store.get_project(pid)["cuts"][new_id]["scene_id"], s1)
 
+class IndexRecoveryTests(unittest.TestCase):
+    """A damaged projects/index.json must never shrink the project list."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.store = LocalStore(self.root)
+        self.a = self.store.create_project("Alpha")["id"]
+        self.b = self.store.create_project("Beta")["id"]
+        self.c = self.store.create_project("Gamma")["id"]
+        self.store.delete_project(self.c)  # lives in trash/, row has deleted_at
+        self.index = self.root / "projects" / "index.json"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _ids(self, rows):
+        return sorted(r["id"] for r in rows)
+
+    def test_truncated_index_is_backed_up_and_rebuilt(self):
+        self.index.write_text('[{"id": "x", "na', encoding="utf-8")
+        damaged = self.index.read_text(encoding="utf-8")
+        rows = self.store.list_projects()
+        self.assertEqual(self._ids(rows), sorted([self.a, self.b]))
+        backups = list(self.index.parent.glob("index.json.bad-*"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_text(encoding="utf-8"), damaged)
+        # the repaired file is valid and complete
+        self.assertEqual(self._ids(json.loads(self.index.read_text(encoding="utf-8"))), sorted([self.a, self.b, self.c]))
+
+    def test_deleted_project_row_is_rebuilt_from_trash(self):
+        self.index.write_text("not json", encoding="utf-8")
+        rows = self.store.list_projects(include_deleted=True)
+        self.assertEqual(self._ids(rows), sorted([self.a, self.b, self.c]))
+        self.assertTrue(next(r for r in rows if r["id"] == self.c)["deleted_at"])
+
+    def test_save_after_damage_keeps_every_project(self):
+        self.index.write_text("{}", encoding="utf-8")  # valid JSON, wrong shape
+        self.store.rename_project(self.a, "Alpha 2")
+        rows = self.store.list_projects()
+        self.assertEqual(self._ids(rows), sorted([self.a, self.b]))
+        self.assertEqual(next(r for r in rows if r["id"] == self.a)["name"], "Alpha 2")
+
+    def test_create_after_damage_keeps_old_projects(self):
+        self.index.write_text("", encoding="utf-8")
+        d = self.store.create_project("Delta")["id"]
+        self.assertEqual(self._ids(self.store.list_projects()), sorted([self.a, self.b, d]))
+
+    def test_unreadable_project_json_is_skipped_not_fatal(self):
+        (self.root / "projects" / self.b / "project.json").write_text("{broken", encoding="utf-8")
+        self.index.write_text("[", encoding="utf-8")
+        self.assertEqual(self._ids(self.store.list_projects()), [self.a])
+
+    def test_missing_index_is_not_touched(self):
+        self.index.unlink()
+        self.assertEqual(self.store.list_projects(), [])
+        self.assertFalse(list(self.index.parent.glob("index.json.bad-*")))
+
+    def test_second_damage_keeps_both_backups(self):
+        self.index.write_text("[", encoding="utf-8")
+        self.store.list_projects()
+        self.index.write_text("[[", encoding="utf-8")
+        self.store.list_projects()
+        self.assertEqual(len(list(self.index.parent.glob("index.json.bad-*"))), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

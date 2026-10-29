@@ -75,8 +75,54 @@ class LocalStore:
         try:
             data = _read_json(p)
         except (OSError, ValueError):
-            return []
-        return data if isinstance(data, list) else []
+            data = None
+        if isinstance(data, list):
+            return data
+        # Unreadable or wrong shape. NEVER answer [] here: the next save would write that
+        # shorter list over the file and drop every other project from the list.
+        return self._recover_index(p)
+
+    def _recover_index(self, bad: Path) -> list[dict[str, Any]]:
+        """Keep the broken index.json as index.json.bad-<time>, rebuild the rows from the
+        project.json files on disk (active projects and the trash) and save the rebuilt index."""
+        stamp = now_iso().replace(":", "").replace("-", "")[:15]
+        backup = bad.with_name(f"{bad.name}.bad-{stamp}")
+        n = 1
+        while backup.exists():
+            n += 1
+            backup = bad.with_name(f"{bad.name}.bad-{stamp}-{n}")
+        rows = self._rebuild_index_rows()
+        try:
+            shutil.copy2(str(bad), str(backup))
+        except OSError:
+            # No backup, so do not overwrite the broken file: serve the rebuilt rows from memory.
+            # (A later save writes the rebuilt, complete list, never a reduced one.)
+            return rows
+        try:
+            self._save_index(rows)
+        except OSError:
+            pass
+        return rows
+
+    def _rebuild_index_rows(self) -> list[dict[str, Any]]:
+        docs: dict[str, dict[str, Any]] = {}
+        trash = self.trash_projects_dir
+        for base in (trash, self.projects_dir):  # active copies win over trash copies
+            if not base.is_dir():
+                continue
+            for d in base.iterdir():
+                f = d / "project.json"
+                if not d.is_dir() or not f.is_file():
+                    continue
+                try:
+                    doc = _read_json(f)
+                except (OSError, ValueError):
+                    continue
+                if isinstance(doc, dict) and isinstance(doc.get("id"), str) and doc["id"]:
+                    docs[doc["id"]] = doc
+        rows = [self._index_row(doc) for doc in docs.values()]
+        rows.sort(key=lambda r: (str(r.get("updated_at") or ""), str(r.get("id") or "")))
+        return rows
 
     def _save_index(self, rows: list[dict[str, Any]]) -> None:
         _atomic_write_json(self._index_path(), rows)
@@ -240,7 +286,13 @@ class LocalStore:
                 self._write_workflow_blob(pid, workflow_sha, template_graph)
             _atomic_write_json(self._project_path(pid), doc)
             rows = self._load_index()
-            rows.append(self._index_row(doc))
+            row = self._index_row(doc)
+            for i, r in enumerate(rows):  # a rebuilt index may already list the new project
+                if r.get("id") == pid:
+                    rows[i] = row
+                    break
+            else:
+                rows.append(row)
             self._save_index(rows)
             self._append_journal(pid, "create", "project", pid, doc["rev"], {"name": name})
             return json.loads(json.dumps(doc))
