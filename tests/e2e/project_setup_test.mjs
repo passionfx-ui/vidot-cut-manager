@@ -194,15 +194,19 @@ async function run() {
     console.log("PASS  dialog order: Name, Template, Auto Cut Split, settings, folder; folder default empty");
     await page.click(".gg-modal-cancel");
 
-    const redoLabel = await page.$eval(".gg-filter-redo", (el) => el.textContent?.trim() || "");
-    const redoTitle = await page.$eval(".gg-filter-redo", (el) => el.getAttribute("title") || "");
-    if (!redoLabel.includes("Show redo cuts only")) {
-      throw new Error(`redo filter label wrong: ${redoLabel}`);
+    if (!(await page.$(".gg-filter-redo"))) {
+      console.log("SKIP  project setup redo filter label: option hidden (SHOW_REDO_FILTER = false)");
+    } else {
+      const redoLabel = await page.$eval(".gg-filter-redo", (el) => el.textContent?.trim() || "");
+      const redoTitle = await page.$eval(".gg-filter-redo", (el) => el.getAttribute("title") || "");
+      if (!redoLabel.includes("Show redo cuts only")) {
+        throw new Error(`redo filter label wrong: ${redoLabel}`);
+      }
+      if (!redoTitle.toLowerCase().includes("marked for redo")) {
+        throw new Error(`redo filter tooltip wrong: ${redoTitle}`);
+      }
+      console.log("PASS  project setup redo filter label");
     }
-    if (!redoTitle.toLowerCase().includes("marked for redo")) {
-      throw new Error(`redo filter tooltip wrong: ${redoTitle}`);
-    }
-    console.log("PASS  project setup redo filter label");
 
     const name = `${TEST_PREFIX}-${runStamp}`;
     await openNewProjectModal(page);

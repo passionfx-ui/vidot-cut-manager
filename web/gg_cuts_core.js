@@ -465,6 +465,15 @@ export function filterCuts(cuts, opts = {}) {
   return arr.filter((c) => c && c.needs_redo === true);
 }
 
+/**
+ * Whether the "Show redo cuts only" filter applies. A hidden option is always off, whatever was checked.
+ * @param {boolean} shown
+ * @param {boolean} checked
+ */
+export function redoFilterOn(shown, checked) {
+  return !!shown && checked === true;
+}
+
 /** @param {string} part */
 export function sanitizeNamePart(part) {
   if (part == null) return "";
