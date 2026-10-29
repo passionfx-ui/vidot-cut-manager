@@ -4516,11 +4516,16 @@ function cutRowHtml(c, labels) {
 function captionRowContent(c) {
   const nat = isNativeProject();
   return captionRowContentHtml({
+    thumb: cutThumbHtml(c),
     text: effectiveCaption(c),
     placeholder: captionFieldPlaceholder(projectCaptionLang()),
     title: nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP,
     native: nat,
   });
+}
+
+function cutThumbHtml(c) {
+  return `<div class="gg-cut-thumb">${thumbHtml(c.media, "gg-thumb")}${c.media && c.media.kind === "video" ? '<span class="gg-badge">▶</span>' : ""}${c.media && c.media.source && c.media.source !== "gonggan" ? `<span class="gg-badge gg-badge-l gg-src-${esc(c.media.source)}">${esc(fmtSrc(c.media.source))}</span>` : ""}</div>`;
 }
 
 function infoRowContent(c, labels) {
@@ -4543,7 +4548,7 @@ function infoRowContent(c, labels) {
   const stageDots = `<span class="gg-stage-dot gg-off" data-k="image"></span><span class="gg-stage-dot gg-off" data-k="video"></span><span class="gg-stage-dot gg-off" data-k="best"></span>`;
   return `
       <div class="gg-cut-thumb-col">
-        <div class="gg-cut-thumb">${thumbHtml(c.media, "gg-thumb")}${c.media && c.media.kind === "video" ? '<span class="gg-badge">▶</span>' : ""}${c.media && c.media.source && c.media.source !== "gonggan" ? `<span class="gg-badge gg-badge-l gg-src-${esc(c.media.source)}">${esc(fmtSrc(c.media.source))}</span>` : ""}</div>
+        ${cutThumbHtml(c)}
         <div class="gg-live-chip" hidden><span class="gg-live-dot"></span><span class="gg-live-text"></span></div>
       </div>
       <div class="gg-cut-text">

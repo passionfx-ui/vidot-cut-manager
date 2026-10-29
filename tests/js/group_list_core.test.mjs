@@ -80,10 +80,19 @@ describe("cutRowShellHtml", () => {
 });
 
 describe("captionRowContentHtml", () => {
-  it("is only the caption field, read-only until edit on native projects", () => {
+  it("is the caption field, read-only until edit on native projects", () => {
     const html = captionRowContentHtml({ text: "Hi <there>", placeholder: "Caption", title: "tip", native: true });
-    assert.match(html, /^<textarea class="gg-caption-text"[^>]* readonly[^>]*>Hi &lt;there&gt;<\/textarea>$/);
-    assert.doesNotMatch(html, /gg-cut-header|gg-thumb|gg-cut-status/);
+    assert.match(html, /<textarea class="gg-caption-text"[^>]* readonly[^>]*>Hi &lt;there&gt;<\/textarea>$/);
+    assert.doesNotMatch(html, /gg-cut-header|gg-cut-status/);
+  });
+  it("puts the Info thumbnail in the same thumb column, before the caption field", () => {
+    const thumb = '<div class="gg-cut-thumb"><img class="gg-thumb gg-thumb-img"></div>';
+    const html = captionRowContentHtml({ thumb, text: "x", placeholder: "", title: "", native: true });
+    assert.ok(html.startsWith(`<div class="gg-cut-thumb-col">${thumb}</div><textarea class="gg-caption-text"`));
+    assert.equal(count(html, "gg-cut-thumb-col"), 1);
+  });
+  it("keeps the thumb column when there is no thumbnail", () => {
+    assert.ok(captionRowContentHtml({ text: "", placeholder: "", title: "", native: true }).startsWith('<div class="gg-cut-thumb-col"></div><textarea'));
   });
   it("is disabled on imported projects", () => {
     assert.match(captionRowContentHtml({ text: "", placeholder: "", title: "", native: false }), / disabled /);
