@@ -13,6 +13,7 @@ import {
   autoScrollDelta,
   finalCutList,
   filterCuts,
+  redoFilterOn,
   fileBaseName,
   sanitizeNamePart,
   projectCompletion,
@@ -243,6 +244,13 @@ describe("filterCuts", () => {
   it("needsRedoOnly", () => {
     assert.equal(filterCuts(cuts, { needsRedoOnly: true }).length, 1);
     assert.equal(filterCuts(cuts).length, 2);
+  });
+  it("redoFilterOn: hidden option is always off", () => {
+    assert.equal(redoFilterOn(false, true), false);
+    assert.equal(redoFilterOn(false, false), false);
+    assert.equal(redoFilterOn(true, true), true);
+    assert.equal(redoFilterOn(true, "true"), false);
+    assert.equal(filterCuts(cuts, { needsRedoOnly: redoFilterOn(false, true) }).length, 2);
   });
 });
 

@@ -9,6 +9,7 @@ import {
   snapshotOrderGroups,
   dropHighlight,
   moveScene,
+  sceneDropBeforeCut,
   sceneBlocks,
   sceneDropTarget,
 } from "../../web/gg_reorder_core.js";
@@ -352,6 +353,29 @@ describe("sceneDropTarget", () => {
   });
   it("no other scenes means no target", () => {
     assert.equal(sceneDropTarget([], 10), null);
+  });
+});
+
+describe("sceneDropBeforeCut", () => {
+  const g = [
+    { id: "g1", name: "S1", cut_ids: ["a", "b"], collapsed: false },
+    { id: "g2", name: "S2", cut_ids: ["d", "e"], collapsed: false },
+  ];
+  it("before a scene = its first cut", () => {
+    assert.equal(sceneDropBeforeCut(["a", "b", "d", "e"], g, "g2", "g1"), "a");
+  });
+  it("end with ungrouped cuts at the end = before the first of them", () => {
+    assert.equal(sceneDropBeforeCut(["a", "b", "d", "e", "x", "y"], g, "g1", null), "x");
+    assert.equal(sceneDropBeforeCut(["a", "b", "d", "e"], g, "g1", null), null);
+  });
+  it("end with ungrouped cuts before the scenes: whole scene lands after the last scene", () => {
+    const o = ["x", "d", "e", "a", "b", "y"];
+    const before = sceneDropBeforeCut(o, g, "g2", null);
+    assert.equal(before, "y");
+    const r = moveScene(o, g, "g2", { beforeCutId: before });
+    assert.deepEqual(r.order, ["x", "a", "b", "d", "e", "y"]);
+    assert.deepEqual(r.groups.map((x) => x.id), ["g1", "g2"]);
+    assert.deepEqual(r.groups.find((x) => x.id === "g2").cut_ids, ["d", "e"]);
   });
 });
 

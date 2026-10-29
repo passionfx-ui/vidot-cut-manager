@@ -2,7 +2,8 @@
  * 0.9.62 scene reorder: drag a scene header to move the whole scene. Covers move + labels + persistence
  * (Reload button and full page reload), Undo, Esc mid-drag, collapsed scene, header buttons / right-click
  * still working, right button never drags, an ordinary cut drag between scenes, and a scene drag while a
- * timeline save is still waiting (0.9.78 hang) with Ctrl+Z / Ctrl+Y.
+ * timeline save is still waiting (0.9.78 hang) with Ctrl+Z / Ctrl+Y, the same in Caption list mode, and
+ * cut ids / media / versions / source workflow unchanged by a move.
  * ZZ temp native project (2 scenes x 2 cuts), soft-deleted at the end. Blocks POST /prompt and /gonggan/regen.
  */
 import fs from "node:fs";
@@ -34,7 +35,7 @@ let blockedPromptAttempts = 0;
 let failNextGroupsPost = false;
 let testPid = "";
 /** @type {{ ids: string[], groups: { id: string, name: string, cut_ids: string[], collapsed: boolean }[] }} */
-const baseline = { ids: [], groups: [] };
+const baseline = { ids: [], groups: [], fingerprint: {} };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -94,6 +95,20 @@ async function serverTimeline(page) {
     const res = await fetch(`/gonggan/timeline?pid=${encodeURIComponent(pid)}`);
     if (!res.ok) throw new Error(`timeline HTTP ${res.status}`);
     return res.json();
+  }, testPid);
+}
+
+/** Per-cut data a scene move must not touch: name, media files, versions, Best, caption, source workflow. */
+async function cutFingerprint(page) {
+  return page.evaluate(async (pid) => {
+    const q = encodeURIComponent(pid);
+    const tl = await (await fetch(`/gonggan/timeline?pid=${q}`)).json();
+    const out = {};
+    for (const c of tl.cuts) {
+      const wf = await (await fetch(`/gonggan/cut-source-workflow?pid=${q}&cut=${encodeURIComponent(c.id)}`)).text();
+      out[c.id] = JSON.stringify([c.name, c.media, c.versions_list, c.pick, c.caption, wf]);
+    }
+    return out;
   }, testPid);
 }
 
@@ -231,6 +246,7 @@ async function setupProject(page) {
   await selectTestProject(page);
   const ids2 = await domCutIds(page);
   if (ids2.join() !== ids.join()) throw new Error(`Shots order differs from server: ${ids2.join()}`);
+  baseline.fingerprint = await cutFingerprint(page);
 }
 
 /** Viewport points for a header drag: from the title of `fromGid` to a Y inside `toSel`'s box. */
@@ -389,6 +405,9 @@ async function main() {
       const tl = await serverTimeline(page);
       if (tl.cuts.map((c) => c.id).join() !== moved.join()) throw new Error(`${where}: server order ${tl.cuts.map((c) => c.id).join()}`);
       if ((tl.groups || []).map((g) => g.id).join() !== [gB, gA].join()) throw new Error(`${where}: server scene order`);
+      const fp = await cutFingerprint(page);
+      const changed = baseline.ids.filter((id) => fp[id] !== baseline.fingerprint[id]);
+      if (changed.length) throw new Error(`${where}: cut data/files/workflow changed for ${changed.join()}`);
     };
 
     await runScenario("s1", "Drag scene B header above scene A: order, labels, persisted (Reload + page reload)", async () => {
@@ -612,6 +631,46 @@ async function main() {
       await sleep(400);
       if ((await sectionCutIds(page, gA)).join() !== [c1, c4, c2].join()) throw new Error("Shots scene A cuts not updated");
       if ((await sectionCutIds(page, gB)).join() !== [c3].join()) throw new Error("Shots scene B cuts not updated");
+    });
+
+    await runScenario("s9", "Caption list mode: scene drag shows the drop line, moves the whole scene; Ctrl+Z / Ctrl+Y", async () => {
+      await resetBaseline(page);
+      await page.click('.gg-root.gg-shots .gg-list-toggle [data-mode="caption"]');
+      await page.waitForSelector(".gg-root.gg-shots.gg-list-caption", { timeout: 8000 });
+      try {
+        await sleep(400);
+        const pts = await headerDragPoints(page, gB, `${secSel(gA)} > .gg-grp-head`, 0.5);
+        if (!pts?.ok) throw new Error(`scene header drag points not usable: ${JSON.stringify(pts)}`);
+        await dragHeader(page, pts, {
+          beforeUp: async () => {
+            const ind = await page.evaluate(() => {
+              const el = document.querySelector(".gg-root.gg-shots .gg-drag-ind");
+              return !!el && !el.hidden;
+            });
+            if (!ind) throw new Error("drop line (.gg-drag-ind) not shown during scene drag in Caption mode");
+          },
+        });
+        await waitToast(page, "Moved 2 cut(s)");
+        await waitServerOrder(page, moved);
+        await sleep(400);
+        await checkMoved("Caption mode drop");
+        const keyInShots = async (key) => {
+          await page.mouse.move(pts.to.x, pts.to.y);
+          await page.keyboard.down("Control");
+          await page.keyboard.press(key);
+          await page.keyboard.up("Control");
+        };
+        await keyInShots("KeyZ");
+        await waitServerOrder(page, baseline.ids);
+        await sleep(400);
+        if ((await domSceneIds(page)).join() !== [gA, gB].join()) throw new Error("Ctrl+Z did not restore scene order in Caption mode");
+        await keyInShots("KeyY");
+        await waitServerOrder(page, moved);
+        await sleep(400);
+        await checkMoved("Caption mode Ctrl+Y");
+      } finally {
+        await page.click('.gg-root.gg-shots .gg-list-toggle [data-mode="info"]').catch(() => {});
+      }
     });
   } finally {
     try {

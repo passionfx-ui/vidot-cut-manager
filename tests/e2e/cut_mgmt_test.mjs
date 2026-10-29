@@ -565,6 +565,14 @@ async function main() {
     await sleep(500);
     const badge = await page.$(".gg-root.gg-shots .gg-cut .gg-redo-badge");
     if (!badge) throw new Error("redo badge missing");
+    if (!(await page.$(".gg-root.gg-shots .gg-filter-redo"))) {
+      // Hidden option must be forced off: every cut stays listed.
+      const n = (await page.evaluate((pid) => fetch(`/gonggan/timeline?pid=${encodeURIComponent(pid)}`).then((r) => r.json()), mainPid)).cuts.length;
+      if ((await countCuts(page)) !== n) throw new Error("redo filter hidden but cuts are filtered");
+      const err = new Error("SKIP redo filter hidden (SHOW_REDO_FILTER = false); badge checked, all cuts listed");
+      err.skipped = true;
+      throw err;
+    }
     await page.click(".gg-filter-redo input");
     await sleep(400);
     const visible = await countCuts(page);
