@@ -52,6 +52,8 @@ import {
   normalizeWorkflowPath,
   pickFreeWorkflowPath,
   pathCollides,
+  autosaveStatusMessage,
+  workflowLabel,
 } from "./gg_autosave_core.js";
 import {
   filterTabsNeedingAutosave,
@@ -1474,6 +1476,7 @@ function applyWipStampForWorkflow(wf) {
   });
 }
 
+let ggWipAutosaveFailing = false;
 function ggWipAutosaveBlockedNow() {
   if (ggCutSwitchAutosaveBlocked) return true;
   if (wfLoadDebounce || ggCutLoadsInFlight > 0) return true;
@@ -1505,8 +1508,17 @@ async function runGongganWipAutosave(opts = {}) {
     // Saved content is the new baseline: a later switch must not re-stamp it with a newer version key.
     if (resolved?.cutId && savedSnap) ggWorkflowBaselines.set(resolved.cutId, savedSnap);
     ggWipLastAutosaveAt = Date.now();
+    const okMsg = autosaveStatusMessage({ failing: false, wasFailing: ggWipAutosaveFailing, label: workflowLabel(wf) });
+    ggWipAutosaveFailing = false;
+    if (okMsg) {
+      sdk.msg = okMsg;
+      bus.dispatchEvent(new Event("sdk"));
+    }
   } catch (e) {
     console.warn("[gonggan] periodic wip autosave failed", e);
+    ggWipAutosaveFailing = true;
+    sdk.msg = autosaveStatusMessage({ failing: true, error: e?.message || String(e), label: workflowLabel(wf) });
+    bus.dispatchEvent(new Event("sdk"));
     if (Date.now() - ggWipLastFailToastAt >= 60000) {
       ggWipLastFailToastAt = Date.now();
       ggToast("Auto-save failed.", e?.message || String(e), "warn");
