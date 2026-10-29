@@ -1,7 +1,8 @@
 /**
  * 0.9.62 scene reorder: drag a scene header to move the whole scene. Covers move + labels + persistence
  * (Reload button and full page reload), Undo, Esc mid-drag, collapsed scene, header buttons / right-click
- * still working, right button never drags, and an ordinary cut drag between scenes.
+ * still working, right button never drags, an ordinary cut drag between scenes, and a scene drag while a
+ * timeline save is still waiting (0.9.78 hang) with Ctrl+Z / Ctrl+Y.
  * ZZ temp native project (2 scenes x 2 cuts), soft-deleted at the end. Blocks POST /prompt and /gonggan/regen.
  */
 import fs from "node:fs";
@@ -244,7 +245,9 @@ async function headerDragPoints(page, fromGid, toSel, fy) {
     const w = wrap.getBoundingClientRect();
     const from = { x: s.x + Math.min(40, s.width / 2), y: s.y + s.height / 2 };
     const to = { x: from.x, y: d.y + d.height * f };
-    return { from, to, ok: from.y > w.top && from.y < w.bottom && to.y > w.top && to.y < w.bottom };
+    // The press must land on the dragged scene's own header (a real header drag, not a cut drag).
+    const onHead = document.elementFromPoint(from.x, from.y)?.closest(".gg-grp-head") === src.closest(".gg-grp-head");
+    return { from, to, onHead, ok: onHead && from.y > w.top && from.y < w.bottom && to.y > w.top && to.y < w.bottom };
   }, secSel(fromGid), toSel, fy);
 }
 
@@ -394,7 +397,7 @@ async function main() {
         throw new Error("baseline labels unexpected");
       }
       const pts = await headerDragPoints(page, gB, `${secSel(gA)} > .gg-grp-head`, 0.5);
-      if (!pts?.ok) return { skip: "scene headers not both visible in the list" };
+      if (!pts?.ok) throw new Error(`scene header drag points not usable: ${JSON.stringify(pts)}`);
       await dragHeader(page, pts, {
         beforeUp: async () => {
           const st = await page.evaluate((b) => {
@@ -423,7 +426,7 @@ async function main() {
     await runScenario("s2", "Undo after a scene move restores the previous order", async () => {
       await resetBaseline(page);
       const pts = await headerDragPoints(page, gB, `${secSel(gA)} > .gg-grp-head`, 0.5);
-      if (!pts?.ok) return { skip: "scene headers not both visible in the list" };
+      if (!pts?.ok) throw new Error(`scene header drag points not usable: ${JSON.stringify(pts)}`);
       await dragHeader(page, pts);
       await waitToast(page, "Moved 2 cut(s)");
       await waitServerOrder(page, moved);
@@ -438,7 +441,7 @@ async function main() {
     await runScenario("s3", "Esc mid-drag cancels a scene drag with no change", async () => {
       await resetBaseline(page);
       const pts = await headerDragPoints(page, gB, `${secSel(gA)} > .gg-grp-head`, 0.5);
-      if (!pts?.ok) return { skip: "scene headers not both visible in the list" };
+      if (!pts?.ok) throw new Error(`scene header drag points not usable: ${JSON.stringify(pts)}`);
       await dragHeader(page, pts, {
         beforeUp: async () => {
           await page.keyboard.press("Escape");
@@ -464,7 +467,7 @@ async function main() {
       await page.waitForFunction((s) => !!document.querySelector(`${s} .gg-cutlist`)?.hidden, { timeout: 8000 }, secSel(gA));
       await sleep(500);
       const pts = await headerDragPoints(page, gA, secSel(gB), 0.9);
-      if (!pts?.ok) return { skip: "scene sections not both visible in the list" };
+      if (!pts?.ok) throw new Error(`scene header drag points not usable: ${JSON.stringify(pts)}`);
       await dragHeader(page, pts);
       const tl = await waitServerOrder(page, moved);
       const g = (tl.groups || []).find((x) => x.id === gA);
@@ -483,7 +486,7 @@ async function main() {
       await closeCtx(page);
 
       const pts = await headerDragPoints(page, gB, `${secSel(gA)} > .gg-grp-head`, 0.5);
-      if (!pts?.ok) return { skip: "scene headers not both visible in the list" };
+      if (!pts?.ok) throw new Error(`scene header drag points not usable: ${JSON.stringify(pts)}`);
       await page.mouse.move(pts.from.x, pts.from.y);
       await page.mouse.down({ button: "right" });
       try {
@@ -520,7 +523,7 @@ async function main() {
     await runScenario("s7", "Save failure during a scene move: failure toast, previous order restored", async () => {
       await resetBaseline(page);
       const pts = await headerDragPoints(page, gB, `${secSel(gA)} > .gg-grp-head`, 0.5);
-      if (!pts?.ok) return { skip: "scene headers not both visible in the list" };
+      if (!pts?.ok) throw new Error(`scene header drag points not usable: ${JSON.stringify(pts)}`);
       failNextGroupsPost = true;
       try {
         await dragHeader(page, pts);
@@ -537,6 +540,53 @@ async function main() {
       if (tl.cuts.map((c) => c.id).join() !== baseline.ids.join()) throw new Error("server order changed after failed save");
       if ((tl.groups || []).map((g) => g.id).join() !== [gA, gB].join()) throw new Error("server scene order changed after failed save");
       if ((await domSceneIds(page)).join() !== [gA, gB].join()) throw new Error("Shots scene order not restored");
+    });
+
+    await runScenario("s8", "Scene drag right after a timeline clip move is saved (with the clip move); Ctrl+Z / Ctrl+Y", async () => {
+      await resetBaseline(page);
+      const clipSel = `.gg-root.gg-timeline .gg-clip[data-cut-id="${c4}"]`;
+      await page.waitForSelector(clipSel, { visible: true, timeout: 15000 });
+      const startBefore = (await serverTimeline(page)).cuts.find((c) => c.id === c4)?.start;
+      const pts = await headerDragPoints(page, gB, `${secSel(gA)} > .gg-grp-head`, 0.5);
+      if (!pts?.ok) throw new Error(`scene header drag points not usable: ${JSON.stringify(pts)}`);
+      const cb = await (await page.$(clipSel)).boundingBox();
+      const cx = cb.x + cb.width / 2;
+      const cy = cb.y + cb.height / 2;
+      if (cx + 60 > VIEWPORT.width) throw new Error(`last timeline clip too far right (${Math.round(cx)})`);
+      await page.mouse.move(cx, cy);
+      await page.mouse.down();
+      await page.mouse.move(cx + 40, cy, { steps: 4 });
+      await page.mouse.up();
+      // The timeline save waits 400 ms; the scene drop must land while it is still waiting (0.9.78 hang).
+      const t0 = Date.now();
+      await page.mouse.move(pts.from.x, pts.from.y);
+      await page.mouse.down();
+      await page.mouse.move(pts.to.x, pts.to.y, { steps: 5 });
+      await page.mouse.up();
+      const elapsed = Date.now() - t0;
+      if (elapsed > 300) return { skip: `scene drop came ${elapsed} ms after the clip move (needs < 300 ms)` };
+      const tl = await waitServerOrder(page, moved);
+      if ((tl.groups || []).map((g) => g.id).join() !== [gB, gA].join()) throw new Error("server scene order not saved");
+      const startAfter = tl.cuts.find((c) => c.id === c4)?.start;
+      if (!(startAfter > startBefore)) throw new Error(`timeline clip move not saved: start ${startBefore} -> ${startAfter}`);
+      await sleep(400);
+      await checkMoved("after drop");
+
+      const keyInShots = async (key) => {
+        await page.mouse.move(pts.to.x, pts.to.y);
+        await page.keyboard.down("Control");
+        await page.keyboard.press(key);
+        await page.keyboard.up("Control");
+      };
+      await keyInShots("KeyZ");
+      const undone = await waitServerOrder(page, baseline.ids);
+      if ((undone.groups || []).map((g) => g.id).join() !== [gA, gB].join()) throw new Error("Ctrl+Z did not restore scene order");
+      await sleep(400);
+      if ((await domSceneIds(page)).join() !== [gA, gB].join()) throw new Error("Shots scene order not restored by Ctrl+Z");
+      await keyInShots("KeyY");
+      await waitServerOrder(page, moved);
+      await sleep(400);
+      await checkMoved("after Ctrl+Y");
     });
 
     await runScenario("s6", "Cut drag still moves a cut from scene B into scene A", async () => {

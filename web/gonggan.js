@@ -2997,7 +2997,15 @@ function scrollMovedCutsIntoView() {
 }
 
 function enqueueReorderPersist(fn) {
-  return editGate.run(fn);
+  // A timeline trim still waiting must be saved before this reply replaces the timeline.
+  return editGate.runAfterPending(takePendingTimelineSave, fn);
+}
+
+function takePendingTimelineSave() {
+  if (!ed.savePending) return null;
+  clearTimeout(ed.saveTimer);
+  ed.savePending = false;
+  return saveEditNow;
 }
 
 /** Cut list order + scenes before a Shots edit, for Ctrl+Z. */
@@ -3864,11 +3872,6 @@ function applyOrderGroupsLocally(order, groups) {
 async function persistShotsReorder(order, groups) {
   const tl = state.timeline;
   if (!tl || !isNativeProject()) return true;
-  if (ed.savePending) {  // a timeline trim still waiting must be saved before this reply replaces the timeline
-    clearTimeout(ed.saveTimer);
-    ed.savePending = false;
-    await saveEdit();
-  }
   applyOrderGroupsLocally(order, groups);
   const mySeq = editGate.seq;
   bus.dispatchEvent(new Event("timeline"));
