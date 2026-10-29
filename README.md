@@ -24,10 +24,10 @@ Plan a short film as projects, scenes and cuts, open each cut's workflow on the 
 - **Timeline bottom panel** - toggle with the **Timeline** button or **T**. All cuts in order on one track, trim handles, playback of the picked takes as a continuous rough cut.
 - **Production tracking** - summary bar `Image a/N · Video b/N · Best c/N`, project completion %, *Needs redo* flag, **Show redo cuts only** filter, 3-second rule warning (with *End card* exemption).
 - **Caption field** - one text area per cut for director notes and dialogue (placeholder includes the project caption language). **Info** vs **Caption** list modes change layout only; **Export captions (.srt)** uses stored caption text only, timed from cut order and lengths.
-- **New project & Project Settings** - name, aspect/resolution preset, FPS, default cut length, default workflow template, caption language, and an optional Project folder path (stored for the planned folder auto-organize; nothing is written there yet) (project selector / header context menu).
+- **New project & Project Settings** - name, aspect/resolution preset, FPS, default cut length, default workflow template, caption language, and an optional Project folder path (stored for the planned folder auto-organize; nothing is written there yet) (the ⚙ gear next to **Project:**, or right-click the project row).
 - **Auto Cut Split** - in the New Project dialog: 1. Copy the prompt and paste it into your LLM together with your story. 2. Paste the LLM's result into the box to split it into scenes and cuts (with captions and a reference name list) automatically. The preview shows e.g. `3 scenes, 12 cuts, 4 references will be created`; Create stays disabled while a line has an error.
-- **References** - header context menu > References…: Character / Place / Prop / Style / Other with category chips. **+ New** adds a name; **Generate** opens its workflow (your default template) in a ComfyUI tab; run it, then **Add last output** makes that image the reference's picture (the newest one is used). Rename / Delete as well. References stay out of the timeline and exports. Names from an Auto Cut Split `# References` section appear here automatically.
-- **Rename a cut** - right-click a cut > **Rename…** (a new cut is named cut1, cut2, ... until you do).
+- **References** - project right-click menu > References…: Character / Place / Prop / Style / Other with category chips. **+ New** adds a name; **Generate** opens its workflow (your default template) in a ComfyUI tab; run it, then **Add last output** makes that image the reference's picture (the newest one is used). Rename / Delete as well. References stay out of the timeline and exports. Names from an Auto Cut Split `# References` section appear here automatically.
+- **Rename a cut** - right-click a cut > **Rename…** (a new cut is named "New cut" until you do; on-screen numbers come from position).
 - **Keyboard shortcuts** (Shots list, while the pointer is over it or focus is inside; not while typing) - **Up / Down** previous / next cut, **Enter** open the selected cut, **F2** rename, **Alt+G** group into a scene, **Alt+Shift+G** remove from scene, **Alt+N** add a cut after the selected one, **Alt+Up / Alt+Down** move cuts, **Delete** move to Trash, **Esc** clear selection, **T** toggle Timeline.
 - **Project templates** - link a saved ComfyUI workflow as the starting graph for new cuts.
 - **Missing Load Image guard** - highlights `Load Image` nodes whose file is missing and blocks queueing until fixed.
@@ -67,7 +67,7 @@ Then run `start_proxy.bat` (proxy on `127.0.0.1:8189`). Regenerate is a dry run 
 
 1. Open the **Shots** tab in the left sidebar.
 2. Open the project selector menu - **New Project…**, set name, aspect/resolution, FPS, default cut length, template, and caption language.
-3. (Optional) adjust the same fields later via **Project Settings…** in the header context menu.
+3. (Optional) adjust the same fields later via **Project Settings…** (the ⚙ gear next to **Project:**, or the project right-click menu).
 4. Right-click the cut list - **Add Cut**. Add as many as you need; drag to reorder; select several and **Group** them into a scene.
 5. Click a cut - its workflow opens on the canvas. Edit prompts, press **Run** yourself.
 6. When the render finishes, click **Send last output** to attach it as a take. Pick the **Best** take.
