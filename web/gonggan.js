@@ -39,7 +39,7 @@ import {
   formatTrashItem,
   movedToTrashToastMessage,
 } from "./gg_trash_core.js";
-import { createTimelineGuard } from "./gg_timeline_guard_core.js";
+import { createTimelineGuard, shouldAdoptMutationTimeline } from "./gg_timeline_guard_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import { parseImportList, summarizeImport, buildLlmPrompt, REFERENCE_CATEGORIES } from "./gg_import_core.js";
 import {
@@ -295,6 +295,13 @@ function adoptServerTimeline(tl) {
   return tl;
 }
 
+function adoptMutationTimeline(tl, requestPid) {
+  // A mutation response belongs to the project it was sent for; never show it under another project.
+  if (!shouldAdoptMutationTimeline(tl, requestPid, state.pid)) return false;
+  state.timeline = tl;
+  return true;
+}
+
 async function loadTimeline() {
   if (!state.pid) { state.timeline = null; bus.dispatchEvent(new Event("timeline")); refreshTrashCount(); return; }
   const token = timelineGuard.begin(state.pid);
@@ -348,9 +355,10 @@ function trashMenuLabel() {
 }
 
 async function restoreCutsByIds(ids, { selectFirst = false } = {}) {
-  const d = await postJson("/gonggan/cut/restore", { pid: state.pid, cuts: ids });
+  const reqPid = state.pid;
+  const d = await postJson("/gonggan/cut/restore", { pid: reqPid, cuts: ids });
   if (d.timeline) {
-    state.timeline = d.timeline;
+    adoptMutationTimeline(d.timeline, reqPid);
     state.error = "";
     if (selectFirst) {
       const pick = ids.find((id) => d.timeline.cuts.some((c) => c.id === id)) || d.timeline.cuts?.[0]?.id || "";
@@ -452,6 +460,7 @@ async function openTrashModal() {
 
 function selectProject(pid) {
   if (pid === state.pid) return;
+  flushPendingCutFields();
   state.pid = pid;
   state.cutId = "";
   state.cutSel.clear();
@@ -742,18 +751,19 @@ function openProjectSettingsModal() {
     const name = nameNorm.value;
     const settings = readProjectSetupFromModal(wrap, curSettings);
     const template_ref = tplSel.value || "";
+    const reqPid = state.pid;
     try {
       if (name !== (p?.name || tl?.project?.name || "")) {
-        await postJson("/gonggan/project/rename", { pid: state.pid, name });
+        await postJson("/gonggan/project/rename", { pid: reqPid, name });
       }
-      const data = await postJson("/gonggan/project/update", { pid: state.pid, fields: { settings } });
+      const data = await postJson("/gonggan/project/update", { pid: reqPid, fields: { settings } });
       if (template_ref !== (projectTemplateRef || "")) {
-        await postJson("/gonggan/template", { pid: state.pid, ref: template_ref || "" });
+        await postJson("/gonggan/template", { pid: reqPid, ref: template_ref || "" });
         projectTemplateRef = template_ref || "";
         projectHasTemplate = !!template_ref;
       }
       closeProjectModal();
-      if (data.timeline) state.timeline = data.timeline;
+      if (data.timeline) adoptMutationTimeline(data.timeline, reqPid);
       if (data.projects) state.projects = data.projects;
       await loadProjects();
       bus.dispatchEvent(new Event("projects"));
@@ -2296,7 +2306,7 @@ async function addLocalCut() {
   try {
     const d = await postJson("/gonggan/cut/add", body);
     if (d.timeline) {
-      state.timeline = d.timeline;
+      adoptMutationTimeline(d.timeline, body.pid);
       bus.dispatchEvent(new Event("timeline"));
     } else {
       await loadTimeline();
@@ -2530,8 +2540,9 @@ async function deleteSelectedCuts() {
   const deletedIds = [...ids];
   const n = deletedIds.length;
   try {
-    const d = await postJson("/gonggan/cut/delete", { pid: state.pid, cuts: deletedIds });
-    if (d.timeline) state.timeline = d.timeline;
+    const reqPid = state.pid;
+    const d = await postJson("/gonggan/cut/delete", { pid: reqPid, cuts: deletedIds });
+    if (d.timeline) adoptMutationTimeline(d.timeline, reqPid);
     state.cutSel.clear();
     cutSelAnchor = "";
     if (deletedIds.includes(state.cutId)) {
@@ -2569,7 +2580,7 @@ async function addCutAfter(cutId) {
   try {
     const d = await postJson("/gonggan/cut/add", body);
     if (d.timeline) {
-      state.timeline = d.timeline;
+      adoptMutationTimeline(d.timeline, body.pid);
       bus.dispatchEvent(new Event("timeline"));
     } else await loadTimeline();
     if (d.cut?.id) {
@@ -2779,7 +2790,7 @@ async function persistGroups(groups) {
   const tl = state.timeline;
   if (!tl) return;
   const data = await postJson("/gonggan/groups", { pid: tl.project.id, groups });
-  state.timeline = data;
+  adoptMutationTimeline(data, tl.project.id);
   state.error = "";
   bus.dispatchEvent(new Event("timeline"));
 }
@@ -3354,7 +3365,7 @@ async function persistShotsReorder(order, groups) {
     const res = await api.fetchApi("/gonggan/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const data = await res.json();
     if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
-    state.timeline = data;
+    adoptMutationTimeline(data, tl.project.id);
     state.error = "";
   } catch (e) {
     const msg = e?.message || String(e);
@@ -3564,24 +3575,27 @@ function showCaptionDegradeToast() {
   );
 }
 
-async function saveCutFields(cutId, fields) {
-  if (!isNativeProject() || !state.pid) return;
+async function saveCutFields(cutId, fields, reqPid = state.pid) {
+  // reqPid is fixed when the edit was made (the debounce timer may fire after a project switch).
+  if (!reqPid || !isNativePid(reqPid)) return;
   cutFieldUi.unsaved[cutId] = { ...(cutFieldUi.unsaved[cutId] || {}), ...fields };
   refreshFieldTextUnsavedClasses();
   if (cutFieldUi.routeMissing && !fields.caption) return;
   if (cutFieldUi.captionDegraded && Object.keys(fields).length > 0 && Object.keys(fields).every((k) => k === "caption")) return;
   try {
-    const data = await postJson("/gonggan/cut/update", { pid: state.pid, cut_id: cutId, fields });
+    const data = await postJson("/gonggan/cut/update", { pid: reqPid, cut_id: cutId, fields });
     if (data.timeline) {
       const row = (data.timeline.cuts || []).find((c) => c.id === cutId);
       if (fields.caption != null && row && !Object.prototype.hasOwnProperty.call(row, "caption")) {
         cutFieldUi.captionDegraded = true;
         showCaptionDegradeToast();
       }
-      state.timeline = adoptServerTimeline(data.timeline);
-      state.error = "";
+      if (reqPid === state.pid) {
+        adoptMutationTimeline(adoptServerTimeline(data.timeline), reqPid);
+        state.error = "";
+      }
       const keys = Object.keys(fields);
-      if (!isSilentFieldSave(fields)) bus.dispatchEvent(new Event("timeline"));
+      if (reqPid === state.pid && !isSilentFieldSave(fields)) bus.dispatchEvent(new Event("timeline"));
       const bucket = cutFieldUi.unsaved[cutId];
       if (bucket) {
         for (const k of keys) {
@@ -3626,20 +3640,31 @@ function scheduleCutFieldSave(cutId, fields) {
   cutFieldUi.unsaved[cutId] = { ...(cutFieldUi.unsaved[cutId] || {}), ...fields };
   refreshFieldTextUnsavedClasses();
   clearTimeout(cutFieldUi.timer);
-  cutFieldUi.pending = { cutId, fields: { ...(cutFieldUi.pending?.cutId === cutId ? cutFieldUi.pending.fields : {}), ...fields } };
+  cutFieldUi.pending = { cutId, pid: state.pid, fields: { ...(cutFieldUi.pending?.cutId === cutId ? cutFieldUi.pending.fields : {}), ...fields } };
   cutFieldUi.timer = setTimeout(() => {
     const p = cutFieldUi.pending;
     cutFieldUi.pending = null;
     cutFieldUi.timer = 0;
-    if (p) saveCutFields(p.cutId, p.fields);
+    if (p) saveCutFields(p.cutId, p.fields, p.pid);
   }, 400);
+}
+
+// Send any debounced field edit right now (project switch, page hide, ...).
+function flushPendingCutFields() {
+  const p = cutFieldUi.pending;
+  if (!p) return;
+  clearTimeout(cutFieldUi.timer);
+  cutFieldUi.pending = null;
+  cutFieldUi.timer = 0;
+  saveCutFields(p.cutId, p.fields, p.pid);
 }
 
 async function saveProjectDue(value) {
   if (!isNativeProject() || !state.pid) return;
   try {
-    const data = await postJson("/gonggan/project/update", { pid: state.pid, fields: { due_date: value || null } });
-    if (data.timeline) state.timeline = data.timeline;
+    const reqPid = state.pid;
+    const data = await postJson("/gonggan/project/update", { pid: reqPid, fields: { due_date: value || null } });
+    if (data.timeline) adoptMutationTimeline(data.timeline, reqPid);
     if (data.projects) state.projects = data.projects;
     state.error = "";
     bus.dispatchEvent(new Event("projects"));
@@ -5058,7 +5083,7 @@ async function resetEdit() {
     const res = await api.fetchApi("/gonggan/edit/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pid: tl.project.id }) });
     const data = await res.json();
     if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
-    state.timeline = data;
+    adoptMutationTimeline(data, tl.project.id);
     state.error = "";
   } catch (e) {
     state.error = "Reset failed: " + e.message;

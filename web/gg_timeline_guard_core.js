@@ -21,3 +21,15 @@ export function createTimelineGuard() {
     },
   };
 }
+
+/**
+ * A mutation response (cut/add, groups, edit ...) may only replace state.timeline when it answers for the
+ * project that is selected NOW and describes that same project.
+ */
+export function shouldAdoptMutationTimeline(timeline, requestPid, currentPid) {
+  if (!timeline || typeof timeline !== "object") return false;
+  if (!requestPid || requestPid !== currentPid) return false;
+  const answered = timeline.project && timeline.project.id;
+  if (answered && answered !== requestPid) return false;
+  return true;
+}
