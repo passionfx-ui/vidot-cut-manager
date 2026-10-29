@@ -44,6 +44,13 @@ import { createFieldSlots } from "./gg_field_slots_core.js";
 import { createEditSaveGate } from "./gg_edit_save_core.js";
 import { confirmKeyAction, splitConfirmMessage } from "./gg_confirm_core.js";
 import { emptyListHint } from "./gg_empty_hint_core.js";
+import {
+  cutCardMenuItems,
+  timelineClipMenuItems,
+  sceneMenuItems,
+  sceneCutIds,
+  attachMenuActions,
+} from "./gg_ctx_menu_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import { parseImportList, summarizeImport, buildLlmPrompt, REFERENCE_CATEGORIES } from "./gg_import_core.js";
 import {
@@ -2784,66 +2791,110 @@ async function commitShotsReorder(order, groups, opts = {}) {
   return true;
 }
 
+function selectOnlyCut(cutId) {
+  state.cutSel.clear();
+  state.cutSel.add(cutId);
+  cutSelAnchor = cutId;
+  state.cutId = cutId;
+  bus.dispatchEvent(new Event("select"));
+}
+
+function cutMenuCtx(cutId, multi) {
+  return {
+    native: isNativeProject(),
+    multi,
+    needsRedo: !!cutById(cutId)?.needs_redo,
+    sdkBusy: !!sdk.busy,
+    sdkOk: !!(sdk.st && sdk.st.ok),
+    readonlyTip: NATIVE_READONLY_TIP,
+  };
+}
+
+function cutMenuActions(cutId) {
+  return {
+    redo: () => toggleNeedsRedo(cutId),
+    rename: () => renameCut(cutId),
+    regen: () => regenCut(cutId),
+    send: () => sendLastOutput(cutId),
+  };
+}
+
 function openCutContextMenu(e, cutId) {
   e.preventDefault();
   e.stopPropagation();
-  if (!state.cutSel.has(cutId)) {
-    state.cutSel.clear();
-    state.cutSel.add(cutId);
-    cutSelAnchor = cutId;
-    state.cutId = cutId;
-    bus.dispatchEvent(new Event("select"));
-  }
+  if (!state.cutSel.has(cutId)) selectOnlyCut(cutId);
   const ids = cutSelIds();
   const c = cutById(cutId);
-  const inScene = !!(c && c.group_id);
   const nat = isNativeProject();
-  const redoLabel = c?.needs_redo ? "Clear needs redo" : "Mark needs redo";
   const order = state.timeline ? state.timeline.cuts.map((x) => x.id) : [];
-  const moveItems = nat
-    ? [
-        {
-          label: "Move up",
-          disabled: !canMoveUp(order, ids),
-          action: () => applyStepMove(-1),
-        },
-        {
-          label: "Move down",
-          disabled: !canMoveDown(order, ids),
-          action: () => applyStepMove(1),
-        },
-        {
-          label: "Move to scene \u25B8",
-          disabled: false,
-          submenu: buildMoveToSceneSubmenu(ids),
-        },
-      ]
-    : [];
-  showCtxMenu(e.clientX, e.clientY, [
-    ...moveItems,
-    { label: "Group into Scene", action: () => createSceneGroup(ids) },
-    { label: "Split scene", disabled: !inScene, action: () => splitSceneHere(cutId) },
-    { label: "Remove from Scene", disabled: !inScene && !ids.some((id) => cutById(id)?.group_id), action: () => ungroupCuts(ids) },
-    { label: redoLabel, disabled: !nat, title: nat ? "" : NATIVE_READONLY_TIP, action: () => toggleNeedsRedo(cutId) },
-    { label: "Rename…", disabled: !nat || ids.length > 1, title: nat ? "" : NATIVE_READONLY_TIP, action: () => renameCut(cutId) },
-    { label: "Add Cut", action: () => addCutAfter(cutId) },
-    { label: "Delete", danger: true, action: () => deleteSelectedCuts() },
-    {
-      label: trashMenuLabel(),
-      disabled: !nat || trashCount <= 0,
-      title: nat ? "Deleted cuts – click to restore" : NATIVE_READONLY_TIP,
-      action: () => openTrashModal(),
-    },
-  ]);
+  const items = cutCardMenuItems({
+    ...cutMenuCtx(cutId, ids.length > 1),
+    canMoveUp: canMoveUp(order, ids),
+    canMoveDown: canMoveDown(order, ids),
+    inScene: !!(c && c.group_id),
+    anyInScene: ids.some((id) => cutById(id)?.group_id),
+    trashLabel: trashMenuLabel(),
+    trashCount,
+  });
+  showCtxMenu(
+    e.clientX,
+    e.clientY,
+    attachMenuActions(
+      items,
+      {
+        ...cutMenuActions(cutId),
+        moveUp: () => applyStepMove(-1),
+        moveDown: () => applyStepMove(1),
+        group: () => createSceneGroup(ids),
+        split: () => splitSceneHere(cutId),
+        removeFromScene: () => ungroupCuts(ids),
+        addCut: () => addCutAfter(cutId),
+        del: () => deleteSelectedCuts(),
+        trash: () => openTrashModal(),
+      },
+      nat ? { moveToScene: buildMoveToSceneSubmenu(ids) } : {},
+    ),
+  );
+}
+
+function openClipContextMenu(e, cutId) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (ed.dragging || !cutById(cutId)) return;
+  showCtxMenu(
+    e.clientX,
+    e.clientY,
+    attachMenuActions(timelineClipMenuItems(cutMenuCtx(cutId, false)), {
+      ...cutMenuActions(cutId),
+      open: () => selectCut(cutId),
+      del: () => {
+        selectOnlyCut(cutId);
+        deleteSelectedCuts();
+      },
+    }),
+  );
 }
 
 function openSceneContextMenu(e, groupId) {
   e.preventDefault();
   e.stopPropagation();
-  showCtxMenu(e.clientX, e.clientY, [
-    { label: "Rename", action: () => renameSceneGroup(groupId) },
-    { label: "Ungroup", action: () => ungroupSceneGroup(groupId) },
-  ]);
+  const g = (state.timeline?.groups || []).find((x) => x.id === groupId);
+  if (!g) return;
+  const ids = sceneCutIds(state.timeline.cuts, g);
+  const first = ids[0];
+  const last = ids[ids.length - 1];
+  showCtxMenu(
+    e.clientX,
+    e.clientY,
+    attachMenuActions(sceneMenuItems({ collapsed: !!g.collapsed, cutCount: ids.length }), {
+      addCut: () => addCutAfter(last),
+      selectCuts: () => selectCutRange(first, last),
+      toggleCollapse: () => toggleGroupCollapsed(groupId),
+      rename: () => renameSceneGroup(groupId),
+      ungroup: () => ungroupSceneGroup(groupId),
+      deleteScene: () => deleteSceneGroup(groupId),
+    }),
+  );
 }
 
 function openShotsPanelContextMenu(e) {
@@ -5658,6 +5709,10 @@ function mountTimeline(el) {
     const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+  });
+  $r(".gg-track").addEventListener("contextmenu", (e) => {
+    const clip = e.target.closest(".gg-clip");
+    if (clip) openClipContextMenu(e, clip.dataset.cutId);
   });
   // The panel host has no definite height; size the root from it so the viewer can fill the panel.
   const host = el.parentElement || el;
