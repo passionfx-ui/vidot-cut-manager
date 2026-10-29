@@ -8,6 +8,9 @@ import {
   createUndoBurst,
   snapshotOrderGroups,
   dropHighlight,
+  moveScene,
+  sceneBlocks,
+  sceneDropTarget,
 } from "../../web/gg_reorder_core.js";
 import { computeCutLabels, moveCuts } from "../../web/gg_cuts_core.js";
 
@@ -208,6 +211,147 @@ describe("cut labels after moves (computeCutLabels)", () => {
     assert.deepEqual(labels(loose.order, loose.groups), { a: "1-1", b: "1-2", d: "2-1", e: "2-2", c: "3-1" });
     const back = moveCuts(loose.order, loose.groups, ["c"], { toIndex: 2, toGroupId: "g1" });
     assert.deepEqual(labels(back.order, back.groups), labels(ord0, grp0));
+  });
+});
+
+describe("moveScene", () => {
+  // S1 = a b c, S2 = d e, S3 = f
+  const ord = ["a", "b", "c", "d", "e", "f"];
+  const grp = [
+    { id: "g1", name: "S1", cut_ids: ["a", "b", "c"], collapsed: false },
+    { id: "g2", name: "S2", cut_ids: ["d", "e"], collapsed: true },
+    { id: "g3", name: "S3", cut_ids: ["f"], collapsed: false },
+  ];
+  const ids = (gs) => gs.map((g) => g.id);
+
+  function timelineOf(order, groups) {
+    const mem = new Map();
+    for (const g of groups) for (const id of g.cut_ids) mem.set(id, g.id);
+    return { cuts: order.map((id) => ({ id, group_id: mem.get(id) || "" })) };
+  }
+  const labels = (order, groups) =>
+    Object.fromEntries([...computeCutLabels(timelineOf(order, groups))].map(([id, v]) => [id, v.label]));
+
+  it("sceneBlocks splits consecutive runs, ungrouped runs included", () => {
+    const blocks = sceneBlocks(["x", "a", "b", "y", "z", "d"], grp);
+    assert.deepEqual(blocks, [
+      { groupId: null, ids: ["x"] },
+      { groupId: "g1", ids: ["a", "b"] },
+      { groupId: null, ids: ["y", "z"] },
+      { groupId: "g2", ids: ["d"] },
+    ]);
+  });
+
+  it("first -> last keeps the block's internal order and membership", () => {
+    const r = moveScene(ord, grp, "g1", { toBlockIndex: 2 });
+    assert.ok(r.changed);
+    assert.deepEqual(r.order, ["d", "e", "f", "a", "b", "c"]);
+    assert.deepEqual(ids(r.groups), ["g2", "g3", "g1"]);
+    assert.deepEqual(r.groups.find((g) => g.id === "g1").cut_ids, ["a", "b", "c"]);
+    assert.deepEqual(r.groups.find((g) => g.id === "g2").cut_ids, ["d", "e"]);
+  });
+
+  it("beforeCutId null means end", () => {
+    const r = moveScene(ord, grp, "g1", { beforeCutId: null });
+    assert.deepEqual(r.order, ["d", "e", "f", "a", "b", "c"]);
+  });
+
+  it("last -> first", () => {
+    const r = moveScene(ord, grp, "g3", { toBlockIndex: 0 });
+    assert.ok(r.changed);
+    assert.deepEqual(r.order, ["f", "a", "b", "c", "d", "e"]);
+    assert.deepEqual(ids(r.groups), ["g3", "g1", "g2"]);
+  });
+
+  it("beforeCutId anywhere in a block inserts before the whole block", () => {
+    const r = moveScene(ord, grp, "g3", { beforeCutId: "e" });
+    assert.deepEqual(r.order, ["a", "b", "c", "f", "d", "e"]);
+    assert.deepEqual(ids(r.groups), ["g1", "g3", "g2"]);
+  });
+
+  it("no-op at its own position, own cut, or unknown scene", () => {
+    for (const r of [
+      moveScene(ord, grp, "g2", { toBlockIndex: 1 }),
+      moveScene(ord, grp, "g2", { beforeCutId: "f" }),
+      moveScene(ord, grp, "g2", { beforeCutId: "d" }),
+      moveScene(ord, grp, "nope", { toBlockIndex: 0 }),
+    ]) {
+      assert.equal(r.changed, false);
+      assert.deepEqual(r.order, ord);
+      assert.deepEqual(r.groups, grp);
+    }
+  });
+
+  it("collapsed scene moves with all its cuts and stays collapsed", () => {
+    const r = moveScene(ord, grp, "g2", { toBlockIndex: 0 });
+    assert.deepEqual(r.order, ["d", "e", "a", "b", "c", "f"]);
+    const g2 = r.groups.find((g) => g.id === "g2");
+    assert.equal(g2.collapsed, true);
+    assert.deepEqual(g2.cut_ids, ["d", "e"]);
+  });
+
+  it("drops land between blocks, never inside an ungrouped run or another scene", () => {
+    const o = ["x", "a", "b", "y", "d", "e", "z"];
+    const g = [
+      { id: "g1", name: "S1", cut_ids: ["a", "b"], collapsed: false },
+      { id: "g2", name: "S2", cut_ids: ["d", "e"], collapsed: false },
+    ];
+    // with S2 taken out the rest is [x] [a b] [y z]: y and z join into one ungrouped run
+    assert.equal(sceneBlocks(["x", "a", "b", "y", "z"], g).length, 3);
+    assert.deepEqual(moveScene(o, g, "g2", { toBlockIndex: 0 }).order, ["d", "e", "x", "a", "b", "y", "z"]);
+    assert.deepEqual(moveScene(o, g, "g2", { toBlockIndex: 1 }).order, ["x", "d", "e", "a", "b", "y", "z"]);
+    assert.deepEqual(moveScene(o, g, "g2", { toBlockIndex: 2 }).order, ["x", "a", "b", "d", "e", "y", "z"]);
+    assert.deepEqual(moveScene(o, g, "g2", { toBlockIndex: 3 }).order, ["x", "a", "b", "y", "z", "d", "e"]);
+    assert.deepEqual(moveScene(o, g, "g2", { toBlockIndex: 99 }).order, ["x", "a", "b", "y", "z", "d", "e"]);
+    assert.deepEqual(moveScene(o, g, "g2", { beforeCutId: "b" }).order, ["x", "d", "e", "a", "b", "y", "z"]);
+    // S1 out: [x y] [d e] [z]; before z lands after S2, not between x and y
+    const r = moveScene(o, g, "g1", { beforeCutId: "z" });
+    assert.deepEqual(r.order, ["x", "y", "d", "e", "a", "b", "z"]);
+    assert.deepEqual(r.groups.find((x) => x.id === "g1").cut_ids, ["a", "b"]);
+  });
+
+  it("labels renumber: moved scene takes its new block number, ids keep their cuts", () => {
+    assert.deepEqual(labels(ord, grp), { a: "1-1", b: "1-2", c: "1-3", d: "2-1", e: "2-2", f: "3-1" });
+    const r = moveScene(ord, grp, "g2", { toBlockIndex: 0 });
+    assert.deepEqual(labels(r.order, r.groups), { d: "1-1", e: "1-2", a: "2-1", b: "2-2", c: "2-3", f: "3-1" });
+    const back = moveScene(r.order, r.groups, "g2", { beforeCutId: "f" });
+    assert.deepEqual(back.order, ord);
+    assert.deepEqual(back.groups, grp);
+    assert.deepEqual(labels(back.order, back.groups), labels(ord, grp));
+  });
+
+  it("ungrouped runs between scenes keep their own block numbers", () => {
+    const o = ["a", "b", "x", "d", "e"];
+    const g = [
+      { id: "g1", name: "S1", cut_ids: ["a", "b"], collapsed: false },
+      { id: "g2", name: "S2", cut_ids: ["d", "e"], collapsed: false },
+    ];
+    const r = moveScene(o, g, "g2", { toBlockIndex: 0 });
+    assert.deepEqual(r.order, ["d", "e", "a", "b", "x"]);
+    assert.deepEqual(labels(r.order, r.groups), { d: "1-1", e: "1-2", a: "2-1", b: "2-2", x: "3-1" });
+  });
+
+  it("does not mutate inputs", () => {
+    const o = [...ord];
+    const g = JSON.parse(JSON.stringify(grp));
+    moveScene(o, g, "g1", { toBlockIndex: 2 });
+    assert.deepEqual(o, ord);
+    assert.deepEqual(g, grp);
+  });
+});
+
+describe("sceneDropTarget", () => {
+  const secs = [
+    { groupId: "g1", top: 0, bottom: 100 },
+    { groupId: "g3", top: 200, bottom: 260 },
+  ];
+  it("picks the boundary by section midpoint", () => {
+    assert.deepEqual(sceneDropTarget(secs, 10), { beforeGroupId: "g1", lineY: 0 });
+    assert.deepEqual(sceneDropTarget(secs, 120), { beforeGroupId: "g3", lineY: 200 });
+    assert.deepEqual(sceneDropTarget(secs, 240), { beforeGroupId: null, lineY: 260 });
+  });
+  it("no other scenes means no target", () => {
+    assert.equal(sceneDropTarget([], 10), null);
   });
 });
 

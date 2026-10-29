@@ -147,6 +147,84 @@ export function moveToScene(order, groups, ids, sceneIdOrNull) {
 }
 
 /**
+ * Consecutive runs of one scene (or of ungrouped cuts) in timeline order.
+ *
+ * @param {string[]} order
+ * @param {object[]} groups
+ * @returns {{ groupId: string|null, ids: string[] }[]}
+ */
+export function sceneBlocks(order, groups) {
+  const mem = membershipMap(groups);
+  const blocks = [];
+  for (const id of order || []) {
+    const gid = mem.get(id) ?? null;
+    const last = blocks[blocks.length - 1];
+    if (last && last.groupId === gid) last.ids.push(id);
+    else blocks.push({ groupId: gid, ids: [id] });
+  }
+  return blocks;
+}
+
+/**
+ * Move a whole scene (all its cuts, in their current order) as one block to a block boundary.
+ * Membership is unchanged. `groups` comes back sorted by first cut in the new order because the
+ * native store lays scenes out in groups-list order.
+ *
+ * @param {string[]} order
+ * @param {object[]} groups
+ * @param {string} groupId
+ * @param {{ toBlockIndex?: number, beforeCutId?: string|null }} target
+ *   toBlockIndex: boundary among the blocks left once the scene is taken out (0 = first, length = end);
+ *   beforeCutId: insert before the block holding that cut (null or unknown = end).
+ * @returns {{ order: string[], groups: object[], changed: boolean }}
+ */
+export function moveScene(order, groups, groupId, target = {}) {
+  const grps = cloneGroups(groups);
+  const ord = [...order];
+  const mem = membershipMap(grps);
+  const moving = ord.filter((id) => mem.get(id) === groupId);
+  if (!groupId || !moving.length) return { order: ord, groups: grps, changed: false };
+  const moveSet = new Set(moving);
+  const rest = ord.filter((id) => !moveSet.has(id));
+  const blocks = sceneBlocks(rest, grps);
+
+  let blockIdx;
+  if (target.toBlockIndex != null) {
+    blockIdx = Math.max(0, Math.min(Math.floor(Number(target.toBlockIndex) || 0), blocks.length));
+  } else if (target.beforeCutId != null && moveSet.has(target.beforeCutId)) {
+    return { order: ord, groups: grps, changed: false };
+  } else {
+    const at = target.beforeCutId == null ? -1 : blocks.findIndex((b) => b.ids.includes(target.beforeCutId));
+    blockIdx = at < 0 ? blocks.length : at;
+  }
+  const toIndex = blocks.slice(0, blockIdx).reduce((n, b) => n + b.ids.length, 0);
+
+  const r = moveCuts(ord, grps, moving, { toIndex, toGroupId: groupId });
+  const rank = new Map(r.order.map((id, i) => [id, i]));
+  const firstRank = (g) => Math.min(...(g.cut_ids || []).map((id) => rank.get(id) ?? Infinity), Infinity);
+  const sorted = r.groups.map((g, i) => ({ g, i, k: firstRank(g) })).sort((a, b) => a.k - b.k || a.i - b.i).map((x) => x.g);
+  const changed =
+    r.order.some((id, i) => id !== ord[i]) || sorted.some((g, i) => g.id !== grps[i].id);
+  return { order: r.order, groups: sorted, changed };
+}
+
+/**
+ * Drop boundary for a scene-header drag. `sections` are the other scene sections in list order
+ * (wrap-content coordinates); dropping past the last one means "end of scenes".
+ *
+ * @param {{ groupId: string, top: number, bottom: number }[]} sections
+ * @param {number} wrapY
+ * @returns {{ beforeGroupId: string|null, lineY: number }|null}
+ */
+export function sceneDropTarget(sections, wrapY) {
+  if (!sections?.length) return null;
+  for (const s of sections) {
+    if (wrapY < (s.top + s.bottom) / 2) return { beforeGroupId: s.groupId, lineY: s.top };
+  }
+  return { beforeGroupId: null, lineY: sections[sections.length - 1].bottom };
+}
+
+/**
  * Which Shots section to tint while dragging (groupId null = Ungrouped section), and whether
  * any moving cut would change scene on drop.
  *
