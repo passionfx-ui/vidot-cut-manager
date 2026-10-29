@@ -394,10 +394,13 @@ async function main() {
   try {
     await waitForComfy(page);
     await openShotsTab(page);
-    // Every scenario clicks version thumbnails in the lower-left cut panel (hidden by SHOW_CUT_PANEL in 0.9.73).
-    const panelShown = await page.evaluate(() => !!document.querySelector(".gg-root.gg-shots .gg-cutpanel")?.getClientRects().length);
+    // Every scenario clicks version thumbnails in the old cut panel (off since 0.9.73; the slot is a read-only status panel since 0.9.88).
+    const panelShown = await page.evaluate(() => {
+      const root = document.querySelector(".gg-root.gg-shots");
+      return !!root?.querySelector(".gg-cutpanel")?.getClientRects().length && !root.classList.contains("gg-cutpanel-status");
+    });
     if (!panelShown) {
-      console.log("SKIP panel hidden: version thumbnails live in the cut panel (SHOW_CUT_PANEL = false); all scenarios skipped");
+      console.log("SKIP panel hidden: version thumbnails live in the old cut panel (SHOW_CUT_PANEL = false; status panel only); all scenarios skipped");
       return;
     }
     const templateRef = await pickUsableTemplateRef(page, await fetchWorkflowPaths(page));
