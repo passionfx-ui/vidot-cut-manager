@@ -1,12 +1,13 @@
 /**
- * Headless Chrome: top Render button on selected cuts (0.9.73, moved to the Shots header in 0.9.87).
- * - bottom bar is always shown: 0 selected -> top Render disabled; the bar has no Render
+ * Headless Chrome: Queue button on selected cuts (0.9.73; Shots header in 0.9.87; status panel as Queue in 0.9.97).
+ * - bottom bar is always shown: 0 selected -> status panel Queue disabled; no Queue in the bar or header
  * - Ctrl+A over Shots selects every cut; over the canvas it does not touch the Shots selection
- * - 3 cuts selected (one empty, selected first) -> Render -> one confirm "Queue 2 cuts?"; Cancel sends nothing
+ * - 3 cuts selected (one empty, selected first) -> status panel "3 cuts selected" -> Queue -> one confirm
+ *   "Queue 2 cuts?"; Cancel sends nothing
  * - OK -> exactly 2 POST /prompt in Shots display order (each the cut's current version graph),
  *   jobs registered to the cuts, cards show Queued, toast "Queued 2 cuts" + "(1 skipped: no workflow)",
- *   selection kept, counter "0 / 2 done"
- * - cut card menu has "Render selected" (not clicked)
+ *   selection kept, counter "0 / 2 done" in the status panel
+ * - cut card menu has "Queue selected" (not clicked)
  * - 0.9.87: Remove from queue on A -> POST /queue {delete:[A's prompt]}, badge cleared, "0 / 1 done";
  *   C errors -> Failed badge, "1 / 1 done"; Re-queue on C -> confirm "Queue 1 cut?" -> 1 more POST /prompt
  *   (C's graph), C Queued, "0 / 1 done"
@@ -290,13 +291,16 @@ async function clickCut(page, cutId, { ctrl = false } = {}) {
 async function barState(page) {
   return page.evaluate(() => {
     const bar = document.querySelector(".gg-root.gg-shots .gg-selbar");
-    const btn = document.querySelector(".gg-root.gg-shots .gg-head .gg-render-btn");
+    const btn = document.querySelector(".gg-root.gg-shots .gg-cutpanel .gg-queue-btn");
     if (!bar || !btn) return null;
     return {
       shown: bar.getClientRects().length > 0,
       count: parseInt(bar.querySelector(".gg-sel-count")?.textContent || "-1", 10),
-      render: !!btn.disabled,
-      renderInBar: !!bar.querySelector(".gg-sel-render, .gg-render-btn"),
+      queue: !!btn.disabled,
+      queueInBar: !!bar.querySelector(".gg-sel-render, .gg-render-btn, .gg-queue-btn"),
+      queueInHead: !!document.querySelector(".gg-root.gg-shots .gg-head .gg-queue-btn, .gg-root.gg-shots .gg-head .gg-render-btn"),
+      queueText: btn.textContent.trim(),
+      panelInfo: document.querySelector(".gg-root.gg-shots .gg-cutpanel .gg-sp-info")?.textContent.replace(/\s+/g, " ").trim() || "",
       selected: [...document.querySelectorAll(".gg-root.gg-shots .gg-cut.gg-sel")].map((e) => e.dataset.cutId),
     };
   });
@@ -376,7 +380,7 @@ async function fire(page, type, detail) {
   }, type, detail);
 }
 
-const BATCH_PROG = ".gg-root.gg-shots .gg-head .gg-render-row .gg-batch-prog";
+const BATCH_PROG = ".gg-root.gg-shots .gg-cutpanel .gg-sp-actions .gg-batch-prog";
 
 async function waitBatchProg(page, want, label) {
   try {
@@ -395,8 +399,8 @@ async function waitBatchProg(page, want, label) {
   }
 }
 
-async function renderToConfirm(page) {
-  await page.click(".gg-root.gg-shots .gg-head .gg-render-btn");
+async function queueToConfirm(page) {
+  await page.click(".gg-root.gg-shots .gg-cutpanel .gg-queue-btn");
   await page.waitForSelector(".gg-confirm-dialog", { timeout: 15000 });
   return page.evaluate(() => ({
     title: document.querySelector(".gg-confirm-title")?.textContent.trim() || "",
@@ -543,17 +547,19 @@ async function main() {
     await reloadTimelineInUi(page, pid);
     await page.waitForSelector(cutSel(cutC.id), { timeout: 15000 });
 
-    // 1. bottom bar shown with nothing selected, top Render disabled, no Render in the bar, no batch counter
+    // 1. bottom bar shown with nothing selected, status panel Queue disabled, no Queue in the bar/header, no batch counter
     let bar = await barState(page);
-    if (!bar?.shown || bar.count !== 0 || !bar.render || bar.renderInBar) throw new Error(`empty bar: ${JSON.stringify(bar)}`);
+    if (!bar?.shown || bar.count !== 0 || !bar.queue || bar.queueInBar || bar.queueInHead || bar.queueText !== "Queue") {
+      throw new Error(`empty bar: ${JSON.stringify(bar)}`);
+    }
     if (await page.$eval(BATCH_PROG, (el) => !el.hidden)) throw new Error("batch counter shown with no batch");
-    console.log("PASS  bottom bar shown with 0 selected, top Render disabled, counter hidden");
+    console.log("PASS  bottom bar shown with 0 selected, status panel Queue disabled, counter hidden");
 
     // 2. Ctrl+A over Shots selects all cuts; over the canvas it leaves the Shots selection alone
     await hoverShots(page);
     await pressCtrlA(page);
     bar = await barState(page);
-    if (bar.count !== 3 || bar.selected.length !== 3 || bar.render) throw new Error(`Ctrl+A over Shots: ${JSON.stringify(bar)}`);
+    if (bar.count !== 3 || bar.selected.length !== 3 || bar.queue) throw new Error(`Ctrl+A over Shots: ${JSON.stringify(bar)}`);
     await hoverShots(page);
     await page.keyboard.press("Escape");
     await sleep(300);
@@ -571,25 +577,25 @@ async function main() {
     await clickCut(page, cutC.id, { ctrl: true });
     await clickCut(page, cutA.id, { ctrl: true });
     bar = await barState(page);
-    if (bar.count !== 3 || bar.render) throw new Error(`3 selected: ${JSON.stringify(bar)}`);
+    if (bar.count !== 3 || bar.queue || bar.panelInfo !== "3 cuts selected") throw new Error(`3 selected: ${JSON.stringify(bar)}`);
     await rightClickAt(page, `${cutSel(cutC.id)} .gg-cut-title`);
-    const item = await ctxItem(page, "Render selected");
-    if (!item || item.disabled) throw new Error(`card menu Render selected: ${JSON.stringify(item)}`);
+    const item = await ctxItem(page, "Queue selected");
+    if (!item || item.disabled) throw new Error(`card menu Queue selected: ${JSON.stringify(item)}`);
     await closeCtx(page);
     if ((await barState(page)).count !== 3) throw new Error("right-click changed the selection");
-    console.log("PASS  3 cuts selected (one empty); card menu has Render selected");
+    console.log("PASS  3 cuts selected (one empty); card menu has Queue selected");
 
-    // 4. Render -> one confirm; Cancel sends nothing
-    let dlg = await renderToConfirm(page);
+    // 4. Queue -> one confirm; Cancel sends nothing
+    let dlg = await queueToConfirm(page);
     if (dlg.title !== "Queue 2 cuts?" || !dlg.body.includes("1 skipped: no workflow")) throw new Error(`confirm: ${JSON.stringify(dlg)}`);
     await page.click(".gg-confirm-cancel");
     await page.waitForFunction(() => !document.querySelector(".gg-confirm-dialog"), { timeout: 5000 });
     await sleep(1500);
     if (promptPosts.length) throw new Error(`Cancel sent ${promptPosts.length} prompt POST(s)`);
-    console.log(`PASS  Render: confirm "${dlg.title}" (1 skipped), Cancel sent nothing`);
+    console.log(`PASS  Queue: confirm "${dlg.title}" (1 skipped), Cancel sent nothing`);
 
-    // 5. Render -> OK -> 2 prompts in display order (A then C), registered, Queued badges, toast, selection kept
-    dlg = await renderToConfirm(page);
+    // 5. Queue -> OK -> 2 prompts in display order (A then C), registered, Queued badges, toast, selection kept
+    dlg = await queueToConfirm(page);
     await page.click(".gg-confirm-ok");
     await waitPromptPosts(2);
     const titles = promptPosts.map((p) => postedMarkerTitle(p, markerNode.id));
@@ -611,8 +617,8 @@ async function main() {
     await waitBadge(page, cardBadge(cutC.id), "Queued", "card C queued");
     await waitBadge(page, cardBadge(cutB.id), "", "empty card idle");
     bar = await barState(page);
-    if (bar.count !== 3) throw new Error(`selection not kept after Render: ${JSON.stringify(bar)}`);
-    await waitBatchProg(page, "0 / 2 done", "counter after Render");
+    if (bar.count !== 3) throw new Error(`selection not kept after Queue: ${JSON.stringify(bar)}`);
+    await waitBatchProg(page, "0 / 2 done", "counter after Queue");
     console.log('PASS  OK: 2 prompts in display order (A, C), jobs registered, cards Queued, toast "Queued 2 cuts (1 skipped: no workflow)", "0 / 2 done"');
 
     // 6. Remove from queue on A only -> POST /queue {delete:[A]}, A badge cleared, counter drops A

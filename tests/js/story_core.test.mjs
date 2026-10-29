@@ -7,6 +7,7 @@ import {
   saveListMode,
   playCutIdAtTime,
   scrollTopToReveal,
+  rowFullyHidden,
   shouldFollowPlayback,
   shouldDeferRepaint,
   applyFieldOverrides,
@@ -15,6 +16,20 @@ import {
   isSilentFieldSave,
   autoHeightPx,
 } from "../../web/gg_story_core.js";
+
+describe("rowFullyHidden", () => {
+  const view = { viewTop: 100, viewBottom: 400 };
+  it("a fully or partly visible row is not hidden (selection leaves the scroll alone)", () => {
+    assert.equal(rowFullyHidden({ ...view, rowTop: 150, rowBottom: 210 }), false);
+    assert.equal(rowFullyHidden({ ...view, rowTop: 370, rowBottom: 430 }), false);
+    assert.equal(rowFullyHidden({ ...view, rowTop: 70, rowBottom: 130 }), false);
+  });
+  it("a row above or below the view is hidden", () => {
+    assert.equal(rowFullyHidden({ ...view, rowTop: 30, rowBottom: 100 }), true);
+    assert.equal(rowFullyHidden({ ...view, rowTop: 400, rowBottom: 460 }), true);
+    assert.equal(rowFullyHidden({ ...view, rowTop: 900, rowBottom: 960 }), true);
+  });
+});
 
 describe("normalizeListMode", () => {
   it("accepts caption and legacy story", () => {
