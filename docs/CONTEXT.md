@@ -86,6 +86,7 @@ UI:
 - `GET /gonggan/last-output`, `POST /gonggan/send-output`(ComfyUI 마지막 결과를 컷 버전으로 복사)
 - 새 버전은 `versions/<pid>/<cut_id>/`에 저장됨. legacy import 데이터에는 절대 쓰지 않음. **0.9.63부터 Best(pick)는 수동만**: 새 버전이 자동으로 pick이 되지 않고, pick이 없으면 최신 버전이 현재본(타임라인·썸네일·워크플로). Best 점은 수동 pick일 때만 켜짐. 기존 자동 pick 데이터는 그대로(마이그레이션 없음). 레퍼런스는 예외로 최신 이미지가 계속 pick.
 - **0.9.64**: 컷 패널의 버전 썸네일 클릭 = 그 버전의 워크플로를 같은 샷 탭에 연다(이미지면 PNG 내장 워크플로 → 없으면 `GET /gonggan/version-workflow`). Best/pick은 안 바뀌고, 열기는 편집이 아님(`*`·WIP 저장 없음, 열린 썸네일은 `gg-ver-open`). 더티 비교는 슬롯 `type`을 무시(재로드 직후 `*`→실제 타입 해석이 편집으로 잡히던 문제).
+- **0.9.65**: 네이티브 프로젝트의 우클릭 **Regen**(컷 카드·타임라인 클립) = 그 컷의 현재본 워크플로를 기존 컷 열기 경로(`selectCut`)로 샷 탭에 열고(같은 컷이 이미 열려 있으면 그대로), `ggCutLoadSeq` 완료 후 `askConfirm` → `app.queuePrompt(0, 1)`(기존 api 패치가 컷에 등록, Load Image 가드 적용). 버전 없고 그래프 노드 0개인 빈 컷은 비활성. 판단 로직 `gg_native_regen_core.js`. 레거시 SDK Regen은 그대로.
 
 SDK 경로:
 ```

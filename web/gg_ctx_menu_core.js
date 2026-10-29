@@ -1,19 +1,28 @@
 /** Pure context-menu item lists for cut cards, timeline clips and scene headers (no DOM). */
 
-export const REGEN_NATIVE_TIP = "Regen is available for imported projects only";
 export const SINGLE_CUT_TIP = "Select a single cut";
 export const SDK_BUSY_TIP = "Comfy SDK is busy";
 export const SDK_OFF_TIP = "Comfy SDK not ready";
+export const BUSY_TIP = "Busy, try again in a moment";
+export const REGEN_EMPTY_TIP = "Empty cut: no workflow to queue";
 export const TRASH_TIP = "Deleted cuts – click to restore";
 
+function nativeRegenTitle(ctx) {
+  if (ctx.multi) return SINGLE_CUT_TIP;
+  if (ctx.sdkBusy) return BUSY_TIP;
+  if (ctx.emptyCut) return REGEN_EMPTY_TIP;
+  return "";
+}
+
 /**
- * Same conditions as the cut panel buttons: Regen is hidden on native projects and off while
- * the SDK is busy or not ready; Send last output is off while the SDK is busy. Menus act on one cut.
- * @param {{ native?: boolean, multi?: boolean, sdkBusy?: boolean, sdkOk?: boolean }} ctx
+ * Imported projects: same conditions as the cut panel buttons (Regen off while the SDK is busy or not
+ * ready). Native projects: Regen queues the cut's own workflow, so it only needs one cut, nothing busy
+ * and a non-empty cut. Send last output is off while busy. Menus act on one cut.
+ * @param {{ native?: boolean, multi?: boolean, sdkBusy?: boolean, sdkOk?: boolean, emptyCut?: boolean }} ctx
  */
 export function sdkActionState(ctx = {}) {
   const regenTitle = ctx.native
-    ? REGEN_NATIVE_TIP
+    ? nativeRegenTitle(ctx)
     : ctx.multi
       ? SINGLE_CUT_TIP
       : ctx.sdkBusy
@@ -30,7 +39,8 @@ export function sdkActionState(ctx = {}) {
 
 /**
  * Items shared by the cut card menu and the timeline clip menu.
- * @param {{ native?: boolean, multi?: boolean, needsRedo?: boolean, sdkBusy?: boolean, sdkOk?: boolean, readonlyTip?: string }} ctx
+ * @param {{ native?: boolean, multi?: boolean, needsRedo?: boolean, sdkBusy?: boolean, sdkOk?: boolean,
+ *   emptyCut?: boolean, readonlyTip?: string }} ctx
  */
 export function cutActionItems(ctx = {}) {
   const nat = !!ctx.native;
@@ -47,7 +57,7 @@ export function cutActionItems(ctx = {}) {
 
 /**
  * @param {{ native?: boolean, multi?: boolean, needsRedo?: boolean, sdkBusy?: boolean, sdkOk?: boolean,
- *   readonlyTip?: string, canMoveUp?: boolean, canMoveDown?: boolean, inScene?: boolean, anyInScene?: boolean,
+ *   emptyCut?: boolean, readonlyTip?: string, canMoveUp?: boolean, canMoveDown?: boolean, inScene?: boolean, anyInScene?: boolean,
  *   trashLabel?: string, trashCount?: number }} ctx
  */
 export function cutCardMenuItems(ctx = {}) {
