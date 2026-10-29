@@ -483,6 +483,16 @@ export function redoFilterOn(shown, checked) {
   return !!shown && checked === true;
 }
 
+/**
+ * Shots view to render. A hidden Final cut list always falls back to "cuts", whatever was picked.
+ * @param {boolean} finalShown
+ * @param {string} view
+ * @returns {"cuts"|"final"}
+ */
+export function shotsViewOf(finalShown, view) {
+  return finalShown && view === "final" ? "final" : "cuts";
+}
+
 /** @param {string} part */
 export function sanitizeNamePart(part) {
   if (part == null) return "";
