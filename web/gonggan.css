@@ -19,7 +19,7 @@
 .gg-shots .gg-batch-prog { font-size: 12px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--gg-fg); }
 /* Full-width Timeline toggle at the very bottom of Shots (under the status panel). */
 .gg-shots > .gg-timeline-toggle { flex: 0 0 auto; width: 100%; border-radius: 0; border-width: 1px 0 0; padding: 5px 8px; font-size: 12px; font-weight: 600; }
-.gg-shots > .gg-timeline-toggle.gg-on { background: var(--gg-acc); color: #1a1a1a; border-color: var(--gg-acc); }
+.gg-root.gg-shots > .gg-timeline-toggle.gg-on { background: var(--gg-acc); color: #1a1a1a; border-color: var(--gg-acc); }
 .gg-shots .gg-proj-row { display: flex; align-items: center; gap: 4px; flex: 1 1 100%; min-width: 0; }
 .gg-shots .gg-proj-wrap { display: inline-flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; }
 .gg-shots .gg-proj-label { flex-shrink: 0; font-size: 11px; color: var(--gg-muted, #888); }
