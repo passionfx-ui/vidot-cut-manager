@@ -22,44 +22,49 @@ describe("shotTabCutParts", () => {
     ];
     const t = tl(cuts, [{ id: "g1", name: "scene1" }]);
     assert.deepEqual(shotTabCutParts(cuts[3], t), { sceneName: "scene1", cutLabel: "1-4" });
-    assert.equal(label("놀이터에서", cuts[3], t), "놀이터에서/scene1 1-4");
+    assert.equal(label("놀이터에서", cuts[3], t), "1-4 scene1 / 놀이터에서");
   });
 
-  it("ungrouped cut has no scene", () => {
+  it("ungrouped cut uses Scene", () => {
     const cuts = [{ id: "a", group_id: "g1" }, { id: "b", group_id: "" }];
     const t = tl(cuts, [{ id: "g1", name: "S" }]);
-    assert.equal(label("P", cuts[1], t), "P/2-1");
+    assert.equal(label("P", cuts[1], t), "2-1 Scene / P");
+  });
+
+  it("empty scene name uses Scene", () => {
+    const cuts = [{ id: "a", group_id: "g1" }];
+    assert.equal(label("놀이터에서", cuts[0], tl(cuts, [{ id: "g1", name: "" }])), "1-1 Scene / 놀이터에서");
   });
 
   it("falls back to cut.group_name when groups list lacks the id", () => {
     const cuts = [{ id: "a", group_id: "g9", group_name: "Legacy" }];
-    assert.equal(label("P", cuts[0], tl(cuts)), "P/Legacy 1-1");
+    assert.equal(label("P", cuts[0], tl(cuts)), "1-1 Legacy / P");
   });
 
   it("reorder changes the label", () => {
     const a = { id: "a", group_id: "g1" };
     const b = { id: "b", group_id: "g1" };
     const groups = [{ id: "g1", name: "S" }];
-    assert.equal(label("P", b, tl([a, b], groups)), "P/S 1-2");
-    assert.equal(label("P", b, tl([b, a], groups)), "P/S 1-1");
+    assert.equal(label("P", b, tl([a, b], groups)), "1-2 S / P");
+    assert.equal(label("P", b, tl([b, a], groups)), "1-1 S / P");
   });
 
   it("group / ungroup / move scene changes the label", () => {
     const groups = [{ id: "g1", name: "S1" }, { id: "g2", name: "S2" }];
     const a = { id: "a", group_id: "g1" };
     const b = { id: "b", group_id: "" };
-    assert.equal(label("P", b, tl([a, b], groups)), "P/2-1");
+    assert.equal(label("P", b, tl([a, b], groups)), "2-1 Scene / P");
     b.group_id = "g1";
-    assert.equal(label("P", b, tl([a, b], groups)), "P/S1 1-2");
+    assert.equal(label("P", b, tl([a, b], groups)), "1-2 S1 / P");
     b.group_id = "g2";
-    assert.equal(label("P", b, tl([a, b], groups)), "P/S2 2-1");
+    assert.equal(label("P", b, tl([a, b], groups)), "2-1 S2 / P");
   });
 
   it("scene rename and project rename change the label", () => {
     const a = { id: "a", group_id: "g1" };
-    assert.equal(label("P", a, tl([a], [{ id: "g1", name: "Old" }])), "P/Old 1-1");
-    assert.equal(label("P", a, tl([a], [{ id: "g1", name: "New" }])), "P/New 1-1");
-    assert.equal(label("Q", a, tl([a], [{ id: "g1", name: "New" }])), "Q/New 1-1");
+    assert.equal(label("P", a, tl([a], [{ id: "g1", name: "Old" }])), "1-1 Old / P");
+    assert.equal(label("P", a, tl([a], [{ id: "g1", name: "New" }])), "1-1 New / P");
+    assert.equal(label("Q", a, tl([a], [{ id: "g1", name: "New" }])), "1-1 New / Q");
   });
 
   it("cut rename changes only the tooltip", () => {
@@ -69,7 +74,7 @@ describe("shotTabCutParts", () => {
     assert.equal(title(a), "P/1-1 · 그네");
     a.name = "미끄럼틀";
     assert.equal(title(a), "P/1-1 · 미끄럼틀");
-    assert.equal(label("P", a, t), "P/1-1");
+    assert.equal(label("P", a, t), "1-1 Scene / P");
   });
 
   it("reference uses its name", () => {
@@ -81,16 +86,16 @@ describe("shotTabCutParts", () => {
 });
 
 describe("formatShotTabLabel", () => {
-  it("project/scene cutLabel", () => {
+  it("cutLabel scene / project", () => {
     assert.equal(
-      formatShotTabLabel({ projectName: "놀이터에서", sceneName: "scene1", cutLabel: "1-4" }),
-      "놀이터에서/scene1 1-4"
+      formatShotTabLabel({ projectName: "놀이터에서", sceneName: "Scene1", cutLabel: "1-4" }),
+      "1-4 Scene1 / 놀이터에서"
     );
   });
 
-  it("project/cutLabel when not in a scene", () => {
-    assert.equal(formatShotTabLabel({ projectName: "놀이터에서", sceneName: "", cutLabel: "2-1" }), "놀이터에서/2-1");
-    assert.equal(formatShotTabLabel({ projectName: "My Film", cutLabel: "1-1" }), "My Film/1-1");
+  it("cutLabel Scene / project when not in a scene", () => {
+    assert.equal(formatShotTabLabel({ projectName: "놀이터에서", sceneName: "", cutLabel: "4" }), "4 Scene / 놀이터에서");
+    assert.equal(formatShotTabLabel({ projectName: "My Film", cutLabel: "1-1" }), "1-1 Scene / My Film");
   });
 
   it("null when project empty", () => {
@@ -101,25 +106,25 @@ describe("formatShotTabLabel", () => {
   it("trim and collapse whitespace", () => {
     assert.equal(
       formatShotTabLabel({ projectName: "  A   B  ", sceneName: "  s   1 ", cutLabel: " 1-2 " }),
-      "A B/s 1 1-2"
+      "1-2 s 1 / A B"
     );
-    assert.equal(formatShotTabLabel({ projectName: "P", sceneName: "   ", cutLabel: "1-1" }), "P/1-1");
+    assert.equal(formatShotTabLabel({ projectName: "P", sceneName: "   ", cutLabel: "1-1" }), "1-1 Scene / P");
   });
 
   it("missing cut label falls back", () => {
-    assert.equal(formatShotTabLabel({ projectName: "P", cutLabel: "" }), "P/Untitled cut");
+    assert.equal(formatShotTabLabel({ projectName: "P", cutLabel: "" }), "Untitled cut Scene / P");
   });
 
-  it("edited marker after cut label", () => {
+  it("edited marker at the end", () => {
     assert.equal(
       formatShotTabLabel({ projectName: "P", sceneName: "Intro", cutLabel: "1-2", edited: true }),
-      "P/Intro 1-2 *"
+      "1-2 Intro / P *"
     );
-    assert.equal(formatShotTabLabel({ projectName: "P", cutLabel: "3-1", edited: true }), "P/3-1 *");
+    assert.equal(formatShotTabLabel({ projectName: "P", cutLabel: "3-1", edited: true }), "3-1 Scene / P *");
   });
 
   it("allows slash in names", () => {
-    assert.equal(formatShotTabLabel({ projectName: "A/B", sceneName: "C/D", cutLabel: "1-1" }), "A/B/C/D 1-1");
+    assert.equal(formatShotTabLabel({ projectName: "A/B", sceneName: "C/D", cutLabel: "1-1" }), "1-1 C/D / A/B");
   });
 
   it("truncates long project first", () => {
@@ -128,8 +133,18 @@ describe("formatShotTabLabel", () => {
       sceneName: "scene1",
       cutLabel: "1-4",
     });
-    assert.equal(label, "My very long pro…/scene1 1-4");
+    assert.equal(label, "1-4 scene1 / My very long p…");
     assert.equal(label.length, 28);
+  });
+
+  it("truncated project keeps the edited marker", () => {
+    const label = formatShotTabLabel({
+      projectName: "My very long project name here",
+      sceneName: "scene1",
+      cutLabel: "1-4",
+      edited: true,
+    });
+    assert.equal(label, "1-4 scene1 / My very long… *");
   });
 
   it("then truncates scene, keeping cut label and marker whole", () => {
@@ -139,15 +154,14 @@ describe("formatShotTabLabel", () => {
       cutLabel: "12-34",
       edited: true,
     });
-    assert.ok(label.length <= 28);
-    assert.ok(label.startsWith("Extrem…/"));
-    assert.ok(label.endsWith("… 12-34 *"));
+    assert.equal(label, "12-34 A very lo… / Extrem… *");
   });
 
   it("long project without scene keeps cut label", () => {
     const label = formatShotTabLabel({ projectName: "x".repeat(60), cutLabel: "10-12" });
     assert.ok(label.length <= 28);
-    assert.ok(label.endsWith("…/10-12"));
+    assert.ok(label.startsWith("10-12 Scene / x"));
+    assert.ok(label.endsWith("…"));
   });
 
   it("formatShotTabTitle is full string with cut name", () => {

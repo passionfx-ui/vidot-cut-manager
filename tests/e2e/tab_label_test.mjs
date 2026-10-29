@@ -1,5 +1,5 @@
 /**
- * Headless Chrome: single Gonggan shot tab + display-only `<Project>/<Scene> <cutLabel>` labels.
+ * Headless Chrome: single Gonggan shot tab + display-only `<cutLabel> <Scene> / <Project>` labels.
  */
 import { shotWorkflowRelPathById } from "../../web/gg_shot_names.js";
 import { formatShotTabLabel, shotTabCutParts } from "../../web/gg_tab_label_core.js";
@@ -562,12 +562,13 @@ async function main() {
     }
   });
 
-  await runScenario("02", "DOM label Project/cutLabel, filename unchanged", async () => {
+  await runScenario("02", "DOM label <cutLabel> Scene / Project, filename unchanged", async () => {
     const c = cuts[0];
     await clickCutById(page, c.id);
     await waitForCutLoaded(page, c.id);
     await refreshTabLabels(page);
     const expected = expLabel(projectName, c, cuts);
+    if (!/^\S+ Scene \/ /.test(expected)) throw new Error(`unexpected label format "${expected}"`);
     const st = await getWorkflowTabState(page);
     const hasLabel = st.labels.some((l) => l === expected);
     if (!hasLabel) throw new Error(`label "${expected}" not in [${st.labels.join(", ")}]`);
