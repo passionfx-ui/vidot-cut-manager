@@ -19,12 +19,19 @@ def version_media_kind(ver: dict[str, Any] | None) -> str | None:
     return None
 
 
-def rep_media_kind(cut: dict[str, Any], versions: list[dict[str, Any]]) -> str | None:
+def current_version_id(cut: dict[str, Any], versions: list[dict[str, Any]]) -> str | None:
+    """Manual pick when it is still a version, else the newest version (versions are newest-first)."""
     pick = cut.get("pick_version_id")
-    if isinstance(pick, str):
-        for ver in versions:
-            if ver.get("id") == pick:
-                return version_media_kind(ver)
+    if isinstance(pick, str) and any(ver.get("id") == pick for ver in versions):
+        return pick
+    return versions[0].get("id") if versions else None
+
+
+def rep_media_kind(cut: dict[str, Any], versions: list[dict[str, Any]]) -> str | None:
+    cur = current_version_id(cut, versions)
+    for ver in versions:
+        if ver.get("id") == cur:
+            return version_media_kind(ver)
     return None
 
 
@@ -90,7 +97,7 @@ def resolve_native_cut_source(
         }
 
     if wanted in ("image", "video"):
-        pick = cut.get("pick_version_id")
+        pick = current_version_id(cut, versions)
         if isinstance(pick, str):
             for ver in versions:
                 if ver.get("id") != pick:
@@ -130,7 +137,7 @@ def resolve_native_cut_source(
     if wf:
         return pack(wf, "stored", opened_kind=None, fallback=None)
 
-    pick = cut.get("pick_version_id")
+    pick = current_version_id(cut, versions)
     if isinstance(pick, str):
         for ver in versions:
             if ver.get("id") == pick:

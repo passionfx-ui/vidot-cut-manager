@@ -29,6 +29,7 @@ import {
   versionIndexFromList,
   formatCutHeaderLengths,
   formatPickedVersionInfo,
+  versionRepState,
   trimSecFromDrag,
   plannedLenInputPlaceholder,
   addCutTarget,
@@ -4464,7 +4465,7 @@ function recomputeCutStarts() {
 
 /** Optimistic promote: swap timeline media + clamp trim, then persist via /gonggan/edit. */
 function applyPickLocally(c, vid) {
-  if (!c || !vid || repIdOf(c) === vid) return false;
+  if (!c || !vid || c.pick === vid) return false;
   const v = (c.versions_list || []).find((x) => x.id === vid);
   if (!v) return false;
   c.pick = vid;
@@ -4607,10 +4608,11 @@ function cutPanelHtml(c, labels) {
   const sendTip = "Copy ComfyUI's last output (from /history, else newest file in output/) into this cut as a new version";
   const rep = repIdOf(c);
   const vers = (c.versions_list || []).map((v) => {
-    const on = v.id === rep;
+    const repState = versionRepState(c, v.id);
+    const on = repState === "manual";
     const tip = `${fmtSrc(v.source)} · ${v.model || ""} · ${new Date(v.created * 1000).toLocaleString()}`;
     return `
-    <div class="gg-ver-wrap${on ? " gg-rep" : ""}" data-vid="${esc(v.id)}">
+    <div class="gg-ver-wrap${on ? " gg-rep" : repState === "implicit" ? " gg-implicit" : ""}" data-vid="${esc(v.id)}">
       <div class="gg-ver" title="${esc(tip)}">
         <img src="${esc(posterUrl(v.id))}" loading="lazy" alt="" />
         <span class="gg-ver-src gg-src-${esc(v.source)}">${esc(fmtSrc(v.source))}</span>

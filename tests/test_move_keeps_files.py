@@ -313,10 +313,13 @@ class PackVersionsMoveKeepsFilesTests(unittest.TestCase):
             vid = res["version"]["id"]
             wfs.save_version_workflow(self.PID, "cutB", vid, wf, None, "generated")
             self.vids[vid] = wf
-        # add_version made the newest take the pick; choose the other one in the version picker.
-        newest = gd.load_edit(self.PID)["clips"]["cutB"]["pick"]
-        self.pick = next(v for v in self.vids if v != newest)
+        # add_version leaves Best unset (newest is current); pick the other one in the version picker.
+        self.assertIsNone(gd.load_edit(self.PID))
         tl = gd.timeline(self.PID)
+        newest = self._row(tl, "cutB")["media"]["id"]
+        self.assertIsNone(self._row(tl, "cutB")["pick"])
+        self.assertEqual(newest, list(self.vids)[-1])
+        self.pick = next(v for v in self.vids if v != newest)
         clips = {c["id"]: {"in": c["in"], "sec": c["sec"], **({"pick": c["pick"]} if c.get("pick") else {})}
                  for c in tl["cuts"]}
         clips["cutB"]["pick"] = self.pick

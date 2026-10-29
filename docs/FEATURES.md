@@ -89,7 +89,7 @@ Verified against: README, `docs/CONTEXT.md`, `web/gonggan.js`, `routes.py`, `gg_
 |--------|---------|------|-------------------|------------|
 | Keep **all takes** per cut | Have | Must | inferred | — |
 | **Set rep** / timeline representative version (UI label **Rep**; summary bars say **Best**) | Have | Must | inferred | — |
-| First **Send** auto-selects pick when none set | Have | Must | inferred | — |
+| No auto pick (0.9.63): with no Best set, the **newest** take is current; Best dot lights only after a manual **Set rep** (existing picks kept) | Have | Must | inferred | — |
 | **Final cut** list + filter **Show redo cuts only** | Have | Must | inferred | — |
 | Read-only suggested filename `S01_003_v02` (display only) | Have | Nice | inferred | — |
 

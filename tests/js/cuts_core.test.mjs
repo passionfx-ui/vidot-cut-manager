@@ -23,9 +23,29 @@ import {
   cutBaseSec,
   cutTimelineSec,
   formatPickedVersionInfo,
+  versionRepState,
   plannedLenInputPlaceholder,
   addCutTarget,
 } from "../../web/gg_cuts_core.js";
+
+describe("versionRepState (Best is manual only)", () => {
+  const vl = [{ id: "v2" }, { id: "v1" }];
+  it("no pick: newest media is implicit, others plain", () => {
+    const c = { pick: null, media: { id: "v2" }, versions_list: vl };
+    assert.equal(versionRepState(c, "v2"), "implicit");
+    assert.equal(versionRepState(c, "v1"), "");
+  });
+  it("manual pick marks only the pick", () => {
+    const c = { pick: "v1", media: { id: "v1" }, versions_list: vl };
+    assert.equal(versionRepState(c, "v1"), "manual");
+    assert.equal(versionRepState(c, "v2"), "");
+  });
+  it("empty inputs", () => {
+    assert.equal(versionRepState(null, "v1"), "");
+    assert.equal(versionRepState({ pick: null, media: null }, "v1"), "");
+    assert.equal(versionRepState({ pick: null, media: { id: "v1" } }, ""), "");
+  });
+});
 
 describe("formatCutNumber", () => {
   it("pads to three digits", () => {
