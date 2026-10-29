@@ -8,10 +8,11 @@ import {
   sceneMenuItems,
   sceneCutIds,
   attachMenuActions,
-  REGEN_NATIVE_TIP,
   SINGLE_CUT_TIP,
   SDK_BUSY_TIP,
   SDK_OFF_TIP,
+  BUSY_TIP,
+  REGEN_EMPTY_TIP,
   TRASH_TIP,
 } from "../../web/gg_ctx_menu_core.js";
 
@@ -25,11 +26,20 @@ describe("sdkActionState (mirrors cut panel Regen/Send)", () => {
     assert.deepEqual(s.regen, { disabled: false, title: "" });
     assert.deepEqual(s.send, { disabled: false, title: "" });
   });
-  it("native project: Regen off (panel hides it), Send still on", () => {
-    const s = sdkActionState({ native: true, sdkOk: true });
-    assert.equal(s.regen.disabled, true);
-    assert.equal(s.regen.title, REGEN_NATIVE_TIP);
-    assert.equal(s.send.disabled, false);
+  it("native project: Regen on for one idle cut, even without the SDK", () => {
+    for (const sdkOk of [true, false]) {
+      const s = sdkActionState({ native: true, sdkOk });
+      assert.deepEqual(s.regen, { disabled: false, title: "" });
+      assert.equal(s.send.disabled, false);
+    }
+  });
+  it("native project: Regen off for multi, busy, or an empty cut (in that order)", () => {
+    assert.deepEqual(sdkActionState({ native: true, multi: true, sdkBusy: true, emptyCut: true }).regen, { disabled: true, title: SINGLE_CUT_TIP });
+    assert.deepEqual(sdkActionState({ native: true, sdkBusy: true, emptyCut: true }).regen, { disabled: true, title: BUSY_TIP });
+    assert.deepEqual(sdkActionState({ native: true, emptyCut: true }).regen, { disabled: true, title: REGEN_EMPTY_TIP });
+  });
+  it("emptyCut does not affect imported projects", () => {
+    assert.deepEqual(sdkActionState({ native: false, sdkOk: true, emptyCut: true }).regen, { disabled: false, title: "" });
   });
   it("SDK not ready: Regen off, Send on", () => {
     const s = sdkActionState({ native: false, sdkOk: false });
@@ -122,6 +132,21 @@ describe("timelineClipMenuItems", () => {
     const items = timelineClipMenuItems({ native: false, sdkOk: true, sdkBusy: true });
     assert.equal(byKey(items, "regen").disabled, true);
     assert.equal(byKey(items, "send").disabled, true);
+  });
+  it("native: Regen on (even if ctx says multi), off with tooltip for an empty cut", () => {
+    assert.equal(byKey(timelineClipMenuItems({ native: true, multi: true }), "regen").disabled, false);
+    const r = byKey(timelineClipMenuItems({ native: true, emptyCut: true }), "regen");
+    assert.equal(r.disabled, true);
+    assert.equal(r.title, REGEN_EMPTY_TIP);
+  });
+});
+
+describe("cutCardMenuItems native Regen", () => {
+  it("enabled for one idle cut, off for multi-selection", () => {
+    assert.equal(byKey(cutCardMenuItems({ native: true }), "regen").disabled, false);
+    const multi = byKey(cutCardMenuItems({ native: true, multi: true }), "regen");
+    assert.equal(multi.disabled, true);
+    assert.equal(multi.title, SINGLE_CUT_TIP);
   });
 });
 
