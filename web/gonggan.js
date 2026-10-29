@@ -1140,6 +1140,9 @@ async function deleteNativeProject() {
   const label = p?.name || state.pid;
   if (!(await askConfirm({ message: `Delete project "${label}"? It will be moved to trash.`, danger: true }))) return;
   try {
+    // Data safety: finish pending field saves and the shot auto-save before the project moves to trash.
+    await flushPendingCutFields();
+    await runGongganWipAutosave({ force: true });
     await postJson("/gonggan/project/delete", { pid: state.pid });
     state.pid = "";
     await loadProjects();
@@ -3742,7 +3745,8 @@ function scheduleCutFieldSave(cutId, fields) {
 function flushPendingCutFields() {
   clearTimeout(cutFieldUi.timer);
   cutFieldUi.timer = 0;
-  for (const p of cutFieldUi.pending.takeAll()) saveCutFields(p.cutId, p.fields, p.pid);
+  // Returns a promise so callers that are about to remove the project can wait for the saves.
+  return Promise.allSettled(Array.from(cutFieldUi.pending.takeAll(), (p) => saveCutFields(p.cutId, p.fields, p.pid)));
 }
 
 async function saveProjectDue(value) {
