@@ -764,9 +764,47 @@ function openNewProjectModal() {
   nameIn.focus();
 }
 
+/** Template field of the Project Settings modal; a change links the template right away (no Save needed). */
+function wireProjectTemplateField(wrap) {
+  const tplSel = wrap.querySelector(".gg-tpl-select");
+  const tplFilter = wrap.querySelector(".gg-modal-tpl-filter");
+  const tplHint = wrap.querySelector(".gg-modal-tpl-hint");
+  if (!tplSel) return;
+  const refreshOptions = () => {
+    const cur = tplSel.value || projectTemplateRef || "";
+    const q = tplFilter?.value || "";
+    tplSel.innerHTML = templateSelectOptionsHtml(q);
+    tplSel.value = cur;
+    if (tplHint) {
+      const userTotal = userTemplatePaths(userWorkflowPaths, cur).length;
+      const shown = filterTemplatePaths(userWorkflowPaths, q, cur).length;
+      if (q.trim() && userTotal) tplHint.textContent = `${shown} of ${userTotal}`;
+      else if (userTotal) tplHint.textContent = `${userTotal} templates`;
+      else tplHint.textContent = "";
+    }
+    syncTplUseLastButton(wrap);
+  };
+  const apply = async (ref) => {
+    await setProjectTemplateRef(ref);
+    if (!wrap.isConnected) return;
+    tplSel.value = projectTemplateRef || "";
+    syncTplUseLastButton(wrap);
+  };
+  tplSel.addEventListener("focus", () => { fetchUserWorkflowPaths().then(refreshOptions); });
+  tplFilter?.addEventListener("input", refreshOptions);
+  fetchUserWorkflowPaths().then(refreshOptions);
+  syncTplUseLastButton(wrap);
+  wrap.querySelector(".gg-tpl-use-last")?.addEventListener("click", (e) => {
+    const ref = e.currentTarget?.dataset?.ref;
+    if (ref) void apply(ref);
+  });
+  tplSel.addEventListener("change", (e) => { void apply(e.target.value); });
+}
+
 function openProjectSettingsModal() {
-  if (!isNativeProject() || !state.pid) return;
+  if (!state.pid) return;
   closeProjectModal();
+  const nat = isNativeProject();
   const p = currentProject();
   const tl = state.timeline;
   const curSettings = normalizeProjectSettings(tl?.project?.settings);
@@ -775,73 +813,54 @@ function openProjectSettingsModal() {
   wrap.innerHTML = `
     <form class="gg-modal" role="dialog" aria-label="Project settings">
       <h3 class="gg-modal-title">Project Settings</h3>
-      <label class="gg-modal-field">Name <input type="text" class="gg-modal-name" required maxlength="${PROJECT_NAME_MAX_LEN}" /></label>
-      ${projectSetupFieldsHtml()}
-      <label class="gg-modal-field">Default template
-        <input type="search" class="gg-modal-tpl-filter" placeholder="Filter templates..." autocomplete="off" />
+      ${nat ? `<label class="gg-modal-field">Name <input type="text" class="gg-modal-name" required maxlength="${PROJECT_NAME_MAX_LEN}" /></label>
+      ${projectSetupFieldsHtml()}` : ""}
+      <div class="gg-modal-field" title="ComfyUI saved workflow used as this project's template">
+        <span class="gg-tpl-label">Default template</span>
+        <input type="search" class="gg-modal-tpl-filter" placeholder="Filter templates..." autocomplete="off" aria-label="Filter templates" />
         <span class="gg-modal-tpl-hint" aria-live="polite"></span>
-        <select class="gg-modal-tpl"><option value="">(none)</option></select>
-      </label>
+        <span class="gg-tpl-wrap">
+          <select class="gg-tpl-select" aria-label="Default template">${templateSelectOptionsHtml()}</select>
+          <button type="button" class="gg-btn gg-tpl-use-last" hidden>Use last</button>
+        </span>
+      </div>
       <div class="gg-modal-actions">
-        <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
-        <button type="submit" class="gg-btn gg-primary">Save</button>
+        <button type="button" class="gg-btn gg-modal-cancel">${nat ? "Cancel" : "Close"}</button>
+        ${nat ? `<button type="submit" class="gg-btn gg-primary">Save</button>` : ""}
       </div>
     </form>`;
   document.body.appendChild(wrap);
   projectModalEl = wrap;
   const form = wrap.querySelector("form");
-  const nameIn = wrap.querySelector(".gg-modal-name");
-  nameIn.value = p?.name || tl?.project?.name || "";
-  const tplSel = wrap.querySelector(".gg-modal-tpl");
-  const tplFilter = wrap.querySelector(".gg-modal-tpl-filter");
-  const tplHint = wrap.querySelector(".gg-modal-tpl-hint");
-  const refreshModalTplOptions = (forceSelected) => {
-    const selected = typeof forceSelected === "string" ? forceSelected : tplSel.value;
-    const userTotal = userTemplatePaths(userWorkflowPaths, selected).length;
-    const filtered = filterTemplatePaths(userWorkflowPaths, tplFilter?.value || "", selected);
-    tplSel.innerHTML = `<option value="">(none)</option>${filtered
-      .map((path) => `<option value="${esc(path)}"${path === selected ? " selected" : ""}>${esc(path)}</option>`)
-      .join("")}`;
-    tplSel.value = selected;
-    if (tplHint) {
-      const q = (tplFilter?.value || "").trim();
-      if (q && userTotal) tplHint.textContent = `${filtered.length} of ${userTotal}`;
-      else if (!q && userTotal) tplHint.textContent = `${userTotal} templates`;
-      else tplHint.textContent = "";
-    }
-  };
-  tplFilter?.addEventListener("input", () => refreshModalTplOptions());
-  fetchUserWorkflowPaths().then(() => {
-    refreshModalTplOptions(projectTemplateRef || "");
-  });
-  applyProjectSetupToModal(wrap, curSettings);
+  wireProjectTemplateField(wrap);
   wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeProjectModal(); });
   wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", closeProjectModal);
+  const nameIn = wrap.querySelector(".gg-modal-name");
+  if (!nat || !nameIn) {
+    form.addEventListener("submit", (e) => e.preventDefault());
+    wrap.querySelector(".gg-tpl-select")?.focus();
+    return;
+  }
+  nameIn.value = p?.name || tl?.project?.name || "";
+  applyProjectSetupToModal(wrap, curSettings);
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const nameNorm = normalizeNameInput(nameIn.value, PROJECT_NAME_MAX_LEN);
     if (!nameNorm.ok) return;
     const name = nameNorm.value;
     const settings = readProjectSetupFromModal(wrap, curSettings);
-    const template_ref = tplSel.value || "";
     const reqPid = state.pid;
     try {
       if (name !== (p?.name || tl?.project?.name || "")) {
         await postJson("/gonggan/project/rename", { pid: reqPid, name });
       }
       const data = await postJson("/gonggan/project/update", { pid: reqPid, fields: { settings } });
-      if (template_ref !== (projectTemplateRef || "")) {
-        await postJson("/gonggan/template", { pid: reqPid, ref: template_ref || "" });
-        projectTemplateRef = template_ref || "";
-        projectHasTemplate = !!template_ref;
-      }
       closeProjectModal();
       if (data.timeline) adoptMutationTimeline(data.timeline, reqPid);
       if (data.projects) state.projects = data.projects;
       await loadProjects();
       bus.dispatchEvent(new Event("projects"));
       bus.dispatchEvent(new Event("timeline"));
-      bus.dispatchEvent(new Event("template"));
       paintProjectSummary(null);
       ggToast("Project", "Settings saved", "ok");
     } catch (err) {
@@ -1160,27 +1179,6 @@ function askConfirm(opts) {
   });
 }
 
-async function renameNativeProject() {
-  if (!isNativeProject()) return;
-  const p = currentProject();
-  const cur = p?.name || "";
-  const name = await askText({
-    title: "Project name",
-    label: "Name",
-    value: cur,
-    okLabel: "Rename",
-    maxLength: PROJECT_NAME_MAX_LEN,
-  });
-  if (name === null) return;
-  try {
-    await postJson("/gonggan/project/rename", { pid: state.pid, name });
-    await loadProjects();
-    ggToast("Project", `Renamed to "${name}"`, "ok");
-  } catch (e) {
-    ggToast("Project", e.message, "warn");
-  }
-}
-
 async function deleteNativeProject() {
   if (!isNativeProject()) return;
   const p = currentProject();
@@ -1206,8 +1204,7 @@ function openProjectContextMenu(e) {
   showCtxMenu(e.clientX, e.clientY, [
     { label: "New Project…", action: () => openNewProjectModal() },
     { label: "References…", disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => openReferencesModal() },
-    { label: "Project Settings…", disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => openProjectSettingsModal() },
-    { label: "Rename Project…", disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => renameNativeProject() },
+    { label: "Project Settings…", disabled: !state.pid, action: () => openProjectSettingsModal() },
     { label: "Delete Project", danger: true, disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => deleteNativeProject() },
   ]);
 }
@@ -2467,10 +2464,10 @@ async function fetchUserWorkflowPaths() {
   return userWorkflowPaths;
 }
 
-function templateSelectOptionsHtml() {
+function templateSelectOptionsHtml(query = "") {
   const opts = [`<option value="">(none)</option>`];
   const cur = projectTemplateRef || "";
-  for (const p of userTemplatePaths(userWorkflowPaths, cur)) {
+  for (const p of filterTemplatePaths(userWorkflowPaths, query, cur)) {
     opts.push(`<option value="${esc(p)}"${p === cur ? " selected" : ""}>${esc(p)}</option>`);
   }
   if (cur && !userWorkflowPaths.includes(cur)) {
@@ -5207,12 +5204,13 @@ function mountShots(el) {
     root.className = `gg-root gg-shots${listCaption ? " gg-list-caption" : ""}`;
     root.innerHTML = `
       <div class="gg-head">
-        <select class="gg-proj" title="Project">${opts}</select>
-        <label class="gg-tpl-wrap" title="ComfyUI saved workflow used as this project's template">
-          <span class="gg-tpl-label">Template:</span>
-          <select class="gg-tpl-select">${templateSelectOptionsHtml()}</select>
-          <button type="button" class="gg-btn gg-tpl-use-last" hidden>Use last</button>
-        </label>
+        <div class="gg-proj-row">
+          <label class="gg-proj-wrap">
+            <span class="gg-proj-label">Project:</span>
+            <select class="gg-proj" title="Project">${opts}</select>
+          </label>
+          <button type="button" class="gg-btn gg-proj-settings" title="Project settings" aria-label="Project settings"${state.pid ? "" : " disabled"}>⚙</button>
+        </div>
         <span class="gg-sdk-slot"></span>
         <span class="gg-other-chip" hidden title="Not started from a Shots cut"></span>
         <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>
@@ -5254,28 +5252,7 @@ function mountShots(el) {
     root.querySelector(".gg-head")?.addEventListener("contextmenu", (e) => {
       if (e.target.closest(".gg-proj") || e.target.closest(".gg-head")) openProjectContextMenu(e);
     });
-    const tplSel = root.querySelector(".gg-tpl-select");
-    tplSel?.addEventListener("focus", () => {
-      fetchUserWorkflowPaths().then(() => {
-        const cur = tplSel.value;
-        tplSel.innerHTML = templateSelectOptionsHtml();
-        tplSel.value = cur || projectTemplateRef || "";
-        syncTplUseLastButton(root);
-      });
-    });
-    if (tplSel) {
-      fetchUserWorkflowPaths().then(() => {
-        tplSel.innerHTML = templateSelectOptionsHtml();
-        tplSel.value = projectTemplateRef || "";
-        syncTplUseLastButton(root);
-      });
-    }
-    syncTplUseLastButton(root);
-    root.querySelector(".gg-tpl-use-last")?.addEventListener("click", (e) => {
-      const ref = e.currentTarget?.dataset?.ref;
-      if (ref) void setProjectTemplateRef(ref);
-    });
-    tplSel?.addEventListener("change", (e) => setProjectTemplateRef(e.target.value));
+    root.querySelector(".gg-proj-settings")?.addEventListener("click", () => openProjectSettingsModal());
     root.querySelector(".gg-cut-add")?.addEventListener("click", () => addLocalCut());
     root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); refreshProjectTemplateFlag(); });
     root.querySelectorAll(".gg-view-toggle .gg-btn").forEach((btn) => {

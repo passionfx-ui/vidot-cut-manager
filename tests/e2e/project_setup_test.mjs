@@ -251,25 +251,52 @@ async function run() {
       console.log("SKIP python part (server not restarted)");
     }
 
-    await page.evaluate(() => {
-      document.querySelector(".gg-root.gg-shots .gg-head")?.dispatchEvent(
-        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 40 })
-      );
+    const head = await page.evaluate(() => {
+      const h = document.querySelector(".gg-root.gg-shots .gg-head");
+      const gear = h?.querySelector(".gg-proj-settings");
+      return {
+        projectLabel: h?.querySelector(".gg-proj-label")?.textContent?.trim() || "",
+        gearTitle: gear?.getAttribute("title") || "",
+        headTemplate: !!h?.querySelector(".gg-tpl-select"),
+      };
     });
-    await clickCtxItem(page, "Project Settings…");
+    if (head.projectLabel !== "Project:") throw new Error(`header Project label wrong: "${head.projectLabel}"`);
+    if (head.gearTitle !== "Project settings") throw new Error(`gear title wrong: "${head.gearTitle}"`);
+    if (head.headTemplate) throw new Error("Template selector should not be in the sidebar header");
+    console.log("PASS  header shows Project: label + gear, no Template selector");
+
+    await page.click(".gg-root.gg-shots .gg-proj-settings");
     await page.waitForSelector('.gg-modal[aria-label="Project settings"]', { timeout: 8000 });
     const settingsFields = await page.evaluate(() => ({
+      title: document.querySelector(".gg-modal .gg-modal-title")?.textContent?.trim() || "",
       name: !!document.querySelector(".gg-modal-name"),
       resolution: !!document.querySelector(".gg-modal-resolution"),
       fps: !!document.querySelector(".gg-modal-fps"),
       cutSec: !!document.querySelector(".gg-modal-cut-sec"),
       captionLang: !!document.querySelector(".gg-modal-caption-lang"),
-      template: !!document.querySelector(".gg-modal-tpl"),
+      folder: !!document.querySelector(".gg-modal-folder"),
+      template: !!document.querySelector(".gg-modal .gg-tpl-select"),
+      useLast: !!document.querySelector(".gg-modal .gg-tpl-use-last"),
     }));
-    if (!settingsFields.name || !settingsFields.resolution || !settingsFields.captionLang) {
-      throw new Error("Project settings dialog incomplete");
+    if (settingsFields.title !== "Project Settings") throw new Error(`modal title wrong: "${settingsFields.title}"`);
+    if (Object.entries(settingsFields).some(([k, v]) => k !== "title" && !v)) {
+      throw new Error(`Project settings dialog incomplete: ${JSON.stringify(settingsFields)}`);
     }
-    console.log("PASS  project setup settings dialog");
+    console.log("PASS  gear opens Project Settings with name, setup fields and template selector");
+    await page.click(".gg-modal-cancel");
+
+    await page.evaluate(() => {
+      document.querySelector(".gg-root.gg-shots .gg-head")?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 40 })
+      );
+    });
+    await page.waitForSelector(".gg-ctx", { timeout: 8000 });
+    const menuLabels = await page.$$eval(".gg-ctx-item", (els) => els.map((el) => el.textContent?.trim()));
+    if (menuLabels.includes("Rename Project…")) throw new Error("Rename Project… should be in Project Settings now");
+    if (!menuLabels.includes("Delete Project")) throw new Error("Delete Project should stay in the project menu");
+    await clickCtxItem(page, "Project Settings…");
+    await page.waitForSelector('.gg-modal[aria-label="Project settings"]', { timeout: 8000 });
+    console.log("PASS  project menu: Project Settings… opens the same modal, Delete Project kept, Rename moved");
     await page.click(".gg-modal-cancel");
 
     if (blockedPromptAttempts > 0) {
