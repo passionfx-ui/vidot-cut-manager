@@ -1,6 +1,8 @@
 """Project setup defaults, presets, and clamping (native projects)."""
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any
 
 RESOLUTION_PRESETS: list[dict[str, Any]] = [
@@ -92,6 +94,47 @@ def _clamp_project_folder(value: Any) -> str:
     """Optional local folder path (display + future sync target only; nothing is written there)."""
     s = "".join(ch for ch in str(value or "") if ch >= " ").strip()
     return s[:260]
+
+
+_WIN_BAD_NAME_CHARS = set('<>:"|?*')
+
+
+def check_output_folder(value: Any) -> dict[str, Any]:
+    """Output folder check for Project Settings: empty (= default), an existing writable folder,
+    or a path whose nearest existing parent is a writable folder. Nothing is created."""
+    path = _clamp_project_folder(value)
+    if not path:
+        return {"ok": True, "path": "", "exists": False}
+
+    def fail(message: str) -> dict[str, Any]:
+        return {"ok": False, "path": path, "message": message}
+
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        return fail("Use a full path, e.g. D:\\Films\\My Film")
+    if os.name == "nt":
+        for part in p.parts[1:]:
+            if any(ch in _WIN_BAD_NAME_CHARS for ch in part) or part != part.rstrip(" ."):
+                return fail(f'Invalid folder name: "{part}"')
+    try:
+        if p.exists():
+            if not p.is_dir():
+                return fail("This path is a file, not a folder")
+            if not os.access(p, os.W_OK):
+                return fail("This folder is not writable")
+            return {"ok": True, "path": path, "exists": True}
+        parent = p.parent
+        while not parent.exists() and parent != parent.parent:
+            parent = parent.parent
+        if not parent.exists():
+            return fail("Drive not found")
+        if not parent.is_dir():
+            return fail(f"Cannot create a folder inside a file: {parent}")
+        if not os.access(parent, os.W_OK):
+            return fail(f"Cannot create a folder in {parent}")
+    except OSError as ex:
+        return fail(f"Cannot use this folder: {ex}")
+    return {"ok": True, "path": path, "exists": False}
 
 
 def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
