@@ -42,6 +42,7 @@ import {
 import { createTimelineGuard, shouldAdoptMutationTimeline } from "./gg_timeline_guard_core.js";
 import { createFieldSlots } from "./gg_field_slots_core.js";
 import { createEditSaveGate } from "./gg_edit_save_core.js";
+import { confirmKeyAction, splitConfirmMessage } from "./gg_confirm_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import { parseImportList, summarizeImport, buildLlmPrompt, REFERENCE_CATEGORIES } from "./gg_import_core.js";
 import {
@@ -899,7 +900,7 @@ async function renameReference(refId) {
 async function deleteReference(refId) {
   const ref = cutById(refId);
   if (!ref) return;
-  if (!confirm(`Delete reference "${ref.name}"?`)) return;
+  if (!(await askConfirm({ message: `Delete reference "${ref.name}"?`, danger: true }))) return;
   try {
     await postJson("/gonggan/cut/delete", { pid: state.pid, cuts: [refId] });
     await loadTimeline();
@@ -1058,6 +1059,56 @@ function askText(opts) {
   });
 }
 
+let askConfirmEl = null;
+
+/**
+ * In-app replacement for window.confirm (same wording, OK / Cancel). Enter = OK, Esc = Cancel.
+ * @param {{ message: string, danger?: boolean }} opts  danger: emphasize the OK button (deletes / reset)
+ * @returns {Promise<boolean>}
+ */
+function askConfirm(opts) {
+  if (askConfirmEl) return Promise.resolve(false);
+  const { title, body } = splitConfirmMessage(opts?.message);
+  const danger = !!opts?.danger;
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.className = "gg-modal-backdrop gg-confirm-backdrop";
+    wrap.innerHTML = `
+      <div class="gg-modal gg-confirm-dialog" role="alertdialog" aria-label="${esc(title)}">
+        <h3 class="gg-modal-title gg-confirm-title">${esc(title)}</h3>
+        ${body ? `<div class="gg-confirm-body">${esc(body)}</div>` : ""}
+        <div class="gg-modal-actions">
+          <button type="button" class="gg-btn gg-confirm-cancel">Cancel</button>
+          <button type="button" class="gg-btn gg-confirm-ok ${danger ? "gg-danger" : "gg-primary"}">OK</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    askConfirmEl = wrap;
+    const okBtn = wrap.querySelector(".gg-confirm-ok");
+    const cancelBtn = wrap.querySelector(".gg-confirm-cancel");
+    const finish = (value) => {
+      if (askConfirmEl !== wrap) return;
+      document.removeEventListener("keydown", onKey, true);
+      wrap.remove();
+      askConfirmEl = null;
+      resolve(value);
+    };
+    const onKey = (e) => {
+      // Keep ComfyUI / Shots hotkeys (Delete, T, arrows ...) from firing behind the dialog.
+      e.stopPropagation();
+      const act = confirmKeyAction(e);
+      if (act) e.preventDefault();
+      if (act === "ok") finish(true);
+      else if (act === "cancel") finish(false);
+    };
+    document.addEventListener("keydown", onKey, true);
+    okBtn.addEventListener("click", () => finish(true));
+    cancelBtn.addEventListener("click", () => finish(false));
+    wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) finish(false); });
+    okBtn.focus();
+  });
+}
+
 async function renameNativeProject() {
   if (!isNativeProject()) return;
   const p = currentProject();
@@ -1083,7 +1134,7 @@ async function deleteNativeProject() {
   if (!isNativeProject()) return;
   const p = currentProject();
   const label = p?.name || state.pid;
-  if (!confirm(`Delete project "${label}"? It will be moved to trash.`)) return;
+  if (!(await askConfirm({ message: `Delete project "${label}"? It will be moved to trash.`, danger: true }))) return;
   try {
     await postJson("/gonggan/project/delete", { pid: state.pid });
     state.pid = "";
@@ -2886,7 +2937,7 @@ async function renameSceneGroup(groupId) {
 }
 
 async function deleteSceneGroup(groupId) {
-  if (!confirm("Delete this scene? (Cuts become ungrouped)")) return;
+  if (!(await askConfirm({ message: "Delete this scene? (Cuts become ungrouped)", danger: true }))) return;
   await persistGroups(groupsClone().filter((g) => g.id !== groupId));
 }
 
@@ -4263,9 +4314,9 @@ async function regenCut(cutId) {
     sdk.msg = v.ok ? `Dry run OK · ${p.model} · ${p.steps} steps · ~${p.approx_size} · seed ${p.seed}` : "Validation failed: " + (v.problems || [v.error]).join("; ");
     bus.dispatchEvent(new Event("sdk"));
     if (!v.ok) return;
-    const ok = confirm(
+    const ok = await askConfirm({ message:
       `Queue ONE generation job on this PC's GPU?\n\nCut ${p.cut_no}. ${p.cut_name}\nModel: ${p.model}\nSteps: ${p.steps} · CFG ${p.cfg} · ${p.sampler}\n` +
-      `Size: ~${p.approx_size} (${p.megapixels} MP, ${p.aspect})\nSeed: ${p.seed}\n\nPrompt:\n${p.prompt.slice(0, 400)}`);
+      `Size: ~${p.approx_size} (${p.megapixels} MP, ${p.aspect})\nSeed: ${p.seed}\n\nPrompt:\n${p.prompt.slice(0, 400)}` });
     if (!ok) { sdk.msg = "Not queued (cancelled)."; return; }
     await postJson("/gonggan/regen", { pid: tl.project.id, cut_id: cutId, dry_run: false, confirm: true, seed: p.seed });
     sdk.msg = "Queued through Comfy SDK → proxy → ComfyUI…";
@@ -5103,7 +5154,7 @@ async function saveEditNow() {
 async function resetEdit() {
   const tl = state.timeline;
   if (!tl) return;
-  if (!confirm("Reset this timeline to the original order and lengths? (the current edit is kept as a backup file)")) return;
+  if (!(await askConfirm({ message: "Reset this timeline to the original order and lengths? (the current edit is kept as a backup file)", danger: true }))) return;
   stopPlay();
   clearTimeout(ed.saveTimer);  // a trim still waiting to be saved must not undo the reset
   ed.saveTimer = 0;
