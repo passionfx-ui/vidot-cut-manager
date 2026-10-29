@@ -65,6 +65,28 @@ export function clampHeight(h, viewportH, min = TIMELINE_MIN_HEIGHT) {
   return Math.min(cap, Math.max(floor, n));
 }
 
+/** First show with no saved height: the panel opens at half of ComfyUI's default bottom panel height. */
+export const TIMELINE_FIRST_SHOW_RATIO = 0.5;
+
+/**
+ * @param {number} defaultPx bottom panel height ComfyUI opened the Timeline at
+ * @param {number} viewportH window inner height
+ */
+export function firstShowTimelineHeight(defaultPx, viewportH) {
+  return Math.round(clampHeight((Number(defaultPx) || 0) * TIMELINE_FIRST_SHOW_RATIO, viewportH));
+}
+
+/**
+ * Bottom panel share (percent) of the canvas/bottom splitter for a wanted height.
+ * @param {number} want px
+ * @param {number} total splitter height px
+ */
+export function bottomPanelPercent(want, total, min = TIMELINE_MIN_HEIGHT) {
+  const t = Number(total) || 0;
+  if (t <= 0) return 0;
+  return Math.min(70, Math.max((want / t) * 100, (min / t) * 100));
+}
+
 /** @param {string} open */
 export function timelineToggleTooltip(open) {
   return open ? "Timeline: on (T)" : "Timeline: off (T)";
