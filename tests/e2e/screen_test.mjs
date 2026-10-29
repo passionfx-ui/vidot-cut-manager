@@ -344,6 +344,7 @@ async function selbarState(page) {
     const r = bar.getBoundingClientRect();
     const list = root.querySelector(".gg-grp-wrap").getBoundingClientRect();
     const tlBar = root.querySelector(":scope > .gg-timeline-toggle")?.getBoundingClientRect();
+    const panel = root.querySelector(":scope > .gg-cutpanel")?.getBoundingClientRect();
     const head = root.querySelector(".gg-head").getBoundingClientRect();
     const renderBtn = root.querySelector(".gg-head .gg-render-btn");
     const dis = (s) => !!bar.querySelector(s)?.disabled;
@@ -357,6 +358,8 @@ async function selbarState(page) {
       xDisabled: dis(".gg-sel-x"),
       barTop: r.top,
       barBottom: r.bottom,
+      panelTop: panel && panel.height > 0 ? panel.top : null,
+      panelBottom: panel && panel.height > 0 ? panel.bottom : null,
       tlBarTop: tlBar ? tlBar.top : null,
       tlBarBottom: tlBar ? tlBar.bottom : null,
       tlBarFullWidth: tlBar ? Math.abs(tlBar.width - root.getBoundingClientRect().width) < 2 : false,
@@ -367,11 +370,14 @@ async function selbarState(page) {
   });
 }
 
-/** Lower-left cut panel (hidden by SHOW_CUT_PANEL in 0.9.73). */
+/** Old cut panel actions (versions, Set rep); off since 0.9.73, the slot is a read-only status panel since 0.9.88. */
 async function requireCutPanel(page) {
-  const shown = await page.evaluate(() => !!document.querySelector(".gg-root.gg-shots .gg-cutpanel")?.getClientRects().length);
+  const shown = await page.evaluate(() => {
+    const root = document.querySelector(".gg-root.gg-shots");
+    return !!root?.querySelector(".gg-cutpanel")?.getClientRects().length && !root.classList.contains("gg-cutpanel-status");
+  });
   if (shown) return;
-  const err = new Error("SKIP panel hidden: cut panel is off (SHOW_CUT_PANEL = false)");
+  const err = new Error("SKIP panel hidden: old cut panel actions (version thumbnails, Set rep) are not rendered (SHOW_CUT_PANEL = false; status panel only)");
   err.skipped = true;
   throw err;
 }
@@ -642,14 +648,17 @@ async function main() {
     if (scenes < 1) throw new Error("expected a scene section after group");
   });
 
-  await runScenario("05", "Bottom selection bar pinned above the Timeline bar, Render on top, list never shifts", async () => {
+  await runScenario("05", "Bottom stack: selection bar, status panel, Timeline bar; Render on top, list never shifts", async () => {
     await page.keyboard.press("Escape");
     await sleep(300);
     const s0 = await selbarState(page);
     if (!s0?.visible) throw new Error(`bar not shown: ${JSON.stringify(s0)}`);
     if (s0.barTop < s0.listBottom - 1) throw new Error(`bar not under the list: ${JSON.stringify(s0)}`);
-    if (s0.tlBarTop == null || Math.abs(s0.tlBarTop - s0.barBottom) > 1 || Math.abs(s0.rootBottom - s0.tlBarBottom) > 1 || !s0.tlBarFullWidth) {
-      throw new Error(`Timeline bar not full width at the very bottom: ${JSON.stringify(s0)}`);
+    if (s0.panelTop == null || Math.abs(s0.panelTop - s0.barBottom) > 1) {
+      throw new Error(`status panel not directly under the selection bar: ${JSON.stringify(s0)}`);
+    }
+    if (s0.tlBarTop == null || Math.abs(s0.tlBarTop - s0.panelBottom) > 1 || Math.abs(s0.rootBottom - s0.tlBarBottom) > 1 || !s0.tlBarFullWidth) {
+      throw new Error(`Timeline bar not full width at the very bottom under the status panel: ${JSON.stringify(s0)}`);
     }
     if (s0.renderInBar || !s0.renderInHead) throw new Error(`Render should be in the header, not the bar: ${JSON.stringify(s0)}`);
     if (s0.count === 0 && (!s0.renderDisabled || !s0.groupDisabled)) throw new Error(`0 selected must disable actions: ${JSON.stringify(s0)}`);
@@ -881,6 +890,40 @@ async function main() {
     if (!after.rep || !after.badge || after.implicit || after.btnDisabled !== true) {
       throw new Error(`manual Rep marker wrong: ${JSON.stringify(after)}`);
     }
+    timelineMocks.delete(mainPid);
+    await reloadShots(page);
+  });
+
+  await runScenario("13", "Status panel: title, status chip, length, version; no actions (mock timeline)", async () => {
+    timelineMocks.set(mainPid, buildMockTimeline(mainPid, runStamp));
+    await reloadShots(page);
+    const read = () => page.evaluate(() => {
+      const root = document.querySelector(".gg-root.gg-shots");
+      const p = root?.querySelector(".gg-cutpanel");
+      return {
+        statusMode: !!root?.classList.contains("gg-cutpanel-status"),
+        visible: !!p?.getClientRects().length,
+        selCount: parseInt(root?.querySelector(".gg-sel-count")?.textContent || "-1", 10),
+        empty: p?.querySelector(".gg-sp-empty")?.textContent?.trim() || "",
+        title: p?.querySelector(".gg-sp-title")?.textContent?.replace(/\s+/g, " ").trim() || "",
+        cardLabel: root?.querySelector(".gg-cut .gg-num")?.textContent?.trim() || "",
+        chip: p?.querySelector(".gg-sp-chip")?.textContent?.trim() || "",
+        len: p?.querySelector(".gg-sp-len")?.textContent?.trim() || "",
+        ver: p?.querySelector(".gg-sp-ver")?.textContent?.trim() || "",
+        controls: p ? p.querySelectorAll("button, input, select, textarea, .gg-ver-wrap").length : -1,
+      };
+    });
+    const s0 = await read();
+    if (!s0.statusMode || !s0.visible) throw new Error(`status panel not shown: ${JSON.stringify(s0)}`);
+    if (s0.selCount === 0 && s0.empty !== "No cut selected") throw new Error(`empty selection text: ${JSON.stringify(s0)}`);
+    await clickCut(page, 0);
+    await sleep(400);
+    const s1 = await read();
+    if (s1.title !== `${s1.cardLabel} hero`) throw new Error(`title should be "<cutLabel> hero": ${JSON.stringify(s1)}`);
+    if (s1.chip !== "Done") throw new Error(`status chip should be Done (idle with output): ${JSON.stringify(s1)}`);
+    if (s1.len !== "Length 3.0s") throw new Error(`length: ${JSON.stringify(s1)}`);
+    if (!/^Best v0*3$/.test(s1.ver)) throw new Error(`version: ${JSON.stringify(s1)}`);
+    if (s1.controls !== 0) throw new Error(`status panel must have no controls: ${JSON.stringify(s1)}`);
     timelineMocks.delete(mainPid);
     await reloadShots(page);
   });
