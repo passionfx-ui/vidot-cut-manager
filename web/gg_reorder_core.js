@@ -147,6 +147,22 @@ export function moveToScene(order, groups, ids, sceneIdOrNull) {
 }
 
 /**
+ * Which Shots section to tint while dragging (groupId null = Ungrouped section), and whether
+ * any moving cut would change scene on drop.
+ *
+ * @param {{ id: string, cut_ids?: string[] }[]} groups
+ * @param {string[]} movingIds
+ * @param {string|null|undefined} toGroupId
+ * @returns {{ groupId: string|null, crossScene: boolean }}
+ */
+export function dropHighlight(groups, movingIds, toGroupId) {
+  const target = toGroupId == null || toGroupId === "" ? null : String(toGroupId);
+  const mem = membershipMap(groups);
+  const crossScene = (movingIds || []).some((id) => (mem.get(id) ?? null) !== target);
+  return { groupId: target, crossScene };
+}
+
+/**
  * @param {{ windowMs?: number }} opts
  */
 export function createUndoBurst({ windowMs = 1500 } = {}) {
