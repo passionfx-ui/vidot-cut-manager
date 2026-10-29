@@ -158,7 +158,7 @@ import {
   isSilentFieldSave,
   autoHeightPx,
 } from "./gg_story_core.js";
-import { buildSrt, srtFileName, effectiveCaption, captionEditChanged, captionFieldPlaceholder } from "./gg_caption_core.js";
+import { buildSrt, srtFileName, effectiveCaption, captionEditChanged, captionFieldPlaceholder, captionAtTime } from "./gg_caption_core.js";
 import { rowContentKind, cutRowShellHtml, captionRowContentHtml, groupedListHtml, shotsSections } from "./gg_group_list_core.js";
 import { decideVideoSync } from "./gg_playback_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
@@ -5633,6 +5633,7 @@ function mountShots(el) {
         if (c) c.caption = ta.value;
         scheduleCutFieldSave(id, { caption: ta.value });
         autoSizeFieldTextarea(ta);
+        paintViewerCaption();
       });
     });
     refreshFieldTextUnsavedClasses();
@@ -6257,8 +6258,15 @@ function itemAt(t) {
 
 let viewer = null;  // { box, img, vid, next, label, clock, playBtn, soundBtn }
 
+function paintViewerCaption() {
+  if (!viewer) return;
+  const text = viewer.mode === "export" ? "" : captionAtTime(trackClips(), play.t);
+  if (viewer.caption.textContent !== text) viewer.caption.textContent = text;
+}
+
 function showFrame(force) {
   if (!viewer) return;
+  paintViewerCaption();
   if (viewer.mode === "export") { paintHead(); return; }
   const cuts = trackClips();
   const { i, local } = itemAt(play.t);
@@ -6704,6 +6712,7 @@ function mountTimeline(el) {
         <video class="gg-v-next" muted preload="auto" hidden></video>
         <div class="gg-v-blank"></div>
         <div class="gg-v-label"></div>
+        <div class="gg-v-cap"></div>
       </div>
       <div class="gg-transport">
         <button class="gg-btn gg-play-btn" title="Play (Space)">▶</button>
@@ -6755,6 +6764,7 @@ function mountTimeline(el) {
     next: root.querySelector(".gg-v-next"),
     blank: root.querySelector(".gg-v-blank"),
     label: root.querySelector(".gg-v-label"),
+    caption: root.querySelector(".gg-v-cap"),
   };
   wireViewerMedia(viewer.vid, viewer.next, viewer.blank);
   const $r = (q) => root.querySelector(q);

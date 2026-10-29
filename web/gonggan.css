@@ -357,6 +357,8 @@
 .gg-timeline .gg-v-blank { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--gg-dim); }
 .gg-timeline .gg-v-label { position: absolute; left: 6px; top: 4px; font-size: 11px; padding: 1px 5px; border-radius: 3px; background: rgba(0,0,0,.55); max-width: calc(100% - 12px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gg-timeline .gg-v-label:empty { display: none; }
+.gg-timeline .gg-v-cap { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px); max-height: 45%; overflow: hidden; padding: 3px 10px; border-radius: 4px; background: rgba(0,0,0,.65); color: #fff; font-size: 14px; line-height: 1.35; text-align: center; white-space: pre-line; overflow-wrap: anywhere; pointer-events: none; }
+.gg-timeline .gg-v-cap:empty { display: none; }
 .gg-timeline .gg-transport { display: flex; align-items: center; gap: 8px; height: 28px; margin-top: 6px; }
 .gg-timeline .gg-play-btn { min-width: 40px; font-size: 13px; }
 .gg-timeline .gg-clock { font-variant-numeric: tabular-nums; font-family: ui-monospace, Consolas, monospace; flex: 1; }
