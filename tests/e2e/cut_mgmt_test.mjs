@@ -398,11 +398,14 @@ let browser;
 let page;
 let mainPid = "";
 
-/** Lower-left cut panel (hidden by SHOW_CUT_PANEL in 0.9.73). */
+/** Old cut panel actions (Length, End card); off since 0.9.73, the slot is a read-only status panel since 0.9.88. */
 async function requireCutPanel(page) {
-  const shown = await page.evaluate(() => !!document.querySelector(".gg-root.gg-shots .gg-cutpanel")?.getClientRects().length);
+  const shown = await page.evaluate(() => {
+    const root = document.querySelector(".gg-root.gg-shots");
+    return !!root?.querySelector(".gg-cutpanel")?.getClientRects().length && !root.classList.contains("gg-cutpanel-status");
+  });
   if (shown) return;
-  const err = new Error("SKIP panel hidden: cut panel is off (SHOW_CUT_PANEL = false)");
+  const err = new Error("SKIP panel hidden: old cut panel actions (Length, End card) are not rendered (SHOW_CUT_PANEL = false; status panel only)");
   err.skipped = true;
   throw err;
 }

@@ -162,6 +162,7 @@ import { rowContentKind, cutRowShellHtml, captionRowContentHtml, groupedListHtml
 import { decideVideoSync } from "./gg_playback_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { batchProgressView, createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
+import { statusPanelView } from "./gg_status_panel_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
 import {
   stepMove,
@@ -248,6 +249,9 @@ const TIMELINE_TAB = "gg-timeline";
 const SHOTS_TAB = "gg-shots";
 /** Lower-left cut panel (versions, End card, Needs redo, Regen, Send last output). Still rendered, only hidden. */
 const SHOW_CUT_PANEL = false;
+/** With SHOW_CUT_PANEL off: the same slot shows a read-only status card for the selection (no actions). */
+const SHOW_STATUS_PANEL = true;
+const CUT_PANEL_ROOT_CLASS = SHOW_CUT_PANEL ? "" : SHOW_STATUS_PANEL ? " gg-cutpanel-status" : " gg-cutpanel-off";
 /** "Show redo cuts only" option in the Shots toolbar. Off = not shown and the filter is forced off. */
 const SHOW_REDO_FILTER = false;
 const bus = new EventTarget();
@@ -3698,6 +3702,7 @@ function paintRenderStatus(cutIds) {
     const sel = `.gg-cut[data-cut-id="${CSS.escape(id)}"] .gg-render-badge, .gg-clip[data-cut-id="${CSS.escape(id)}"] .gg-render-badge`;
     document.querySelectorAll(sel).forEach((el) => paintRenderBadge(el, v));
   }
+  if (!SHOW_CUT_PANEL && SHOW_STATUS_PANEL) document.querySelectorAll(".gg-shots .gg-cutpanel").forEach(paintStatusPanel);
   paintRenderGlobal();
 }
 
@@ -5355,10 +5360,38 @@ function cutPanelHtml(c, labels) {
     <div class="gg-sdk-msg"${sdkMsg ? ` title="${esc(sdkMsg)}"` : ""}>${esc(sdkMsg)}</div>`;
 }
 
+function statusPanelHtml() {
+  const tl = state.timeline;
+  const tlIds = new Set((tl?.cuts || []).map((c) => c.id));
+  const ids = tl ? cutSelIds().filter((id) => tlIds.has(id)) : [];
+  const cut = ids.length === 1 ? cutById(ids[0]) : null;
+  const head = cut ? cutHeaderParts(cut, tl, computeCutLabels(tl)) : null;
+  const v = statusPanelView({
+    count: ids.length,
+    cut,
+    cutLabel: head?.cutLabel,
+    name: head?.name,
+    render: cut ? renderStatus.cutView(state.pid, cut.id) : null,
+  });
+  if (v.kind !== "cut") return `<div class="gg-sp-empty">${esc(v.text)}</div>`;
+  return `
+    <div class="gg-sp-title" title="${esc(v.title)}"><span class="gg-num">${esc(v.label)}</span> <span class="gg-sp-name">${esc(v.name)}</span></div>
+    <div class="gg-sp-status"><span class="gg-sp-chip gg-sp-${esc(v.status.mode)}" title="${esc(v.status.title)}"><span class="gg-sp-dot"></span>${esc(v.status.text)}</span></div>
+    <div class="gg-sp-meta"><span class="gg-sp-len" title="${esc(v.length.title)}">${esc(v.length.text)}</span><span class="gg-sp-ver" title="${esc(v.version.title)}">${esc(v.version.text)}</span></div>`;
+}
+
+function paintStatusPanel(panel) {
+  if (!panel) return;
+  const html = statusPanelHtml();
+  if (panel.dataset.sp === html) return;
+  panel.dataset.sp = html;
+  panel.innerHTML = html;
+}
+
 function mountShots(el) {
   el.innerHTML = "";
   const root = document.createElement("div");
-  root.className = `gg-root gg-shots${SHOW_CUT_PANEL ? "" : " gg-cutpanel-off"}`;
+  root.className = `gg-root gg-shots${CUT_PANEL_ROOT_CLASS}`;
   el.appendChild(root);
   const extraCleanup = [];
   bindShotsTabActivated(el, extraCleanup);
@@ -5393,6 +5426,10 @@ function mountShots(el) {
     if (badge) badge.innerHTML = sdkBadge();
     updateSelectionBar(root);
     if (!panel) return;
+    if (!SHOW_CUT_PANEL) {
+      if (SHOW_STATUS_PANEL) paintStatusPanel(panel);
+      return;
+    }
     const c = state.timeline && state.timeline.cuts.find((x) => x.id === state.cutId);
     const labels = computeCutLabels(state.timeline);
     panel.innerHTML = cutPanelHtml(c, labels);
@@ -5678,7 +5715,7 @@ function mountShots(el) {
         return `${best}/${total}`;
       },
     });
-    root.className = `gg-root gg-shots${listCaption ? " gg-list-caption" : ""}${SHOW_CUT_PANEL ? "" : " gg-cutpanel-off"}`;
+    root.className = `gg-root gg-shots${listCaption ? " gg-list-caption" : ""}${CUT_PANEL_ROOT_CLASS}`;
     root.innerHTML = `
       <div class="gg-head">
         <div class="gg-proj-row">
@@ -5722,7 +5759,6 @@ function mountShots(el) {
       </div>
       <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${listHtml}</div>
       <div class="gg-final-wrap"${viewFinal ? "" : " hidden"}>${viewFinal && tl ? finalCutListHtml(tl) : ""}</div>
-      <div class="gg-cutpanel"></div>
       <div class="gg-selbar">
         <span class="gg-sel-label"><span class="gg-sel-count">0</span> selected</span>
         <button type="button" class="gg-btn gg-sel-group" disabled>Group</button>
@@ -5730,6 +5766,7 @@ function mountShots(el) {
         <button type="button" class="gg-btn gg-sel-x" disabled title="Clear selection">×</button>
         <span class="gg-version" title="Shots plugin version — if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>
       </div>
+      <div class="gg-cutpanel"></div>
       <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>`;
     const projSel = root.querySelector(".gg-proj");
     projSel?.addEventListener("change", (e) => selectProject(e.target.value));
@@ -6008,7 +6045,7 @@ function mountShots(el) {
   };
   const onShotsEmptyClick = (e) => {
     if (!root.contains(e.target)) return;
-    if (e.target.closest(".gg-cut") || e.target.closest(".gg-selbar") || e.target.closest(".gg-render-row") || e.target.closest(".gg-ctx")) return;
+    if (e.target.closest(".gg-cut") || e.target.closest(".gg-selbar") || e.target.closest(".gg-cutpanel") || e.target.closest(".gg-render-row") || e.target.closest(".gg-ctx")) return;
     if (!state.cutSel.size) return;
     state.cutSel.clear();
     cutSelAnchor = "";
