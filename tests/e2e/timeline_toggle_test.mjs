@@ -238,6 +238,49 @@ async function clickCutById(page, cutId) {
   await sleep(400);
 }
 
+/** Since 0.9.57 the T shortcut needs the pointer (or focus) inside Shots or the Timeline panel. */
+async function hoverShots(page) {
+  await page.waitForSelector(".gg-root.gg-shots .gg-head", { timeout: 15000 });
+  await page.hover(".gg-root.gg-shots .gg-head");
+  await sleep(150);
+}
+
+async function canvasPoint(page) {
+  const pt = await page.evaluate(() => {
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    for (let fy = 0.2; fy <= 0.6; fy += 0.1) {
+      for (let fx = 0.85; fx >= 0.4; fx -= 0.05) {
+        const x = Math.round(W * fx);
+        const y = Math.round(H * fy);
+        const el = document.elementFromPoint(x, y);
+        if (el && el.tagName === "CANVAS" && !el.closest(".gg-root, .gg-timeline")) return { x, y };
+      }
+    }
+    return null;
+  });
+  if (!pt) throw new Error("no point over the ComfyUI canvas found");
+  return pt;
+}
+
+async function hoverCanvasAndBlur(page) {
+  const pt = await canvasPoint(page);
+  await page.mouse.move(pt.x, pt.y, { steps: 4 });
+  await page.evaluate(() => {
+    if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+    try {
+      window.app?.canvas?.deselectAll?.();
+    } catch (_) {}
+  });
+  await sleep(150);
+  const inScope = await page.evaluate(() => {
+    const ae = document.activeElement;
+    const sel = ".gg-root.gg-shots, .gg-timeline";
+    return !!(ae && ae !== document.body && ae.closest(sel));
+  });
+  if (inScope) throw new Error("focus is still inside Shots/Timeline after blur");
+}
+
 async function cleanupProjects(page) {
   for (const pid of [...new Set(createdProjectIds)]) {
     try {
@@ -316,6 +359,7 @@ async function main() {
     m = await timelineMetrics(page);
     if (m.visible || m.panelOpen) throw new Error("selecting cut while off must not open timeline");
 
+    await hoverShots(page);
     await page.keyboard.press("t");
     await sleep(800);
     m = await timelineMetrics(page);
@@ -349,13 +393,29 @@ async function main() {
     m = await timelineMetrics(page);
     if (m.visible || m.openFlag !== "0") throw new Error("reload should restore off state");
 
+    await hoverCanvasAndBlur(page);
     await page.keyboard.press("t");
     await sleep(600);
+    m = await timelineMetrics(page);
+    if (m.visible || m.openFlag !== "0") throw new Error("T over the ComfyUI canvas must not toggle the timeline");
+
+    await hoverShots(page);
+    await page.keyboard.press("t");
+    await sleep(600);
+    m = await timelineMetrics(page);
+    if (!m.visible || m.openFlag !== "1") throw new Error("T with pointer over Shots should turn timeline on after reload");
     await clickCutById(page, cut.id);
     m = await timelineMetrics(page);
     if (!m.visible || m.height < 220) throw new Error("cut select while on should keep timeline height >= 220");
 
+    await hoverCanvasAndBlur(page);
+    await page.keyboard.press("t");
+    await sleep(600);
+    m = await timelineMetrics(page);
+    if (!m.visible || m.openFlag !== "1") throw new Error("T over the ComfyUI canvas must not turn the timeline off");
+
     console.log("PASS  timeline toggle (button, T, localStorage, cut select, reload)");
+    console.log("PASS  T over ComfyUI canvas (focus outside Shots) does not toggle");
   } finally {
     try {
       await cleanupProjects(page);
