@@ -1538,11 +1538,13 @@ function setupWipPeriodicAutosave() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       flushPendingCutFields();
+      flushTimelineEdit();
       runGongganWipAutosave({ force: true }).catch(() => {});
     }
   });
   window.addEventListener("pagehide", () => {
     flushPendingCutFields();
+    flushTimelineEdit();
     runGongganWipAutosave({ force: true }).catch(() => {});
   });
 }
@@ -3457,7 +3459,9 @@ async function persistShotsReorder(order, groups) {
       order,
       clips: Object.fromEntries(tl.cuts.map((c) => [c.id, { in: c.in, sec: c.sec, pick: c.pick || null }])),
     };
-    const res = await api.fetchApi("/gonggan/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const payload = JSON.stringify(body);
+    // keepalive lets the save finish if the page closes; browsers cap keepalive bodies at 64 KB.
+    const res = await api.fetchApi("/gonggan/edit", { method: "POST", keepalive: payload.length < 60000, headers: { "Content-Type": "application/json" }, body: payload });
     const data = await res.json();
     if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
     // A newer local trim/reorder happened while this request was out: keep the newer local state
@@ -5136,8 +5140,20 @@ function clampClip(c, tlIn, sec) {
 function scheduleSave() {
   editGate.bump();
   clearTimeout(ed.saveTimer);
-  ed.saveTimer = setTimeout(saveEdit, 400);
+  ed.savePending = true;
+  ed.saveTimer = setTimeout(() => {
+    ed.savePending = false;
+    saveEdit();
+  }, 400);
   bus.dispatchEvent(new Event("dirty"));
+}
+
+// Data safety: a timeline edit made just before the page is hidden or closed is saved right away.
+function flushTimelineEdit() {
+  if (!ed.savePending) return;
+  clearTimeout(ed.saveTimer);
+  ed.savePending = false;
+  saveEdit();
 }
 
 function saveEdit() {
@@ -5159,7 +5175,9 @@ async function saveEditNow() {
   };
   let ok = true;
   try {
-    const res = await api.fetchApi("/gonggan/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const payload = JSON.stringify(body);
+    // keepalive lets the save finish if the page closes; browsers cap keepalive bodies at 64 KB.
+    const res = await api.fetchApi("/gonggan/edit", { method: "POST", keepalive: payload.length < 60000, headers: { "Content-Type": "application/json" }, body: payload });
     const data = await res.json();
     if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
     if (!ed.dragging && editGate.isCurrent(mySeq) && state.timeline && state.timeline.project.id === data.project.id) {
