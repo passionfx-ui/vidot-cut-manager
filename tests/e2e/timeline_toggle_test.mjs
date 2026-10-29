@@ -343,6 +343,27 @@ async function main() {
     let m = await timelineMetrics(page);
     if (!m.visible || m.height < 220) throw new Error(`initial timeline should be on with height>=220 (got ${m.height})`);
 
+    const place = await page.evaluate(() => {
+      const root = document.querySelector(".gg-root.gg-shots");
+      const btn = root?.querySelector(".gg-timeline-toggle");
+      if (!btn) return null;
+      const r = btn.getBoundingClientRect();
+      const rr = root.getBoundingClientRect();
+      const bar = root.querySelector(".gg-selbar").getBoundingClientRect();
+      return {
+        direct: btn.parentElement === root,
+        inHead: !!btn.closest(".gg-head"),
+        fullWidth: Math.abs(r.width - rr.width) < 2,
+        atBottom: Math.abs(rr.bottom - r.bottom) <= 1,
+        underSelbar: r.top >= bar.bottom - 1,
+        pressed: btn.getAttribute("aria-pressed"),
+      };
+    });
+    if (!place || !place.direct || place.inHead || !place.fullWidth || !place.atBottom || !place.underSelbar || place.pressed !== "true") {
+      throw new Error(`Timeline toggle should be the full-width bar at the very bottom (on): ${JSON.stringify(place)}`);
+    }
+    console.log("PASS  Timeline toggle is the full-width bottom bar under the selection bar");
+
     const heightBeforeOff = m.height;
     await page.click(".gg-root.gg-shots .gg-timeline-toggle");
     await sleep(600);

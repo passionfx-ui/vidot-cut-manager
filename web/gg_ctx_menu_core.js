@@ -60,12 +60,19 @@ export function cutActionItems(ctx = {}) {
 /**
  * @param {{ native?: boolean, multi?: boolean, needsRedo?: boolean, sdkBusy?: boolean, sdkOk?: boolean,
  *   emptyCut?: boolean, readonlyTip?: string, canMoveUp?: boolean, canMoveDown?: boolean, inScene?: boolean, anyInScene?: boolean,
- *   trashLabel?: string, trashCount?: number, renderCount?: number }} ctx  renderCount: selected cuts (default 1)
+ *   trashLabel?: string, trashCount?: number, renderCount?: number, queuedCount?: number, failedCount?: number }} ctx
+ *   renderCount: selected cuts (default 1); queuedCount / failedCount: selected cuts with a still-queued /
+ *   failed prompt (Remove from queue / Re-queue are listed only then)
  */
 export function cutCardMenuItems(ctx = {}) {
   const nat = !!ctx.native;
   const a = cutActionItems(ctx);
   const r = renderButtonState({ count: ctx.renderCount ?? 1, native: nat, busy: ctx.sdkBusy });
+  const rq = renderButtonState({ count: ctx.failedCount || 0, native: nat, busy: ctx.sdkBusy });
+  const queueItems = [
+    ...(ctx.queuedCount > 0 ? [{ key: "removeQueue", label: "Remove from queue" }] : []),
+    ...(ctx.failedCount > 0 ? [{ key: "requeue", label: "Re-queue", disabled: rq.disabled, title: rq.title }] : []),
+  ];
   const moveItems = nat
     ? [
         { key: "moveUp", label: "Move up", disabled: !ctx.canMoveUp },
@@ -83,6 +90,7 @@ export function cutCardMenuItems(ctx = {}) {
     { key: "addCut", label: "Add Cut" },
     a.regen,
     { key: "renderSel", label: "Render selected", disabled: r.disabled, title: r.title },
+    ...queueItems,
     a.send,
     a.del,
     {

@@ -331,7 +331,10 @@ async function createProjectViaUi(page, name, templateRef) {
   return pid;
 }
 
-/** Bottom selection bar (0.9.73): always shown under the list; buttons follow the selection. */
+/**
+ * Bottom selection bar (0.9.73): always shown under the list; buttons follow the selection.
+ * 0.9.87: Render is the top `.gg-render-btn`; the full-width Timeline bar sits under the selection bar.
+ */
 async function selbarState(page) {
   return page.evaluate(() => {
     const root = document.querySelector(".gg-root.gg-shots");
@@ -340,15 +343,23 @@ async function selbarState(page) {
     const st = getComputedStyle(bar);
     const r = bar.getBoundingClientRect();
     const list = root.querySelector(".gg-grp-wrap").getBoundingClientRect();
+    const tlBar = root.querySelector(":scope > .gg-timeline-toggle")?.getBoundingClientRect();
+    const head = root.querySelector(".gg-head").getBoundingClientRect();
+    const renderBtn = root.querySelector(".gg-head .gg-render-btn");
     const dis = (s) => !!bar.querySelector(s)?.disabled;
     return {
       visible: !bar.hidden && st.display !== "none" && st.visibility !== "hidden" && r.height > 0,
       count: parseInt(bar.querySelector(".gg-sel-count")?.textContent || "-1", 10),
-      renderDisabled: dis(".gg-sel-render"),
+      renderInBar: !!bar.querySelector(".gg-sel-render, .gg-render-btn"),
+      renderInHead: !!renderBtn && renderBtn.getBoundingClientRect().bottom <= head.bottom + 0.5,
+      renderDisabled: !!renderBtn?.disabled,
       groupDisabled: dis(".gg-sel-group"),
       xDisabled: dis(".gg-sel-x"),
       barTop: r.top,
       barBottom: r.bottom,
+      tlBarTop: tlBar ? tlBar.top : null,
+      tlBarBottom: tlBar ? tlBar.bottom : null,
+      tlBarFullWidth: tlBar ? Math.abs(tlBar.width - root.getBoundingClientRect().width) < 2 : false,
       rootBottom: root.getBoundingClientRect().bottom,
       listTop: list.top,
       listBottom: list.bottom,
@@ -631,12 +642,16 @@ async function main() {
     if (scenes < 1) throw new Error("expected a scene section after group");
   });
 
-  await runScenario("05", "Bottom selection bar: always shown, pinned under the list, list never shifts", async () => {
+  await runScenario("05", "Bottom selection bar pinned above the Timeline bar, Render on top, list never shifts", async () => {
     await page.keyboard.press("Escape");
     await sleep(300);
     const s0 = await selbarState(page);
     if (!s0?.visible) throw new Error(`bar not shown: ${JSON.stringify(s0)}`);
-    if (s0.barTop < s0.listBottom - 1 || s0.rootBottom - s0.barBottom > 24) throw new Error(`bar not at the bottom: ${JSON.stringify(s0)}`);
+    if (s0.barTop < s0.listBottom - 1) throw new Error(`bar not under the list: ${JSON.stringify(s0)}`);
+    if (s0.tlBarTop == null || Math.abs(s0.tlBarTop - s0.barBottom) > 1 || Math.abs(s0.rootBottom - s0.tlBarBottom) > 1 || !s0.tlBarFullWidth) {
+      throw new Error(`Timeline bar not full width at the very bottom: ${JSON.stringify(s0)}`);
+    }
+    if (s0.renderInBar || !s0.renderInHead) throw new Error(`Render should be in the header, not the bar: ${JSON.stringify(s0)}`);
     if (s0.count === 0 && (!s0.renderDisabled || !s0.groupDisabled)) throw new Error(`0 selected must disable actions: ${JSON.stringify(s0)}`);
     await clickCut(page, 0);
     await sleep(250);

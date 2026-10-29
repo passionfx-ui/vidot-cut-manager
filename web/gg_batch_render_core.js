@@ -47,7 +47,12 @@ export function batchRenderPlan(ids, info) {
   return { queue, skipped };
 }
 
-/** Bottom-bar Render button state. */
+/** ComfyUI POST /queue body that deletes still-waiting prompts (duplicates and empty ids dropped). */
+export function queueDeleteBody(promptIds) {
+  return { delete: [...new Set((Array.isArray(promptIds) ? promptIds : []).filter((id) => id != null && id !== "").map(String))] };
+}
+
+/** Top Render button state (also Render selected / Re-queue in the cut menu). */
 export function renderButtonState({ count = 0, native = false, busy = false } = {}) {
   const title = !(count > 0) ? RENDER_EMPTY_TIP : !native ? RENDER_NATIVE_TIP : busy ? RENDER_BUSY_TIP : `Queue ${cuts(count)} to ComfyUI`;
   return { disabled: !(count > 0) || !native || !!busy, title };

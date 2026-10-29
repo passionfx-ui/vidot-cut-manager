@@ -5,7 +5,10 @@
  * - ComfyUI api events (execution_start, progress, execution_success, status) are dispatched in the page
  * Checks: api.queuePrompt with a cut-stamped workflow -> "Queued" on the cut card + timeline clip ->
  * "Rendering 40%" (same DOM row, badge-only update) -> cleared on execution_success;
- * a prompt not tied to a cut -> header "Queued" / "Rendering…" -> cleared.
+ * a prompt not tied to a cut -> header "Queued" / "Rendering…" (next to the top Render button, 0.9.87) -> cleared.
+ * 0.9.87: cut menu Remove from queue on a queued cut -> POST /queue {delete:[id]} intercepted (never
+ * forwarded), badge cleared; execution_error / execution_interrupted -> "Failed" on card + clip, menu lists
+ * Re-queue (not clicked here; batch_render_test clicks it).
  * ZZ-test- project only, deleted at the end.
  */
 import fs from "node:fs";
@@ -25,6 +28,8 @@ const runStamp = Date.now();
 const USER_DATA_DIR = path.join(os.tmpdir(), `gg-render-status-${runStamp}`);
 const createdProjectIds = [];
 const promptPosts = [];
+/** Intercepted POST /queue bodies (never forwarded). */
+const queuePosts = [];
 /** What GET /queue answers with. */
 const fakeQueue = { running: [], pending: [] };
 
@@ -48,6 +53,18 @@ function attachRequestGuard(page) {
       promptPosts.push({ url, promptId });
       console.log(`INTERCEPTED POST ${new URL(url).pathname} (not forwarded) -> ${promptId}`);
       req.respond({ status: 200, contentType: "application/json", body: JSON.stringify({ prompt_id: promptId, number: 0, node_errors: {} }) });
+      return;
+    }
+    if (method === "POST" && matchesAny(QUEUE_GET, url)) {
+      let body = null;
+      try {
+        body = JSON.parse(req.postData() || "null");
+      } catch (_) {}
+      queuePosts.push(body);
+      const del = new Set(Array.isArray(body?.delete) ? body.delete : []);
+      fakeQueue.pending = fakeQueue.pending.filter((id) => !del.has(id));
+      console.log(`INTERCEPTED POST ${new URL(url).pathname} (not forwarded): ${JSON.stringify(body)}`);
+      req.respond({ status: 200, contentType: "application/json", body: "{}" });
       return;
     }
     if (method === "GET" && matchesAny(QUEUE_GET, url)) {
@@ -135,7 +152,30 @@ async function fire(page, type, detail) {
 
 const cardBadge = (id) => `.gg-root.gg-shots .gg-cut[data-cut-id="${id}"] .gg-render-badge`;
 const clipBadge = (id) => `.gg-timeline .gg-track .gg-clip[data-cut-id="${id}"] .gg-render-badge`;
-const GLOBAL = ".gg-root.gg-shots .gg-render-global";
+const GLOBAL = ".gg-root.gg-shots .gg-head .gg-render-row .gg-render-global";
+
+async function queueForCut(page, cutId, projectId) {
+  return page.evaluate(async (c, p) => {
+    const { api } = await import("/scripts/api.js");
+    const res = await api.queuePrompt(0, { output: {}, workflow: { nodes: [], links: [], extra: { gonggan: { cutId: c, projectId: p } } } });
+    return res?.prompt_id || null;
+  }, cutId, projectId);
+}
+
+async function openCardMenu(page, cutId) {
+  const sel = `.gg-root.gg-shots .gg-cut[data-cut-id="${cutId}"] .gg-cut-title`;
+  await page.$eval(sel, (el) => el.scrollIntoView({ block: "nearest" }));
+  const box = await (await page.$(sel)).boundingBox();
+  await page.mouse.click(box.x + Math.min(box.width / 2, 40), box.y + box.height / 2, { button: "right" });
+  await page.waitForSelector(".gg-ctx", { timeout: 8000 });
+  return page.$$eval(".gg-ctx > .gg-ctx-item", (els) => els.map((e) => e.textContent.trim()));
+}
+
+async function closeMenu(page) {
+  if (!(await page.$(".gg-ctx"))) return;
+  await page.evaluate(() => document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true })));
+  await page.waitForFunction(() => !document.querySelector(".gg-ctx"), { timeout: 5000 });
+}
 
 /** Wait until the badge's shown text is `want` ("" = hidden). */
 async function waitBadge(page, sel, want, label) {
@@ -270,7 +310,44 @@ async function main() {
     await waitBadge(page, GLOBAL, "", "global cleared");
     console.log("PASS  unmapped prompt: header shows Queued, then Rendering…, then clears; cut badges idle");
 
-    if (promptPosts.length !== 1) throw new Error(`expected 1 intercepted prompt POST, got ${promptPosts.length}`);
+    // 5. Remove from queue on a queued cut -> POST /queue {delete:[id]} (intercepted), badge cleared
+    const queuedId = await queueForCut(page, cutA.id, pid);
+    fakeQueue.pending = [queuedId];
+    await waitBadge(page, cardBadge(cutA.id), "Queued", "card queued again");
+    let labels = await openCardMenu(page, cutA.id);
+    if (!labels.includes("Remove from queue") || labels.includes("Re-queue")) throw new Error(`queued cut menu: ${labels.join(", ")}`);
+    await page.$$eval(".gg-ctx > .gg-ctx-item", (els) => els.find((e) => e.textContent.trim() === "Remove from queue").click());
+    const until = Date.now() + 10000;
+    while (!queuePosts.length && Date.now() < until) await sleep(100);
+    if (queuePosts.length !== 1 || JSON.stringify(queuePosts[0]) !== JSON.stringify({ delete: [queuedId] })) {
+      throw new Error(`POST /queue body: ${JSON.stringify(queuePosts)}`);
+    }
+    await waitBadge(page, cardBadge(cutA.id), "", "card cleared after Remove from queue");
+    await waitBadge(page, clipBadge(cutA.id), "", "clip cleared after Remove from queue");
+    console.log("PASS  Remove from queue: POST /queue {delete:[id]} intercepted, card + clip cleared");
+
+    // 6. execution_error / execution_interrupted -> Failed on card + clip; menu lists Re-queue, not Remove from queue
+    for (const [ev, cut] of [["execution_error", cutB], ["execution_interrupted", cutA]]) {
+      const id = await queueForCut(page, cut.id, pid);
+      fakeQueue.running = [id];
+      await fire(page, "execution_start", { prompt_id: id, timestamp: Date.now() });
+      await waitBadge(page, cardBadge(cut.id), "Rendering", `${ev}: rendering`);
+      fakeQueue.running = [];
+      await fire(page, ev, { prompt_id: id, exception_message: "zz test", timestamp: Date.now() });
+      await waitBadge(page, cardBadge(cut.id), "Failed", `${ev}: card failed`);
+      await waitBadge(page, clipBadge(cut.id), "Failed", `${ev}: clip failed`);
+    }
+    await fire(page, "status", { exec_info: { queue_remaining: 0 } });
+    await sleep(2500);
+    await waitBadge(page, cardBadge(cutB.id), "Failed", "failed stays after the queue empties");
+    labels = await openCardMenu(page, cutB.id);
+    if (!labels.includes("Re-queue") || labels.includes("Remove from queue")) throw new Error(`failed cut menu: ${labels.join(", ")}`);
+    await closeMenu(page);
+    await waitBadge(page, GLOBAL, "", "global idle with failed cuts");
+    console.log("PASS  execution_error / execution_interrupted: Failed on card + clip (kept after queue empties), menu has Re-queue");
+
+    if (promptPosts.length !== 4) throw new Error(`expected 4 intercepted prompt POSTs, got ${promptPosts.length}`);
+    if (queuePosts.length !== 1) throw new Error(`expected 1 intercepted POST /queue, got ${queuePosts.length}`);
   } finally {
     try {
       await cleanup(page);
@@ -280,7 +357,7 @@ async function main() {
       fs.rmSync(USER_DATA_DIR, { recursive: true, force: true });
     } catch (_) {}
   }
-  console.log(`DONE  ${promptPosts.length} prompt POST intercepted, none forwarded`);
+  console.log(`DONE  ${promptPosts.length} prompt POSTs + ${queuePosts.length} queue POST intercepted, none forwarded`);
 }
 
 main().catch((e) => {
