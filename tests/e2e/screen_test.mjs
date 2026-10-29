@@ -457,12 +457,12 @@ function buildMockTimelineNoPick(pid, stamp) {
   return t;
 }
 
-function buildMockTimelineAutoPick(pid, stamp) {
-  const cutId = `cut-auto-${stamp}`;
-  const vid = `ver-auto-${stamp}`;
+function buildMockTimelineFirstResult(pid, stamp) {
+  const cutId = `cut-first-${stamp}`;
+  const vid = `ver-first-${stamp}`;
   return {
     ok: true,
-    project: { id: pid, name: `${TEST_PREFIX} autopick`, native: true },
+    project: { id: pid, name: `${TEST_PREFIX} first result`, native: true },
     groups: [],
     groups_customized: true,
     total_sec: 3,
@@ -478,7 +478,7 @@ function buildMockTimelineAutoPick(pid, stamp) {
         group_id: "",
         group_name: "",
         media: { id: vid, kind: "image" },
-        pick: vid,
+        pick: null,
         versions: 1,
         versions_list: [{ id: vid, kind: "image", source: "native", created: 1, seconds: 0, width: 64, height: 64 }],
       },
@@ -775,15 +775,44 @@ async function main() {
     await reloadShots(page);
   });
 
-  await runScenario("12", "First result auto-pick shows Done (mock timeline)", async () => {
-    timelineMocks.set(mainPid, buildMockTimelineAutoPick(mainPid, runStamp));
+  await runScenario("12", "First result is not Best until picked manually (mock timeline)", async () => {
+    const mock = buildMockTimelineFirstResult(mainPid, runStamp);
+    const vid = mock.cuts[0].versions_list[0].id;
+    timelineMocks.set(mainPid, mock);
     await reloadShots(page);
-    const state = await page.evaluate(() => ({
-      allDone: document.querySelector(".gg-root.gg-shots .gg-cut .gg-stage-row")?.classList.contains("gg-stage-all-done"),
-      sum: document.querySelector(".gg-root.gg-shots .gg-summary-text")?.textContent?.trim() || "",
-    }));
-    if (!state.allDone) throw new Error("Done styling not shown for auto-pick");
-    if (!/Best 1\/1/.test(state.sum)) throw new Error(`summary: "${state.sum}"`);
+    await clickCut(page, 0);
+    await sleep(600);
+    const read = () => page.evaluate((v) => {
+      const wrap = document.querySelector(`.gg-cutpanel .gg-ver-wrap[data-vid="${v}"]`);
+      return {
+        allDone: !!document.querySelector(".gg-root.gg-shots .gg-cut .gg-stage-row")?.classList.contains("gg-stage-all-done"),
+        bestOn: !!document.querySelector('.gg-root.gg-shots .gg-cut .gg-stage-dot[data-k="best"]')?.classList.contains("gg-on"),
+        sum: document.querySelector(".gg-root.gg-shots .gg-summary-text")?.textContent?.trim() || "",
+        rep: !!wrap?.classList.contains("gg-rep"),
+        implicit: !!wrap?.classList.contains("gg-implicit"),
+        badge: !!wrap?.querySelector(".gg-ver-rep"),
+        btnDisabled: wrap?.querySelector(".gg-promote")?.disabled ?? null,
+      };
+    }, vid);
+    const before = await read();
+    if (before.allDone || before.bestOn) throw new Error(`Best/Done lit without a manual pick: ${JSON.stringify(before)}`);
+    if (!/Best 0\/1/.test(before.sum)) throw new Error(`summary before pick: "${before.sum}"`);
+    if (!before.implicit || before.rep || before.badge) throw new Error(`implicit latest marker wrong: ${JSON.stringify(before)}`);
+    if (before.btnDisabled !== false) throw new Error(`Set rep must stay enabled on implicit latest: ${JSON.stringify(before)}`);
+    const clicked = await page.evaluate((v) => {
+      const b = document.querySelector(`.gg-cutpanel .gg-ver-wrap[data-vid="${v}"] .gg-promote`);
+      if (!b) return false;
+      b.click();
+      return true;
+    }, vid);
+    if (!clicked) throw new Error("Set rep button not found");
+    await sleep(800);
+    const after = await read();
+    if (!after.allDone || !after.bestOn) throw new Error(`Best/Done not lit after manual pick: ${JSON.stringify(after)}`);
+    if (!/Best 1\/1/.test(after.sum)) throw new Error(`summary after pick: "${after.sum}"`);
+    if (!after.rep || !after.badge || after.implicit || after.btnDisabled !== true) {
+      throw new Error(`manual Rep marker wrong: ${JSON.stringify(after)}`);
+    }
     timelineMocks.delete(mainPid);
     await reloadShots(page);
   });

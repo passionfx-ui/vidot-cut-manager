@@ -986,7 +986,8 @@ def poster_path(job_id: str) -> Path | None:
 
 
 def add_version(pid: str, cut_id: str, src: Path, meta: dict) -> dict:
-    """Copy a finished file into versions/<pid>/<cut>/ and make it the cut's pick in the edit."""
+    """Copy a finished file into versions/<pid>/<cut>/. Best stays manual; with no pick the newest version is current."""
+    import os
     import secrets
     import time
     if not PID_RE.fullmatch(pid or "") or not PID_RE.fullmatch(cut_id or ""):
@@ -1001,6 +1002,7 @@ def add_version(pid: str, cut_id: str, src: Path, meta: dict) -> dict:
     d = VERSIONS_DIR / pid / cut_id
     d.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, d / f"{vid}{ext}")
+    os.utime(d / f"{vid}{ext}")  # versions sort newest-first by mtime; copy2 keeps the source file's
     info = {"id": vid, "pid": pid, "cut_id": cut_id, "ext": ext, "created_at": time.time(), **meta}
     (d / f"{vid}.json").write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
     try:
@@ -1008,10 +1010,4 @@ def add_version(pid: str, cut_id: str, src: Path, meta: dict) -> dict:
         gg_wfstore.maybe_save_for_new_version(pid, cut_id, vid, d / f"{vid}{ext}", meta)
     except Exception:  # noqa: BLE001
         pass
-    # make it the cut's pick, keeping order/trims
-    edit = load_edit(pid) or {}
-    clips = {c["id"]: {"in": c["in"], "sec": c["sec"], **({"pick": c["pick"]} if c.get("pick") else {})}
-             for c in tl["cuts"]}
-    clips[cut_id]["pick"] = vid
-    save_edit(pid, edit.get("order") or [c["id"] for c in tl["cuts"]], clips)
     return info

@@ -189,6 +189,7 @@ Headless Chrome scenarios live under `tests/e2e/` (manual / CI optional).
 
 ## Changelog
 
+- **0.9.63** — Best (pick) is manual only: `add_version` (native store and legacy `gg_data`) no longer sets the pick (references still take the newest); with no pick the newest version is current (timeline media, workflow source). Best dot/Done/`Best c/N` need a manual pick; cut panel marks the implicit newest with a dashed outline (`gg-implicit`, no Rep badge, **Set rep** enabled). Existing picks are not migrated. Python part needs a ComfyUI restart.
 - **0.9.3** — Compact cut header + traffic-light dots; Info notes vs Caption field; SRT export; video sync/error handling; native media id guard; `caption` on `POST /gonggan/cut/update` (restart); `gg_caption_core.js`, `gg_playback_core.js`, tests `caption_core`, `playback_core`, `test_cut_caption.py`, `test_native_media_guard.py`.
 - **0.9.2** — Story mode: length label beside cut name; Notes textarea full width with content/viewport auto-height and scroll; `autoHeightPx` in `gg_story_core.js`.
 - **0.9.1** — Denser Shots cut info panel (collapsible header, compact summary row, smaller version strip); removed in-panel preview and scene button row; **Split scene** in cut context menu; `gg_panel_core.js`, `tests/js/panel_core.test.mjs`.
