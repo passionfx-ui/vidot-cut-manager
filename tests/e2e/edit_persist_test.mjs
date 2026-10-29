@@ -265,14 +265,28 @@ async function openShotsTab(page) {
 }
 
 async function selectProject(page, pid) {
-  await page.waitForSelector(".gg-root.gg-shots .gg-proj", { timeout: 30000 });
-  await page.select(".gg-root.gg-shots .gg-proj", pid);
-  await page.waitForFunction(
-    (id) => document.querySelector(".gg-root.gg-shots .gg-proj")?.value === id,
-    { timeout: 15000 },
-    pid
-  );
-  await sleep(400);
+  // Right after a browser relaunch the panel is still loading its project list and can
+  // re-render back to the first project, so a pick made during that load may not stick.
+  // Pick again (up to 3 times), then fail with what the dropdown showed.
+  let info = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await page.waitForSelector(".gg-root.gg-shots .gg-proj", { timeout: 30000 });
+    await page.select(".gg-root.gg-shots .gg-proj", pid);
+    try {
+      await page.waitForFunction(
+        (id) => document.querySelector(".gg-root.gg-shots .gg-proj")?.value === id,
+        { timeout: 15000 },
+        pid
+      );
+      await sleep(400);
+      if ((await page.$eval(".gg-root.gg-shots .gg-proj", (s) => s.value)) === pid) {
+        if (attempt > 1) console.log(`selectProject: stuck on attempt ${attempt}`);
+        return;
+      }
+    } catch {}
+    info = await page.$eval(".gg-root.gg-shots .gg-proj", (s) => ({ value: s.value, options: [...s.options].map((o) => o.value) })).catch(() => null);
+  }
+  throw new Error(`selectProject(${pid}) did not stick after 3 tries; select=${JSON.stringify(info)}`);
 }
 
 async function clickCtxItem(page, label) {
