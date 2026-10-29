@@ -162,3 +162,11 @@ export async function autosaveModifiedTabs(tabs, deps) {
   }
   return { ok: true, saved, failed: null };
 }
+
+/** Status-line text for periodic auto-save. Failure stays visible until a later save works. */
+export function autosaveStatusMessage({ failing, wasFailing, error, label } = {}) {
+  const name = label || "workflow";
+  if (failing) return `Not saved: ${name}. Auto-save failed (${error || "unknown error"}). Retrying.`;
+  if (wasFailing) return `Saved: ${name}. Auto-save works again.`;
+  return null;
+}
