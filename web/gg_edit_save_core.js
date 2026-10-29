@@ -23,5 +23,15 @@ export function createEditSaveGate() {
       chain = p.then(() => {}, () => {});
       return p;
     },
+    // Like run(), but a debounced save still waiting is written first: `takePending()` (read when the job
+    // starts) returns its write function or null. The flush runs inside this job; calling run() from inside
+    // a job waits for that job itself and never settles, which blocks every later write.
+    runAfterPending(takePending, fn) {
+      return this.run(async () => {
+        const flush = takePending();
+        if (flush) await flush();
+        return fn();
+      });
+    },
   };
 }
