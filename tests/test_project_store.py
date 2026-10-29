@@ -51,13 +51,13 @@ class LocalStoreTests(unittest.TestCase):
         cid = next(iter(cuts))
         return cuts[cid]
 
-    def test_create_scene1_and_cut1(self):
+    def test_create_scene1_and_first_cut(self):
         doc = self.store.create_project("My film")
         self.assertEqual(doc["name"], "My film")
         self.assertEqual(len(doc["scenes"]), 1)
         self.assertEqual(doc["scenes"][0]["name"], "Scene 1")
         cut = self._first_cut(doc)
-        self.assertEqual(cut["name"], "cut1")
+        self.assertEqual(cut["name"], "New cut")
         self.assertEqual(doc["scenes"][0]["cut_order"], [cut["id"]])
         self.assertIn("-", doc["id"])
 
@@ -99,7 +99,7 @@ class LocalStoreTests(unittest.TestCase):
         self.assertEqual(len(deleted), 1)
         self.assertEqual(deleted[0]["id"], cut_id)
         self.assertTrue(deleted[0]["deleted_at"])
-        self.assertEqual(deleted[0]["name"], "cut1")
+        self.assertEqual(deleted[0]["name"], "New cut")
 
         self.store.restore_cuts(pid, [cut_id])
         self.assertEqual(self.store.list_deleted_cuts(pid), [])
