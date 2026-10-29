@@ -9,6 +9,7 @@ import {
   snapshotOrderGroups,
   dropHighlight,
 } from "../../web/gg_reorder_core.js";
+import { computeCutLabels, moveCuts } from "../../web/gg_cuts_core.js";
 
 const groups = [
   { id: "g1", name: "A", cut_ids: ["a", "b"], collapsed: false },
@@ -111,6 +112,102 @@ describe("createUndoBurst", () => {
     assert.deepEqual(b.push(s1, 1000), s1);
     assert.deepEqual(b.push(s2, 1200), s1);
     assert.deepEqual(b.push(s2, 3000), s2);
+  });
+});
+
+describe("cut labels after moves (computeCutLabels)", () => {
+  // Scene 1 = a b c (1-1..1-3), Scene 2 = d e (2-1, 2-2)
+  const ord0 = ["a", "b", "c", "d", "e"];
+  const grp0 = [
+    { id: "g1", name: "S1", cut_ids: ["a", "b", "c"], collapsed: false },
+    { id: "g2", name: "S2", cut_ids: ["d", "e"], collapsed: false },
+  ];
+
+  function timelineOf(order, groups) {
+    const mem = new Map();
+    for (const g of groups) for (const id of g.cut_ids) mem.set(id, g.id);
+    return { cuts: order.map((id) => ({ id, group_id: mem.get(id) || "" })) };
+  }
+
+  function labels(order, groups) {
+    return Object.fromEntries([...computeCutLabels(timelineOf(order, groups))].map(([id, v]) => [id, v.label]));
+  }
+
+  it("starts as 1-1..1-3, 2-1..2-2", () => {
+    assert.deepEqual(labels(ord0, grp0), { a: "1-1", b: "1-2", c: "1-3", d: "2-1", e: "2-2" });
+  });
+
+  it("moving 1-3 into scene 2 makes it 2-x; scene 1 stays 1-1, 1-2", () => {
+    const r = moveToScene(ord0, grp0, ["c"], "g2");
+    assert.ok(r.changed);
+    assert.deepEqual(labels(r.order, r.groups), { a: "1-1", b: "1-2", d: "2-1", e: "2-2", c: "2-3" });
+  });
+
+  it("moving 1-1 out renumbers the rest of scene 1 contiguously", () => {
+    const r = moveToScene(ord0, grp0, ["a"], "g2");
+    assert.deepEqual(labels(r.order, r.groups), { b: "1-1", c: "1-2", d: "2-1", e: "2-2", a: "2-3" });
+  });
+
+  it("moving into the middle of scene 2 shifts later cuts", () => {
+    const r = moveCuts(ord0, grp0, ["c"], { toIndex: 3, toGroupId: "g2" });
+    assert.deepEqual(r.order, ["a", "b", "d", "c", "e"]);
+    assert.deepEqual(labels(r.order, r.groups), { a: "1-1", b: "1-2", d: "2-1", c: "2-2", e: "2-3" });
+  });
+
+  it("moving back restores order, groups and labels", () => {
+    const there = moveToScene(ord0, grp0, ["c"], "g2");
+    const back = moveCuts(there.order, there.groups, ["c"], { toIndex: 2, toGroupId: "g1" });
+    assert.deepEqual(back.order, ord0);
+    assert.deepEqual(back.groups, grp0);
+    assert.deepEqual(labels(back.order, back.groups), labels(ord0, grp0));
+  });
+
+  it("labels stay keyed by the same cut ids (ids never change)", () => {
+    const r = moveToScene(ord0, grp0, ["b", "c"], "g2");
+    const m = computeCutLabels(timelineOf(r.order, r.groups));
+    assert.deepEqual([...m.keys()].sort(), [...ord0].sort());
+    assert.deepEqual([...r.order].sort(), [...ord0].sort());
+    assert.deepEqual(labels(r.order, r.groups), { a: "1-1", d: "2-1", e: "2-2", b: "2-3", c: "2-4" });
+  });
+
+  it("emptying scene 1 makes scene 2 the first scene", () => {
+    const r = moveToScene(ord0, grp0, ["a", "b", "c"], "g2");
+    assert.deepEqual(labels(r.order, r.groups), { d: "1-1", e: "1-2", a: "1-3", b: "1-4", c: "1-5" });
+  });
+
+  it("stepMove down across the boundary renumbers both scenes", () => {
+    const r = stepMove(ord0, grp0, ["c"], 1);
+    assert.ok(r.changed);
+    assert.deepEqual(r.order, ["a", "b", "d", "c", "e"]);
+    assert.deepEqual(labels(r.order, r.groups), { a: "1-1", b: "1-2", d: "2-1", c: "2-2", e: "2-3" });
+  });
+
+  it("stepMove up across the boundary renumbers both scenes", () => {
+    const r = stepMove(ord0, grp0, ["d"], -1);
+    assert.ok(r.changed);
+    assert.deepEqual(r.order, ["a", "b", "d", "c", "e"]);
+    assert.deepEqual(labels(r.order, r.groups), { a: "1-1", b: "1-2", d: "1-3", c: "1-4", e: "2-1" });
+  });
+
+  it("stepMove round trip across the boundary returns to the start", () => {
+    const down = stepMove(ord0, grp0, ["c"], 1);
+    const up = stepMove(down.order, down.groups, ["c"], -1);
+    assert.deepEqual(up.order, ["a", "b", "c", "d", "e"]);
+    assert.deepEqual(labels(up.order, up.groups), { a: "1-1", b: "1-2", c: "2-1", d: "2-2", e: "2-3" });
+    const up2 = stepMove(up.order, up.groups, ["c"], -1);
+    assert.deepEqual(labels(up2.order, up2.groups), { a: "1-1", c: "1-2", b: "1-3", d: "2-1", e: "2-2" });
+    const down2 = stepMove(up2.order, up2.groups, ["c"], 1);
+    assert.deepEqual(down2.order, ord0);
+    assert.deepEqual(down2.groups, grp0);
+    assert.deepEqual(labels(down2.order, down2.groups), labels(ord0, grp0));
+  });
+
+  it("ungrouping a cut gives it its own block number, regrouping restores", () => {
+    const loose = moveToScene(ord0, grp0, ["c"], null);
+    assert.deepEqual(loose.order, ["a", "b", "d", "e", "c"]);
+    assert.deepEqual(labels(loose.order, loose.groups), { a: "1-1", b: "1-2", d: "2-1", e: "2-2", c: "3-1" });
+    const back = moveCuts(loose.order, loose.groups, ["c"], { toIndex: 2, toGroupId: "g1" });
+    assert.deepEqual(labels(back.order, back.groups), labels(ord0, grp0));
   });
 });
 
