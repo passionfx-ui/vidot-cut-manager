@@ -19,7 +19,7 @@ from .entities import (
     new_version,
 )
 from .errors import ConflictError
-from .ids import now_iso, uuid7
+from .ids import is_uuid_id, now_iso, uuid7
 from .project_settings import merge_settings_patch, normalize_settings
 from .timeline import build_timeline, timeline_order
 from .workflow_hash import workflow_sha256
@@ -60,7 +60,15 @@ class LocalStore:
         return self.projects_dir / "index.json"
 
     def _project_dir(self, pid: str) -> Path:
-        return self.projects_dir / pid
+        # Only uuid-shaped ids name a project folder, and the folder must stay inside projects/.
+        if not is_uuid_id(pid):
+            raise FileNotFoundError("invalid project id")
+        d = self.projects_dir / pid
+        try:
+            d.resolve().relative_to(self.projects_dir.resolve())
+        except ValueError:
+            raise FileNotFoundError("invalid project id") from None
+        return d
 
     def _project_path(self, pid: str) -> Path:
         return self._project_dir(pid) / "project.json"
@@ -145,6 +153,8 @@ class LocalStore:
             f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
     def _load_project_doc(self, pid: str) -> dict[str, Any] | None:
+        if not is_uuid_id(pid):
+            return None
         path = self._project_path(pid)
         if not path.is_file():
             return None
@@ -869,6 +879,8 @@ class LocalStore:
             return ver
 
     def list_versions(self, pid: str, cut_id: str) -> list[dict[str, Any]]:
+        if not is_uuid_id(pid) or not is_uuid_id(cut_id):
+            return []
         vdir = self._project_dir(pid) / "versions" / cut_id
         if not vdir.is_dir():
             return []
