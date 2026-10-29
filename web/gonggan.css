@@ -191,6 +191,18 @@
 }
 .gg-shots .gg-drag-ind::before { left: 0; }
 .gg-shots .gg-drag-ind::after { right: 0; }
+.gg-shots .gg-grp-sec.gg-drop-target {
+  outline: 2px solid hsl(var(--gg-grp, 200) 65% 60% / 0.8);
+  outline-offset: -2px;
+  background: hsl(var(--gg-grp, 200) 60% 50% / 0.07);
+}
+.gg-shots .gg-grp-loose.gg-drop-target { outline-color: rgba(154, 160, 170, 0.7); background: rgba(154, 160, 170, 0.06); }
+.gg-shots .gg-grp-sec.gg-drop-cross > .gg-grp-head {
+  background: linear-gradient(hsl(var(--gg-grp, 200) 60% 50% / 0.22), hsl(var(--gg-grp, 200) 60% 50% / 0.22)), var(--gg-panel);
+}
+.gg-shots .gg-grp-loose.gg-drop-cross > .gg-grp-head {
+  background: linear-gradient(rgba(154, 160, 170, 0.16), rgba(154, 160, 170, 0.16)), var(--gg-panel);
+}
 .gg-shots .gg-complete-pct { font-size: 9px; color: var(--gg-dim); min-width: 2em; text-align: right; flex-shrink: 0; }
 .gg-shots .gg-due-label { color: var(--gg-dim); flex-shrink: 0; }
 .gg-shots .gg-due-input { font-size: 10px; }
