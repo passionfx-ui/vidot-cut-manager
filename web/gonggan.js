@@ -104,7 +104,15 @@ import {
   shouldShowOpenTabMarker,
   shotsKeyAction,
   stepCutId,
+  selectAllCutIds,
 } from "./gg_cut_select_core.js";
+import {
+  selectedInDisplayOrder,
+  batchRenderPlan,
+  batchRenderConfirmMessage,
+  batchRenderSummary,
+  renderButtonState,
+} from "./gg_batch_render_core.js";
 import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
 import {
   readCutWorkflowKindSwitch,
@@ -216,6 +224,8 @@ const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
 const TIMELINE_TAB = "gg-timeline";
 const SHOTS_TAB = "gg-shots";
+/** Lower-left cut panel (versions, End card, Needs redo, Regen, Send last output). Still rendered, only hidden. */
+const SHOW_CUT_PANEL = false;
 const bus = new EventTarget();
 const state = { projects: [], projectsLoaded: false, pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
 // Every assignment to state.timeline that is not a load result counts as a mutation (see gg_timeline_guard_core.js).
@@ -2967,6 +2977,7 @@ function openCutContextMenu(e, cutId) {
     anyInScene: ids.some((id) => cutById(id)?.group_id),
     trashLabel: trashMenuLabel(),
     trashCount,
+    renderCount: ids.length,
   });
   showCtxMenu(
     e.clientX,
@@ -2975,6 +2986,7 @@ function openCutContextMenu(e, cutId) {
       items,
       {
         ...cutMenuActions(cutId),
+        renderSel: () => renderSelectedCuts(),
         moveUp: () => applyStepMove(-1),
         moveDown: () => applyStepMove(1),
         group: () => createSceneGroup(ids),
@@ -4511,16 +4523,28 @@ function bindShotsTabActivated(hostEl, onCleanup) {
   }
 }
 
+/** Bottom bar of the Shots sidebar: always shown so the list never shifts; actions off with nothing selected. */
 function updateSelectionBar(root) {
   if (!root) return;
   const bar = root.querySelector(".gg-selbar");
   if (!bar) return;
-  const n = state.cutSel.size;
-  const show = n >= 2;
-  bar.hidden = !show;
-  bar.style.display = show ? "" : "none";
+  const tlIds = new Set((state.timeline?.cuts || []).map((c) => c.id));
+  const ids = state.timeline ? cutSelIds().filter((id) => tlIds.has(id)) : [];
+  const n = ids.length;
+  bar.classList.toggle("gg-selbar-empty", n === 0);
   const countEl = bar.querySelector(".gg-sel-count");
   if (countEl) countEl.textContent = String(n);
+  const set = (sel, disabled, title) => {
+    const b = bar.querySelector(sel);
+    if (!b) return;
+    b.disabled = !!disabled;
+    if (title !== undefined) b.title = title;
+  };
+  set(".gg-sel-group", n === 0);
+  set(".gg-sel-ungroup", !ids.some((id) => cutById(id)?.group_id));
+  set(".gg-sel-x", state.cutSel.size === 0);
+  const r = renderButtonState({ count: n, native: isNativeProject(), busy: !!sdk.busy });
+  set(".gg-sel-render", r.disabled, r.title);
 }
 
 function paintSelection(root) {
@@ -4756,6 +4780,108 @@ async function regenNativeCut(cutId) {
   }
 }
 
+const batchRenderUi = { running: false };
+
+/** Cut ids in Shots list order (final cut list view or scene sections) and the ones hidden in collapsed scenes. */
+function shotsNavOrder() {
+  const tl = state.timeline;
+  if (!tl) return { order: [], hidden: [] };
+  if (shotsUi.view === "final") return { order: finalCutList(tl).items.map((it) => it.cutId), hidden: [] };
+  const cuts = shotsUi.needsRedoOnly ? filterCuts(tl.cuts, { needsRedoOnly: true }) : tl.cuts;
+  const order = [];
+  const hidden = [];
+  for (const sec of shotsSections(cuts, tl.groups || [])) {
+    for (const c of sec.cuts) {
+      order.push(c.id);
+      if (sec.group?.collapsed) hidden.push(c.id);
+    }
+  }
+  return { order, hidden };
+}
+
+/**
+ * Render: queue each selected cut's current workflow in Shots display order, through the native Regen
+ * path (open the cut in its shot tab, then queue like ComfyUI's Queue button). One confirm for the batch;
+ * empty cuts are skipped. The selection is restored afterwards.
+ */
+async function renderSelectedCuts() {
+  const tl = state.timeline;
+  if (!tl || !isNativeProject() || sdk.busy || batchRenderUi.running) return;
+  const selected = cutSelIds();
+  const ids = selectedInDisplayOrder(shotsNavOrder().order, tl.cuts.map((c) => c.id), selected);
+  if (!ids.length) return;
+  const plan = batchRenderPlan(ids, (id) => {
+    const c = cutById(id);
+    return {
+      versionCount: (c?.versions_list || []).length || c?.versions || 0,
+      nodeCount: regenKnownNodeCount({
+        live: liveCutGraphNodeCount(id),
+        remembered: ggCutGraphNodeCounts.get(`${state.pid}\n${id}`),
+      }),
+    };
+  });
+  let skipped = plan.skipped.length;
+  if (!plan.queue.length) {
+    const s = batchRenderSummary({ skipped });
+    ggToast(s.summary, s.detail, s.kind);
+    return;
+  }
+  const labels = plan.queue.map((id) => shotTitle(cutById(id)));
+  if (!(await askConfirm({ message: batchRenderConfirmMessage(labels, skipped) }))) return;
+  const pid = state.pid;
+  const keepSel = [...state.cutSel];
+  const total = plan.queue.length;
+  let queued = 0;
+  let failed = 0;
+  let stopped = false;
+  let i = 0;
+  batchRenderUi.running = true;
+  sdk.busy = "regen";
+  bus.dispatchEvent(new Event("sdk"));
+  try {
+    for (; i < total; i++) {
+      const cutId = plan.queue[i];
+      if (state.pid !== pid || !cutById(cutId)) break;
+      sdk.msg = `Render ${i + 1}/${total}: ${shotTitle(cutById(cutId))}`;
+      selectCut(cutId);
+      const token = wfLoadToken;
+      await waitCutLoadsSettled();
+      const check = nativeRegenCheck(cutId, token);
+      if (check.reason === "superseded") {
+        stopped = true;
+        break;
+      }
+      if (!check.ok) {
+        if (check.reason === "empty") skipped++;
+        else failed++;
+        continue;
+      }
+      const before = ggLastRegisteredPrompt;
+      await app.queuePrompt(0, 1);
+      const reg = ggLastRegisteredPrompt;
+      if (reg && reg !== before && reg.cutId === cutId && reg.projectId === pid) {
+        paintRenderStatus(renderStatus.queued(reg.promptId, { cutId, projectId: pid }));
+        queued++;
+      } else failed++;
+    }
+  } catch (e) {
+    console.warn("[gonggan] render selected failed", e);
+  } finally {
+    failed += total - Math.min(i, total);
+    batchRenderUi.running = false;
+    sdk.busy = "";
+    if (state.pid === pid && !stopped && keepSel.length) {
+      state.cutSel.clear();
+      for (const id of keepSel) if (cutById(id)) state.cutSel.add(id);
+      bus.dispatchEvent(new Event("select"));
+    }
+    const s = batchRenderSummary({ queued, skipped, failed, stopped });
+    sdk.msg = [s.summary, s.detail].filter(Boolean).join(" ");
+    bus.dispatchEvent(new Event("sdk"));
+    ggToast(s.summary, s.detail, s.kind);
+  }
+}
+
 function readJobsList() {
   try {
     const raw = localStorage.getItem(JOBS_KEY);
@@ -4881,7 +5007,7 @@ function cutPanelHtml(c, labels) {
 function mountShots(el) {
   el.innerHTML = "";
   const root = document.createElement("div");
-  root.className = "gg-root gg-shots";
+  root.className = `gg-root gg-shots${SHOW_CUT_PANEL ? "" : " gg-cutpanel-off"}`;
   el.appendChild(root);
   const extraCleanup = [];
   bindShotsTabActivated(el, extraCleanup);
@@ -4914,6 +5040,7 @@ function mountShots(el) {
     const panel = root.querySelector(".gg-cutpanel");
     const badge = root.querySelector(".gg-sdk-slot");
     if (badge) badge.innerHTML = sdkBadge();
+    updateSelectionBar(root);
     if (!panel) return;
     const c = state.timeline && state.timeline.cuts.find((x) => x.id === state.cutId);
     const labels = computeCutLabels(state.timeline);
@@ -5220,7 +5347,7 @@ function mountShots(el) {
         <ol class="gg-cutlist"${collapsed ? " hidden" : ""}>${sec.cuts.map((c) => cutRowHtml(c, cutLabels)).join("")}</ol>
       </section>`;
     }).join("");
-    root.className = `gg-root gg-shots${listCaption ? " gg-list-caption" : ""}`;
+    root.className = `gg-root gg-shots${listCaption ? " gg-list-caption" : ""}${SHOW_CUT_PANEL ? "" : " gg-cutpanel-off"}`;
     root.innerHTML = `
       <div class="gg-head">
         <div class="gg-proj-row">
@@ -5259,13 +5386,17 @@ function mountShots(el) {
         <span class="gg-meta-text">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</span>
         <button type="button" class="gg-btn gg-trash-btn" hidden title="Deleted cuts – click to restore">${esc(trashButtonLabel(trashCount))}</button>
       </div>
-      <div class="gg-selbar" hidden>
-        <span class="gg-sel-count">0</span> selected · <button type="button" class="gg-btn gg-sel-group">Group</button> · <button type="button" class="gg-btn gg-sel-ungroup">Ungroup</button> · <button type="button" class="gg-btn gg-sel-x">×</button>
-      </div>
       <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${listHtml}</div>
       <div class="gg-final-wrap"${viewFinal ? "" : " hidden"}>${viewFinal && tl ? finalCutListHtml(tl) : ""}</div>
       <div class="gg-cutpanel"></div>
-      <span class="gg-version" title="Shots plugin version — if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>`;
+      <div class="gg-selbar">
+        <span class="gg-sel-label"><span class="gg-sel-count">0</span> selected</span>
+        <button type="button" class="gg-btn gg-sel-group" disabled>Group</button>
+        <button type="button" class="gg-btn gg-sel-ungroup" disabled>Ungroup</button>
+        <button type="button" class="gg-btn gg-sel-x" disabled title="Clear selection">×</button>
+        <button type="button" class="gg-btn gg-primary gg-sel-render" disabled>Render</button>
+        <span class="gg-version" title="Shots plugin version — if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>
+      </div>`;
     const projSel = root.querySelector(".gg-proj");
     projSel?.addEventListener("change", (e) => selectProject(e.target.value));
     root.querySelector(".gg-head")?.addEventListener("contextmenu", (e) => {
@@ -5321,6 +5452,7 @@ function mountShots(el) {
     root.querySelector(".gg-scene-add")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-group")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-ungroup")?.addEventListener("click", () => ungroupCuts(cutSelIds()));
+    root.querySelector(".gg-sel-render")?.addEventListener("click", () => void renderSelectedCuts());
     root.querySelector(".gg-sel-x")?.addEventListener("click", () => {
       state.cutSel.clear();
       cutSelAnchor = "";
@@ -5408,21 +5540,6 @@ function mountShots(el) {
   refreshProjectTemplateFlag();
   refreshSdk(false);
   const timer = setInterval(() => refreshSdk(false), 20000);
-  const shotsNavOrder = () => {
-    const tl = state.timeline;
-    if (!tl) return { order: [], hidden: [] };
-    if (shotsUi.view === "final") return { order: finalCutList(tl).items.map((it) => it.cutId), hidden: [] };
-    const cuts = shotsUi.needsRedoOnly ? filterCuts(tl.cuts, { needsRedoOnly: true }) : tl.cuts;
-    const order = [];
-    const hidden = [];
-    for (const sec of shotsSections(cuts, tl.groups || [])) {
-      for (const c of sec.cuts) {
-        order.push(c.id);
-        if (sec.group?.collapsed) hidden.push(c.id);
-      }
-    }
-    return { order, hidden };
-  };
   const selectCutFromKeys = (cutId) => {
     selectCut(cutId);
     openTimelinePanelIfAllowed();
@@ -5522,6 +5639,39 @@ function mountShots(el) {
         return;
     }
   };
+  // Window capture: a focused graph canvas runs ComfyUI's Ctrl+A (select all nodes) and stops the event
+  // before it bubbles, so with the pointer over Shots this handler has to see it first.
+  const onShotsSelectAllKey = (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (!pluginKeyScopeActive({ hoverShots: ggElHovered(root), focusShots: ggElHasFocus(root) })) return;
+    const t = e.target;
+    const tag = (t && t.tagName) || "";
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable) return;
+    const ae = document.activeElement;
+    const action = shotsKeyAction({
+      key: e.key,
+      code: e.code,
+      altKey: e.altKey,
+      shiftKey: e.shiftKey,
+      ctrlKey: e.ctrlKey,
+      metaKey: e.metaKey,
+      isComposing: e.isComposing,
+      repeat: e.repeat,
+      modalOpen: ggModalOpen() || comfyPromptDialogOpen(),
+      menuOpen: !!ctxUi.el,
+      fieldEditing: !!(ae && isCardFieldEditing(ae)),
+    });
+    if (action !== "select-all" || !state.timeline) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const { order, hidden } = shotsNavOrder();
+    const ids = selectAllCutIds(order, hidden);
+    if (!ids.length) return;
+    state.cutSel.clear();
+    for (const id of ids) state.cutSel.add(id);
+    cutSelAnchor = state.cutSel.has(state.cutId) ? state.cutId : ids[0];
+    bus.dispatchEvent(new Event("select"));
+  };
   const onShotsEmptyClick = (e) => {
     if (!root.contains(e.target)) return;
     if (e.target.closest(".gg-cut") || e.target.closest(".gg-selbar") || e.target.closest(".gg-ctx")) return;
@@ -5542,6 +5692,7 @@ function mountShots(el) {
   root.addEventListener("mousedown", onShotsEmptyClick);
   root.addEventListener("contextmenu", onShotsPanelContextMenu);
   document.addEventListener("keydown", onShotsKey);
+  window.addEventListener("keydown", onShotsSelectAllKey, true);
   return () => {
     shotsUi.composing = false;
     shotsUi.paintDeferred = false;
@@ -5554,6 +5705,7 @@ function mountShots(el) {
     root.removeEventListener("mousedown", onShotsEmptyClick);
     root.removeEventListener("contextmenu", onShotsPanelContextMenu);
     document.removeEventListener("keydown", onShotsKey);
+    window.removeEventListener("keydown", onShotsSelectAllKey, true);
     closeCtxMenu();
     bus.removeEventListener("projects", paint);
     bus.removeEventListener("timeline", paint);

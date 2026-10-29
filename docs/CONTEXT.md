@@ -17,6 +17,7 @@
 - MiniMax H3 보너스는 메인 상과 중복 가능.
 
 ## 3. 결정 사항 (시간순)
+- 2026-10-29: **0.9.73 하단 선택 바 + Render** — 선택 바(`N selected · Group · Ungroup · ×`)를 Shots 맨 아래 고정 바로 옮김(항상 보임, 0개면 비활성, 목록이 안 밀림). 하단 좌측 컷 패널은 `web/gonggan.js`의 `SHOW_CUT_PANEL = false` 한 줄로 임시 숨김(코드·데이터 그대로, true로 복구; 숨긴 동안 Length/End card는 UI에서 못 바꿈, Needs redo는 우클릭 메뉴). 바의 **Render**와 컷 우클릭 **Render selected**(네이티브만) = 선택 컷을 화면 순서대로 네이티브 Regen 경로로 큐, 확인창 1번(`Queue N cuts?`), 빈 컷 건너뜀, 토스트 `Queued N cuts (M skipped: no workflow)`, 렌더 상태 배지에 등록. **Ctrl+A** = Shots에 키 범위(hover/focus)가 있을 때만 전체 컷 선택(입력창·메뉴·모달 제외, 캔버스 위에서는 ComfyUI 노드 전체 선택 그대로). 순수 로직 `gg_batch_render_core.js`, e2e `batch_render_test.mjs`(POST /prompt 가로챔).
 - 2026-10-29: **0.9.72 렌더 상태 배지** — 컷 카드·타임라인 클립에 Queued / Rendering NN%(큐·실행 중), 끝나면(성공·에러·중단·큐에서 사라짐) 지움. 프롬프트→컷 연결은 queuePrompt 응답 prompt_id + 큐한 그래프 `extra.gonggan`(없으면 열린 샷 탭 컷) + `gonggan.jobs`. 컷에 안 붙는 프롬프트는 Shots 헤더에 Queued / Rendering…(예전 "Other jobs" 칩 대체). 순수 로직 `gg_render_status_core.js`, e2e `render_status_test.mjs`(가짜 이벤트, 실제 렌더 없음).
 - 2026-10-29: **0.9.69 Caption 단일 필드** — 컷 카드에는 Caption 하나(노트+대사). caption이 비고 notes가 있으면 편집창에 notes가 미리 채워져 첫 편집 때 caption으로 저장됨. 둘 다 있으면 caption만 보임. JS는 `notes`를 절대 쓰거나 지우지 않음(서버 데이터 그대로).
 - 2026-10-25: **0.9.3 컷 헤더·Caption** — Info|Caption 토글, 컷별 `caption` 필드·SRT보내기, 한 줄 헤더(번호·이름·버전·길이·트래픽 라이트), 영상 재생 동기화·썸네일/뷰어 오류 처리; `caption` 저장은 ComfyUI 재시작 후.

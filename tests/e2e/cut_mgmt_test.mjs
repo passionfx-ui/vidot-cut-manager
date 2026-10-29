@@ -382,6 +382,15 @@ let browser;
 let page;
 let mainPid = "";
 
+/** Lower-left cut panel (hidden by SHOW_CUT_PANEL in 0.9.73). */
+async function requireCutPanel(page) {
+  const shown = await page.evaluate(() => !!document.querySelector(".gg-root.gg-shots .gg-cutpanel")?.getClientRects().length);
+  if (shown) return;
+  const err = new Error("SKIP panel hidden: cut panel is off (SHOW_CUT_PANEL = false)");
+  err.skipped = true;
+  throw err;
+}
+
 async function runScenario(id, title, fn) {
   checkRam(`before ${id}`);
   const entry = { id, title, status: "FAIL", detail: "", screenshot: null };
@@ -393,7 +402,10 @@ async function runScenario(id, title, fn) {
     console.log(`PASS  ${id} ${title}`);
   } catch (e) {
     entry.detail = e.message || String(e);
-    console.log(`FAIL  ${id} ${title}: ${entry.detail}`);
+    if (e.skipped) {
+      entry.status = "SKIPPED";
+      console.log(`SKIP  ${id} ${title}: ${entry.detail}`);
+    } else console.log(`FAIL  ${id} ${title}: ${entry.detail}`);
   }
   shotNum += 1;
   try {
@@ -498,6 +510,7 @@ async function main() {
   });
 
   await runScenario("04", "Length 4s warning badge", async () => {
+    await requireCutPanel(page);
     await page.click(".gg-root.gg-shots .gg-cut");
     await sleep(300);
     await page.waitForSelector(".gg-len-input");
@@ -510,6 +523,7 @@ async function main() {
   });
 
   await runScenario("05", "End card clears warning", async () => {
+    await requireCutPanel(page);
     await page.click(".gg-cutpanel input.gg-endcard-chk");
     await sleep(500);
     const hidden = await page.$eval(".gg-root.gg-shots .gg-cut .gg-warn3", (el) => el.hidden).catch(() => true);
@@ -535,8 +549,9 @@ async function main() {
     if (!val.includes(note)) throw new Error(`caption lost: ${val}`);
   });
 
-  await runScenario("07", "Needs redo flag + filter", async () => {
-    await page.click(".gg-cutpanel input.gg-redo-chk");
+  await runScenario("07", "Needs redo flag + filter (card menu)", async () => {
+    await rightClickCut(page, 0);
+    await clickCtxItem(page, "Mark needs redo");
     await sleep(500);
     const badge = await page.$(".gg-root.gg-shots .gg-cut .gg-redo-badge");
     if (!badge) throw new Error("redo badge missing");
@@ -575,9 +590,9 @@ async function main() {
     if (!nb) throw new Error("caption box missing");
     await page.mouse.click(nb.x + nb.width / 2, nb.y + nb.height / 2);
     await sleep(400);
-    const panelName = await page.$eval(".gg-cutpanel .gg-panel-name", (el) => el.textContent?.trim());
-    if (panelName !== secondName) {
-      throw new Error(`single click on caption should select cut: panel=${panelName} expected=${secondName}`);
+    const selName = await page.$eval(".gg-root.gg-shots .gg-cut.gg-on .gg-cut-title", (el) => el.textContent?.trim() || "").catch(() => "");
+    if (selName !== secondName) {
+      throw new Error(`single click on caption should select cut: selected=${selName} expected=${secondName}`);
     }
     const focusedAfterClick = await page.evaluate(
       () => document.activeElement?.classList?.contains("gg-caption-text") ?? false
