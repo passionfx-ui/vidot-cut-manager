@@ -657,21 +657,34 @@ function openNewProjectModal() {
   applyProjectSetupToModal(wrap, DEFAULT_PROJECT_SETTINGS);
   wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeProjectModal(); });
   wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", closeProjectModal);
+  // The project is created once per modal. If the split import is refused (server 400 ...), the modal stays open with the
+  // pasted text and the next Create only retries the import into that same project (no duplicate project).
+  let createdPid = "";
+  let submitting = false;
+  const showSplitError = (msg) => {
+    splitPreview.textContent = msg;
+    splitPreview.classList.add("gg-split-err");
+  };
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (submitting) return;
     const name = nameIn.value.trim();
     if (!name) return;
     const template_ref = tplSel.value || undefined;
     const settings = readProjectSetupFromModal(wrap, DEFAULT_PROJECT_SETTINGS);
     saveLastTemplate(localStorage, tplSel.value);
+    submitting = true;
+    createBtn.disabled = true;
     try {
-      const d = await postJson("/gonggan/project/create", { name, template_ref, settings });
-      closeProjectModal();
+      if (!createdPid) {
+        const d = await postJson("/gonggan/project/create", { name, template_ref, settings });
+        createdPid = d.project?.id || "";
+      }
       let splitNote = "";
-      if (splitResult && !(splitResult.errors || []).length && d.project?.id) {
+      if (splitResult && !(splitResult.errors || []).length && createdPid) {
         try {
           await postJson("/gonggan/project/import", {
-            pid: d.project.id,
+            pid: createdPid,
             scenes: splitResult.scenes,
             loose: splitResult.loose,
             references: splitResult.references,
@@ -679,14 +692,21 @@ function openNewProjectModal() {
           splitNote = ` (${summarizeImport(splitResult).replace(" will be created", " created")})`;
         } catch (err) {
           const hint = (err.status === 404 || err.status === 405) ? "Restart ComfyUI to enable Auto Cut Split." : err.message;
-          ggToast("Auto Cut Split", `Project created, but the split failed: ${hint}`, "warn");
+          showSplitError(`Auto Cut Split failed: ${hint}`);
+          ggToast("Auto Cut Split", `Project "${name}" was created, but the split failed: ${hint} Fix the text and press Create again.`, "warn");
+          await loadProjects();
+          return; // keep the modal open with the pasted text
         }
       }
+      closeProjectModal();
       await loadProjects();
-      if (d.project?.id) selectProject(d.project.id);
+      if (createdPid) selectProject(createdPid);
       ggToast("Project", `Created "${name}"${splitNote}`, "ok");
     } catch (err) {
       ggToast("Project", err.message, "warn");
+    } finally {
+      submitting = false;
+      if (wrap.isConnected) createBtn.disabled = !!(splitResult && (splitResult.errors || []).length);
     }
   });
   nameIn.focus();

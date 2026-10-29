@@ -8,7 +8,9 @@ const REFERENCE_CATEGORY_MAP = new Map(
   REFERENCE_CATEGORIES.map((c) => [c.toLowerCase(), c])
 );
 
-const MAX_CUTS = 1000;
+// Same limits the server enforces in LocalStore.import_structure / _validate_planned_sec (keep in sync).
+export const IMPORT_LIMITS = Object.freeze({ maxCuts: 500, minSec: 0.2, maxSec: 600, captionMax: 4000 });
+const MAX_CUTS = IMPORT_LIMITS.maxCuts;
 
 const LLM_PROMPT_TEXT = `Split the story below into scenes and cuts using the rules, and output only the result in this format. No commentary, no code fences.
 
@@ -71,10 +73,10 @@ function parseSecondsSegment(line, secRaw, errors) {
   const t = secRaw.trim();
   if (t === "") return null;
   const n = Number(t);
-  if (!Number.isFinite(n) || n <= 0 || n > 600) {
+  if (!Number.isFinite(n) || n < IMPORT_LIMITS.minSec || n > IMPORT_LIMITS.maxSec) {
     errors.push({
       line,
-      message: "seconds must be a number between 0 and 600",
+      message: `seconds must be a number between ${IMPORT_LIMITS.minSec} and ${IMPORT_LIMITS.maxSec}`,
     });
     return undefined;
   }
@@ -99,7 +101,15 @@ function parseCutPayload(line, payload, errors) {
   }
   const sec = parseSecondsSegment(line, secRaw, errors);
   if (sec === undefined) return null;
-  return { name, sec, caption: caption.trim() };
+  const cap = caption.trim();
+  if (cap.length > IMPORT_LIMITS.captionMax) {
+    errors.push({
+      line,
+      message: `caption must be at most ${IMPORT_LIMITS.captionMax} characters`,
+    });
+    return null;
+  }
+  return { name, sec, caption: cap };
 }
 
 /**
