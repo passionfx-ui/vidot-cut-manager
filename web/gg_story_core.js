@@ -2,7 +2,7 @@
 
 export const LIST_MODE_KEY = "gg.listMode";
 
-const FIELD_KEYS = ["notes", "caption", "planned_sec", "end_card", "needs_redo"];
+const FIELD_KEYS = ["caption", "planned_sec", "end_card", "needs_redo"];
 
 export function normalizeListMode(v) {
   if (v === "caption" || v === "story") return "caption";

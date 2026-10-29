@@ -569,9 +569,9 @@ async function main() {
       ".gg-cut-title",
       (el) => el.textContent?.trim() || ""
     );
-    const notesBox = await cuts[1].$(".gg-caption-text");
-    if (!notesBox) throw new Error("card caption textarea missing");
-    const nb = await notesBox.boundingBox();
+    const capBox = await cuts[1].$(".gg-caption-text");
+    if (!capBox) throw new Error("card caption textarea missing");
+    const nb = await capBox.boundingBox();
     if (!nb) throw new Error("caption box missing");
     await page.mouse.click(nb.x + nb.width / 2, nb.y + nb.height / 2);
     await sleep(400);
@@ -583,7 +583,7 @@ async function main() {
       () => document.activeElement?.classList?.contains("gg-caption-text") ?? false
     );
     if (focusedAfterClick) throw new Error("single click should not focus card caption");
-    await notesBox.click({ clickCount: 2 });
+    await capBox.click({ clickCount: 2 });
     await sleep(200);
     const focusedEdit = await page.evaluate(
       () => document.activeElement?.classList?.contains("gg-caption-text") ?? false

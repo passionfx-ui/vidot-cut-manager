@@ -144,7 +144,7 @@ import {
   isSilentFieldSave,
   autoHeightPx,
 } from "./gg_story_core.js";
-import { buildSrt, srtFileName, effectiveCaption, captionFieldPlaceholder } from "./gg_caption_core.js";
+import { buildSrt, srtFileName, effectiveCaption, captionEditChanged, captionFieldPlaceholder } from "./gg_caption_core.js";
 import { decideVideoSync } from "./gg_playback_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
@@ -3737,7 +3737,7 @@ function bindShotsReorder(root) {
     el.addEventListener("pointerdown", (e) => {
       if (!isNativeProject() || e.button) return;
       const blocker = e.target.closest("input, textarea, button, select, a");
-      // Card Notes/caption textareas only block a drag while they are in edit mode (double-click).
+      // Card caption textareas only block a drag while they are in edit mode (double-click).
       if (blocker && !(blocker.tagName === "TEXTAREA" && !isCardFieldEditing(blocker))) return;
       const startX = e.clientX;
       const startY = e.clientY;
@@ -4013,7 +4013,6 @@ async function saveCutFields(cutId, fields, reqPid = state.pid) {
       if (bucket) {
         for (const k of keys) {
           if (k === "caption" && cutFieldUi.captionDegraded) continue;
-          if (k === "notes" && cutFieldUi.routeMissing) continue;
           delete bucket[k];
         }
         if (!Object.keys(bucket).length) delete cutFieldUi.unsaved[cutId];
@@ -4956,7 +4955,7 @@ function mountShots(el) {
     if (!ta) return;
     ta.value = cap.value;
     const c = cutByIdTimeline(cap.cutId);
-    if (c && c.caption !== cap.value) {
+    if (c && captionEditChanged(c, cap.value)) {
       c.caption = cap.value;
       scheduleCutFieldSave(cap.cutId, { caption: cap.value });
     }

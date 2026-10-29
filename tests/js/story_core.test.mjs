@@ -230,7 +230,7 @@ describe("applyFieldOverrides", () => {
       a: { notes: "new", planned_sec: 2, caption: "c", extra: "x" },
       missing: { notes: "z" },
     });
-    assert.equal(tl.cuts[0].notes, "new");
+    assert.equal(tl.cuts[0].notes, "old", "notes is never overridden client-side");
     assert.equal(tl.cuts[0].planned_sec, 2);
     assert.equal(tl.cuts[0].caption, "c");
     assert.equal(tl.cuts[0].extra, undefined);
