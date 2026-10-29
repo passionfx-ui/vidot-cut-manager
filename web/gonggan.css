@@ -35,8 +35,15 @@
 .gg-shots .gg-grp-fold:hover, .gg-shots .gg-grp-ren:hover, .gg-shots .gg-grp-del:hover { color: var(--gg-acc); }
 .gg-shots .gg-grp-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .gg-shots .gg-grp-meta { color: var(--gg-dim); font-variant-numeric: tabular-nums; }
-.gg-shots .gg-selbar { margin: 0 8px 4px; padding: 4px 6px; border-radius: 4px; background: #2c2a22; border: 1px solid var(--gg-acc); font-size: 11px; }
-.gg-shots .gg-selbar[hidden] { display: none !important; }
+/* Bottom bar: always present so the cut list never shifts; dim with nothing selected. */
+.gg-shots .gg-selbar { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; min-width: 0; padding: 4px 6px; border-top: 1px solid var(--gg-line); background: #1f2228; font-size: 11px; }
+.gg-shots .gg-selbar .gg-sel-label { white-space: nowrap; margin-right: 2px; font-variant-numeric: tabular-nums; }
+.gg-shots .gg-selbar.gg-selbar-empty .gg-sel-label { color: var(--gg-dim); }
+.gg-shots .gg-selbar .gg-btn { font-size: 11px; padding: 1px 6px; white-space: nowrap; }
+.gg-shots .gg-selbar .gg-btn:disabled, .gg-shots .gg-selbar .gg-btn.gg-primary:disabled { opacity: 0.4; cursor: default; border-color: var(--gg-line); }
+.gg-shots .gg-selbar .gg-sel-render { margin-left: auto; }
+.gg-shots .gg-selbar .gg-version { position: static; align-self: flex-end; flex-shrink: 0; }
+.gg-shots.gg-cutpanel-off .gg-cutpanel { display: none; }
 .gg-shots .gg-cutlist { list-style: none; margin: 0; padding: 0 6px 6px; }
 .gg-shots .gg-cut.gg-sel { outline: 2px solid var(--gg-acc); background: #3a3528; box-shadow: inset 0 0 0 1px rgba(242, 184, 75, 0.35); }
 .gg-shots .gg-cut {

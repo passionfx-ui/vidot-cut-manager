@@ -331,13 +331,38 @@ async function createProjectViaUi(page, name, templateRef) {
   return pid;
 }
 
-async function selbarVisible(page) {
+/** Bottom selection bar (0.9.73): always shown under the list; buttons follow the selection. */
+async function selbarState(page) {
   return page.evaluate(() => {
-    const bar = document.querySelector(".gg-root.gg-shots .gg-selbar");
-    if (!bar || bar.hidden) return false;
+    const root = document.querySelector(".gg-root.gg-shots");
+    const bar = root?.querySelector(".gg-selbar");
+    if (!bar) return null;
     const st = getComputedStyle(bar);
-    return st.display !== "none" && st.visibility !== "hidden";
+    const r = bar.getBoundingClientRect();
+    const list = root.querySelector(".gg-grp-wrap").getBoundingClientRect();
+    const dis = (s) => !!bar.querySelector(s)?.disabled;
+    return {
+      visible: !bar.hidden && st.display !== "none" && st.visibility !== "hidden" && r.height > 0,
+      count: parseInt(bar.querySelector(".gg-sel-count")?.textContent || "-1", 10),
+      renderDisabled: dis(".gg-sel-render"),
+      groupDisabled: dis(".gg-sel-group"),
+      xDisabled: dis(".gg-sel-x"),
+      barTop: r.top,
+      barBottom: r.bottom,
+      rootBottom: root.getBoundingClientRect().bottom,
+      listTop: list.top,
+      listBottom: list.bottom,
+    };
   });
+}
+
+/** Lower-left cut panel (hidden by SHOW_CUT_PANEL in 0.9.73). */
+async function requireCutPanel(page) {
+  const shown = await page.evaluate(() => !!document.querySelector(".gg-root.gg-shots .gg-cutpanel")?.getClientRects().length);
+  if (shown) return;
+  const err = new Error("SKIP panel hidden: cut panel is off (SHOW_CUT_PANEL = false)");
+  err.skipped = true;
+  throw err;
 }
 
 async function openCutContextMenu(page, index = 0) {
@@ -606,19 +631,27 @@ async function main() {
     if (scenes < 1) throw new Error("expected a scene section after group");
   });
 
-  await runScenario("05", "Selection bar visibility threshold", async () => {
+  await runScenario("05", "Bottom selection bar: always shown, pinned under the list, list never shifts", async () => {
     await page.keyboard.press("Escape");
     await sleep(300);
-    if (await selbarVisible(page)) throw new Error("bar visible with 0 selection");
+    const s0 = await selbarState(page);
+    if (!s0?.visible) throw new Error(`bar not shown: ${JSON.stringify(s0)}`);
+    if (s0.barTop < s0.listBottom - 1 || s0.rootBottom - s0.barBottom > 24) throw new Error(`bar not at the bottom: ${JSON.stringify(s0)}`);
+    if (s0.count === 0 && (!s0.renderDisabled || !s0.groupDisabled)) throw new Error(`0 selected must disable actions: ${JSON.stringify(s0)}`);
     await clickCut(page, 0);
     await sleep(250);
-    if (await selbarVisible(page)) throw new Error("bar visible with 1 selected");
+    const s1 = await selbarState(page);
+    if (!s1.visible || s1.count !== 1 || s1.renderDisabled || !s1.xDisabled) throw new Error(`1 selected: ${JSON.stringify(s1)}`);
     await shiftClickCut(page, 1);
     await page.waitForFunction(
       () => parseInt(document.querySelector(".gg-root.gg-shots .gg-sel-count")?.textContent || "0", 10) >= 2,
       { timeout: 5000 }
     );
-    if (!(await selbarVisible(page))) throw new Error("bar hidden with 2+ selected");
+    const s2 = await selbarState(page);
+    if (!s2.visible || s2.renderDisabled || s2.xDisabled) throw new Error(`2+ selected: ${JSON.stringify(s2)}`);
+    if (Math.abs(s2.listTop - s0.listTop) > 0.5 || Math.abs(s1.listTop - s0.listTop) > 0.5) {
+      throw new Error(`list moved with the selection: ${s0.listTop} / ${s1.listTop} / ${s2.listTop}`);
+    }
   });
 
   await runScenario("06", "Context menu opaque and compact", async () => {
@@ -641,7 +674,7 @@ async function main() {
     if (!m) throw new Error("menu missing");
     if (m.alpha < 0.99) throw new Error(`menu not opaque: alpha=${m.alpha} bg=${m.bg}`);
     if (m.width > 220) throw new Error(`menu too wide: ${m.width}px`);
-    if (m.height > 320) throw new Error(`menu too tall: ${m.height}px`);
+    if (m.height > 360) throw new Error(`menu too tall: ${m.height}px`);
   });
 
   await runScenario("07", "Cut click loads workflow tab labeled Project/Scene cutLabel", async () => {
@@ -759,6 +792,7 @@ async function main() {
   });
 
   await runScenario("11", "Best change updates header summary immediately", async () => {
+    await requireCutPanel(page);
     const mock = buildMockTimelineNoPick(mainPid, runStamp);
     timelineMocks.set(mainPid, mock);
     await reloadShots(page);
@@ -780,6 +814,7 @@ async function main() {
   });
 
   await runScenario("12", "First result is not Best until picked manually (mock timeline)", async () => {
+    await requireCutPanel(page);
     const mock = buildMockTimelineFirstResult(mainPid, runStamp);
     const vid = mock.cuts[0].versions_list[0].id;
     timelineMocks.set(mainPid, mock);

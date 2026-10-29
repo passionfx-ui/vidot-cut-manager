@@ -394,6 +394,12 @@ async function main() {
   try {
     await waitForComfy(page);
     await openShotsTab(page);
+    // Every scenario clicks version thumbnails in the lower-left cut panel (hidden by SHOW_CUT_PANEL in 0.9.73).
+    const panelShown = await page.evaluate(() => !!document.querySelector(".gg-root.gg-shots .gg-cutpanel")?.getClientRects().length);
+    if (!panelShown) {
+      console.log("SKIP panel hidden: version thumbnails live in the cut panel (SHOW_CUT_PANEL = false); all scenarios skipped");
+      return;
+    }
     const templateRef = await pickUsableTemplateRef(page, await fetchWorkflowPaths(page));
     if (!templateRef) throw new Error("need a usable workflow template");
 
