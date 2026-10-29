@@ -822,11 +822,11 @@ async function main() {
     const orderBeforeScene = await cutIdOrder(page);
     const firstId = orderBeforeScene[0];
     await rightClickCut(page, 0);
-    await clickCtxSubItem(page, "Move to scene \u25B8", "No scene");
+    await clickCtxSubItem(page, "Move to scene \u25B8", "Ungrouped");
     await sleep(900);
     const orderUngrouped = await cutIdOrder(page);
     if (orderUngrouped.join() === orderBeforeScene.join()) {
-      throw new Error("Move to No scene should change order/group");
+      throw new Error("Move to Ungrouped should change order/group");
     }
 
     await page.waitForSelector(".gg-toast-action", { timeout: 10000 });

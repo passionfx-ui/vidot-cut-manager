@@ -12,6 +12,7 @@ import {
   sceneDropBeforeCut,
   sceneBlocks,
   sceneDropTarget,
+  listOrder,
 } from "../../web/gg_reorder_core.js";
 import { computeCutLabels, moveCuts } from "../../web/gg_cuts_core.js";
 
@@ -95,7 +96,7 @@ describe("moveToScene", () => {
     assert.deepEqual(r.groups[1].cut_ids, ["c", "a"]);
   });
 
-  it("appends to ungrouped (No scene)", () => {
+  it("appends to Ungrouped", () => {
     const ord = ["a", "b", "c"];
     const gr = [
       { id: "g1", name: "A", cut_ids: ["a", "b"], collapsed: false },
@@ -376,6 +377,38 @@ describe("sceneDropBeforeCut", () => {
     assert.deepEqual(r.order, ["x", "a", "b", "d", "e", "y"]);
     assert.deepEqual(r.groups.map((x) => x.id), ["g1", "g2"]);
     assert.deepEqual(r.groups.find((x) => x.id === "g2").cut_ids, ["d", "e"]);
+  });
+});
+
+describe("listOrder (Ungrouped always last, like the native store)", () => {
+  const grps = [
+    { id: "g1", cut_ids: ["a", "b"] },
+    { id: "g2", cut_ids: ["c"] },
+  ];
+  it("moves ungrouped cuts from between scenes to the end, keeping their order", () => {
+    assert.deepEqual(listOrder(["x", "a", "y", "b", "c", "z"], grps), ["a", "b", "c", "x", "y", "z"]);
+  });
+  it("scenes follow the groups list; cuts in each scene follow the given order", () => {
+    assert.deepEqual(listOrder(["c", "b", "a", "x"], grps), ["b", "a", "c", "x"]);
+    assert.deepEqual(listOrder(["a", "c", "b"], [grps[1], grps[0]]), ["c", "a", "b"]);
+  });
+  it("no scenes / no ungrouped / already laid out", () => {
+    assert.deepEqual(listOrder(["x", "y"], []), ["x", "y"]);
+    assert.deepEqual(listOrder(["a", "b", "c"], grps), ["a", "b", "c"]);
+    assert.deepEqual(listOrder([], grps), []);
+  });
+  it("cut dragged out of a scene into Ungrouped ends up in the Ungrouped block", () => {
+    const r = moveCuts(["a", "b", "c", "x"], grps, ["a"], { toIndex: 2, toGroupId: null });
+    assert.deepEqual(listOrder(r.order, r.groups), ["b", "c", "a", "x"]);
+    assert.deepEqual(r.groups.find((g) => g.id === "g1").cut_ids, ["b"]);
+    const back = moveCuts(["b", "c", "a", "x"], r.groups, ["a"], { toIndex: 0, toGroupId: "g1" });
+    assert.deepEqual(listOrder(back.order, back.groups), ["a", "b", "c", "x"]);
+  });
+  it("labels after listOrder match the sections: Ungrouped is the last block", () => {
+    const ord = listOrder(["a", "x", "b", "c"], grps);
+    const mem = new Map([["a", "g1"], ["b", "g1"], ["c", "g2"]]);
+    const labels = computeCutLabels({ cuts: ord.map((id) => ({ id, group_id: mem.get(id) || "" })) });
+    assert.deepEqual(ord.map((id) => labels.get(id).label), ["1-1", "1-2", "2-1", "3-1"]);
   });
 });
 

@@ -222,6 +222,34 @@ class TimelineIndependentTests(unittest.TestCase):
         self.assertEqual([c["id"] for c in tl["cuts"]], [self.c3, self.c4, self.c1, self.c2, self.c5])
         self.assertEqual(tl["track_order"], self.cut_list)
 
+    def test_cut_into_and_out_of_ungrouped_goes_last_in_list_not_on_timeline(self):
+        # 0.9.90: a cut dragged out of a scene joins the one Ungrouped block at the bottom of the cut
+        # list, even if the client sends it between scenes; the timeline stays where it was.
+        def move(groups, order):
+            na.native_save_groups(self.pid, groups)
+            return na.native_reorder_cuts(self.pid, order)
+
+        for edited in (False, True):
+            with self.subTest(edited=edited):
+                if edited:
+                    na.native_save_edit(self.pid, self.cut_list, {self.c1: {"sec": 3.0, "start": 4}})
+                before = self._tl()
+                tl = move([
+                    {"id": self.s1, "name": "Scene 1", "cut_ids": [self.c1], "collapsed": False},
+                    {"id": S2, "name": "Scene 2", "cut_ids": [self.c3, self.c4], "collapsed": False},
+                ], [self.c1, self.c2, self.c3, self.c4, self.c5])
+                self.assertEqual([c["id"] for c in tl["cuts"]], [self.c1, self.c3, self.c4, self.c2, self.c5])
+                self.assertEqual(self._doc()["loose_order"], [self.c2, self.c5])
+                self.assertEqual(tl["track_order"], before["track_order"])
+                self.assertEqual({c["id"]: c["start"] for c in tl["cuts"]}, {c["id"]: c["start"] for c in before["cuts"]})
+                tl = move([
+                    {"id": self.s1, "name": "Scene 1", "cut_ids": [self.c1, self.c2], "collapsed": False},
+                    {"id": S2, "name": "Scene 2", "cut_ids": [self.c3, self.c4], "collapsed": False},
+                ], [self.c1, self.c2, self.c3, self.c4, self.c5])
+                self.assertEqual([c["id"] for c in tl["cuts"]], self.cut_list)
+                self.assertEqual(tl["track_order"], before["track_order"])
+                self.assertEqual({c["id"]: c["start"] for c in tl["cuts"]}, {c["id"]: c["start"] for c in before["cuts"]})
+
     def test_insert_cut_never_edited_appends_to_timeline_end(self):
         out = na.native_add_cut(self.pid, self.s1, self.c1)
         new_id = out["cut"]["id"]
