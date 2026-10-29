@@ -116,6 +116,7 @@ def native_timeline(pid: str) -> dict | None:
 
 
 def native_save_edit(pid: str, order, clips) -> dict | None:
+    """Timeline edit (clip order, trims, start times, pick). Never reorders the Shots cut list."""
     store = native_store()
     tl = store.to_timeline(pid)
     if tl is None:
@@ -124,7 +125,9 @@ def native_save_edit(pid: str, order, clips) -> dict | None:
     clips = clips if isinstance(clips, dict) else {}
     out_clips: dict[str, dict] = {}
     for cid, c in by_id.items():
-        e = clips.get(cid) if isinstance(clips.get(cid), dict) else {"in": c["in"], "sec": c["sec"]}
+        e = clips.get(cid)
+        if not isinstance(e, dict):
+            continue
         pick = e.get("pick") if "pick" in e else c.get("pick")
         valid = {v["id"]: v for v in c.get("versions_list") or []}
         if not (isinstance(pick, str) and pick in valid):
@@ -132,12 +135,45 @@ def native_save_edit(pid: str, order, clips) -> dict | None:
         kind = valid[pick]["kind"] if pick else (c["media"]["kind"] if c.get("media") else None)
         src_dur = c.get("src_dur")
         i, sec = clamp_clip(kind, e.get("in", c["in"]), e.get("sec", c["sec"]), src_dur)
-        out_clips[cid] = {"in": i, "sec": sec, **({"pick": pick} if pick else {})}
+        out = {"in": i, "sec": sec, **({"pick": pick} if pick else {})}
+        if "start" in e:
+            out["start"] = e["start"]
+        out_clips[cid] = out
     if not isinstance(order, list):
         order = []
     order = [x for x in dict.fromkeys(order) if isinstance(x, str) and x in by_id]
-    order += [cid for cid in by_id if cid not in order]
+    order += [cid for cid in tl.get("track_order") or by_id if cid not in order]
     store.apply_timeline_edit(pid, order, out_clips)
+    return store.to_timeline(pid)
+
+
+def native_reorder_cuts(pid: str, order) -> dict | None:
+    """Shots cut list order (the timeline is not touched). Unknown ids are dropped, missing ones kept at the end."""
+    store = native_store()
+    tl = store.to_timeline(pid)
+    if tl is None:
+        return None
+    ids = [c["id"] for c in tl["cuts"]]
+    order = order if isinstance(order, list) else []
+    order = [x for x in dict.fromkeys(order) if isinstance(x, str) and x in ids]
+    order += [cid for cid in ids if cid not in order]
+    store.reorder(pid, order)
+    return store.to_timeline(pid)
+
+
+def native_reset_timeline(pid: str) -> dict | None:
+    store = native_store()
+    if store.get_project(pid) is None:
+        return None
+    store.reset_timeline(pid)
+    return store.to_timeline(pid)
+
+
+def native_apply_track_order(pid: str) -> dict | None:
+    store = native_store()
+    if store.get_project(pid) is None:
+        return None
+    store.apply_track_order_to_cuts(pid)
     return store.to_timeline(pid)
 
 

@@ -119,10 +119,16 @@ describe("cutCardMenuItems", () => {
 describe("timelineClipMenuItems", () => {
   it("order and labels", () => {
     const items = timelineClipMenuItems({ native: true, sdkOk: true });
-    assert.deepEqual(keys(items), ["open", "regen", "send", "redo", "rename", "del"]);
+    assert.deepEqual(keys(items), ["open", "regen", "send", "redo", "rename", "applyOrder", "del"]);
     assert.deepEqual(items.map((i) => i.label), [
-      "Open cut", "Regen", "Send last output", "Mark needs redo", "Rename…", "Delete",
+      "Open cut", "Regen", "Send last output", "Mark needs redo", "Rename…", "Apply order to cuts", "Delete",
     ]);
+  });
+  it("Apply order to cuts: native only, read-only tip on imported projects", () => {
+    assert.equal(byKey(timelineClipMenuItems({ native: true }), "applyOrder").disabled, false);
+    const off = byKey(timelineClipMenuItems({ native: false, readonlyTip: TIP }), "applyOrder");
+    assert.equal(off.disabled, true);
+    assert.equal(off.title, TIP);
   });
   it("always single cut even if ctx says multi", () => {
     const items = timelineClipMenuItems({ native: false, sdkOk: true, multi: true });

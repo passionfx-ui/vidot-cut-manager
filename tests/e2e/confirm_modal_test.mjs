@@ -243,7 +243,22 @@ async function run() {
     if (posts.groups !== 1) throw new Error(`Enter should save groups once (got ${posts.groups})`);
     console.log("PASS  scene delete: IME Enter ignored, Enter confirms and deletes the scene");
 
-    // timeline Reset is disabled on native projects, so it is not reachable here (same askConfirm path).
+    // ---- 2) timeline Reset (enabled for native projects since 0.9.78)
+    await page.waitForSelector(".gg-timeline .gg-reset:not([disabled])", { timeout: 15000 });
+    await page.click(".gg-timeline .gg-reset");
+    m = await waitModal();
+    if (!m.title.startsWith("Reset this timeline")) throw new Error(`reset confirm wording changed: ${m.title}`);
+    await page.click(".gg-confirm-cancel");
+    await noModal();
+    await sleep(300);
+    if (posts.reset !== 0) throw new Error(`cancelled Reset still posted (${posts.reset})`);
+    await page.click(".gg-timeline .gg-reset");
+    await waitModal();
+    await page.click(".gg-confirm-ok");
+    await noModal();
+    await sleep(800);
+    if (posts.reset !== 1) throw new Error(`OK should post /gonggan/edit/reset once (got ${posts.reset})`);
+    console.log("PASS  timeline Reset (native): Cancel does nothing, OK posts /gonggan/edit/reset once");
 
     // ---- 3) delete project (ctx menu)
     const openDeleteProject = async () => {
