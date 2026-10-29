@@ -135,6 +135,8 @@ import {
   createUndoBurst,
   snapshotOrderGroups,
   dropHighlight,
+  moveScene,
+  sceneDropTarget,
 } from "./gg_reorder_core.js";
 import {
   loadLastTemplate,
@@ -3710,6 +3712,112 @@ function bindShotsReorder(root) {
           JSON.stringify(r.groups) === JSON.stringify(tl.groups || []);
         if (same) return;
         await commitShotsReorder(r.order, r.groups);
+      };
+      shotsUi.dragSession = { cancel };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    });
+  });
+  bindSceneHeadReorder(root, wrap, indicator);
+}
+
+/** Drag a scene header to move the whole scene between other scenes (same save/undo path as cut drags). */
+function bindSceneHeadReorder(root, wrap, indicator) {
+  root.querySelectorAll(".gg-grp-sec[data-group-id] > .gg-grp-head").forEach((head) => {
+    const sec = head.closest(".gg-grp-sec");
+    const gid = sec?.dataset?.groupId;
+    if (!gid || head._ggSceneDrag) return;
+    head._ggSceneDrag = true;
+    head.classList.add("gg-grp-drag");
+    head.addEventListener("mousedown", (e) => {
+      if (e.button === 0 && !e.target.closest("button")) e.preventDefault();
+    });
+    head.addEventListener("pointerdown", (e) => {
+      if (!isNativeProject() || e.button) return;
+      if (e.target.closest("input, textarea, button, select, a")) return;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      let active = false;
+      let aborted = false;
+      let drop = null;
+      let lastClientY = startY;
+      let scrollRaf = 0;
+      const otherSections = () => {
+        const wr = wrap.getBoundingClientRect();
+        return [...wrap.querySelectorAll(".gg-grp-sec[data-group-id]")]
+          .filter((s) => s.dataset.groupId !== gid)
+          .map((s) => {
+            const r = s.getBoundingClientRect();
+            return {
+              groupId: s.dataset.groupId,
+              top: r.top - wr.top + wrap.scrollTop,
+              bottom: r.bottom - wr.top + wrap.scrollTop,
+            };
+          });
+      };
+      const refreshDropIndicator = () => {
+        const wr = wrap.getBoundingClientRect();
+        drop = sceneDropTarget(otherSections(), clientYToWrapY(lastClientY, wr.top, wrap.scrollTop));
+        indicator.hidden = !drop;
+        if (drop) indicator.style.top = `${drop.lineY}px`;
+      };
+      const tickAutoScroll = () => {
+        const wr = wrap.getBoundingClientRect();
+        const delta = autoScrollDelta(lastClientY, wr.top, wr.bottom, 48, 16);
+        if (delta !== 0) wrap.scrollTop += delta;
+        refreshDropIndicator();
+        scrollRaf = requestAnimationFrame(tickAutoScroll);
+      };
+      const onEsc = (ev) => {
+        if (ev.key !== "Escape") return;
+        ev.preventDefault();
+        aborted = true;
+        cancel();
+      };
+      const cancel = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+        window.removeEventListener("keydown", onEsc);
+        if (scrollRaf) cancelAnimationFrame(scrollRaf);
+        scrollRaf = 0;
+        indicator.hidden = true;
+        wrap.classList.remove("gg-reorder-dragging");
+        sec.classList.remove("gg-grp-moving");
+        shotsUi.dragSession = null;
+        ed.dragging = false;
+      };
+      const move = (ev) => {
+        if (!active && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
+        if (!active) {
+          active = true;
+          ed.dragging = true;
+          wrap.classList.add("gg-reorder-dragging");
+          sec.classList.add("gg-grp-moving");
+          try { head.setPointerCapture(e.pointerId); } catch (_) {}
+          window.addEventListener("keydown", onEsc);
+          scrollRaf = requestAnimationFrame(tickAutoScroll);
+        }
+        lastClientY = ev.clientY;
+        refreshDropIndicator();
+      };
+      const up = async () => {
+        const wasActive = active;
+        cancel();
+        if (!wasActive || aborted || !drop) return;
+        const tl = state.timeline;
+        if (!tl) return;
+        const order0 = tl.cuts.map((c) => c.id);
+        const groups0 = groupsClone();
+        const mem = new Map();
+        for (const g of groups0) for (const id of g.cut_ids || []) mem.set(id, g.id);
+        const beforeCutId = drop.beforeGroupId
+          ? order0.find((id) => mem.get(id) === drop.beforeGroupId) ?? null
+          : order0.find((id) => !mem.has(id)) ?? null;
+        const r = moveScene(order0, groups0, gid, { beforeCutId });
+        if (!r.changed) return;
+        await commitShotsReorder(r.order, r.groups, { moveCount: order0.filter((id) => mem.get(id) === gid).length });
       };
       shotsUi.dragSession = { cancel };
       window.addEventListener("pointermove", move);

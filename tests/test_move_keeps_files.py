@@ -191,6 +191,33 @@ class NativeMoveKeepsFilesTests(unittest.TestCase):
             self.assertEqual((a["group_id"], a["cut_in_scene"], a["media"]), (b["group_id"], b["cut_in_scene"], b["media"]))
         self._assert_linked(tl)
 
+    def test_move_scene_block_keeps_links(self):
+        # moveScene (scene header drag): Scene 2 as one block before Scene 1, groups in the new scene order
+        order = [self.c3, self.c4, self.c1, self.c2]
+        tl = self._persist(order, self._groups((SCENE2_ID, [self.c3, self.c4]), (self.s1, [self.c1, self.c2])))
+        self.assertEqual([c["id"] for c in tl["cuts"]], order)
+        self.assertEqual([g["id"] for g in tl["groups"]], [SCENE2_ID, self.s1])
+        self.assertEqual(
+            [(self._row(tl, c)["group_id"], self._row(tl, c)["scene_index"], self._row(tl, c)["cut_in_scene"]) for c in order],
+            [(SCENE2_ID, 1, 1), (SCENE2_ID, 1, 2), (self.s1, 2, 1), (self.s1, 2, 2)],
+        )
+        self.assertEqual(timeline_order(self.store.get_project(self.pid)), order)
+        self._assert_linked(tl)
+        self._assert_linked(self.store.to_timeline(self.pid))
+
+        back = [self.c1, self.c2, self.c3, self.c4]
+        tl = self._persist(back, self._groups((self.s1, [self.c1, self.c2]), (SCENE2_ID, [self.c3, self.c4])))
+        self.assertEqual([c["id"] for c in tl["cuts"]], back)
+        self.assertEqual([g["id"] for g in tl["groups"]], [self.s1, SCENE2_ID])
+        self._assert_linked(tl)
+
+    def test_scene_move_needs_groups_in_new_order(self):
+        # The flat order alone cannot move a scene: the store lays scenes out in groups-list order.
+        tl = self._persist([self.c3, self.c4, self.c1, self.c2],
+                           self._groups((self.s1, [self.c1, self.c2]), (SCENE2_ID, [self.c3, self.c4])))
+        self.assertEqual([c["id"] for c in tl["cuts"]], [self.c1, self.c2, self.c3, self.c4])
+        self._assert_linked(tl)
+
     def test_ungroup_then_regroup(self):
         self._persist([self.c1, self.c3, self.c2, self.c4],
                       self._groups((self.s1, [self.c1]), (SCENE2_ID, [self.c3, self.c2, self.c4])))
