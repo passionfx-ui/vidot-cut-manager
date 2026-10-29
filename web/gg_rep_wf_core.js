@@ -76,3 +76,48 @@ export function shouldTryEmbeddedRepWorkflow(cut, effectiveKind) {
   const kind = effectiveKind ?? repMediaKind(cut);
   return kind === "image";
 }
+
+export const VERSION_WF_MISSING = "No workflow saved for this version.";
+
+/**
+ * @param {{ versions_list?: Array<{ id?: string }> } | null | undefined} cut
+ * @param {string} vid
+ */
+export function findCutVersion(cut, vid) {
+  if (!cut || !vid || !Array.isArray(cut.versions_list)) return null;
+  return cut.versions_list.find((v) => v && v.id === vid) || null;
+}
+
+/**
+ * Sources to try, in order, when a version thumbnail is clicked: the workflow embedded in an
+ * image result first, then the per-version stored workflow (image or video).
+ * @param {{ id?: string, kind?: string } | null | undefined} version
+ * @returns {Array<"embedded" | "stored">}
+ */
+export function versionWorkflowSourceOrder(version) {
+  if (!version || !version.id) return [];
+  return version.kind === "image" ? ["embedded", "stored"] : ["stored"];
+}
+
+/**
+ * Graph from a /gonggan/version-workflow payload: UI graph first, else the API prompt.
+ * @param {{ workflow?: unknown, prompt?: unknown } | null | undefined} rec
+ * @returns {object | null}
+ */
+export function workflowFromVersionRecord(rec) {
+  if (!rec || typeof rec !== "object") return null;
+  const isObj = (x) => !!x && typeof x === "object" && !Array.isArray(x) && Object.keys(x).length > 0;
+  if (isObj(rec.workflow)) return rec.workflow;
+  if (isObj(rec.prompt)) return rec.prompt;
+  return null;
+}
+
+/**
+ * Whether a version thumbnail is the one whose workflow is open in the shot tab.
+ * @param {{ projectId?: string, cutId?: string, vid?: string } | null | undefined} open
+ * @param {{ projectId?: string, cutId?: string, vid?: string, tabOpen?: boolean }} at
+ */
+export function isOpenVersion(open, at) {
+  if (!open || !open.vid || !at?.tabOpen) return false;
+  return open.projectId === at.projectId && open.cutId === at.cutId && open.vid === at.vid;
+}

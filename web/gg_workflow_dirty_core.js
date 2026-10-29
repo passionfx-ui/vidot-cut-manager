@@ -2,6 +2,27 @@
  * When Comfy marks a workflow tab modified but widget content matches our baseline snapshot.
  */
 
+/**
+ * Slot `type` is derived (links / node defs) and wildcard slots ("*") resolve a moment after a
+ * graph is reloaded into an open tab, so it is not user content. Links (with their types) still count.
+ */
+function withoutSlotTypes(x, key) {
+  if (Array.isArray(x)) {
+    const slots = key === "inputs" || key === "outputs";
+    return x.map((v) => {
+      if (slots && v && typeof v === "object" && !Array.isArray(v)) {
+        const { type, ...keep } = v;
+        return withoutSlotTypes(keep, "");
+      }
+      return withoutSlotTypes(v, "");
+    });
+  }
+  if (!x || typeof x !== "object") return x;
+  const out = {};
+  for (const k of Object.keys(x)) out[k] = withoutSlotTypes(x[k], k);
+  return out;
+}
+
 /** Canonical content of a serialized graph: everything a user can edit, minus volatile UI state. */
 function canonicalGraph(wf) {
   if (!wf || typeof wf !== "object") return null;
@@ -13,7 +34,7 @@ function canonicalGraph(wf) {
         return keep;
       })
     : rest.nodes;
-  return { ...rest, nodes };
+  return withoutSlotTypes({ ...rest, nodes }, "");
 }
 
 /**

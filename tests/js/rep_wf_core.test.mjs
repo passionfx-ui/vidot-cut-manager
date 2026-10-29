@@ -7,6 +7,11 @@ import {
   shouldTryEmbeddedRepWorkflow,
   workflowSourceToastDetail,
   CUT_WF_KIND_KEY,
+  VERSION_WF_MISSING,
+  findCutVersion,
+  isOpenVersion,
+  versionWorkflowSourceOrder,
+  workflowFromVersionRecord,
 } from "../../web/gg_rep_wf_core.js";
 
 describe("resolveEffectiveWorkflowKind", () => {
@@ -57,6 +62,73 @@ describe("shouldTryEmbeddedRepWorkflow", () => {
   it("skips non-image media", () => {
     const cut = { media: { kind: "video", id: "x" } };
     assert.equal(shouldTryEmbeddedRepWorkflow(cut, "image"), false);
+  });
+});
+
+describe("versionWorkflowSourceOrder", () => {
+  it("image: embedded PNG workflow first, then stored", () => {
+    assert.deepEqual(versionWorkflowSourceOrder({ id: "v1", kind: "image" }), ["embedded", "stored"]);
+  });
+
+  it("video or unknown kind: stored only", () => {
+    assert.deepEqual(versionWorkflowSourceOrder({ id: "v1", kind: "video" }), ["stored"]);
+    assert.deepEqual(versionWorkflowSourceOrder({ id: "v1" }), ["stored"]);
+  });
+
+  it("missing version: nothing to try", () => {
+    assert.deepEqual(versionWorkflowSourceOrder(null), []);
+    assert.deepEqual(versionWorkflowSourceOrder({ kind: "image" }), []);
+  });
+
+  it("does not depend on the pick", () => {
+    const cut = { pick: "v2", versions_list: [{ id: "v1", kind: "image" }, { id: "v2", kind: "video" }] };
+    assert.deepEqual(versionWorkflowSourceOrder(findCutVersion(cut, "v1")), ["embedded", "stored"]);
+    assert.equal(cut.pick, "v2");
+  });
+});
+
+describe("findCutVersion", () => {
+  it("finds by id, else null", () => {
+    const cut = { versions_list: [{ id: "a" }, { id: "b", kind: "video" }] };
+    assert.equal(findCutVersion(cut, "b").kind, "video");
+    assert.equal(findCutVersion(cut, "zz"), null);
+    assert.equal(findCutVersion({}, "a"), null);
+    assert.equal(findCutVersion(cut, ""), null);
+  });
+});
+
+describe("workflowFromVersionRecord", () => {
+  it("prefers the UI graph, falls back to the API prompt", () => {
+    const ui = { nodes: [{ id: 1 }] };
+    const api = { 3: { class_type: "KSampler", inputs: {} } };
+    assert.equal(workflowFromVersionRecord({ workflow: ui, prompt: api }), ui);
+    assert.equal(workflowFromVersionRecord({ workflow: null, prompt: api }), api);
+  });
+
+  it("null when nothing usable", () => {
+    assert.equal(workflowFromVersionRecord(null), null);
+    assert.equal(workflowFromVersionRecord({ ok: false }), null);
+    assert.equal(workflowFromVersionRecord({ workflow: {}, prompt: null }), null);
+    assert.equal(workflowFromVersionRecord({ workflow: [], prompt: [] }), null);
+  });
+
+  it("missing toast text", () => {
+    assert.equal(VERSION_WF_MISSING, "No workflow saved for this version.");
+  });
+});
+
+describe("isOpenVersion", () => {
+  const open = { projectId: "p", cutId: "c", vid: "v1" };
+  it("matches project, cut and version while the shot tab is open", () => {
+    assert.equal(isOpenVersion(open, { projectId: "p", cutId: "c", vid: "v1", tabOpen: true }), true);
+  });
+
+  it("false for other version, cut, project, closed tab, or nothing opened", () => {
+    assert.equal(isOpenVersion(open, { projectId: "p", cutId: "c", vid: "v2", tabOpen: true }), false);
+    assert.equal(isOpenVersion(open, { projectId: "p", cutId: "d", vid: "v1", tabOpen: true }), false);
+    assert.equal(isOpenVersion(open, { projectId: "q", cutId: "c", vid: "v1", tabOpen: true }), false);
+    assert.equal(isOpenVersion(open, { projectId: "p", cutId: "c", vid: "v1", tabOpen: false }), false);
+    assert.equal(isOpenVersion(null, { projectId: "p", cutId: "c", vid: "v1", tabOpen: true }), false);
   });
 });
 
