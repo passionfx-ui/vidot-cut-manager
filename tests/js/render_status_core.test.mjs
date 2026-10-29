@@ -240,6 +240,7 @@ describe("badge views", () => {
     assert.equal(batchProgressView({ done: 0, total: 0, failed: 0 }).show, false);
     assert.equal(batchProgressView({ done: 3, total: 10, failed: 0 }).text, "3 / 10 done");
     assert.match(batchProgressView({ done: 3, total: 10, failed: 1 }).title, /1 failed/);
+    assert.match(batchProgressView({ done: 1, total: 2, failed: 0 }).title, /^Last Queue batch: /);
   });
   it("queue position goes to pos (text stays Queued)", () => {
     const v = renderBadgeView({ state: "queued", count: 1, position: 2 });
