@@ -12,6 +12,7 @@ import {
   snapshotTimelineEdit,
   applyTimelineSnapshot,
 } from "../../web/gg_undo_core.js";
+import { moveScene, snapshotOrderGroups } from "../../web/gg_reorder_core.js";
 
 describe("undoKeyAction", () => {
   it("maps Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z, Ctrl/Cmd+Y", () => {
@@ -185,6 +186,39 @@ describe("Shots history entries", () => {
     const restored = { order: ["a", "c", "b"], groups: [{ id: "s1", name: "S", cut_ids: ["a"] }] };
     const before = { order: ["a", "b", "c"], groups: [{ id: "s1", name: "S", cut_ids: ["a", "b"] }] };
     assert.deepEqual(fitOrderGroupsSnapshot(before, restored), before);
+  });
+  it("scene header drag: Ctrl+Z puts the scene back, Ctrl+Y moves it again, cut ids unchanged", () => {
+    const tl = {
+      cuts: ["a", "b", "c", "d"].map((id) => ({ id })),
+      groups: [
+        { id: "sA", name: "A", cut_ids: ["a", "b"], collapsed: false },
+        { id: "sB", name: "B", cut_ids: ["c", "d"], collapsed: true },
+      ],
+    };
+    const layout = () => snapshotOrderGroups(tl);
+    const apply = (snap) => {
+      const fit = fitOrderGroupsSnapshot(snap, layout());
+      tl.cuts = fit.order.map((id) => ({ id }));
+      tl.groups = fit.groups;
+    };
+    const h = createUndoHistory();
+    const before = layout();
+    h.record("p", before);
+    const r = moveScene(before.order, before.groups, "sB", { beforeCutId: "a" });
+    assert.equal(r.changed, true);
+    apply(r);
+    const moved = layout();
+    assert.deepEqual(moved.order, ["c", "d", "a", "b"]);
+    assert.deepEqual(moved.groups.map((g) => [g.id, g.cut_ids]), [["sB", ["c", "d"]], ["sA", ["a", "b"]]]);
+
+    const undo = h.undo("p", (e) => shotsCounterpart(e, layout()));
+    for (const step of shotsUndoSteps(undo, "undo")) apply(step.snap);
+    assert.deepEqual(layout(), before);
+
+    const redo = h.redo("p", (e) => shotsCounterpart(e, layout()));
+    for (const step of shotsUndoSteps(redo, "redo")) apply(step.snap);
+    assert.deepEqual(layout(), moved);
+    assert.equal(tl.groups.find((g) => g.id === "sB").collapsed, true);
   });
 });
 

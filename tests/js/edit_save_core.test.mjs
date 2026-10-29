@@ -48,3 +48,42 @@ describe("edit save gate", () => {
     assert.deepEqual(adopted, ["v2"]);
   });
 });
+
+const settles = (p, ms = 80) => Promise.race([p.then(() => "settled", () => "settled"), tick(ms).then(() => "stuck")]);
+
+describe("edit save gate: waiting timeline save before a cut list write (0.9.83)", () => {
+  it("run() from inside a job never settles and blocks later writes (the 0.9.78 scene drag hang)", async () => {
+    const g = createEditSaveGate();
+    const job = g.run(async () => { await g.run(async () => "save"); return "reorder"; });
+    assert.equal(await settles(job), "stuck");
+    assert.equal(await settles(g.run(async () => "next drag")), "stuck");
+  });
+  it("runAfterPending writes the waiting save first, inside the same job, then the write", async () => {
+    const g = createEditSaveGate();
+    const log = [];
+    let pending = true;
+    const take = () => {
+      if (!pending) return null;
+      pending = false;
+      return async () => { log.push("save"); await tick(5); };
+    };
+    const job = g.runAfterPending(take, async () => { log.push("reorder"); return "ok"; });
+    assert.equal(await settles(job), "settled");
+    assert.equal(await job, "ok");
+    assert.deepEqual(log, ["save", "reorder"]);
+    assert.equal(await g.runAfterPending(take, async () => "again"), "again");
+    assert.deepEqual(log, ["save", "reorder"]);
+  });
+  it("the waiting save is read when the job starts, after earlier writes", async () => {
+    const g = createEditSaveGate();
+    const log = [];
+    let pending = false;
+    const take = () => (pending ? ((pending = false), async () => log.push("save")) : null);
+    const first = g.run(async () => { await tick(10); log.push("first"); });
+    const second = g.runAfterPending(take, async () => log.push("reorder"));
+    pending = true; // a trim made while the first write is still out
+    await Promise.all([first, second]);
+    assert.deepEqual(log, ["first", "save", "reorder"]);
+    assert.equal(await settles(g.run(async () => "next")), "settled");
+  });
+});
