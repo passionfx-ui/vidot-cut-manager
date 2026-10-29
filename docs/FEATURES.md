@@ -13,7 +13,7 @@ Verified against: README, `docs/CONTEXT.md`, `web/gonggan.js`, `routes.py`, `gg_
 | Feature | Current | Need | User-request basis | Difficulty |
 |--------|---------|------|-------------------|------------|
 | Native **New Project** (name, aspect/resolution, FPS, default cut length, caption language, workflow template) | Have | Must | new-project setup v2 approved | — |
-| **Project Settings** (same fields + template ref) | Have | Must | new-project setup v2 approved | — |
+| **Project Settings** (Output folder + default template, 0.9.82) | Have | Must | new-project setup v2 approved | — |
 | Native project **rename / delete** (delete → `trash/projects/`) | Have | Must | inferred | — |
 | Completion **Best c/N** summary bar (the Due-date field is hidden; saved data kept) | Have (native) | Nice | inferred | — |
 | Read-only **legacy imported** projects via `gonggan_settings.json` `data_root` | Have | Nice | inferred | — |
