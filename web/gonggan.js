@@ -40,6 +40,7 @@ import {
   movedToTrashToastMessage,
 } from "./gg_trash_core.js";
 import { createTimelineGuard, shouldAdoptMutationTimeline } from "./gg_timeline_guard_core.js";
+import { createFieldSlots } from "./gg_field_slots_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import { parseImportList, summarizeImport, buildLlmPrompt, REFERENCE_CATEGORIES } from "./gg_import_core.js";
 import {
@@ -190,7 +191,7 @@ const shotsUi = {
   cutWfKind: null,
   cutWfKindCutId: "",
 };
-const cutFieldUi = { timer: 0, pending: null, unsaved: {}, routeMissing: false, captionDegraded: false };
+const cutFieldUi = { timer: 0, pending: createFieldSlots(), unsaved: {}, routeMissing: false, captionDegraded: false };
 let cutFieldSaveFailToastAt = 0;
 let routeMissingToastShown = false;
 let captionDegradeToastShown = false;
@@ -282,8 +283,7 @@ async function loadProjects() {
 
 function mergeFieldOverrides() {
   const overrides = { ...cutFieldUi.unsaved };
-  if (cutFieldUi.pending) {
-    const { cutId, fields } = cutFieldUi.pending;
+  for (const { cutId, fields } of cutFieldUi.pending.all()) {
     overrides[cutId] = { ...(overrides[cutId] || {}), ...fields };
   }
   return overrides;
@@ -1448,10 +1448,12 @@ function setupWipPeriodicAutosave() {
   }, 1000);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
+      flushPendingCutFields();
       runGongganWipAutosave({ force: true }).catch(() => {});
     }
   });
   window.addEventListener("pagehide", () => {
+    flushPendingCutFields();
     runGongganWipAutosave({ force: true }).catch(() => {});
   });
 }
@@ -3552,7 +3554,7 @@ function refreshFieldTextUnsavedClasses() {
   const capDegraded = cutFieldUi.captionDegraded;
   document.querySelectorAll(".gg-shots .gg-caption-text").forEach((ta) => {
     const id = ta.closest(".gg-cut")?.dataset?.cutId;
-    const pending = id && (cutFieldUi.unsaved[id] || (cutFieldUi.pending?.cutId === id ? cutFieldUi.pending.fields : null));
+    const pending = id && (cutFieldUi.unsaved[id] || (cutFieldUi.pending.get(id)?.fields || null));
     const unsaved = capDegraded || (pending && Object.keys(pending).length);
     ta.classList.toggle("gg-field-unsaved", !!unsaved);
     if (capDegraded) {
@@ -3640,23 +3642,15 @@ function scheduleCutFieldSave(cutId, fields) {
   cutFieldUi.unsaved[cutId] = { ...(cutFieldUi.unsaved[cutId] || {}), ...fields };
   refreshFieldTextUnsavedClasses();
   clearTimeout(cutFieldUi.timer);
-  cutFieldUi.pending = { cutId, pid: state.pid, fields: { ...(cutFieldUi.pending?.cutId === cutId ? cutFieldUi.pending.fields : {}), ...fields } };
-  cutFieldUi.timer = setTimeout(() => {
-    const p = cutFieldUi.pending;
-    cutFieldUi.pending = null;
-    cutFieldUi.timer = 0;
-    if (p) saveCutFields(p.cutId, p.fields, p.pid);
-  }, 400);
+  cutFieldUi.pending.add(cutId, state.pid, fields);
+  cutFieldUi.timer = setTimeout(flushPendingCutFields, 400);
 }
 
 // Send any debounced field edit right now (project switch, page hide, ...).
 function flushPendingCutFields() {
-  const p = cutFieldUi.pending;
-  if (!p) return;
   clearTimeout(cutFieldUi.timer);
-  cutFieldUi.pending = null;
   cutFieldUi.timer = 0;
-  saveCutFields(p.cutId, p.fields, p.pid);
+  for (const p of cutFieldUi.pending.takeAll()) saveCutFields(p.cutId, p.fields, p.pid);
 }
 
 async function saveProjectDue(value) {
@@ -4614,6 +4608,7 @@ function mountShots(el) {
         autoSizeFieldTextarea(ta);
       });
       ta.addEventListener("blur", () => {
+        flushPendingCutFields();
         if (isCardFieldEditing(ta)) exitCardFieldEdit();
         else autoSizeFieldTextarea(ta);
       });
