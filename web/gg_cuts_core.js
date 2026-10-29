@@ -139,6 +139,19 @@ export function formatPickedVersionInfo(cut) {
   return { text, title: text };
 }
 
+/**
+ * How a version relates to the cut's Best: "manual" = user-set pick, "implicit" = no pick so the newest
+ * version is current, "" = neither. Best is never automatic.
+ * @param {{ pick?: string|null, media?: { id?: string }|null }|null|undefined} cut
+ * @param {string} versionId
+ * @returns {"manual"|"implicit"|""}
+ */
+export function versionRepState(cut, versionId) {
+  if (!cut || !versionId) return "";
+  if (cut.pick) return cut.pick === versionId ? "manual" : "";
+  return cut.media?.id === versionId ? "implicit" : "";
+}
+
 /** @param {{ planned_sec?: number|null, sec?: number }} cut */
 export function computeEffectiveSec(cut) {
   const planned = cut?.planned_sec;

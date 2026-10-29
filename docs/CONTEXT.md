@@ -84,7 +84,7 @@ UI:
 - `POST /gonggan/export`, `GET /export/status`, `POST /export/cancel`, `GET /export/file` → 결과 `ComfyUI\output\gonggan\`
 - `GET /gonggan/sdk/status`, `POST /gonggan/regen`(기본 드라이런, `{"dry_run": false, "confirm": true, "seed": ...}`일 때만 큐), `GET /regen/status`
 - `GET /gonggan/last-output`, `POST /gonggan/send-output`(ComfyUI 마지막 결과를 컷 버전으로 복사)
-- 새 버전은 `versions/<pid>/<cut_id>/`에 저장되고 `edits/edit_<pid>.json`에서 그 컷의 선택본이 됨. legacy import 데이터에는 절대 쓰지 않음.
+- 새 버전은 `versions/<pid>/<cut_id>/`에 저장됨. legacy import 데이터에는 절대 쓰지 않음. **0.9.63부터 Best(pick)는 수동만**: 새 버전이 자동으로 pick이 되지 않고, pick이 없으면 최신 버전이 현재본(타임라인·썸네일·워크플로). Best 점은 수동 pick일 때만 켜짐. 기존 자동 pick 데이터는 그대로(마이그레이션 없음). 레퍼런스는 예외로 최신 이미지가 계속 pick.
 
 SDK 경로:
 ```

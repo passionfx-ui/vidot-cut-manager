@@ -90,6 +90,19 @@ class CutSourceLogicTests(unittest.TestCase):
         self.assertIsNotNone(out["fallback"])
         self.assertIn("no video workflow", out["fallback"])
 
+    def test_no_pick_uses_newest_version(self):
+        cut = {"pick_version_id": None, "workflow_sha": "cutsha"}
+        versions = [
+            {"id": "vv", "asset": {"kind": "video"}, "workflow_sha": "vsha"},
+            {"id": "vi", "asset": {"kind": "image"}, "workflow_sha": "isha"},
+        ]
+        blobs = {"vsha": WF_VIDEO, "isha": WF_IMAGE, "cutsha": WF_CUT}
+        self.assertEqual(effective_workflow_kind(None, cut, versions), "video")
+        out = resolve_native_cut_source(cut, versions, blobs.get, None, is_ui_workflow=_is_ui)
+        self.assertEqual(out["workflow"], WF_VIDEO)
+        cut["pick_version_id"] = "gone"
+        self.assertEqual(effective_workflow_kind(None, cut, versions), "video")
+
     def test_template_last(self):
         cut = {"pick_version_id": None, "workflow_sha": None}
         versions = []

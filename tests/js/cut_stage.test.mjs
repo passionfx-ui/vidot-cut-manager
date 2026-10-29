@@ -106,6 +106,30 @@ describe("cutStage", () => {
     assert.equal(s.stage, "done");
   });
 
+  it("Best is manual only: media (newest) without pick does not light best", () => {
+    const s = cutStage(
+      cut("auto", {
+        versions_list: [{ id: "v2", kind: "image" }, { id: "v1", kind: "image" }],
+        media: { id: "v2", kind: "image" },
+      }),
+    );
+    assert.equal(s.image, true);
+    assert.equal(s.best, false);
+    assert.equal(s.stage, "image");
+  });
+
+  it("Best lights once a manual pick exists, even on an older version", () => {
+    const s = cutStage(
+      cut("manual", {
+        versions_list: [{ id: "v2", kind: "video" }, { id: "v1", kind: "image" }],
+        pick: "v1",
+        media: { id: "v1", kind: "image" },
+      }),
+    );
+    assert.equal(s.best, true);
+    assert.equal(s.stage, "done");
+  });
+
   it("ignores unknown version kind", () => {
     const s = cutStage(cut("u", { versions_list: [{ id: "z", kind: "audio" }] }));
     assert.equal(s.stage, "empty");
