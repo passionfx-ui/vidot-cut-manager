@@ -1,6 +1,6 @@
 /** Pure context-menu item lists for cut cards, timeline clips and scene headers (no DOM). */
 
-import { renderButtonState } from "./gg_batch_render_core.js";
+import { queueButtonState } from "./gg_batch_render_core.js";
 
 export const SINGLE_CUT_TIP = "Select a single cut";
 export const SDK_BUSY_TIP = "Comfy SDK is busy";
@@ -60,15 +60,15 @@ export function cutActionItems(ctx = {}) {
 /**
  * @param {{ native?: boolean, multi?: boolean, needsRedo?: boolean, sdkBusy?: boolean, sdkOk?: boolean,
  *   emptyCut?: boolean, readonlyTip?: string, canMoveUp?: boolean, canMoveDown?: boolean, inScene?: boolean, anyInScene?: boolean,
- *   trashLabel?: string, trashCount?: number, renderCount?: number, queuedCount?: number, failedCount?: number }} ctx
- *   renderCount: selected cuts (default 1); queuedCount / failedCount: selected cuts with a still-queued /
+ *   trashLabel?: string, trashCount?: number, queueCount?: number, queuedCount?: number, failedCount?: number }} ctx
+ *   queueCount: selected cuts (default 1); queuedCount / failedCount: selected cuts with a still-queued /
  *   failed prompt (Remove from queue / Re-queue are listed only then)
  */
 export function cutCardMenuItems(ctx = {}) {
   const nat = !!ctx.native;
   const a = cutActionItems(ctx);
-  const r = renderButtonState({ count: ctx.renderCount ?? 1, native: nat, busy: ctx.sdkBusy });
-  const rq = renderButtonState({ count: ctx.failedCount || 0, native: nat, busy: ctx.sdkBusy });
+  const q = queueButtonState({ count: ctx.queueCount ?? 1, native: nat, busy: ctx.sdkBusy });
+  const rq = queueButtonState({ count: ctx.failedCount || 0, native: nat, busy: ctx.sdkBusy });
   const queueItems = [
     ...(ctx.queuedCount > 0 ? [{ key: "removeQueue", label: "Remove from queue" }] : []),
     ...(ctx.failedCount > 0 ? [{ key: "requeue", label: "Re-queue", disabled: rq.disabled, title: rq.title }] : []),
@@ -89,7 +89,7 @@ export function cutCardMenuItems(ctx = {}) {
     a.rename,
     { key: "addCut", label: "Add Cut" },
     a.regen,
-    { key: "renderSel", label: "Render selected", disabled: r.disabled, title: r.title },
+    { key: "queueSel", label: "Queue selected", disabled: q.disabled, title: q.title },
     ...queueItems,
     a.send,
     a.del,

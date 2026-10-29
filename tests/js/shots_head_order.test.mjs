@@ -17,10 +17,16 @@ describe("Shots header layout", () => {
     assert.equal(js.split('<div class="gg-head">').length, 2);
   });
 
-  it("puts the SDK status row above the Project row", () => {
+  it("puts the SDK status above the Project row", () => {
     assert.ok(pos('class="gg-sdk-slot"') >= 0);
-    assert.ok(pos('class="gg-render-row"') > pos('class="gg-sdk-slot"'));
-    assert.ok(pos('class="gg-proj-row"') > pos('class="gg-render-row"'));
+    assert.ok(pos('class="gg-proj-row"') > pos('class="gg-sdk-slot"'));
+  });
+
+  it("has no Render / Queue row in the header (Queue lives in the status panel)", () => {
+    assert.equal(pos("gg-render-row"), -1);
+    assert.equal(pos("gg-render-btn"), -1);
+    assert.equal(pos("gg-queue-btn"), -1);
+    assert.equal(pos("gg-batch-prog"), -1);
   });
 
   it("puts Reload right after the Project settings gear, inside the Project row", () => {

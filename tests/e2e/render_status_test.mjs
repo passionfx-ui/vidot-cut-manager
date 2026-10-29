@@ -5,7 +5,7 @@
  * - ComfyUI api events (execution_start, progress, execution_success, status) are dispatched in the page
  * Checks: api.queuePrompt with a cut-stamped workflow -> "Queued" on the cut card + timeline clip ->
  * "Rendering 40%" (same DOM row, badge-only update) -> cleared on execution_success;
- * a prompt not tied to a cut -> header "Queued" / "Rendering…" (next to the top Render button, 0.9.87) -> cleared.
+ * a prompt not tied to a cut -> "Queued" / "Rendering…" next to the status panel Queue button (0.9.97) -> cleared.
  * 0.9.87: cut menu Remove from queue on a queued cut -> POST /queue {delete:[id]} intercepted (never
  * forwarded), badge cleared; execution_error / execution_interrupted -> "Failed" on card + clip, menu lists
  * Re-queue (not clicked here; batch_render_test clicks it).
@@ -152,7 +152,7 @@ async function fire(page, type, detail) {
 
 const cardBadge = (id) => `.gg-root.gg-shots .gg-cut[data-cut-id="${id}"] .gg-render-badge`;
 const clipBadge = (id) => `.gg-timeline .gg-track .gg-clip[data-cut-id="${id}"] .gg-render-badge`;
-const GLOBAL = ".gg-root.gg-shots .gg-head .gg-render-row .gg-render-global";
+const GLOBAL = ".gg-root.gg-shots .gg-cutpanel .gg-sp-actions .gg-render-global";
 
 async function queueForCut(page, cutId, projectId) {
   return page.evaluate(async (c, p) => {
@@ -266,7 +266,7 @@ async function main() {
     await waitBadge(page, clipBadge(cutA.id), "Queued", "clip queued");
     await waitBadge(page, cardBadge(cutB.id), "", "other cut idle");
     await waitBadge(page, GLOBAL, "", "global while mapped");
-    console.log("PASS  queued prompt of cut A: card + clip show Queued, header idle");
+    console.log("PASS  queued prompt of cut A: card + clip show Queued, status panel indicator idle");
 
     // 2. execution_start + progress 4/10 -> Rendering 40%, same <li> (badge-only update)
     await page.evaluate((id) => {
@@ -294,7 +294,7 @@ async function main() {
     await waitBadge(page, clipBadge(cutA.id), "", "clip cleared");
     console.log("PASS  execution_success: badges cleared");
 
-    // 4. prompt not tied to a cut: queued (via status -> /queue sync), then rendering -> header indicator
+    // 4. prompt not tied to a cut: queued (via status -> /queue sync), then rendering -> status panel indicator
     const foreign = `zz-rs-unmapped-${runStamp}`;
     fakeQueue.pending = [foreign];
     await fire(page, "status", { exec_info: { queue_remaining: 1 } });
@@ -308,7 +308,7 @@ async function main() {
     await fire(page, "execution_success", { prompt_id: foreign, timestamp: Date.now() });
     await fire(page, "status", { exec_info: { queue_remaining: 0 } });
     await waitBadge(page, GLOBAL, "", "global cleared");
-    console.log("PASS  unmapped prompt: header shows Queued, then Rendering…, then clears; cut badges idle");
+    console.log("PASS  unmapped prompt: status panel shows Queued, then Rendering…, then clears; cut badges idle");
 
     // 5. Remove from queue on a queued cut -> POST /queue {delete:[id]} (intercepted), badge cleared
     const queuedId = await queueForCut(page, cutA.id, pid);
