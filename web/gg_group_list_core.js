@@ -23,6 +23,28 @@ export function captionRowContentHtml({ thumb = "", text, placeholder, title, na
 }
 
 /**
+ * Shots list sections: scenes in order of their first cut, then one Ungrouped section with every cut
+ * that is in no scene (wherever those cuts sit in the cut order). Empty scenes are left out.
+ * @param {{ id: string }[]} cuts cut list order
+ * @param {{ id: string, cut_ids?: string[] }[]} groups
+ * @returns {{ type: "group"|"ungrouped", group: any, cuts: any[] }[]}
+ */
+export function shotsSections(cuts, groups) {
+  const byId = new Map((cuts || []).map((c, i) => [c.id, { c, i }]));
+  const inGrp = new Set();
+  const secs = (groups || []).map((g) => {
+    const ids = [...new Set(g.cut_ids || [])].filter((id) => byId.has(id) && !inGrp.has(id));
+    ids.forEach((id) => inGrp.add(id));
+    ids.sort((a, b) => byId.get(a).i - byId.get(b).i);
+    return { type: "group", group: g, cuts: ids.map((id) => byId.get(id).c) };
+  }).filter((s) => s.cuts.length);
+  secs.sort((a, b) => byId.get(a.cuts[0].id).i - byId.get(b.cuts[0].id).i);
+  const loose = (cuts || []).filter((c) => !inGrp.has(c.id));
+  if (loose.length) secs.push({ type: "ungrouped", group: null, cuts: loose });
+  return secs;
+}
+
+/**
  * Scene sections (from shotsSections) to list HTML. Group headers are written once per scene;
  * `cutHtml(cut)` supplies each row, the only part that differs between views.
  * @param {{ type: string, group: any, cuts: any[] }[]} sections
@@ -32,7 +54,7 @@ export function groupedListHtml(sections, { cutHtml, groupHue = () => 200, group
   return (sections || []).map((sec) => {
     const rows = sec.cuts.map((c) => cutHtml(c)).join("");
     if (sec.type === "ungrouped") {
-      return `<section class="gg-grp-sec gg-grp-loose"><header class="gg-grp-head">Ungrouped <span class="gg-grp-meta">${sec.cuts.length}</span></header><ol class="gg-cutlist">${rows}</ol></section>`;
+      return `<section class="gg-grp-sec gg-grp-loose"><header class="gg-grp-head" title="Cuts not in a scene"><span class="gg-grp-title">Ungrouped</span><span class="gg-grp-meta">${sec.cuts.length}</span></header><ol class="gg-cutlist">${rows}</ol></section>`;
     }
     const g = sec.group;
     const collapsed = !!g.collapsed;

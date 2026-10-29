@@ -101,10 +101,11 @@ describe("cutHeaderParts (cut card header <cutLabel> <CutName>, no scene name)",
   const t = { cuts, groups };
   it("<cutLabel> <CutName>, scene name left out", () => {
     assert.deepEqual(cutHeaderParts(cuts[3], t), { cutLabel: "1-4", name: "New cut" });
-    assert.deepEqual(cutHeaderParts(cuts[4], t), { cutLabel: "2-1", name: "Solo" });
+    // Ungrouped cuts are numbered after every scene (the Ungrouped section is listed last).
+    assert.deepEqual(cutHeaderParts(cuts[4], t), { cutLabel: "3-1", name: "Solo" });
   });
   it("empty cut name -> (untitled)", () => {
-    assert.deepEqual(cutHeaderParts(cuts[5], t), { cutLabel: "3-1", name: "(untitled)" });
+    assert.deepEqual(cutHeaderParts(cuts[5], t), { cutLabel: "2-1", name: "(untitled)" });
   });
   it("reference: its name is the label, no repeat", () => {
     assert.deepEqual(cutHeaderParts({ id: "r", kind: "reference", name: "Hero" }, t), { cutLabel: "Hero", name: "" });
