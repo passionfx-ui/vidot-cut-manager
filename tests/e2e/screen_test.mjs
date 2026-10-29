@@ -677,7 +677,7 @@ async function main() {
     if (m.height > 360) throw new Error(`menu too tall: ${m.height}px`);
   });
 
-  await runScenario("07", "Cut click loads workflow tab labeled Project/Scene cutLabel", async () => {
+  await runScenario("07", "Cut click loads workflow tab labeled cutLabel Scene / Project", async () => {
     if (!templateRef) {
       const err = new Error("No saved ComfyUI workflow for template — skipped");
       err.skipped = true;
@@ -692,15 +692,15 @@ async function main() {
       const active = ws?.activeWorkflow;
       const tabEls = [...document.querySelectorAll('[data-testid="workflow-tab"]')];
       const activeEl = tabEls.find((el) => /active|selected|p-tab-active/.test(el.className + " " + (el.getAttribute("aria-selected") || ""))) || tabEls[tabEls.length - 1];
-      // 0.9.18: file name is the stable cutId; the displayed tab label is `<Project>/<Scene> <cutLabel>`.
+      // 0.9.18: file name is the stable cutId; the displayed tab label is `<cutLabel> <Scene> / <Project>`.
       const base = activeEl?.querySelector(".workflow-label")?.textContent?.trim() || active?.filename || "";
       const numEl = document.querySelector(".gg-root.gg-shots .gg-cut .gg-num");
       return { tab: base, cutLabel: numEl?.textContent?.trim() || "" };
     });
     if (!info.tab) throw new Error("No active workflow tab after cut click");
     if (!info.cutLabel) throw new Error("No cut label on first cut card");
-    if (!info.tab.includes("/") || !info.tab.replace(/ \*$/, "").endsWith(info.cutLabel)) {
-      throw new Error(`tab "${info.tab}" does not end with cut label "${info.cutLabel}" (expected <Project>/<Scene> ${info.cutLabel})`);
+    if (!info.tab.startsWith(`${info.cutLabel} `) || !info.tab.includes(" / ")) {
+      throw new Error(`tab "${info.tab}" does not start with cut label "${info.cutLabel}" (expected ${info.cutLabel} <Scene> / <Project>)`);
     }  });
 
   await runScenario("08", "Template dropdown (Project Settings gear) matches saved workflows", async () => {

@@ -7,6 +7,8 @@ function collapseWs(s) {
 const MAX_LABEL_CHARS = 28;
 const MIN_PROJECT_CHARS = 6;
 const TAB_LABEL_SEP = "/";
+const TAB_LABEL_PROJECT_SEP = " / ";
+const TAB_LABEL_NO_SCENE = "Scene";
 const TAB_LABEL_ELL = "…";
 
 /**
@@ -55,32 +57,31 @@ export function formatShotTabTitle({ projectName, sceneName, cutLabel, cutName }
 }
 
 /**
- * `<Project>/<Scene> <cutLabel>` or `<Project>/<cutLabel>` for cuts not in a scene; ` *` when edited.
+ * `<cutLabel> <Scene> / <Project>`; `Scene` stands in when the cut has no scene name; ` *` when edited.
  * Over budget: shorten the project, then the scene; the cut label and marker stay whole.
  * @returns {string|null} null when project name empty (do not override label).
  */
 export function formatShotTabLabel({ projectName, sceneName, cutLabel, edited }) {
   const parts = resolveShotTabParts({ projectName, sceneName, cutLabel });
   if (!parts) return null;
-  const { project, scene } = parts;
-  const tail = edited ? `${parts.cut} *` : parts.cut;
-  const rest = scene ? `${scene} ${tail}` : tail;
-  const full = `${project}${TAB_LABEL_SEP}${rest}`;
+  const { project, cut } = parts;
+  const scene = parts.scene || TAB_LABEL_NO_SCENE;
+  const mark = edited ? " *" : "";
+  const head = `${cut} ${scene}`;
+  const full = `${head}${TAB_LABEL_PROJECT_SEP}${project}${mark}`;
   if (full.length <= MAX_LABEL_CHARS) return full;
 
   const minProjectSlot = MIN_PROJECT_CHARS + 1;
-  const projectOnlyMax = MAX_LABEL_CHARS - TAB_LABEL_SEP.length - rest.length;
+  const projectOnlyMax = MAX_LABEL_CHARS - head.length - TAB_LABEL_PROJECT_SEP.length - mark.length;
   if (projectOnlyMax >= minProjectSlot) {
-    return truncateWithEllipsis(project, projectOnlyMax) + TAB_LABEL_SEP + rest;
+    return head + TAB_LABEL_PROJECT_SEP + truncateWithEllipsis(project, projectOnlyMax) + mark;
   }
 
   const projectShort = truncateWithEllipsis(project, minProjectSlot);
-  const restMax = MAX_LABEL_CHARS - TAB_LABEL_SEP.length - projectShort.length;
-  if (scene) {
-    const sceneMax = restMax - 1 - tail.length;
-    if (sceneMax >= 1) return projectShort + TAB_LABEL_SEP + truncateWithEllipsis(scene, sceneMax) + " " + tail;
-  }
-  return projectShort + TAB_LABEL_SEP + truncateWithEllipsis(tail, restMax);
+  const headMax = MAX_LABEL_CHARS - TAB_LABEL_PROJECT_SEP.length - projectShort.length - mark.length;
+  const sceneMax = headMax - cut.length - 1;
+  const headShort = sceneMax >= 1 ? `${cut} ${truncateWithEllipsis(scene, sceneMax)}` : truncateWithEllipsis(head, headMax);
+  return headShort + TAB_LABEL_PROJECT_SEP + projectShort + mark;
 }
 
 function basenameOnly(filename) {
