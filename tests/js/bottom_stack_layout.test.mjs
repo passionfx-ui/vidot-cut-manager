@@ -39,6 +39,49 @@ describe("Shots bottom stack keeps fixed heights", () => {
   });
 });
 
+const rowStart = js.indexOf("function iconRowHtml()");
+const rowHtml = js.slice(rowStart, js.indexOf("\n}\n", rowStart));
+
+describe("Shots icon row replaces the selection bar", () => {
+  it("selection bar is hidden by a flag, its code kept", () => {
+    assert.match(js, /^const SHOW_SEL_BAR = false;$/m);
+    assert.match(js, /\$\{SHOW_SEL_BAR \? `<div class="gg-selbar">[\s\S]*gg-sel-group[\s\S]*gg-sel-ungroup[\s\S]*` : ""\}\s*\$\{iconRowHtml\(\)\}/);
+  });
+
+  it("icon row: New scene, New cut, Delete buttons with English tooltips, then the version", () => {
+    assert.ok(rowStart >= 0);
+    assert.match(rowHtml, /<div class="gg-iconrow">/);
+    const order = ["gg-ir-scene", "gg-ir-cut", "gg-ir-del", "gg-version"].map((c) => rowHtml.indexOf(c));
+    assert.ok(order.every((i, n) => i > 0 && (n === 0 || i > order[n - 1])), String(order));
+    assert.match(rowHtml, /"gg-ir-scene", "New scene", ICON_FOLDER/);
+    assert.match(rowHtml, /"gg-ir-cut", "New cut", ICON_NEW_PAGE/);
+    assert.match(rowHtml, /"gg-ir-del", "Delete", ICON_TRASH/);
+  });
+
+  it("buttons reuse the existing actions; Delete goes through the in-app confirm", () => {
+    assert.match(js, /\.gg-ir-scene"\)\?\.addEventListener\("click", \(\) => createSceneGroup\(cutSelIds\(\)\)\)/);
+    assert.match(js, /\.gg-ir-cut"\)\?\.addEventListener\("click", \(\) => addLocalCut\(\)\)/);
+    assert.match(js, /\.gg-ir-del"\)\?\.addEventListener\("click", \(\) => void confirmDeleteSelectedCuts\(\)\)/);
+    const s = js.indexOf("async function confirmDeleteSelectedCuts()");
+    const body = js.slice(s, js.indexOf("\n}\n", s));
+    assert.match(body, /askConfirm\(\{ message: deleteCutsConfirmMessage\(n\), danger: true \}\)/);
+    assert.ok(body.indexOf("askConfirm") < body.indexOf("deleteSelectedCuts()"));
+  });
+
+  it("icon row has a fixed px height, does not shrink and is never hidden", () => {
+    const row = ruleFor(".gg-shots .gg-iconrow");
+    assert.match(prop(row, "height") || "", /^\d+px$/);
+    assert.equal(prop(row, "flex"), "0 0 auto");
+    assert.equal(prop(row, "overflow"), "hidden");
+    assert.ok(!rules.some((r) => /\.gg-iconrow/.test(r.sel) && /display\s*:\s*none/.test(r.body)));
+  });
+
+  it("clicking the icon row does not clear the selection first", () => {
+    const s = js.indexOf("const onShotsEmptyClick");
+    assert.match(js.slice(s, s + 400), /closest\("\.gg-iconrow"\)/);
+  });
+});
+
 describe("Queue button in the status panel", () => {
   it("status panel shell has the Queue button, queue status and batch counter", () => {
     assert.ok(shellStart >= 0);

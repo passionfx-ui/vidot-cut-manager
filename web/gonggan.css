@@ -60,7 +60,13 @@
 .gg-shots .gg-selbar .gg-btn { font-size: 11px; padding: 1px 6px; white-space: nowrap; }
 .gg-shots .gg-selbar .gg-sel-group, .gg-shots .gg-selbar .gg-sel-ungroup { font-size: 13px; padding: 4px 14px; }
 .gg-shots .gg-selbar .gg-btn:disabled { opacity: 0.4; cursor: default; border-color: var(--gg-line); }
-.gg-shots .gg-selbar .gg-version { position: static; align-self: flex-end; flex-shrink: 0; margin-left: auto; }
+/* Lower-left icon row (New scene / New cut / Delete): fixed height, never hidden, so the list never shifts. */
+.gg-shots .gg-iconrow { flex: 0 0 auto; height: 30px; overflow: hidden; display: flex; align-items: center; gap: 2px; min-width: 0; padding: 0 6px; border-top: 1px solid var(--gg-line); background: #1f2228; }
+.gg-shots .gg-iconrow .gg-ir-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; border-color: transparent; background: transparent; color: var(--gg-dim); }
+.gg-shots .gg-iconrow .gg-ir-btn:hover:not(:disabled) { color: var(--gg-fg); border-color: var(--gg-line); }
+.gg-shots .gg-iconrow .gg-ir-del:hover:not(:disabled) { color: #ffb4b4; }
+.gg-shots .gg-iconrow .gg-ir-btn:disabled { opacity: 0.35; cursor: default; border-color: transparent; }
+.gg-shots .gg-iconrow .gg-version { position: static; flex-shrink: 0; margin-left: auto; }
 .gg-shots.gg-cutpanel-off .gg-cutpanel { display: none; }
 /* Status card for the selection with the Queue row (under the selection bar, above the Timeline bar). */
 .gg-shots.gg-cutpanel-status .gg-cutpanel { border-top: none; padding: 6px 10px 8px; height: 108px; max-height: none; overflow: hidden; display: flex; flex-direction: column; gap: 6px; }
@@ -475,6 +481,7 @@
 .gg-ctx-item:disabled { opacity: 0.45; cursor: default; }
 .gg-ctx-item.gg-ctx-danger { color: #ffb4b4; }
 .gg-ctx-item.gg-ctx-parent::after { content: ""; }
+.gg-ctx-sep { height: 1px; margin: 3px 0; background: var(--gg-line); }
 .gg-ctx-sub { z-index: 10051; }
 .gg-toast { padding: 10px 12px; border-radius: 6px; background: #2a2f38; border: 1px solid var(--gg-line); color: var(--gg-fg); font: 12px/1.35 system-ui, "Segoe UI", "Malgun Gothic", sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.45); }
 .gg-toast-sum { display: block; font-weight: 600; color: var(--gg-acc); margin-bottom: 2px; }
