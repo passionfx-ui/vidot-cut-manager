@@ -170,7 +170,7 @@ Shots and Timeline add lightweight production tracking on top of the existing sc
 - **3-second rule warning** when effective length is over 3 s (uses `planned_sec` when set, else media `sec`); End card cuts are exempt.
 - **Final cut list** view: ordered picks with **total length**, copyable **file naming** display `S01_003_v02` (computed label only — pack files are never renamed).
 - **Needs redo** flag per cut plus **filter** (**Show redo cuts only**) to show only flagged cuts.
-- **Project due date** and **completion %** in the Shots header (`due_date` on native projects; share projects when present in timeline payload).
+- **Completion %** in the Shots header. The **Due date** field is hidden since 0.9.49 (`due_date` is still stored on native projects and left untouched).
 - Routes: `POST /gonggan/cut/update` `{pid, cut_id, fields}` · `POST /gonggan/project/update` `{pid, fields}` (Python route changes need a ComfyUI restart).
 
 Pure helpers: `web/gg_cuts_core.js`. Headless UI checks: `tests/e2e/cut_mgmt_test.mjs`, `tests/e2e/reorder_real_test.mjs` (not run automatically).
