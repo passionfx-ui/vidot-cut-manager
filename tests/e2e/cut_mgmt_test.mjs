@@ -275,6 +275,11 @@ async function countCuts(page) {
   return page.$$eval(".gg-root.gg-shots .gg-cut", (els) => els.length);
 }
 
+async function setListMode(page, mode) {
+  await page.click(`.gg-root.gg-shots .gg-list-toggle [data-mode="${mode}"]`);
+  await sleep(300);
+}
+
 async function createProjectViaUi(page, name) {
   await page.evaluate(() => {
     document.querySelector(".gg-root.gg-shots .gg-head")?.dispatchEvent(
@@ -532,21 +537,26 @@ async function main() {
     if (!hidden) throw new Error("warning should hide for end card");
   });
 
-  await runScenario("06", "Caption persists after reload", async () => {
+  await runScenario("06", "Caption persists after reload (Caption mode)", async () => {
     const note = `note-${runStamp}`;
-    const cuts = await page.$$(".gg-root.gg-shots .gg-cut");
-    if (!cuts.length) throw new Error("need a cut");
-    const capBox = await cuts[0].$(".gg-caption-text");
-    if (!capBox) throw new Error("card caption textarea missing");
-    await capBox.click({ clickCount: 2 });
-    await sleep(200);
-    await page.keyboard.type(note, { delay: 8 });
-    await page.keyboard.press("Escape");
-    await sleep(700);
-    await page.click(".gg-root.gg-shots .gg-reload");
-    await sleep(1500);
-    const val = await page.$eval(".gg-root.gg-shots .gg-cut .gg-caption-text", (el) => el.value);
-    if (!val.includes(note)) throw new Error(`caption lost: ${val}`);
+    await setListMode(page, "caption");
+    try {
+      const cuts = await page.$$(".gg-root.gg-shots .gg-cut");
+      if (!cuts.length) throw new Error("need a cut");
+      const capBox = await cuts[0].$(".gg-caption-text");
+      if (!capBox) throw new Error("caption mode textarea missing");
+      await capBox.click({ clickCount: 2 });
+      await sleep(200);
+      await page.keyboard.type(note, { delay: 8 });
+      await page.keyboard.press("Escape");
+      await sleep(700);
+      await page.click(".gg-root.gg-shots .gg-reload");
+      await sleep(1500);
+      const val = await page.$eval(".gg-root.gg-shots .gg-cut .gg-caption-text", (el) => el.value);
+      if (!val.includes(note)) throw new Error(`caption lost: ${val}`);
+    } finally {
+      await setListMode(page, "info");
+    }
   });
 
   await runScenario("07", "Needs redo flag + filter (card menu)", async () => {
@@ -574,47 +584,74 @@ async function main() {
     await page.click(".gg-view-cuts");
   });
 
-  await runScenario("10", "Card caption single-click select, dbl-click edit", async () => {
+  await runScenario("10", "Info card has no caption; Caption mode single-click select, dbl-click edit", async () => {
     timelineMocks.delete(mainPid);
     await page.click(".gg-root.gg-shots .gg-reload");
     await sleep(1500);
-    const cuts = await page.$$(".gg-root.gg-shots .gg-cut");
-    if (cuts.length < 2) throw new Error("need 2+ cuts");
-    const secondName = await cuts[1].$eval(
-      ".gg-cut-title",
-      (el) => el.textContent?.trim() || ""
-    );
-    const capBox = await cuts[1].$(".gg-caption-text");
-    if (!capBox) throw new Error("card caption textarea missing");
-    const nb = await capBox.boundingBox();
-    if (!nb) throw new Error("caption box missing");
-    await page.mouse.click(nb.x + nb.width / 2, nb.y + nb.height / 2);
-    await sleep(400);
-    const selName = await page.$eval(".gg-root.gg-shots .gg-cut.gg-on .gg-cut-title", (el) => el.textContent?.trim() || "").catch(() => "");
-    if (selName !== secondName) {
-      throw new Error(`single click on caption should select cut: selected=${selName} expected=${secondName}`);
+    await setListMode(page, "info");
+    if ((await countCuts(page)) < 2) throw new Error("need 2+ cuts");
+    if (await page.$(".gg-root.gg-shots .gg-cut .gg-caption-text")) {
+      throw new Error("Info card must not show a caption editor");
     }
-    const focusedAfterClick = await page.evaluate(
-      () => document.activeElement?.classList?.contains("gg-caption-text") ?? false
-    );
-    if (focusedAfterClick) throw new Error("single click should not focus card caption");
-    await capBox.click({ clickCount: 2 });
-    await sleep(200);
-    const focusedEdit = await page.evaluate(
-      () => document.activeElement?.classList?.contains("gg-caption-text") ?? false
-    );
-    if (!focusedEdit) throw new Error("double-click should enter edit mode");
-    const tag = `abc-${runStamp}`;
-    await page.keyboard.type(tag, { delay: 10 });
-    await page.keyboard.press("Escape");
-    await sleep(700);
-    const cardVal = await page.evaluate((el) => el.value, await cuts[1].$(".gg-caption-text"));
-    if (!cardVal.includes(tag)) throw new Error(`escape should keep text: ${cardVal}`);
-    await page.click(".gg-root.gg-shots .gg-reload");
-    await sleep(1500);
-    const cutsAfter = await page.$$(".gg-root.gg-shots .gg-cut");
-    const reloadedVal = await page.evaluate((el) => el?.value || "", await cutsAfter[1].$(".gg-caption-text"));
-    if (!reloadedVal.includes(tag)) throw new Error(`caption not persisted after reload: ${reloadedVal}`);
+    const headBad = await page.evaluate(() => {
+      const scenes = [...document.querySelectorAll(".gg-root.gg-shots .gg-grp-sec[data-group-id] .gg-grp-title")]
+        .map((e) => (e.textContent || "").replace(/^Scene ·\s*/, "").trim())
+        .filter(Boolean);
+      for (const li of document.querySelectorAll(".gg-root.gg-shots .gg-cut")) {
+        const head = (li.querySelector(".gg-cut-head")?.textContent || "").replace(/\s+/g, " ").trim();
+        const num = li.querySelector(".gg-cut-head .gg-num")?.textContent?.trim() || "";
+        const name = li.querySelector(".gg-cut-head .gg-cut-title")?.textContent?.trim() || "";
+        if (!num || !name || head !== `${num} ${name}`) return `header "${head}" is not <label> <name>`;
+        if (li.querySelector(".gg-cut-scene, .gg-cut-header > .gg-cut-title")) return `extra scene/name span in ${head}`;
+        const text = `${li.querySelector(".gg-cut-header")?.textContent || ""} ${li.querySelector(".gg-cut-status")?.textContent || ""}`;
+        const hit = scenes.find((s) => text.includes(s));
+        if (hit) return `cut row ${head} repeats scene name ${hit}`;
+      }
+      return "";
+    });
+    if (headBad) throw new Error(headBad);
+    await setListMode(page, "caption");
+    try {
+      const cuts = await page.$$(".gg-root.gg-shots .gg-cut");
+      if (cuts.length < 2) throw new Error("need 2+ cuts");
+      const secondName = await cuts[1].$eval(
+        ".gg-cut-title",
+        (el) => el.textContent?.trim() || ""
+      );
+      const capBox = await cuts[1].$(".gg-caption-text");
+      if (!capBox) throw new Error("card caption textarea missing");
+      const nb = await capBox.boundingBox();
+      if (!nb) throw new Error("caption box missing");
+      await page.mouse.click(nb.x + nb.width / 2, nb.y + nb.height / 2);
+      await sleep(400);
+      const selName = await page.$eval(".gg-root.gg-shots .gg-cut.gg-on .gg-cut-title", (el) => el.textContent?.trim() || "").catch(() => "");
+      if (selName !== secondName) {
+        throw new Error(`single click on caption should select cut: selected=${selName} expected=${secondName}`);
+      }
+      const focusedAfterClick = await page.evaluate(
+        () => document.activeElement?.classList?.contains("gg-caption-text") ?? false
+      );
+      if (focusedAfterClick) throw new Error("single click should not focus card caption");
+      await capBox.click({ clickCount: 2 });
+      await sleep(200);
+      const focusedEdit = await page.evaluate(
+        () => document.activeElement?.classList?.contains("gg-caption-text") ?? false
+      );
+      if (!focusedEdit) throw new Error("double-click should enter edit mode");
+      const tag = `abc-${runStamp}`;
+      await page.keyboard.type(tag, { delay: 10 });
+      await page.keyboard.press("Escape");
+      await sleep(700);
+      const cardVal = await page.evaluate((el) => el.value, await cuts[1].$(".gg-caption-text"));
+      if (!cardVal.includes(tag)) throw new Error(`escape should keep text: ${cardVal}`);
+      await page.click(".gg-root.gg-shots .gg-reload");
+      await sleep(1500);
+      const cutsAfter = await page.$$(".gg-root.gg-shots .gg-cut");
+      const reloadedVal = await page.evaluate((el) => el?.value || "", await cutsAfter[1].$(".gg-caption-text"));
+      if (!reloadedVal.includes(tag)) throw new Error(`caption not persisted after reload: ${reloadedVal}`);
+    } finally {
+      await setListMode(page, "info");
+    }
   });
 
   await runScenario("09", "Completion percent; Due field is hidden", async () => {

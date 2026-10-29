@@ -135,7 +135,7 @@
   line-height: 16px;
 }
 .gg-shots .gg-cut-head {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -144,15 +144,6 @@
   font-weight: 600;
 }
 .gg-shots .gg-cut-head .gg-num { font-size: inherit; }
-.gg-shots .gg-cut-title {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10px;
-  color: var(--gg-dim);
-}
 .gg-shots .gg-cut-header .gg-drag-handle,
 .gg-shots .gg-cut-header .gg-stage-row,
 .gg-shots .gg-cut-header-badges { align-self: center; }
@@ -291,11 +282,6 @@
 .gg-shots .gg-caption-text.gg-field-editing { cursor: text; }
 .gg-shots .gg-field-unsaved { border-style: dashed; }
 .gg-shots .gg-caption-text:disabled { opacity: 0.55; }
-.gg-shots:not(.gg-list-caption) .gg-caption-text:not(.gg-field-editing) {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .gg-shots.gg-list-caption .gg-caption-text {
   min-height: 4.6em;
   max-height: clamp(6em, 45vh, 70em);

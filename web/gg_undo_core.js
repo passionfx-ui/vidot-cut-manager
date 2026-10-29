@@ -25,17 +25,37 @@ export function undoKeyAction(e) {
 }
 
 /**
- * Which history a key goes to. The pointer wins over focus: the Timeline root keeps focus after a click
- * while clicks in Shots do not move it.
- * @param {{ hoverShots?: boolean, focusShots?: boolean, hoverTimeline?: boolean, focusTimeline?: boolean }} ctx
+ * Which history a key goes to. The pointer wins, then the last panel clicked (a context menu leaves
+ * neither hover nor focus in the panel once it closes), then focus: the Timeline root keeps focus after a
+ * click while clicks in Shots do not move it. `last: "other"` (canvas or any other ComfyUI area clicked
+ * last) leaves the key to ComfyUI.
+ * @param {{ hoverShots?: boolean, focusShots?: boolean, hoverTimeline?: boolean, focusTimeline?: boolean,
+ *   last?: "shots" | "timeline" | "other" | "" }} ctx
  * @returns {"shots" | "timeline" | null}
  */
 export function undoScope(ctx) {
   if (ctx?.hoverTimeline) return "timeline";
   if (ctx?.hoverShots) return "shots";
+  if (ctx?.last === "shots" || ctx?.last === "timeline") return ctx.last;
+  if (ctx?.last === "other") return null;
   if (ctx?.focusTimeline) return "timeline";
   if (ctx?.focusShots) return "shots";
   return null;
+}
+
+/**
+ * Last interacted area after a pointerdown / focusin. Our own menus, dialogs and toasts keep the area that
+ * opened them; focus moving outside the panels (e.g. ComfyUI focusing the canvas on a workflow load) does not
+ * count, only a pointer does.
+ * @param {string} prev
+ * @param {{ shots?: boolean, timeline?: boolean, overlay?: boolean, focus?: boolean }} hit
+ * @returns {"shots" | "timeline" | "other" | ""}
+ */
+export function nextUndoArea(prev, hit) {
+  if (hit?.overlay) return prev || "";
+  if (hit?.timeline) return "timeline";
+  if (hit?.shots) return "shots";
+  return hit?.focus ? prev || "" : "other";
 }
 
 export function sameSnapshot(a, b) {
@@ -70,27 +90,36 @@ export function createUndoHistory({ limit = UNDO_LIMIT } = {}) {
       cap(past);
       future = [];
     },
-    /** @returns snapshot to restore, or null. `current` (state now) goes to the redo stack. */
+    /**
+     * @returns snapshot to restore, or null. `current` (state now, or a function of the popped snapshot)
+     * goes to the redo stack.
+     */
     undo(k, current) {
       sync(k);
       if (!past.length) return null;
       const snap = past.pop();
-      if (current) {
-        future.push(current);
+      const back = typeof current === "function" ? current(snap) : current;
+      if (back) {
+        future.push(back);
         cap(future);
       }
       return snap;
     },
-    /** @returns snapshot to restore, or null. `current` goes back to the undo stack. */
+    /** @returns snapshot to restore, or null. `current` (or a function of it) goes back to the undo stack. */
     redo(k, current) {
       sync(k);
       if (!future.length) return null;
       const snap = future.pop();
-      if (current) {
-        past.push(current);
+      const back = typeof current === "function" ? current(snap) : current;
+      if (back) {
+        past.push(back);
         cap(past);
       }
       return snap;
+    },
+    /** Next entry Ctrl+Z would take, without taking it. */
+    peekUndo(k) {
+      return String(k || "") === key && past.length ? past[past.length - 1] : null;
     },
     clear() {
       past = [];
@@ -111,6 +140,7 @@ export function createUndoHistory({ limit = UNDO_LIMIT } = {}) {
 /**
  * Shots snapshot ({ order, groups }) made to fit the cuts that exist now: deleted cuts are dropped,
  * cuts the snapshot does not know go to the end and keep their current scene when that scene is in it.
+ * A scene's collapsed state is not an edit: scenes that still exist keep their current one.
  * @param {{ order: string[], groups: { id: string, cut_ids?: string[] }[] }} snap
  * @param {{ order: string[], groups?: { id: string, cut_ids?: string[] }[] }} current
  */
@@ -125,9 +155,43 @@ export function fitOrderGroupsSnapshot(snap, current) {
   for (const g of current?.groups || []) {
     const into = byId.get(g.id);
     if (!into) continue;
+    if ("collapsed" in g) into.collapsed = g.collapsed;
     for (const id of g.cut_ids || []) if (extra.includes(id)) into.cut_ids.push(id);
   }
   return { order: [...order, ...extra], groups };
+}
+
+/*
+ * Shots history entries:
+ *   { order, groups }                                   cut list layout before an edit (no `kind`)
+ *   { kind: "cuts", op: "delete" | "add", ids, before, after }   soft delete / add or restore of cuts;
+ *     `before` / `after` = layout before / after, so a restore puts the cuts back where they were
+ *   { kind: "rename", cut_id, from, to }                cut rename
+ */
+
+/** What goes to the other stack when `entry` is taken: the layout now for a layout entry, else the entry itself. */
+export function shotsCounterpart(entry, currentLayout) {
+  return entry?.kind ? entry : currentLayout;
+}
+
+/**
+ * Steps that undo / redo one Shots entry, in order.
+ * @returns {({ type: "layout", snap: object } | { type: "restore" | "delete", ids: string[] } |
+ *   { type: "rename", cut_id: string, name: string })[]}
+ */
+export function shotsUndoSteps(entry, action) {
+  if (!entry) return [];
+  const redo = action === "redo";
+  if (entry.kind === "rename") return [{ type: "rename", cut_id: entry.cut_id, name: redo ? entry.to : entry.from }];
+  if (entry.kind === "cuts") {
+    const ids = [...(entry.ids || [])];
+    if (!ids.length) return [];
+    const bringBack = entry.op === "delete" ? !redo : redo;
+    if (!bringBack) return [{ type: "delete", ids }];
+    const layout = entry.op === "delete" ? entry.before : entry.after;
+    return layout ? [{ type: "restore", ids }, { type: "layout", snap: layout }] : [{ type: "restore", ids }];
+  }
+  return [{ type: "layout", snap: entry }];
 }
 
 function trackIds(tl) {

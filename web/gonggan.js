@@ -226,9 +226,12 @@ import {
 import {
   undoKeyAction,
   undoScope,
+  nextUndoArea,
   createUndoHistory,
   sameSnapshot,
   fitOrderGroupsSnapshot,
+  shotsCounterpart,
+  shotsUndoSteps,
   snapshotTimelineEdit,
   applyTimelineSnapshot,
 } from "./gg_undo_core.js";
@@ -285,9 +288,12 @@ const PROGRESS_API_EVENTS = [
 let cutSelAnchor = "";
 const ctxUi = { el: null, sub: null, onDoc: null, onKey: null };
 const reorderUndoBurst = createUndoBurst({ windowMs: 1500 });
-// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y: Shots = cut list order + scenes, Timeline = clip order + trims.
+// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y: Shots = cut list order + scenes, cut add/delete, cut rename;
+// Timeline = clip order + trims.
 const shotsHistory = createUndoHistory();
 const timelineHistory = createUndoHistory();
+let shotsStepChain = Promise.resolve(true);
+let undoLastArea = "";  // "shots" | "timeline" | "other" (canvas etc.) | "" — see nextUndoArea
 const editGate = createEditSaveGate();  // serializes /gonggan/edit, /groups, /edit/reset and guards stale replies
 
 (function loadCss() {
@@ -456,6 +462,15 @@ async function restoreCutsByIds(ids, { selectFirst = false } = {}) {
   return d;
 }
 
+/** Restore + a Shots history entry (Ctrl+Z deletes them again, Ctrl+Y restores them where they were). */
+async function restoreCutsRecorded(ids, opts) {
+  const pid = state.pid;
+  const before = snapshotOrderGroups(state.timeline);
+  const d = await restoreCutsByIds(ids, opts);
+  if (d.timeline) recordShotsEntry(pid, { kind: "cuts", op: "add", ids: [...ids], before, after: snapshotOrderGroups(state.timeline) });
+  return d;
+}
+
 async function openTrashModal() {
   if (!state.pid || !isNativeProject()) return;
   let items = [];
@@ -505,7 +520,7 @@ async function openTrashModal() {
         const cutId = row?.dataset?.cutId;
         if (!cutId) return;
         try {
-          await restoreCutsByIds([cutId]);
+          await restoreCutsRecorded([cutId]);
           const d = await getJson(`/gonggan/trash?pid=${encodeURIComponent(state.pid)}`);
           items = normalizeTrashItems(d);
           trashCount = items.length;
@@ -528,7 +543,7 @@ async function openTrashModal() {
     const ids = items.map((it) => it.id);
     if (!ids.length) return;
     try {
-      await restoreCutsByIds(ids);
+      await restoreCutsRecorded(ids);
       items = [];
       trashCount = 0;
       bus.dispatchEvent(new Event("trash"));
@@ -2563,6 +2578,7 @@ async function addLocalCut() {
   const body = { pid: state.pid };
   if (group) body.group = group;
   if (after) body.after = after;
+  const before = snapshotOrderGroups(state.timeline);
   try {
     const d = await postJson("/gonggan/cut/add", body);
     if (d.timeline) {
@@ -2571,6 +2587,7 @@ async function addLocalCut() {
     } else {
       await loadTimeline();
     }
+    recordCutAdded(body.pid, d.cut?.id, before);
     if (d.cut && d.cut.id) {
       wfLastLoadedCutId = "";
       wfLastLoadedProjectId = "";
@@ -2794,31 +2811,45 @@ function cutsForDelete() {
   return ids.length ? ids : (state.cutId ? [state.cutId] : []);
 }
 
+/** Soft delete (to Trash) without a toast or history entry. */
+async function deleteCutsByIds(ids) {
+  const reqPid = state.pid;
+  const d = await postJson("/gonggan/cut/delete", { pid: reqPid, cuts: ids });
+  if (d.timeline) adoptMutationTimeline(d.timeline, reqPid);
+  else await loadTimeline();
+  state.cutSel.clear();
+  cutSelAnchor = "";
+  if (ids.includes(state.cutId)) {
+    state.cutId = state.timeline?.cuts?.[0]?.id || "";
+    wfLastLoadedCutId = "";
+    wfLastLoadedProjectId = "";
+  }
+  state.error = "";
+  bus.dispatchEvent(new Event("timeline"));
+  bus.dispatchEvent(new Event("select"));
+  refreshTrashCount();
+  return d;
+}
+
 async function deleteSelectedCuts() {
   const ids = cutsForDelete();
   if (!ids.length || !state.pid) return;
   const deletedIds = [...ids];
   const n = deletedIds.length;
+  const reqPid = state.pid;
+  const entry = { kind: "cuts", op: "delete", ids: deletedIds, before: snapshotOrderGroups(state.timeline) };
   try {
-    const reqPid = state.pid;
-    const d = await postJson("/gonggan/cut/delete", { pid: reqPid, cuts: deletedIds });
-    if (d.timeline) adoptMutationTimeline(d.timeline, reqPid);
-    state.cutSel.clear();
-    cutSelAnchor = "";
-    if (deletedIds.includes(state.cutId)) {
-      state.cutId = state.timeline?.cuts?.[0]?.id || "";
-      wfLastLoadedCutId = "";
-      wfLastLoadedProjectId = "";
-    }
-    state.error = "";
-    bus.dispatchEvent(new Event("timeline"));
-    bus.dispatchEvent(new Event("select"));
-    refreshTrashCount();
+    await deleteCutsByIds(deletedIds);
+    recordShotsEntry(reqPid, entry);
     ggToast(movedToTrashToastMessage(n), "", "ok", {
       actionLabel: "Undo",
       onAction: async () => {
         try {
-          await restoreCutsByIds(deletedIds, { selectFirst: true });
+          if (shotsHistory.peekUndo(reqPid) === entry) {
+            if (await stepShotsHistory("undo")) ggToast(`Restored ${n} cut(s)`, "", "ok");
+            return;
+          }
+          await restoreCutsRecorded(deletedIds, { selectFirst: true });
           ggToast(`Restored ${n} cut(s)`, "", "ok");
         } catch (e) {
           ggToast("Restore", e.message, "warn");
@@ -2837,12 +2868,14 @@ async function addCutAfter(cutId) {
   const body = { pid: state.pid };
   if (after) body.after = after;
   if (group) body.group = group;
+  const before = snapshotOrderGroups(state.timeline);
   try {
     const d = await postJson("/gonggan/cut/add", body);
     if (d.timeline) {
       adoptMutationTimeline(d.timeline, body.pid);
       bus.dispatchEvent(new Event("timeline"));
     } else await loadTimeline();
+    recordCutAdded(body.pid, d.cut?.id, before);
     if (d.cut?.id) {
       wfLastLoadedCutId = "";
       wfLastLoadedProjectId = "";
@@ -2929,22 +2962,67 @@ function recordShotsUndo() {
   shotsHistory.record(state.pid, snapshotOrderGroups(state.timeline));
 }
 
-/** Ctrl+Z / Ctrl+Shift+Z in Shots: put a cut list snapshot back through the reorder save path. */
-async function stepShotsHistory(action) {
+/** A cut add / delete / rename entry, only while its project is still the open one. */
+function recordShotsEntry(pid, entry) {
+  if (!pid || pid !== state.pid || !state.timeline || !isNativeProject()) return;
+  shotsHistory.record(pid, entry);
+}
+
+function recordCutAdded(pid, cutId, before) {
+  if (!cutId) return;
+  recordShotsEntry(pid, { kind: "cuts", op: "add", ids: [cutId], before, after: snapshotOrderGroups(state.timeline) });
+}
+
+/** Persist one undo/redo step through the same routes as the edit itself. */
+async function runShotsStep(step, pid) {
+  if (state.pid !== pid || !state.timeline) return false;
+  if (step.type === "layout") {
+    const current = snapshotOrderGroups(state.timeline);
+    const fit = fitOrderGroupsSnapshot(step.snap, current);
+    if (sameSnapshot(fit, current)) return true;
+    return enqueueReorderPersist(() => persistShotsReorder(fit.order, fit.groups));
+  }
+  try {
+    if (step.type === "restore") await restoreCutsByIds(step.ids, { selectFirst: true });
+    else if (step.type === "delete") await deleteCutsByIds(step.ids);
+    else if (step.type === "rename") {
+      await postJson("/gonggan/cut/rename", { pid, cut_id: step.cut_id, name: step.name });
+      await loadTimeline();
+    }
+    return true;
+  } catch (e) {
+    ggToast("Undo", e.message, "warn");
+    await loadTimeline();
+    return false;
+  }
+}
+
+async function stepShotsHistoryNow(action) {
   const tl = state.timeline;
-  if (!tl || !isNativeProject()) return;
+  if (!tl || !isNativeProject()) return false;
   const pid = state.pid;
   const current = snapshotOrderGroups(tl);
-  const snap = action === "redo" ? shotsHistory.redo(pid, current) : shotsHistory.undo(pid, current);
-  if (!snap) {
+  const counterpart = (entry) => shotsCounterpart(entry, current);
+  const entry = action === "redo" ? shotsHistory.redo(pid, counterpart) : shotsHistory.undo(pid, counterpart);
+  if (!entry) {
     ggToast(action === "redo" ? "Nothing to redo" : "Nothing to undo", "", "info", { ttlMs: 1500 });
-    return;
+    return false;
   }
   reorderUndoBurst.reset();
-  const fit = fitOrderGroupsSnapshot(snap, current);
-  if (sameSnapshot(fit, current)) return;
-  const ok = await enqueueReorderPersist(() => persistShotsReorder(fit.order, fit.groups));
-  if (!ok) shotsHistory.clear();
+  for (const step of shotsUndoSteps(entry, action)) {
+    if (!(await runShotsStep(step, pid))) {
+      shotsHistory.clear();
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Ctrl+Z / Ctrl+Shift+Z in Shots, one step at a time (each step reads the list as the previous one left it). */
+function stepShotsHistory(action) {
+  const run = shotsStepChain.then(() => stepShotsHistoryNow(action));
+  shotsStepChain = run.catch(() => false);
+  return run;
 }
 
 async function commitShotsReorder(order, groups, opts = {}) {
@@ -3055,8 +3133,13 @@ function openClipContextMenu(e, cutId) {
     attachMenuActions(timelineClipMenuItems(cutMenuCtx(cutId, false)), {
       ...cutMenuActions(cutId),
       open: () => selectCut(cutId),
-      applyOrder: () => applyTimelineOrderToCuts(),
+      // These two are Shots history edits: the next Ctrl+Z (pointer not back over the Timeline) undoes them.
+      applyOrder: () => {
+        undoLastArea = "shots";
+        applyTimelineOrderToCuts();
+      },
       del: () => {
+        undoLastArea = "shots";
         selectOnlyCut(cutId);
         deleteSelectedCuts();
       },
@@ -3204,9 +3287,13 @@ async function renameCut(cutId) {
   if (!c || !state.pid) return;
   const name = await askText({ title: "Cut name", label: "Name", value: c.name || "", okLabel: "Rename", maxLength: 80 });
   if (name === null || name === c.name) return;
+  const pid = state.pid;
+  const from = c.name || "";
   try {
-    await postJson("/gonggan/cut/rename", { pid: state.pid, cut_id: cutId, name });
+    await postJson("/gonggan/cut/rename", { pid, cut_id: cutId, name });
     await loadTimeline();
+    const to = cutById(cutId)?.name ?? name;
+    if (from && to !== from) recordShotsEntry(pid, { kind: "rename", cut_id: cutId, from, to });
   } catch (err) {
     const hint = err.status === 404 || err.status === 405 ? "Restart ComfyUI to enable renaming." : err.message;
     ggToast("Cut", hint, "warn");
@@ -3223,10 +3310,11 @@ async function renameSceneGroup(groupId) {
     okLabel: "Rename",
     maxLength: SCENE_NAME_MAX_LEN,
   });
-  if (title === null) return;
+  if (title === null || title === g.name) return;
   const groups = groupsClone();
   const hit = groups.find((x) => x.id === groupId);
   if (hit) hit.name = title;
+  recordShotsUndo();
   await persistGroups(groups);
 }
 
@@ -3252,6 +3340,7 @@ async function assignCutsToGroup(groupId, cutIds) {
   g.cut_ids = orderCutIds([...(g.cut_ids || []), ...ids]);
   state.cutSel.clear();
   cutSelAnchor = "";
+  recordShotsUndo();
   await persistGroups(groups);
 }
 
@@ -3277,6 +3366,7 @@ async function splitSceneHere(cutId) {
   }
   let groups = stripCutsFromGroups(groupsClone(), moveIds);
   groups.push({ id: "s" + Date.now(), name: title, cut_ids: moveIds, collapsed: false });
+  recordShotsUndo();
   await persistGroups(groups);
 }
 
@@ -4309,8 +4399,6 @@ function refreshCutRowBadges(cutId) {
   document.querySelectorAll(`.gg-cut[data-cut-id="${CSS.escape(cutId)}"]`).forEach((li) => {
     const num = li.querySelector(".gg-num");
     if (num) num.textContent = head.cutLabel;
-    const scene = li.querySelector(".gg-cut-scene");
-    if (scene) scene.textContent = head.scene;
     const len = li.querySelector(".gg-cut-len");
     if (len) {
       const liInfo = formatCutHeaderLengths(c);
@@ -4361,14 +4449,16 @@ function cutRowHtml(c, labels) {
   const capTip = nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP;
   const roAttr = nat ? " readonly" : " disabled";
   const capPh = captionFieldPlaceholder(projectCaptionLang());
-  const bodyArea = `<textarea class="gg-caption-text" rows="${listCaption ? 3 : 1}" placeholder="${esc(capPh)}"${roAttr} title="${esc(capTip)}">${esc(effectiveCaption(c))}</textarea>`;
+  const bodyArea = listCaption
+    ? `<textarea class="gg-caption-text" rows="3" placeholder="${esc(capPh)}"${roAttr} title="${esc(capTip)}">${esc(effectiveCaption(c))}</textarea>`
+    : "";
   const warn = lengthWarning(c);
   const lenInfo = formatCutHeaderLengths(c);
   const verInfo = formatCutVersionStatus(c);
   const head = cutHeaderParts(c, state.timeline, labels);
   const idle = idleStateView(!!c.media?.id);
-  const grpTip = c.group_name ? `${c.group_name} · ` : "";
-  const nameTitle = `${grpTip}${c.story || c.prompt || c.name || ""}`.trim();
+  const nameTitle = `${c.story || c.prompt || c.name || ""}`.trim();
+  const headName = head.name && cutShowsEditedMarker(c) ? `${head.name} *` : head.name;
   const headerBadges = [
     warn ? `<span class="gg-warn3" title="${esc(warn.message)}">&gt; 3s</span>` : "",
     c.end_card ? `<span class="gg-endcard-badge">End card</span>` : "",
@@ -4384,8 +4474,7 @@ function cutRowHtml(c, labels) {
       <div class="gg-cut-text">
         <div class="gg-cut-header" title="${esc(nameTitle)}">
           ${isNativeProject() ? '<span class="gg-drag-handle" title="Drag to reorder (or Alt+Up/Down)" aria-hidden="true">\u22EE\u22EE</span>' : ""}
-          <span class="gg-cut-head"><span class="gg-num">${esc(head.cutLabel)}</span> <span class="gg-cut-scene">${esc(head.scene)}</span></span>
-          <span class="gg-cut-title">${esc(displayCutName(c))}</span>
+          <span class="gg-cut-head"><span class="gg-num">${esc(head.cutLabel)}</span> <span class="gg-cut-title">${esc(headName)}</span></span>
           ${headerBadges ? `<span class="gg-cut-header-badges">${headerBadges}</span>` : ""}
           <div class="gg-stage-row" title="">${stageDots}</div>
         </div>
@@ -4609,7 +4698,8 @@ function onTimelineToggleKey(e) {
 }
 
 // Window capture, like Shots Ctrl+A: ComfyUI's own Ctrl+Z (graph undo) must not run while the pointer or
-// focus is in Shots / Timeline; outside them (canvas, inputs, menus, dialogs) the key is left alone.
+// focus is in Shots / Timeline, or one of them was clicked last; otherwise (canvas clicked last, inputs,
+// menus, dialogs) the key is left alone.
 function onUndoRedoKey(e) {
   const action = undoKeyAction(e);
   if (!action) return;
@@ -4621,11 +4711,14 @@ function onUndoRedoKey(e) {
   if (document.querySelector(".p-contextmenu, .p-menu-overlay, .p-tieredmenu-overlay, .p-select-overlay")) return;
   const shots = [...document.querySelectorAll(".gg-root.gg-shots")];
   const tls = [...document.querySelectorAll(".gg-root.gg-timeline")];
+  const shown = (el) => el.isConnected && el.getClientRects().length > 0;
+  const lastShown = (undoLastArea === "shots" && shots.some(shown)) || (undoLastArea === "timeline" && tls.some(shown));
   const scope = undoScope({
     hoverShots: shots.some(ggElHovered),
     focusShots: shots.some(ggElHasFocus),
     hoverTimeline: tls.some(ggElHovered),
     focusTimeline: tls.some(ggElHasFocus),
+    last: lastShown || !undoLastArea ? undoLastArea : "other",
   });
   if (!scope) return;
   e.preventDefault();
@@ -4633,6 +4726,17 @@ function onUndoRedoKey(e) {
   if (e.repeat || ed.dragging || shotsUi.dragSession) return;
   if (scope === "timeline") stepTimelineHistory(action);
   else void stepShotsHistory(action);
+}
+
+function trackUndoArea(e) {
+  const t = e.target;
+  if (!(t instanceof Element)) return;
+  undoLastArea = nextUndoArea(undoLastArea, {
+    overlay: !!t.closest(".gg-ctx, .gg-modal-backdrop, .gg-toast-host"),
+    timeline: !!t.closest(".gg-root.gg-timeline"),
+    shots: !!t.closest(".gg-root.gg-shots"),
+    focus: e.type === "focusin",
+  });
 }
 
 /** Open Timeline when Shots becomes visible; close when Shots sidebar deactivates (if Timeline tab is active). */
@@ -6930,6 +7034,8 @@ app.registerExtension({
     setupWipPeriodicAutosave();
     window.addEventListener("keydown", onTimelineToggleKey, true);
     window.addEventListener("keydown", onUndoRedoKey, true);
+    window.addEventListener("pointerdown", trackUndoArea, true);
+    window.addEventListener("focusin", trackUndoArea, true);
     if (!loadTimelineOpen(localStorage)) {
       queueMicrotask(() => {
         if (isTimelinePanelOpen()) closeTimelinePanel();
