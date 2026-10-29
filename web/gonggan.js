@@ -18,6 +18,7 @@ import {
   lengthWarning,
   moveCuts,
   shotsDropTarget,
+  dropRestIndex,
   clientYToWrapY,
   autoScrollDelta,
   finalCutList,
@@ -158,7 +159,7 @@ import {
   autoHeightPx,
 } from "./gg_story_core.js";
 import { buildSrt, srtFileName, effectiveCaption, captionEditChanged, captionFieldPlaceholder } from "./gg_caption_core.js";
-import { rowContentKind, cutRowShellHtml, captionRowContentHtml, groupedListHtml } from "./gg_group_list_core.js";
+import { rowContentKind, cutRowShellHtml, captionRowContentHtml, groupedListHtml, shotsSections } from "./gg_group_list_core.js";
 import { decideVideoSync } from "./gg_playback_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { batchProgressView, createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
@@ -175,6 +176,7 @@ import {
   moveScene,
   sceneDropBeforeCut,
   sceneDropTarget,
+  listOrder,
 } from "./gg_reorder_core.js";
 import {
   loadLastTemplate,
@@ -2956,7 +2958,7 @@ function buildMoveToSceneSubmenu(ids) {
   if (!tl) return [];
   const { allIn } = cutGroupMembership(ids);
   const items = [
-    { label: "No scene", disabled: allIn(null), action: () => applyMoveToScene(ids, null) },
+    { label: "Ungrouped", disabled: allIn(null), action: () => applyMoveToScene(ids, null) },
   ];
   for (const g of tl.groups || []) {
     items.push({
@@ -3443,21 +3445,6 @@ function groupColor(id) {
   return [42, 88, 148, 118, 168, 28, 198][Math.abs(h) % 7];
 }
 
-function shotsSections(cuts, groups) {
-  const rank = new Map(cuts.map((c, i) => [c.id, i]));
-  const inGrp = new Set();
-  const secs = (groups || []).map((g) => {
-    const ids = (g.cut_ids || []).filter((id) => rank.has(id));
-    ids.forEach((id) => inGrp.add(id));
-    ids.sort((a, b) => rank.get(a) - rank.get(b));
-    return { type: "group", group: g, cuts: ids.map((id) => cuts.find((c) => c.id === id)).filter(Boolean) };
-  }).filter((s) => s.cuts.length);
-  secs.sort((a, b) => rank.get(a.cuts[0].id) - rank.get(b.cuts[0].id));
-  const loose = cuts.filter((c) => !inGrp.has(c.id));
-  if (loose.length) secs.push({ type: "ungrouped", group: null, cuts: loose });
-  return secs;
-}
-
 function markGraphGongganCut(cutId) {
   try {
     if (!app.graph) return;
@@ -3892,9 +3879,10 @@ function applyOrderGroupsLocally(order, groups) {
   recomputeCutStarts();
 }
 
-async function persistShotsReorder(order, groups) {
+async function persistShotsReorder(order0, groups) {
   const tl = state.timeline;
   if (!tl || !isNativeProject()) return true;
+  const order = listOrder(order0, groups);
   applyOrderGroupsLocally(order, groups);
   const mySeq = editGate.seq;
   bus.dispatchEvent(new Event("timeline"));
@@ -4098,13 +4086,14 @@ function bindShotsReorder(root) {
         if (!tl) return;
         const order0 = tl.cuts.map((c) => c.id);
         const ids = movingIds();
-        const r = moveCuts(order0, groupsClone(), ids, { toIndex: drop.toIndex, toGroupId: drop.toGroupId });
+        const r = moveCuts(order0, groupsClone(), ids, { toIndex: dropRestIndex(order0, ids, drop.toIndex), toGroupId: drop.toGroupId });
+        const order = listOrder(r.order, r.groups);
         const same =
-          r.order.length === order0.length &&
-          r.order.every((id, i) => id === order0[i]) &&
+          order.length === order0.length &&
+          order.every((id, i) => id === order0[i]) &&
           JSON.stringify(r.groups) === JSON.stringify(tl.groups || []);
         if (same) return;
-        await commitShotsReorder(r.order, r.groups);
+        await commitShotsReorder(order, r.groups);
       };
       shotsUi.dragSession = { cancel };
       window.addEventListener("pointermove", move);

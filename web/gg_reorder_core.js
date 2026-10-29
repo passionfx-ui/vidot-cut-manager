@@ -147,6 +147,25 @@ export function moveToScene(order, groups, ids, sceneIdOrNull) {
 }
 
 /**
+ * Cut list order as the native store lays it out: each scene in `groups` list order (its cuts in
+ * `order` sequence), then every ungrouped cut. Changes only the Shots list, never the timeline track.
+ *
+ * @param {string[]} order
+ * @param {{ id: string, cut_ids?: string[] }[]} groups
+ * @returns {string[]}
+ */
+export function listOrder(order, groups) {
+  const mem = membershipMap(groups);
+  const ord = order || [];
+  const out = [];
+  for (const g of groups || []) {
+    for (const id of ord) if (mem.get(id) === g.id) out.push(id);
+  }
+  for (const id of ord) if (!mem.has(id)) out.push(id);
+  return out;
+}
+
+/**
  * Consecutive runs of one scene (or of ungrouped cuts) in timeline order.
  *
  * @param {string[]} order
