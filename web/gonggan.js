@@ -4806,8 +4806,7 @@ function mountShots(el) {
         <div class="gg-summary-top">
           <span class="gg-summary-text">${esc(tl ? formatSummary(projectSummary(tl.cuts || [])) : "")}</span>
           <span class="gg-complete-pct"></span>
-          <label class="gg-due-label">Due <input type="date" class="gg-due-input" /></label>
-          <span class="gg-due-text"></span>
+          <!-- Due-date field hidden (0.9.49): the saved project.due_date is kept, just not shown or edited. -->
         </div>
         <div class="gg-summary-bar"${(tl?.cuts?.length || 0) ? "" : " hidden"}><span class="gg-seg gg-seg-best"></span><span class="gg-seg gg-seg-video"></span><span class="gg-seg gg-seg-image"></span><span class="gg-seg gg-seg-empty"></span></div>
       </div>

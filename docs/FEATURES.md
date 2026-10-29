@@ -15,7 +15,7 @@ Verified against: README, `docs/CONTEXT.md`, `web/gonggan.js`, `routes.py`, `gg_
 | Native **New Project** (name, aspect/resolution, FPS, default cut length, caption language, workflow template) | Have | Must | new-project setup v2 approved | — |
 | **Project Settings** (same fields + template ref) | Have | Must | new-project setup v2 approved | — |
 | Native project **rename / delete** (delete → `trash/projects/`) | Have | Must | inferred | — |
-| **Due date** + completion **Best c/N** summary bar | Have (native) | Nice | inferred | — |
+| Completion **Best c/N** summary bar (the Due-date field is hidden; saved data kept) | Have (native) | Nice | inferred | — |
 | Read-only **legacy imported** projects via `gonggan_settings.json` `data_root` | Have | Nice | inferred | — |
 | **Auto Cut Split** (copy LLM prompt + paste import list → scenes/cuts/captions) | None | Must | Auto Cut Split approved | M |
 | Optional **project folder** path (see §9) | None | Nice | local folder auto-organize (pending confirm) | M |

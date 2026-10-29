@@ -602,17 +602,11 @@ async function main() {
     if (!reloadedVal.includes(tag)) throw new Error(`caption not persisted after reload: ${reloadedVal}`);
   });
 
-  await runScenario("09", "Due date + completion percent", async () => {
+  await runScenario("09", "Completion percent; Due field is hidden", async () => {
     timelineMocks.delete(mainPid);
     await page.click(".gg-root.gg-shots .gg-reload");
     await sleep(1200);
-    await page.$eval(".gg-due-input", (el) => {
-      el.value = "2026-10-30";
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    await sleep(800);
-    const dueText = await page.$eval(".gg-due-text", (el) => el.textContent);
-    if (!/Due Oct 30/i.test(dueText)) throw new Error(`due text: ${dueText}`);
+    if (await page.$(".gg-due-input, .gg-due-label, .gg-due-text")) throw new Error("Due field must not be shown");
     const pct = await page.$eval(".gg-complete-pct", (el) => el.textContent);
     if (!/%/.test(pct)) throw new Error(`percent missing: ${pct}`);
   });
