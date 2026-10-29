@@ -281,7 +281,7 @@ async function loadProjects() {
       state.pid = pick ? pick.id : "";
     }
   } catch (e) {
-    state.error = "Could not load projects: " + e.message;
+    state.error = "Could not load projects (" + e.message + "). Check that ComfyUI is running, then reload the page.";
   }
   bus.dispatchEvent(new Event("projects"));
   await loadTimeline();
@@ -1128,7 +1128,7 @@ async function renameNativeProject() {
   try {
     await postJson("/gonggan/project/rename", { pid: state.pid, name });
     await loadProjects();
-    ggToast("Project", "Renamed", "ok");
+    ggToast("Project", `Renamed to "${name}"`, "ok");
   } catch (e) {
     ggToast("Project", e.message, "warn");
   }
@@ -1146,7 +1146,7 @@ async function deleteNativeProject() {
     await postJson("/gonggan/project/delete", { pid: state.pid });
     state.pid = "";
     await loadProjects();
-    ggToast("Project", "Project moved to trash", "ok");
+    ggToast("Project", `"${label}" moved to the plugin trash folder`, "ok");
   } catch (e) {
     ggToast("Project", e.message, "warn");
   }
@@ -1524,7 +1524,7 @@ async function runGongganWipAutosave(opts = {}) {
     bus.dispatchEvent(new Event("sdk"));
     if (Date.now() - ggWipLastFailToastAt >= 60000) {
       ggWipLastFailToastAt = Date.now();
-      ggToast("Auto-save failed.", e?.message || String(e), "warn");
+      ggToast("Auto-save failed.", `${e?.message || String(e)}. Retrying. Press Ctrl+S to save now.`, "warn");
     }
   } finally {
     ggWipAutosaveRunning = false;
@@ -1595,7 +1595,7 @@ async function prepareGongganShotTabReplace() {
     const deps = buildAutosaveDeps();
     if (typeof deps.saveWorkflow !== "function") {
       ggCutSwitchAutosaveBlocked = true;
-      ggToast("Auto-save failed. Switch cancelled.", "saveWorkflow unavailable", "warn");
+      ggToast("Auto-save failed. Switch cancelled.", "ComfyUI save is not ready. Press Ctrl+S, then switch again.", "warn");
       return false;
     }
     const savedSnaps = dirtyTabs.map((w) => ({
@@ -1605,7 +1605,7 @@ async function prepareGongganShotTabReplace() {
     const result = await autosaveModifiedTabs(dirtyTabs, deps);
     if (!result.ok) {
       ggCutSwitchAutosaveBlocked = true;
-      ggToast("Auto-save failed. Switch cancelled.", result.failed?.error || "save failed", "warn");
+      ggToast("Auto-save failed. Switch cancelled.", `${result.failed?.error || "Save failed"}. Press Ctrl+S, then switch again.`, "warn");
       return false;
     }
     // Saved content is the new baseline: such a tab is clean now and may be closed/replaced.
@@ -1974,7 +1974,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
         }
       }
       if (prevDirty) {
-        ggToast("Previous shot tab kept (unsaved changes).", "", "warn");
+        ggToast("Previous shot tab kept open.", "It has unsaved changes. Save it (Ctrl+S) or close it.", "warn");
       } else {
         const active = ws?.isActive?.(previous) ?? ws?.activeWorkflow === previous;
         const decision = shouldClosePreviousShotTab({
@@ -2371,7 +2371,7 @@ async function refreshProjectTemplateFlag() {
 
 async function setProjectTemplateRef(ref) {
   if (!state.pid) {
-    ggToast("Template", "Select a project first", "warn");
+    ggToast("Template", "Pick a project in the list first.", "warn");
     return;
   }
   saveLastTemplate(localStorage, ref || "");
@@ -2388,7 +2388,7 @@ async function setProjectTemplateRef(ref) {
 
 async function addLocalCut() {
   if (!state.pid) {
-    ggToast("Cut", "Select a project first", "warn");
+    ggToast("Cut", "Pick a project in the list first.", "warn");
     return;
   }
   const cuts = state.timeline ? state.timeline.cuts : [];
@@ -3471,7 +3471,7 @@ async function persistShotsReorder(order, groups) {
   } catch (e) {
     const msg = e?.message || String(e);
     console.warn("[gonggan-cut] Reorder failed:", msg);
-    state.error = "Reorder failed: " + msg;
+    state.error = "Reorder not saved: " + msg + ". The previous order is back. Try again.";
     ggToast("Reorder failed – restored previous order", msg, "warn");
     await loadTimeline();
     return false;
@@ -5186,7 +5186,7 @@ async function saveEditNow() {
     }
   } catch (e) {
     ok = false;
-    state.error = "Save failed: " + e.message;
+    state.error = "Timeline not saved: " + e.message + ". Your change is still on screen. Edit again to retry.";
   }
   ed.saving = false;
   bus.dispatchEvent(new Event("timeline"));
@@ -5209,7 +5209,7 @@ async function resetEdit() {
       adoptMutationTimeline(data, tl.project.id);
       state.error = "";
     } catch (e) {
-      state.error = "Reset failed: " + e.message;
+      state.error = "Reset failed: " + e.message + ". Try again.";
     }
   });
   bus.dispatchEvent(new Event("timeline"));
@@ -5796,7 +5796,7 @@ async function startExport(preset, sound) {
     exp.hidden = false;
     onExportJob(data.job);
   } catch (e) {
-    state.error = "Export failed to start: " + e.message;
+    state.error = "Export did not start: " + e.message + ". Check that ComfyUI is running, then try again.";
     bus.dispatchEvent(new Event("timeline"));
   }
 }
