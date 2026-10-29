@@ -157,6 +157,7 @@ import {
   autoHeightPx,
 } from "./gg_story_core.js";
 import { buildSrt, srtFileName, effectiveCaption, captionEditChanged, captionFieldPlaceholder } from "./gg_caption_core.js";
+import { rowContentKind, cutRowShellHtml, captionRowContentHtml, groupedListHtml } from "./gg_group_list_core.js";
 import { decideVideoSync } from "./gg_playback_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
@@ -4489,17 +4490,26 @@ function refreshCutRowBadges(cutId) {
 }
 
 function cutRowHtml(c, labels) {
-  const listCaption = normalizeListMode(shotsUi.listMode) === "caption";
+  const kind = rowContentKind(shotsUi.listMode);
+  const content = kind === "caption" ? captionRowContent(c) : infoRowContent(c, labels);
+  return cutRowShellHtml({ id: c.id, kind, selected: state.cutSel.has(c.id), content });
+}
+
+function captionRowContent(c) {
+  const nat = isNativeProject();
+  return captionRowContentHtml({
+    text: effectiveCaption(c),
+    placeholder: captionFieldPlaceholder(projectCaptionLang()),
+    title: nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP,
+    native: nat,
+  });
+}
+
+function infoRowContent(c, labels) {
   const nat = isNativeProject();
   const timelineOrder = state.timeline?.cuts?.map((x) => x.id) ?? [];
   const canUp = nat && canMoveUp(timelineOrder, [c.id]);
   const canDown = nat && canMoveDown(timelineOrder, [c.id]);
-  const capTip = nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP;
-  const roAttr = nat ? " readonly" : " disabled";
-  const capPh = captionFieldPlaceholder(projectCaptionLang());
-  const bodyArea = listCaption
-    ? `<textarea class="gg-caption-text" rows="3" placeholder="${esc(capPh)}"${roAttr} title="${esc(capTip)}">${esc(effectiveCaption(c))}</textarea>`
-    : "";
   const warn = lengthWarning(c);
   const lenInfo = formatCutHeaderLengths(c);
   const verInfo = formatCutVersionStatus(c);
@@ -4514,7 +4524,6 @@ function cutRowHtml(c, labels) {
   ].filter(Boolean).join("");
   const stageDots = `<span class="gg-stage-dot gg-off" data-k="image"></span><span class="gg-stage-dot gg-off" data-k="video"></span><span class="gg-stage-dot gg-off" data-k="best"></span>`;
   return `
-    <li class="gg-cut${state.cutSel.has(c.id) ? " gg-sel" : ""}" data-cut-id="${esc(c.id)}">
       <div class="gg-cut-thumb-col">
         <div class="gg-cut-thumb">${thumbHtml(c.media, "gg-thumb")}${c.media && c.media.kind === "video" ? '<span class="gg-badge">▶</span>' : ""}${c.media && c.media.source && c.media.source !== "gonggan" ? `<span class="gg-badge gg-badge-l gg-src-${esc(c.media.source)}">${esc(fmtSrc(c.media.source))}</span>` : ""}</div>
         <div class="gg-live-chip" hidden><span class="gg-live-dot"></span><span class="gg-live-text"></span></div>
@@ -4532,13 +4541,11 @@ function cutRowHtml(c, labels) {
           <span class="gg-cut-ver" title="${esc(verInfo.title)}">${esc(verInfo.detail)}</span>
           <span class="gg-cut-len" title="${esc(lenInfo.title)}">${esc(lenInfo.text)}</span>
         </div>
-        ${bodyArea}
       </div>
       ${nat ? `<div class="gg-move-col">
           <button type="button" class="gg-move-btn gg-move-up" title="Move up" aria-label="Move up"${canUp ? "" : " disabled"}>\u25B2</button>
           <button type="button" class="gg-move-btn gg-move-down" title="Move down" aria-label="Move down"${canDown ? "" : " disabled"}>\u25BC</button>
-        </div>` : ""}
-    </li>`;
+        </div>` : ""}`;
 }
 
 function timelinePanelVisible() {
@@ -5428,13 +5435,7 @@ function mountShots(el) {
       (parseFloat(cs.paddingBottom) || 0) +
       (parseFloat(cs.borderTopWidth) || 0) +
       (parseFloat(cs.borderBottomWidth) || 0);
-    const focused = document.activeElement === ta;
-    const listCaption = normalizeListMode(shotsUi.listMode) === "caption";
-    const minLines = listCaption || focused ? (listCaption ? 3 : 1) : 1;
-    const minPx = lh * minLines + pad;
-    let maxPx = listCaption ? window.innerHeight * 0.45 : lh * 1 + pad;
-    if (!listCaption && focused) maxPx = lh * 6 + pad;
-    return { minPx, maxPx };
+    return { minPx: lh * 3 + pad, maxPx: window.innerHeight * 0.45 };
   }
 
   function autoSizeFieldTextarea(ta) {
@@ -5624,28 +5625,14 @@ function mountShots(el) {
     const emptyHint = hintInfo
       ? `<div class="gg-dim gg-list-empty${hintInfo.kind === "projects" ? " gg-no-projects" : ""}">${esc(hintInfo.text)}</div>`
       : "";
-    const listHtml = emptyHint || sections.map((sec) => {
-      if (sec.type === "ungrouped") {
-        return `<section class="gg-grp-sec gg-grp-loose"><header class="gg-grp-head">Ungrouped <span class="gg-grp-meta">${sec.cuts.length}</span></header><ol class="gg-cutlist">${sec.cuts.map((c) => cutRowHtml(c, cutLabels)).join("")}</ol></section>`;
-      }
-      const g = sec.group;
-      const hue = groupColor(g.id);
-      const collapsed = !!g.collapsed;
-      return `<section class="gg-grp-sec" data-group-id="${esc(g.id)}" style="--gg-grp:${hue}">
-        <header class="gg-grp-head">
-          <button type="button" class="gg-grp-fold" title="Collapse or expand">${collapsed ? "▸" : "▾"}</button>
-          <span class="gg-grp-title">Scene · ${esc(g.name)}</span>
-          <span class="gg-grp-prog">${(() => {
-            const { best, total } = sceneBestProgress(sec.cuts);
-            return esc(`${best}/${total}`);
-          })()}</span>
-          <span class="gg-grp-meta">${sec.cuts.length}</span>
-          <button type="button" class="gg-grp-ren" title="Rename scene">✎</button>
-          <button type="button" class="gg-grp-del" title="Delete scene (cuts become ungrouped)">×</button>
-        </header>
-        <ol class="gg-cutlist"${collapsed ? " hidden" : ""}>${sec.cuts.map((c) => cutRowHtml(c, cutLabels)).join("")}</ol>
-      </section>`;
-    }).join("");
+    const listHtml = emptyHint || groupedListHtml(sections, {
+      cutHtml: (c) => cutRowHtml(c, cutLabels),
+      groupHue: groupColor,
+      groupProgress: (secCuts) => {
+        const { best, total } = sceneBestProgress(secCuts);
+        return `${best}/${total}`;
+      },
+    });
     root.className = `gg-root gg-shots${listCaption ? " gg-list-caption" : ""}${SHOW_CUT_PANEL ? "" : " gg-cutpanel-off"}`;
     root.innerHTML = `
       <div class="gg-head">
