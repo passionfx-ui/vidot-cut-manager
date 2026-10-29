@@ -203,6 +203,43 @@ class TimelineIndependentTests(unittest.TestCase):
         self.assertEqual(self._doc()["timeline"], track)
         self.assertEqual(tl["track_order"], self.cut_list)
 
+    # -- never-edited timeline (no doc["timeline"]) stays put when the cut list changes ----------------
+
+    def test_reorder_cuts_never_edited_keeps_timeline_order(self):
+        self.assertNotIn("timeline", self._doc())
+        before = self.store.to_timeline(self.pid)
+        self.store.reorder(self.pid, [self.c5, self.c4, self.c2, self.c1, self.c3])
+        after = self.store.to_timeline(self.pid)
+        self.assertEqual(after["track_order"], before["track_order"])
+        self.assertEqual({c["id"]: c["start"] for c in after["cuts"]}, {c["id"]: c["start"] for c in before["cuts"]})
+        self.assertNotEqual([c["id"] for c in after["cuts"]], self.cut_list)
+
+    def test_scene_reorder_never_edited_keeps_timeline_order(self):
+        tl = na.native_save_groups(self.pid, [
+            {"id": S2, "name": "Scene 2", "cut_ids": [self.c3, self.c4], "collapsed": False},
+            {"id": self.s1, "name": "Scene 1", "cut_ids": [self.c1, self.c2], "collapsed": False},
+        ])
+        self.assertEqual([c["id"] for c in tl["cuts"]], [self.c3, self.c4, self.c1, self.c2, self.c5])
+        self.assertEqual(tl["track_order"], self.cut_list)
+
+    def test_insert_cut_never_edited_appends_to_timeline_end(self):
+        out = na.native_add_cut(self.pid, self.s1, self.c1)
+        new_id = out["cut"]["id"]
+        self.assertEqual([c["id"] for c in out["timeline"]["cuts"]][:2], [self.c1, new_id])
+        self.assertEqual(out["timeline"]["track_order"], self.cut_list + [new_id])
+
+    def test_append_cut_never_edited_stays_derived(self):
+        self.store.add_cut(self.pid)
+        self.assertNotIn("timeline", self._doc())
+
+    def test_apply_timeline_edit_never_edited_keeps_cut_list(self):
+        before = self._cut_list_state()
+        track = list(reversed(self.cut_list))
+        self.store.apply_timeline_edit(self.pid, track, {})
+        self.assertEqual(self._cut_list_state(), before)
+        self.assertEqual(timeline_order(self._doc()), self.cut_list)
+        self.assertEqual(self.store.to_timeline(self.pid)["track_order"], track)
+
 
 class ExportPlanTests(unittest.TestCase):
     def test_gap_becomes_black_segment(self):
