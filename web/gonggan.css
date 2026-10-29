@@ -402,6 +402,14 @@
 .gg-modal-field input, .gg-modal-field select { font-size: 12px; padding: 4px 6px; border-radius: 4px; border: 1px solid var(--gg-line, #353a44); background: #1b1d22; color: inherit; }
 .gg-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .gg-ask-dialog .gg-ask-ok:disabled { opacity: 0.45; cursor: not-allowed; }
+.gg-confirm-dialog { max-width: 440px; }
+.gg-confirm-title { white-space: pre-wrap; overflow-wrap: anywhere; }
+.gg-confirm-body { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; font-size: 12px; opacity: .85; margin: 4px 0 8px; }
+.gg-confirm-dialog .gg-btn { background: var(--gg-panel, #23262d); color: var(--gg-fg, #e6e8ec); border: 1px solid var(--gg-line, #353a44); border-radius: 4px; padding: 4px 14px; cursor: pointer; font-size: 12px; }
+.gg-confirm-dialog .gg-btn:hover, .gg-confirm-dialog .gg-btn:focus-visible { border-color: var(--gg-acc, #f2b84b); outline: none; }
+.gg-confirm-dialog .gg-btn.gg-primary { background: #3a5f2e; border-color: #5c9447; }
+.gg-confirm-dialog .gg-btn.gg-danger { background: #6b2a2a; border-color: #c46a6a; color: #fff; }
+.gg-confirm-dialog .gg-btn.gg-danger:hover, .gg-confirm-dialog .gg-btn.gg-danger:focus-visible { border-color: #ffb4b4; }
 .gg-root .gg-primary { border-color: var(--gg-acc, #f2b84b); }
 .gg-modal { max-height: calc(100vh - 32px); overflow-y: auto; }
 .gg-modal-field input[type="text"] { width: 100%; box-sizing: border-box; }
