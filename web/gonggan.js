@@ -30,10 +30,18 @@ import {
   formatCutHeaderLengths,
   formatPickedVersionInfo,
   versionRepState,
-  trimSecFromDrag,
   plannedLenInputPlaceholder,
   addCutTarget,
 } from "./gg_cuts_core.js";
+import {
+  TRIM_SNAP_PX,
+  trimTipText,
+  trimSnapTargets,
+  pickSnapTarget,
+  quantizeTrimDelta,
+  trimToSource,
+  appliedTrimDelta,
+} from "./gg_trim_core.js";
 import {
   trashButtonLabel,
   normalizeTrashItems,
@@ -5880,30 +5888,43 @@ function bindTrim(root) {
       if (!c) return;
       const side = edge.dataset.side;
       const startX = e.clientX;
-      const startIn = c.in, startSec = c.sec, outPt = startIn + startSec;
+      const startIn = c.in, startSec = c.sec;
       const isVid = kindOf(c) === "video";
+      const idx = cutsNow().indexOf(c);
+      const origin = startOf(idx) + (side === "r" ? startSec : 0);
+      const targets = trimSnapTargets(cutsNow().map((x) => x.sec), idx, play.t);
+      const inner = root.querySelector(".gg-tl-inner");
+      const marker = root.querySelector(".gg-drop");
+      const float = document.createElement("div");
+      float.className = "gg-trim-tip";
+      float.textContent = trimTipText(0, startSec);
+      float.style.left = startX - inner.getBoundingClientRect().left + "px";
+      inner.appendChild(float);
       let raf = 0, pendingX = startX;
       ed.dragging = true;
       el.classList.add("gg-trimming");
+      edge.classList.add("gg-edge-active");
       const paint = (x) => {
-        const dx = x - startX;
-        let next;
-        if (side === "l" && isVid) {
-          const nextIn = Math.max(0, snapSec(startIn + dx / ed.px));
-          next = clampClip(c, Math.min(nextIn, outPt - VID_MIN), outPt - Math.min(nextIn, outPt - VID_MIN));
-        } else if (side === "l") {
-          next = clampClip(c, 0, snapSec(trimSecFromDrag(side, startSec, dx / ed.px)));
-        } else {
-          next = clampClip(c, startIn, snapSec(trimSecFromDrag(side, startSec, dx / ed.px)));
-        }
+        const raw = (x - startX) / ed.px;
+        const hit = pickSnapTarget(origin + raw, targets, TRIM_SNAP_PX / ed.px);
+        const delta = hit != null ? hit - origin : quantizeTrimDelta(side, isVid, startIn, startSec, raw, snapSec);
+        const want = trimToSource({ side, isVideo: isVid, startIn, startSec, srcDur: c.src_dur, deltaSec: delta, vidMin: VID_MIN, imgMin: IMG_MIN, imgMax: IMG_MAX });
+        const next = clampClip(c, want.in, want.sec);
         c.in = next.in; c.sec = next.sec;
         layoutClips(root);
+        const applied = appliedTrimDelta(side, isVid, startIn, startSec, next);
+        const snapped = hit != null && Math.abs(origin + applied - hit) < 0.011;
+        marker.classList.toggle("gg-snap-hit", snapped);
+        marker.hidden = !snapped;
+        if (snapped) marker.style.left = hit * ed.px + "px";
         const badge = el.querySelector(".gg-clip-dur");
         if (badge) badge.textContent = `${c.sec.toFixed(1)}s`;
         const inb = el.querySelector(".gg-clip-in");
         if (inb) inb.textContent = isVid && c.in > 0 ? `in ${c.in.toFixed(1)}` : "";
         const tip = root.querySelector(".gg-tip");
         if (tip) tip.textContent = isVid ? `in ${c.in.toFixed(2)}s · len ${c.sec.toFixed(2)}s · src ${c.src_dur ? c.src_dur.toFixed(2) + "s" : "?"}` : `len ${c.sec.toFixed(2)}s (still ${IMG_MIN}–${IMG_MAX}s)`;
+        float.textContent = trimTipText(applied, c.sec);
+        float.style.left = x - inner.getBoundingClientRect().left + "px";
       };
       const move = (ev) => {
         pendingX = ev.clientX;
@@ -5917,6 +5938,10 @@ function bindTrim(root) {
         try { edge.releasePointerCapture(e.pointerId); } catch (_) {}
         if (raf) cancelAnimationFrame(raf);
         paint(ev.clientX || pendingX);
+        float.remove();
+        marker.hidden = true;
+        marker.classList.remove("gg-snap-hit");
+        edge.classList.remove("gg-edge-active");
         el.classList.remove("gg-trimming");
         ed.dragging = false;
         c.edited = true;
