@@ -8,10 +8,12 @@ try:
     from .gg_data import PACK_DIR, clamp_clip
     from .gg_project import LocalStore
     from .gg_project.timeline import timeline_order
+    from .gg_project.ids import is_uuid_id
 except ImportError:  # unittest / plain script
     from gg_data import PACK_DIR, clamp_clip  # type: ignore
     from gg_project import LocalStore  # type: ignore
     from gg_project.timeline import timeline_order  # type: ignore
+    from gg_project.ids import is_uuid_id  # type: ignore
 
 try:
     from . import gg_template
@@ -25,7 +27,8 @@ _STORE: LocalStore | None = None
 
 
 def is_native_pid(pid: str) -> bool:
-    return isinstance(pid, str) and "-" in pid
+    """True only for uuid-shaped native ids; legacy ids and anything path-like are not native."""
+    return is_uuid_id(pid)
 
 
 def native_store() -> LocalStore:
