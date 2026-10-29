@@ -189,10 +189,10 @@ describe("edited map", () => {
 });
 
 describe("formatShotTabLabel edited", () => {
-  it("appends star on cut side", () => {
+  it("appends star at the end", () => {
     assert.equal(
       formatShotTabLabel({ projectName: "P", sceneName: "Intro", cutLabel: "1-1", edited: true }),
-      "P/Intro 1-1 *"
+      "1-1 Intro / P *"
     );
   });
 });
