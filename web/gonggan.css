@@ -304,7 +304,16 @@
 .gg-timeline .gg-tl-info { color: var(--gg-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .gg-timeline .gg-tip { flex: 1 1 0; min-width: 0; color: var(--gg-acc); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gg-timeline .gg-error[hidden] { display: none; }
-.gg-timeline .gg-tl-scroll { overflow-x: auto; overflow-y: hidden; flex: 1; padding: 0 8px 6px; }
+.gg-timeline .gg-tl-scroll { overflow-x: auto; overflow-y: hidden; flex: 1; padding: 0 8px 6px; scrollbar-width: none; }
+.gg-timeline .gg-tl-scroll::-webkit-scrollbar { display: none; }
+.gg-timeline .gg-zoombar { position: relative; flex: 0 0 auto; height: 12px; margin: 0 8px 6px; border: 1px solid var(--gg-line); border-radius: 7px; background: rgba(0,0,0,.25); }
+.gg-timeline .gg-zb-thumb { position: absolute; top: 0; bottom: 0; left: 0; width: 100%; min-width: 0; box-sizing: border-box; border-radius: 6px; background: #4a5160; cursor: grab; touch-action: none; user-select: none; }
+.gg-timeline .gg-zb-thumb:hover, .gg-timeline .gg-zb-thumb.gg-zb-drag { background: #5a6273; }
+.gg-timeline .gg-zb-thumb.gg-zb-drag { cursor: grabbing; }
+.gg-timeline .gg-zb-handle { position: absolute; top: 1px; width: 10px; height: 10px; border-radius: 50%; background: #c9ced8; cursor: ew-resize; }
+.gg-timeline .gg-zb-l { left: 1px; }
+.gg-timeline .gg-zb-r { right: 1px; }
+.gg-timeline .gg-zb-handle:hover { background: var(--gg-acc); }
 .gg-timeline .gg-tl-inner { position: relative; height: 100%; }
 .gg-timeline .gg-ruler { position: relative; height: 20px; border-bottom: 1px solid var(--gg-line); cursor: col-resize; }
 .gg-timeline .gg-tick { position: absolute; top: 12px; width: 1px; height: 8px; background: var(--gg-line); font-size: 9px; color: var(--gg-dim); text-indent: 3px; white-space: nowrap; line-height: 10px; pointer-events: none; }

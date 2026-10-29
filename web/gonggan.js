@@ -189,6 +189,17 @@ import {
   timelineToggleTooltip,
 } from "./gg_timeline_toggle_core.js";
 import {
+  ZOOM_KEY_FACTOR,
+  clampPx,
+  thumbFromScroll,
+  scrollFromThumbLeft,
+  zoomFromHandle,
+  fitPx,
+  scrollForZoomAt,
+  wheelZoomFactor,
+  zoomKeyAction,
+} from "./gg_zoombar_core.js";
+import {
   RESOLUTION_PRESETS,
   FPS_OPTIONS,
   DEFAULT_PROJECT_SETTINGS,
@@ -5571,7 +5582,7 @@ function mountShots(el) {
 // ---------------- Timeline (bottom panel) ----------------
 // Edit model: state.timeline.cuts in edit order, each with in/sec (+ src_dur for video caps).
 const ed = {
-  px: Number(localStorage.getItem("gg.px")) || 48,      // pixels per second (zoom)
+  px: clampPx(Number(localStorage.getItem("gg.px")) || 48), // pixels per second (zoom)
   snap: localStorage.getItem("gg.snap") !== "0",          // on = 1 s steps, off = 0.1 s
   sound: localStorage.getItem("gg.sound") === "1",
   saveTimer: 0,
@@ -6035,6 +6046,22 @@ function paintRuler(root) {
   ruler.innerHTML = ticks.join("");
   const info = root.querySelector(".gg-tl-info");
   if (info) info.textContent = `${cutsNow().length} cuts · ${fmtClock(total)}${state.timeline && state.timeline.edited ? " · edited" : ""}${ed.saving ? " · saving…" : ""}`;
+  paintZoomBar(root);
+}
+
+function paintZoomBar(root) {
+  const wrap = root.querySelector(".gg-tl-scroll");
+  const bar = root.querySelector(".gg-zoombar");
+  const thumb = bar && bar.querySelector(".gg-zb-thumb");
+  if (!wrap || !thumb) return;
+  const { left, width } = thumbFromScroll({
+    scrollLeft: wrap.scrollLeft,
+    scrollWidth: wrap.scrollWidth,
+    clientWidth: wrap.clientWidth,
+    barW: bar.clientWidth,
+  });
+  thumb.style.left = left + "px";
+  thumb.style.width = width + "px";
 }
 
 function mountTimeline(el) {
@@ -6064,8 +6091,6 @@ function mountTimeline(el) {
         <span class="gg-tl-info"></span>
         <span class="gg-tip"></span>
         <button class="gg-btn gg-snap" title="Snap: 1 s steps (off = 0.1 s)">Snap</button>
-        <button class="gg-btn gg-zoom-out" title="Zoom out">−</button>
-        <button class="gg-btn gg-zoom-in" title="Zoom in">+</button>
         <button class="gg-btn gg-reset" title="Reset to original order and lengths">Reset</button>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
         <span class="gg-sep"></span>
@@ -6093,6 +6118,9 @@ function mountTimeline(el) {
           <div class="gg-head-line"></div>
         </div>
       </div>
+      <div class="gg-zoombar" title="Drag to scroll · drag an end to zoom · double-click to fit (Alt+wheel, = / -)">
+        <div class="gg-zb-thumb"><span class="gg-zb-handle gg-zb-l" data-side="l"></span><span class="gg-zb-handle gg-zb-r" data-side="r"></span></div>
+      </div>
     </div>`;
   viewer = {
     box: root,
@@ -6112,9 +6140,98 @@ function mountTimeline(el) {
   $r(".gg-play-btn").addEventListener("click", togglePlay);
   $r(".gg-sound").addEventListener("click", () => { ed.sound = !ed.sound; localStorage.setItem("gg.sound", ed.sound ? "1" : "0"); viewer.vid.muted = !ed.sound; paintButtons(); });
   $r(".gg-snap").addEventListener("click", () => { ed.snap = !ed.snap; localStorage.setItem("gg.snap", ed.snap ? "1" : "0"); paintButtons(); });
-  const zoom = (f) => { ed.px = Math.max(6, Math.min(240, Math.round(ed.px * f))); localStorage.setItem("gg.px", String(ed.px)); paintTrack(); };
-  $r(".gg-zoom-in").addEventListener("click", () => zoom(1.5));
-  $r(".gg-zoom-out").addEventListener("click", () => zoom(1 / 1.5));
+  const tlWrap = $r(".gg-tl-scroll");
+  const zoomBar = $r(".gg-zoombar");
+  const zoomThumb = $r(".gg-zb-thumb");
+  const scrollPad = () => {
+    const cs = getComputedStyle(tlWrap);
+    return { l: parseFloat(cs.paddingLeft) || 0, r: parseFloat(cs.paddingRight) || 0 };
+  };
+  const setZoom = (px, scrollLeft) => {
+    ed.px = clampPx(px);
+    localStorage.setItem("gg.px", String(ed.px));
+    layoutClips(root);
+    paintHead();
+    if (scrollLeft != null) tlWrap.scrollLeft = scrollLeft;
+    paintZoomBar(root);
+  };
+  const zoomAt = (factor, x) => {
+    const next = clampPx(ed.px * factor);
+    if (next === ed.px) return;
+    setZoom(next, scrollForZoomAt({ px: ed.px, nextPx: next, scrollLeft: tlWrap.scrollLeft, x, padLeft: scrollPad().l }));
+  };
+  const zoomToFit = () => {
+    const p = scrollPad();
+    setZoom(fitPx({ seqSec: totalSec() + 2, clientWidth: tlWrap.clientWidth, pad: p.l + p.r }), 0);
+  };
+  tlWrap.addEventListener("scroll", () => paintZoomBar(root), { passive: true });
+  zoomThumb.addEventListener("pointerdown", (e) => {
+    if (e.button) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const side = e.target.closest(".gg-zb-handle")?.dataset.side || "";
+    const barW = zoomBar.clientWidth;
+    const x0 = e.clientX;
+    const left0 = parseFloat(zoomThumb.style.left) || 0;
+    const width0 = parseFloat(zoomThumb.style.width) || barW;
+    const C = tlWrap.clientWidth, W0 = Math.max(1, tlWrap.scrollWidth), sl0 = tlWrap.scrollLeft;
+    const startFrac = sl0 / W0, endFrac = Math.min(1, (sl0 + C) / W0);
+    const p = scrollPad();
+    let raf = 0, pendingX = x0;
+    const apply = (x) => {
+      const dx = x - x0;
+      if (!side) {
+        tlWrap.scrollLeft = scrollFromThumbLeft({ left: left0 + dx, width: width0, barW, maxScroll: tlWrap.scrollWidth - tlWrap.clientWidth });
+        paintZoomBar(root);
+        return;
+      }
+      const edgeFrac = (side === "l" ? startFrac : endFrac) + dx / Math.max(1, barW);
+      const r = zoomFromHandle({ side, edgeFrac, startFrac, endFrac, seqSec: totalSec() + 2, clientWidth: C, pad: p.l + p.r });
+      setZoom(r.px, r.scrollLeft);
+    };
+    const move = (ev) => {
+      pendingX = ev.clientX;
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; apply(pendingX); });
+    };
+    const up = () => {
+      zoomThumb.removeEventListener("pointermove", move);
+      zoomThumb.removeEventListener("pointerup", up);
+      zoomThumb.removeEventListener("pointercancel", up);
+      try { zoomThumb.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (raf) { cancelAnimationFrame(raf); raf = 0; apply(pendingX); }
+      zoomThumb.classList.remove("gg-zb-drag");
+    };
+    zoomThumb.classList.add("gg-zb-drag");
+    try { zoomThumb.setPointerCapture(e.pointerId); } catch (_) {}
+    zoomThumb.addEventListener("pointermove", move);
+    zoomThumb.addEventListener("pointerup", up);
+    zoomThumb.addEventListener("pointercancel", up);
+  });
+  zoomThumb.addEventListener("dblclick", (e) => { e.preventDefault(); zoomToFit(); });
+  $r(".gg-editor").addEventListener("wheel", (e) => {
+    if (!e.altKey || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    const x = e.clientX - tlWrap.getBoundingClientRect().left - tlWrap.clientLeft;
+    zoomAt(wheelZoomFactor(e.deltaY || e.deltaX, e.deltaMode), x);
+  }, { passive: false });
+  // '=' / '-' zoom around the playhead (or the view centre when it is off-screen), Timeline scope only.
+  const onZoomKey = (e) => {
+    const act = zoomKeyAction(e);
+    if (!act) return;
+    if (!pluginKeyScopeActive({ hoverTimeline: ggElHovered(root), focusTimeline: ggElHasFocus(root) })) return;
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    if (ggModalOpen() || comfyPromptDialogOpen() || ctxUi.el) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const headX = play.t * ed.px + scrollPad().l - tlWrap.scrollLeft;
+    const x = headX >= 0 && headX <= tlWrap.clientWidth ? headX : tlWrap.clientWidth / 2;
+    zoomAt(act === "zoom-in" ? ZOOM_KEY_FACTOR : 1 / ZOOM_KEY_FACTOR, x);
+  };
+  window.addEventListener("keydown", onZoomKey, true);
+  const zoomRo = window.ResizeObserver ? new ResizeObserver(() => paintZoomBar(root)) : null;
+  if (zoomRo) { zoomRo.observe(tlWrap); zoomRo.observe(zoomBar); }
   $r(".gg-reset").addEventListener("click", resetEdit);
   $r(".gg-export").addEventListener("click", () => startExport($r(".gg-ex-preset").value, $r(".gg-ex-sound").checked));
   $r(".gg-ex-cancel").addEventListener("click", cancelExport);
@@ -6222,6 +6339,8 @@ function mountTimeline(el) {
   return () => {
     stopPlay();
     if (ro) ro.disconnect();
+    if (zoomRo) zoomRo.disconnect();
+    window.removeEventListener("keydown", onZoomKey, true);
     bus.removeEventListener("timeline", onTimeline);
     bus.removeEventListener("timeline", onTimelineLocks);
     bus.removeEventListener("projects", onProjects);
