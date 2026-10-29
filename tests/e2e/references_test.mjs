@@ -266,23 +266,29 @@ async function run() {
     if (pid) createdProjectIds.push(pid);
     await sleep(800);
 
-    // Project Settings Save must work (regression: the name was sent as an object)
+    // Rename must send the name as a string (regression: the name was sent as an object)
     await page.evaluate(() => {
       document.querySelector(".gg-root.gg-shots .gg-head")?.dispatchEvent(
         new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 80, clientY: 40 })
       );
     });
-    await clickCtxItem(page, "Project Settings…");
-    await page.waitForSelector(".gg-modal", { timeout: 10000 });
-    await page.click(".gg-modal-name");
+    await clickCtxItem(page, "Rename Project…");
+    await page.waitForSelector(".gg-ask-dialog .gg-ask-input", { timeout: 10000 });
+    await page.click(".gg-ask-dialog .gg-ask-input");
     await page.keyboard.press("End");
-    await page.type(".gg-modal-name", "x", { delay: 5 });
-    await page.click("form.gg-modal button[type=submit]");
-    await page.waitForFunction(() => !document.querySelector(".gg-modal-backdrop"), { timeout: 15000 });
-    await sleep(600);
+    await page.type(".gg-ask-dialog .gg-ask-input", "x", { delay: 5 });
+    await page.click(".gg-ask-dialog .gg-ask-ok");
+    await page.waitForFunction(
+      (n) => {
+        const sel = document.querySelector(".gg-root.gg-shots .gg-proj");
+        return sel?.options[sel.selectedIndex]?.textContent.includes(n);
+      },
+      { timeout: 15000 },
+      `${name}x`
+    ).catch(() => {});
     const renamed = await page.$eval(".gg-root.gg-shots .gg-proj", (sel) => sel.options[sel.selectedIndex].textContent);
-    if (!renamed.includes(`${name}x`)) throw new Error(`Project Settings save did not rename: ${renamed}`);
-    console.log("PASS  Project Settings Save renames the project");
+    if (!renamed.includes(`${name}x`)) throw new Error(`Rename Project… did not rename: ${renamed}`);
+    console.log("PASS  Rename Project… renames the project");
 
     // empty state
     await openRefs(page);

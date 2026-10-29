@@ -222,6 +222,8 @@ import {
   presetKeyForSettings,
   readSettingsFromFormValues,
   CAPTION_LANG_OPTIONS,
+  projectSettingsModalPatch,
+  folderCheckErrorText,
 } from "./gg_project_settings_core.js";
 import {
   undoKeyAction,
@@ -850,16 +852,17 @@ function openProjectSettingsModal() {
   if (!state.pid) return;
   closeProjectModal();
   const nat = isNativeProject();
-  const p = currentProject();
-  const tl = state.timeline;
-  const curSettings = normalizeProjectSettings(tl?.project?.settings);
+  const curSettings = normalizeProjectSettings(state.timeline?.project?.settings);
   const wrap = document.createElement("div");
   wrap.className = "gg-modal-backdrop";
   wrap.innerHTML = `
-    <form class="gg-modal" role="dialog" aria-label="Project settings">
+    <form class="gg-modal gg-proj-settings-modal" role="dialog" aria-label="Project settings">
       <h3 class="gg-modal-title">Project Settings</h3>
-      ${nat ? `<label class="gg-modal-field">Name <input type="text" class="gg-modal-name" required maxlength="${PROJECT_NAME_MAX_LEN}" /></label>
-      ${projectSetupFieldsHtml()}` : ""}
+      ${nat ? `<label class="gg-modal-field">Output folder
+        <input type="text" class="gg-modal-folder" maxlength="260" spellcheck="false" autocomplete="off" placeholder="e.g. D:\\Films\\My Film" />
+        <span class="gg-modal-hint">Where results are organized by project / scene / cut. Empty = default: the plugin's own projects folder (custom_nodes/comfyui-gonggan-cut/projects).</span>
+        <span class="gg-modal-hint gg-split-err gg-modal-folder-err" aria-live="polite"></span>
+      </label>` : ""}
       <div class="gg-modal-field" title="ComfyUI saved workflow used as this project's template">
         <span class="gg-tpl-label">Default template</span>
         <input type="search" class="gg-modal-tpl-filter" placeholder="Filter templates..." autocomplete="off" aria-label="Filter templates" />
@@ -880,26 +883,42 @@ function openProjectSettingsModal() {
   wireProjectTemplateField(wrap);
   wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeProjectModal(); });
   wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", closeProjectModal);
-  const nameIn = wrap.querySelector(".gg-modal-name");
-  if (!nat || !nameIn) {
+  const folderIn = wrap.querySelector(".gg-modal-folder");
+  if (!nat || !folderIn) {
     form.addEventListener("submit", (e) => e.preventDefault());
     wrap.querySelector(".gg-tpl-select")?.focus();
     return;
   }
-  nameIn.value = p?.name || tl?.project?.name || "";
-  applyProjectSetupToModal(wrap, curSettings);
+  const folderErr = wrap.querySelector(".gg-modal-folder-err");
+  const saveBtn = wrap.querySelector("button[type=submit]");
+  const showFolderErr = (msg) => {
+    if (folderErr) folderErr.textContent = msg;
+    folderIn.focus();
+  };
+  folderIn.value = curSettings.project_folder;
+  folderIn.addEventListener("input", () => { if (folderErr) folderErr.textContent = ""; });
+  let saving = false;
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const nameNorm = normalizeNameInput(nameIn.value, PROJECT_NAME_MAX_LEN);
-    if (!nameNorm.ok) return;
-    const name = nameNorm.value;
-    const settings = readProjectSetupFromModal(wrap, curSettings);
+    if (saving) return;
+    const patch = projectSettingsModalPatch(curSettings, folderIn.value);
+    if (!patch) {
+      closeProjectModal();
+      return;
+    }
     const reqPid = state.pid;
+    saving = true;
+    if (saveBtn) saveBtn.disabled = true;
     try {
-      if (name !== (p?.name || tl?.project?.name || "")) {
-        await postJson("/gonggan/project/rename", { pid: reqPid, name });
+      if (patch.project_folder) {
+        try {
+          await postJson("/gonggan/folder/check", { path: patch.project_folder });
+        } catch (err) {
+          showFolderErr(folderCheckErrorText(err));
+          return;
+        }
       }
-      const data = await postJson("/gonggan/project/update", { pid: reqPid, fields: { settings } });
+      const data = await postJson("/gonggan/project/update", { pid: reqPid, fields: { settings: patch } });
       closeProjectModal();
       if (data.timeline) adoptMutationTimeline(data.timeline, reqPid);
       if (data.projects) state.projects = data.projects;
@@ -910,9 +929,12 @@ function openProjectSettingsModal() {
       ggToast("Project", "Settings saved", "ok");
     } catch (err) {
       ggToast("Project", err.message, "warn");
+    } finally {
+      saving = false;
+      if (saveBtn && wrap.isConnected) saveBtn.disabled = false;
     }
   });
-  nameIn.focus();
+  folderIn.focus();
 }
 
 let refsModalEl = null;
@@ -1224,6 +1246,27 @@ function askConfirm(opts) {
   });
 }
 
+async function renameNativeProject() {
+  if (!isNativeProject()) return;
+  const reqPid = state.pid;
+  const cur = currentProject()?.name || state.timeline?.project?.name || "";
+  const name = await askText({
+    title: "Rename Project",
+    label: "Name",
+    value: cur,
+    okLabel: "Rename",
+    maxLength: PROJECT_NAME_MAX_LEN,
+  });
+  if (name === null || name === cur) return;
+  try {
+    await postJson("/gonggan/project/rename", { pid: reqPid, name });
+    await loadProjects();
+    ggToast("Project", `Renamed to "${name}"`, "ok");
+  } catch (e) {
+    ggToast("Project", e.message, "warn");
+  }
+}
+
 async function deleteNativeProject() {
   if (!isNativeProject()) return;
   const p = currentProject();
@@ -1250,6 +1293,7 @@ function openProjectContextMenu(e) {
     { label: "New Project…", action: () => openNewProjectModal() },
     { label: "References…", disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => openReferencesModal() },
     { label: "Project Settings…", disabled: !state.pid, action: () => openProjectSettingsModal() },
+    { label: "Rename Project…", disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => renameNativeProject() },
     { label: "Delete Project", danger: true, disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => deleteNativeProject() },
   ]);
 }

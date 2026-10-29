@@ -14,8 +14,10 @@ from . import gg_wfstore
 
 try:
     from .gg_project import ConflictError
+    from .gg_project.project_settings import check_output_folder
 except ImportError:  # unittest / plain script
     from gg_project import ConflictError  # type: ignore
+    from gg_project.project_settings import check_output_folder  # type: ignore
 
 routes = PromptServer.instance.routes
 log = logging.getLogger("gonggan-cut")
@@ -527,6 +529,16 @@ async def gg_project_update(request):
     if res is None:
         return _err(404, "project not found")
     return web.json_response(res)
+
+
+@routes.post("/gonggan/folder/check")
+async def gg_folder_check(request):
+    data = await _json_body(request)
+    path = data.get("path")
+    if path is not None and not isinstance(path, str):
+        return _err(400, "path must be a string")
+    res = await asyncio.to_thread(check_output_folder, path or "")
+    return web.json_response(res, status=200 if res.get("ok") else 400)
 
 
 @routes.post("/gonggan/project/import")
