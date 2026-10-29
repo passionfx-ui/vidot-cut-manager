@@ -644,7 +644,7 @@ async function main() {
     if (m.height > 320) throw new Error(`menu too tall: ${m.height}px`);
   });
 
-  await runScenario("07", "Cut click loads workflow tab named like cut", async () => {
+  await runScenario("07", "Cut click loads workflow tab labeled Project/Scene cutLabel", async () => {
     if (!templateRef) {
       const err = new Error("No saved ComfyUI workflow for template — skipped");
       err.skipped = true;
@@ -659,19 +659,16 @@ async function main() {
       const active = ws?.activeWorkflow;
       const tabEls = [...document.querySelectorAll('[data-testid="workflow-tab"]')];
       const activeEl = tabEls.find((el) => /active|selected|p-tab-active/.test(el.className + " " + (el.getAttribute("aria-selected") || ""))) || tabEls[tabEls.length - 1];
-      // 0.9.18: file name is the stable cutId; the human-readable name is the displayed tab label.
+      // 0.9.18: file name is the stable cutId; the displayed tab label is `<Project>/<Scene> <cutLabel>`.
       const base = activeEl?.querySelector(".workflow-label")?.textContent?.trim() || active?.filename || "";
-      const nameEl = document.querySelector(".gg-root.gg-shots .gg-cut .gg-cut-title");
-      const raw = nameEl?.textContent?.replace(/^\d+\s*/, "").trim() || "";
-      return { tab: base, cutName: raw };
+      const numEl = document.querySelector(".gg-root.gg-shots .gg-cut .gg-num");
+      return { tab: base, cutLabel: numEl?.textContent?.trim() || "" };
     });
     if (!info.tab) throw new Error("No active workflow tab after cut click");
-    const slug = (info.cutName || "cut1").replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "") || "cut1";
-    const stem = slug.replace(/\.json$/i, "");
-    if (!info.tab.toLowerCase().includes(stem.toLowerCase())) {
-      throw new Error(`tab "${info.tab}" does not match cut "${info.cutName}" (expected ~${stem}.json)`);
-    }
-  });
+    if (!info.cutLabel) throw new Error("No cut label on first cut card");
+    if (!info.tab.includes("/") || !info.tab.replace(/ \*$/, "").endsWith(info.cutLabel)) {
+      throw new Error(`tab "${info.tab}" does not end with cut label "${info.cutLabel}" (expected <Project>/<Scene> ${info.cutLabel})`);
+    }  });
 
   await runScenario("08", "Template dropdown matches saved workflows", async () => {
     const paths = await fetchWorkflowPaths(page);

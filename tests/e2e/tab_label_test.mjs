@@ -1,12 +1,12 @@
 /**
- * Headless Chrome: single Gonggan shot tab + display-only Project / Cut labels (0.8.4).
+ * Headless Chrome: single Gonggan shot tab + display-only `<Project>/<Scene> <cutLabel>` labels.
  */
 import { shotWorkflowRelPathById } from "../../web/gg_shot_names.js";
-import { formatShotTabLabel } from "../../web/gg_tab_label_core.js";
+import { formatShotTabLabel, shotTabCutParts } from "../../web/gg_tab_label_core.js";
 
 // Expected tab text goes through the same length budget as the plugin (long project names are shortened).
-function expLabel(projectName, c) {
-  return formatShotTabLabel({ projectName, cutName: c.name, cutNumber: (c.pos ?? c.index ?? 0) + 1 });
+function expLabel(projectName, c, cuts) {
+  return formatShotTabLabel({ projectName, ...shotTabCutParts(c, { cuts }) });
 }
 import fs from "node:fs";
 import os from "node:os";
@@ -562,12 +562,12 @@ async function main() {
     }
   });
 
-  await runScenario("02", "DOM label Project / Cut, filename unchanged", async () => {
+  await runScenario("02", "DOM label Project/cutLabel, filename unchanged", async () => {
     const c = cuts[0];
     await clickCutById(page, c.id);
     await waitForCutLoaded(page, c.id);
     await refreshTabLabels(page);
-    const expected = expLabel(projectName, c);
+    const expected = expLabel(projectName, c, cuts);
     const st = await getWorkflowTabState(page);
     const hasLabel = st.labels.some((l) => l === expected);
     if (!hasLabel) throw new Error(`label "${expected}" not in [${st.labels.join(", ")}]`);
@@ -587,7 +587,7 @@ async function main() {
     await clickCutById(page, c2.id);
     await waitForCutLoaded(page, c2.id);
     await refreshTabLabels(page);
-    const expectedC2 = expLabel(projectName, c2);
+    const expectedC2 = expLabel(projectName, c2, cuts);
     await page.waitForFunction(
       (exp) => [...document.querySelectorAll(".workflow-label")].some((s) => s.textContent?.trim() === exp),
       { timeout: 3000 },
@@ -598,18 +598,17 @@ async function main() {
     await postJson(page, "/gonggan/project/rename", { pid, name: newProj });
     await reloadShotsData(page);
     await refreshTabLabels(page);
-    const expectedProj = expLabel(newProj, c2);
+    const expectedProj = expLabel(newProj, c2, cuts);
     await page.waitForFunction(
       (exp) => [...document.querySelectorAll(".workflow-label")].some((s) => s.textContent?.trim() === exp),
       { timeout: 3000 },
       expectedProj
     );
 
-    // cut/update POST is unavailable until ComfyUI reloads Python routes; cut name changes are covered by switching cuts above.
     await clickCutById(page, c0.id);
     await waitForCutLoaded(page, c0.id);
     await refreshTabLabels(page);
-    const expectedC0 = expLabel(newProj, c0);
+    const expectedC0 = expLabel(newProj, c0, cuts);
     await page.waitForFunction(
       (exp) => [...document.querySelectorAll(".workflow-label")].some((s) => s.textContent?.trim() === exp),
       { timeout: 3000 },

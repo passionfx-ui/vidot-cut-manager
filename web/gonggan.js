@@ -123,6 +123,7 @@ import {
   formatShotTabTitle,
   normalizeTabDescriptor,
   planTabLabels,
+  shotTabCutParts,
 } from "./gg_tab_label_core.js";
 import {
   CARD_EDIT_IDLE_TIP,
@@ -1770,13 +1771,9 @@ function resolveShotTabLabel(wf) {
 
   const c = cutById(meta.cutId);
   if (!c) return wf.ggTabLabelCache || null;
-  const pos = c.pos ?? c.index;
-  const labelEntry = computeCutLabels(state.timeline).get(c.id);
-  const tabCutNum = labelEntry?.label ?? (pos != null ? pos + 1 : undefined);
   const label = formatShotTabLabel({
     projectName,
-    cutName: c.name,
-    cutNumber: tabCutNum,
+    ...shotTabCutParts(c, state.timeline),
     edited: cutShowsEditedMarker(c),
   });
   if (label) wf.ggTabLabelCache = label;
@@ -1800,13 +1797,10 @@ function resolveShotTabTitle(wf) {
 
   const c = cutById(meta.cutId);
   if (!c) return null;
-  const pos = c.pos ?? c.index;
-  const labelEntry = computeCutLabels(state.timeline).get(c.id);
-  const tabCutNum = labelEntry?.label ?? (pos != null ? pos + 1 : undefined);
   return formatShotTabTitle({
     projectName,
+    ...shotTabCutParts(c, state.timeline),
     cutName: c.name,
-    cutNumber: tabCutNum,
   });
 }
 
