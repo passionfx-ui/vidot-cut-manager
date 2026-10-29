@@ -7,6 +7,7 @@ import {
   canMoveDown,
   createUndoBurst,
   snapshotOrderGroups,
+  dropHighlight,
 } from "../../web/gg_reorder_core.js";
 
 const groups = [
@@ -21,6 +22,28 @@ describe("canMoveUp/Down", () => {
     assert.equal(canMoveDown(order, ["c"]), false);
     assert.ok(canMoveDown(order, ["a"]));
     assert.ok(canMoveUp(order, ["c"]));
+  });
+});
+
+describe("dropHighlight", () => {
+  it("targets the scene; same scene is not cross", () => {
+    assert.deepEqual(dropHighlight(groups, ["a"], "g1"), { groupId: "g1", crossScene: false });
+  });
+
+  it("marks cross-scene when the target differs", () => {
+    assert.deepEqual(dropHighlight(groups, ["a"], "g2"), { groupId: "g2", crossScene: true });
+  });
+
+  it("null/empty target means Ungrouped section", () => {
+    assert.deepEqual(dropHighlight(groups, ["a"], null), { groupId: null, crossScene: true });
+    assert.deepEqual(dropHighlight(groups, ["a"], ""), { groupId: null, crossScene: true });
+    assert.deepEqual(dropHighlight(groups, ["z"], undefined), { groupId: null, crossScene: false });
+  });
+
+  it("multi-select is cross if any cut changes scene", () => {
+    assert.equal(dropHighlight(groups, ["a", "b"], "g1").crossScene, false);
+    assert.equal(dropHighlight(groups, ["a", "c"], "g1").crossScene, true);
+    assert.equal(dropHighlight(null, ["a"], "g1").crossScene, true);
   });
 });
 

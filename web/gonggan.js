@@ -132,6 +132,7 @@ import {
   canMoveDown,
   createUndoBurst,
   snapshotOrderGroups,
+  dropHighlight,
 } from "./gg_reorder_core.js";
 import {
   loadLastTemplate,
@@ -3613,6 +3614,14 @@ function bindShotsReorder(root) {
       };
       let scrollRaf = 0;
       let scrollLoop = false;
+      let dropSec = null;
+      const setDropSec = (sec, cross) => {
+        if (dropSec && dropSec !== sec) dropSec.classList.remove("gg-drop-target", "gg-drop-cross");
+        dropSec = sec || null;
+        if (!dropSec) return;
+        dropSec.classList.add("gg-drop-target");
+        dropSec.classList.toggle("gg-drop-cross", !!cross);
+      };
       const refreshDropIndicator = () => {
         const tl = state.timeline;
         if (!tl) return;
@@ -3623,6 +3632,11 @@ function bindShotsReorder(root) {
         drop = shotsDropTarget(order, rows, wrapY);
         indicator.hidden = false;
         indicator.style.top = `${drop.lineY}px`;
+        const hi = dropHighlight(tl.groups || [], movingIds(), drop.toGroupId);
+        const sec = hi.groupId
+          ? wrap.querySelector(`.gg-grp-sec[data-group-id="${CSS.escape(hi.groupId)}"]`)
+          : wrap.querySelector(".gg-grp-sec.gg-grp-loose");
+        setDropSec(sec, hi.crossScene);
       };
       const tickAutoScroll = () => {
         if (!scrollLoop) return;
@@ -3655,6 +3669,7 @@ function bindShotsReorder(root) {
         window.removeEventListener("keydown", onEsc);
         stopScrollLoop();
         indicator.hidden = true;
+        setDropSec(null);
         wrap.classList.remove("gg-reorder-dragging");
         el.classList.remove("gg-moving");
         root.querySelectorAll(".gg-cut.gg-moving").forEach((n) => n.classList.remove("gg-moving"));
