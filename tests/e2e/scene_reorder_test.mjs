@@ -203,7 +203,8 @@ async function selectTestProject(page) {
 async function resetBaseline(page) {
   await closeCtx(page);
   await postJson(page, "/gonggan/groups", { pid: testPid, groups: baseline.groups });
-  await postJson(page, "/gonggan/edit", { pid: testPid, order: baseline.ids, clips: {} });
+  await postJson(page, "/gonggan/cut/reorder", { pid: testPid, order: baseline.ids });
+  await postJson(page, "/gonggan/edit/reset", { pid: testPid });
   await reloadShots(page);
   const ids = await domCutIds(page);
   if (ids.join() !== baseline.ids.join()) throw new Error(`baseline order not restored: ${ids.join()}`);

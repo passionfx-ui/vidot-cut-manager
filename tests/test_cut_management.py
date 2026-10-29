@@ -143,7 +143,7 @@ class CutManagementTests(unittest.TestCase):
             ],
         )
         new_order = [c2, c1, c3]
-        self.store.apply_timeline_edit(pid, new_order, {})
+        self.store.reorder(pid, new_order)
         doc = self.store.get_project(pid)
         self.assertEqual(timeline_order(doc), new_order)
         groups = [

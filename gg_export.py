@@ -15,7 +15,10 @@ import time
 import uuid
 from pathlib import Path
 
-from . import gg_data
+try:
+    from . import gg_data
+except ImportError:  # unittest / plain script
+    import gg_data  # type: ignore
 
 PRESETS = {"480p": (854, 480), "720p": (1280, 720), "1080p": (1920, 1080)}
 FPS_ALLOWED = (24, 25, 30)
@@ -152,6 +155,30 @@ def _segment_cmd(exe: str, clip: dict, src: Path | None, out: Path, w: int, h: i
     return cmd
 
 
+GAP_CLIP = {"media": None, "in": 0.0}
+
+
+def export_plan(cuts: list[dict], fps: int) -> list[tuple[dict, int]]:
+    """(clip, frames) in time order; a gap between clips becomes GAP_CLIP (black, silent).
+    Clips are placed at their `start` (packed after the previous clip when missing). Frame boundaries
+    come from absolute times, so there is no rounding drift across many clips."""
+    plan: list[tuple[dict, int]] = []
+    frame_at, at = 0, 0.0
+    if all(isinstance(c.get("start"), (int, float)) for c in cuts):
+        cuts = sorted(cuts, key=lambda c: float(c["start"]))
+    for c in cuts:
+        start = c.get("start")
+        start = max(at, float(start)) if isinstance(start, (int, float)) else at
+        at = start + float(c["sec"])
+        s, e = max(frame_at, round(start * fps)), round(at * fps)
+        if s > frame_at:
+            plan.append((GAP_CLIP, s - frame_at))
+        if e > s:
+            plan.append((c, e - s))
+            frame_at = e
+    return plan
+
+
 def _worker(job_id: str, tl: dict, w: int, h: int, fps: int, sound: bool) -> None:
     exe = gg_data.ffmpeg_exe()
     work = gg_data.CACHE_DIR / "export" / job_id
@@ -159,22 +186,15 @@ def _worker(job_id: str, tl: dict, w: int, h: int, fps: int, sound: bool) -> Non
         if not exe:
             raise RuntimeError("ffmpeg not found (PATH or imageio_ffmpeg)")
         work.mkdir(parents=True, exist_ok=True)
-        cuts = tl["cuts"]
-        total = sum(c["sec"] for c in cuts)
-        # cumulative frame boundaries -> no rounding drift across many clips
-        bounds, at = [0], 0.0
-        for c in cuts:
-            at += c["sec"]
-            bounds.append(round(at * fps))
+        plan = export_plan(tl["cuts"], fps)
+        total_frames = sum(f for _, f in plan)
+        total = total_frames / fps
         segs = []
         done = 0.0
-        for i, c in enumerate(cuts):
-            frames = bounds[i + 1] - bounds[i]
-            if frames <= 0:
-                continue
+        for i, (c, frames) in enumerate(plan):
             src = gg_data.media_path(c["media"]["id"]) if c.get("media") else None
             seg = work / f"seg_{i:03d}.mkv"
-            label = f"clip {i + 1}/{len(cuts)}"
+            label = f"clip {i + 1}/{len(plan)}"
             _set(step=label, current=i + 1)
             _run(_segment_cmd(exe, c, src, seg, w, h, fps, frames, sound), frames / fps, done, total, label)
             segs.append(seg)
@@ -192,7 +212,7 @@ def _worker(job_id: str, tl: dict, w: int, h: int, fps: int, sound: bool) -> Non
               "-movflags", "+faststart", str(tmp)], total, 0.0, total, "joining", base=0.97, span=0.03)
         tmp.replace(out)
         _set(status="done", progress=1.0, step="done", finished_at=time.time(), file=name,
-             path=str(out), size=out.stat().st_size, expected_sec=round(bounds[-1] / fps, 3))
+             path=str(out), size=out.stat().st_size, expected_sec=round(total_frames / fps, 3))
     except InterruptedError:
         _set(status="cancelled", step="cancelled", finished_at=time.time())
     except Exception as ex:  # noqa: BLE001

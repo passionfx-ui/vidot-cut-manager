@@ -63,7 +63,7 @@ def _last_output(path: Path, prompt_id: str) -> dict:
 
 
 class NativeMoveKeepsFilesTests(unittest.TestCase):
-    """Native projects: the Shots sidebar saves a move as /gonggan/groups then /gonggan/edit."""
+    """Native projects: the Shots sidebar saves a move as /gonggan/groups then /gonggan/cut/reorder."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -127,14 +127,13 @@ class NativeMoveKeepsFilesTests(unittest.TestCase):
         return out
 
     def _persist(self, order, groups, picks=None) -> dict:
-        """Same two calls, same order and same clip payload as gonggan.js persistShotsReorder."""
+        """Same two calls and same order payload as gonggan.js persistShotsReorder (picks: a timeline save)."""
         self.assertIsNotNone(na.native_save_groups(self.pid, groups))
-        tl = self.store.to_timeline(self.pid)
-        clips = {c["id"]: {"in": c["in"], "sec": c["sec"], "pick": c.get("pick") or None} for c in tl["cuts"]}
-        for cid, vid in (picks or {}).items():
-            clips[cid]["pick"] = vid
-        out = na.native_save_edit(self.pid, order, clips)
+        out = na.native_reorder_cuts(self.pid, order)
         self.assertIsNotNone(out)
+        if picks:
+            out = na.native_save_edit(self.pid, out["track_order"], {cid: {"pick": vid} for cid, vid in picks.items()})
+            self.assertIsNotNone(out)
         return out
 
     def _groups(self, *pairs) -> list[dict]:

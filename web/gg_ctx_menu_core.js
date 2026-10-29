@@ -97,7 +97,9 @@ export function cutCardMenuItems(ctx = {}) {
 /** Timeline clip menu: always one cut (the clicked clip). */
 export function timelineClipMenuItems(ctx = {}) {
   const a = cutActionItems({ ...ctx, multi: false });
-  return [{ key: "open", label: "Open cut" }, a.regen, a.send, a.redo, a.rename, a.del];
+  const nat = !!ctx.native;
+  const applyOrder = { key: "applyOrder", label: "Apply order to cuts", disabled: !nat, title: nat ? "Reorder the Shots cut list to match the timeline" : ctx.readonlyTip || "" };
+  return [{ key: "open", label: "Open cut" }, a.regen, a.send, a.redo, a.rename, applyOrder, a.del];
 }
 
 /** @param {{ collapsed?: boolean, cutCount?: number }} ctx */
