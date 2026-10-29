@@ -2,8 +2,9 @@
  * 0.9.62 scene reorder: drag a scene header to move the whole scene. Covers move + labels + persistence
  * (Reload button and full page reload), Undo, Esc mid-drag, collapsed scene, header buttons / right-click
  * still working, right button never drags, an ordinary cut drag between scenes, and a scene drag while a
- * timeline save is still waiting (0.9.78 hang) with Ctrl+Z / Ctrl+Y, the same in Caption list mode, and
- * cut ids / media / versions / source workflow unchanged by a move.
+ * timeline save is still waiting (0.9.78 hang) with Ctrl+Z / Ctrl+Y, the same in Caption list mode (scene
+ * headers once, scene drag, cut drag from the caption field), and cut ids / media / versions / source
+ * workflow unchanged by a move.
  * ZZ temp native project (2 scenes x 2 cuts), soft-deleted at the end. Blocks POST /prompt and /gonggan/regen.
  */
 import fs from "node:fs";
@@ -395,11 +396,12 @@ async function main() {
     const moved = [c3, c4, c1, c2];
     const movedLabels = { [c3]: "1-1", [c4]: "1-2", [c1]: "2-1", [c2]: "2-2" };
 
-    const checkMoved = async (where) => {
+    // Caption view rows are just the caption field (no cut label), so labels are checked in Info view only.
+    const checkMoved = async (where, { labels: withLabels = true } = {}) => {
       if ((await domCutIds(page)).join() !== moved.join()) throw new Error(`${where}: Shots order ${(await domCutIds(page)).join()}`);
       if ((await domSceneIds(page)).join() !== [gB, gA].join()) throw new Error(`${where}: scene order ${(await domSceneIds(page)).join()}`);
       const labels = await domLabels(page);
-      if (JSON.stringify(labels) !== JSON.stringify(movedLabels)) throw new Error(`${where}: labels ${JSON.stringify(labels)}`);
+      if (withLabels && JSON.stringify(labels) !== JSON.stringify(movedLabels)) throw new Error(`${where}: labels ${JSON.stringify(labels)}`);
       if ((await sectionCutIds(page, gB)).join() !== [c3, c4].join()) throw new Error(`${where}: scene B cuts changed`);
       if ((await sectionCutIds(page, gA)).join() !== [c1, c2].join()) throw new Error(`${where}: scene A cuts changed`);
       const tl = await serverTimeline(page);
@@ -608,11 +610,11 @@ async function main() {
       await checkMoved("after Ctrl+Y");
     });
 
-    await runScenario("s6", "Cut drag still moves a cut from scene B into scene A", async () => {
-      await resetBaseline(page);
-      const pts = await page.evaluate((a, b) => {
+    /** Drag cut c4 (pressed on `grab` inside its row) onto c2: it must join scene A. */
+    const dragC4IntoSceneA = async (grab) => {
+      const pts = await page.evaluate((a, b, g) => {
         const wrap = document.querySelector(".gg-root.gg-shots .gg-grp-wrap");
-        const src = document.querySelector(`.gg-root.gg-shots .gg-cut[data-cut-id="${a}"] .gg-cut-title`);
+        const src = document.querySelector(`.gg-root.gg-shots .gg-cut[data-cut-id="${a}"] ${g}`);
         const dst = document.querySelector(`.gg-root.gg-shots .gg-cut[data-cut-id="${b}"]`);
         if (!wrap || !src || !dst) return null;
         const w = wrap.getBoundingClientRect();
@@ -622,7 +624,7 @@ async function main() {
         const to = { x: d.x + d.width / 2, y: d.y + Math.max(4, d.height * 0.25) };
         const inside = (p) => p.y > w.top + 50 && p.y < w.bottom - 50;
         return { from, to, ok: inside(from) && inside(to), geo: { wTop: w.top, wBottom: w.bottom, dTop: d.top, dBottom: d.bottom } };
-      }, c4, c2);
+      }, c4, c2, grab);
       if (!pts) throw new Error("drag points not found");
       if (!pts.ok) return { skip: `source/target not both away from the auto-scroll edges ${JSON.stringify(pts.geo)}` };
       await dragHeader(page, pts);
@@ -631,6 +633,12 @@ async function main() {
       await sleep(400);
       if ((await sectionCutIds(page, gA)).join() !== [c1, c4, c2].join()) throw new Error("Shots scene A cuts not updated");
       if ((await sectionCutIds(page, gB)).join() !== [c3].join()) throw new Error("Shots scene B cuts not updated");
+      return null;
+    };
+
+    await runScenario("s6", "Cut drag still moves a cut from scene B into scene A", async () => {
+      await resetBaseline(page);
+      return dragC4IntoSceneA(".gg-cut-title");
     });
 
     await runScenario("s9", "Caption list mode: scene drag shows the drop line, moves the whole scene; Ctrl+Z / Ctrl+Y", async () => {
@@ -639,6 +647,13 @@ async function main() {
       await page.waitForSelector(".gg-root.gg-shots.gg-list-caption", { timeout: 8000 });
       try {
         await sleep(400);
+        const heads = await page.$$eval(".gg-root.gg-shots .gg-grp-sec", (els) =>
+          els.map((s) => `${s.dataset.groupId}:${s.querySelectorAll(":scope > .gg-grp-head").length}`));
+        if (heads.join() !== [`${gA}:1`, `${gB}:1`].join()) throw new Error(`Caption view scene headers: ${heads.join()}`);
+        if ((await sectionCutIds(page, gA)).join() !== [c1, c2].join()) throw new Error("Caption view scene A rows differ from Info");
+        if (await page.$(".gg-root.gg-shots .gg-cut .gg-cut-header, .gg-root.gg-shots .gg-cut .gg-cut-thumb")) {
+          throw new Error("Caption view row shows info card parts");
+        }
         const pts = await headerDragPoints(page, gB, `${secSel(gA)} > .gg-grp-head`, 0.5);
         if (!pts?.ok) throw new Error(`scene header drag points not usable: ${JSON.stringify(pts)}`);
         await dragHeader(page, pts, {
@@ -653,7 +668,7 @@ async function main() {
         await waitToast(page, "Moved 2 cut(s)");
         await waitServerOrder(page, moved);
         await sleep(400);
-        await checkMoved("Caption mode drop");
+        await checkMoved("Caption mode drop", { labels: false });
         const keyInShots = async (key) => {
           await page.mouse.move(pts.to.x, pts.to.y);
           await page.keyboard.down("Control");
@@ -667,7 +682,19 @@ async function main() {
         await keyInShots("KeyY");
         await waitServerOrder(page, moved);
         await sleep(400);
-        await checkMoved("Caption mode Ctrl+Y");
+        await checkMoved("Caption mode Ctrl+Y", { labels: false });
+      } finally {
+        await page.click('.gg-root.gg-shots .gg-list-toggle [data-mode="info"]').catch(() => {});
+      }
+    });
+
+    await runScenario("s10", "Caption view: cut drag (pressed on the caption field) moves a cut from scene B into scene A", async () => {
+      await resetBaseline(page);
+      await page.click('.gg-root.gg-shots .gg-list-toggle [data-mode="caption"]');
+      await page.waitForSelector(".gg-root.gg-shots.gg-list-caption .gg-caption-text", { timeout: 8000 });
+      try {
+        await sleep(400);
+        return await dragC4IntoSceneA(".gg-caption-text");
       } finally {
         await page.click('.gg-root.gg-shots .gg-list-toggle [data-mode="info"]').catch(() => {});
       }
