@@ -1,14 +1,18 @@
 /**
- * Headless Chrome: bottom-bar Render on selected cuts (0.9.73).
- * - bottom bar is always shown: 0 selected -> Render disabled
+ * Headless Chrome: top Render button on selected cuts (0.9.73, moved to the Shots header in 0.9.87).
+ * - bottom bar is always shown: 0 selected -> top Render disabled; the bar has no Render
  * - Ctrl+A over Shots selects every cut; over the canvas it does not touch the Shots selection
  * - 3 cuts selected (one empty, selected first) -> Render -> one confirm "Queue 2 cuts?"; Cancel sends nothing
  * - OK -> exactly 2 POST /prompt in Shots display order (each the cut's current version graph),
  *   jobs registered to the cuts, cards show Queued, toast "Queued 2 cuts" + "(1 skipped: no workflow)",
- *   selection kept
+ *   selection kept, counter "0 / 2 done"
  * - cut card menu has "Render selected" (not clicked)
+ * - 0.9.87: Remove from queue on A -> POST /queue {delete:[A's prompt]}, badge cleared, "0 / 1 done";
+ *   C errors -> Failed badge, "1 / 1 done"; Re-queue on C -> confirm "Queue 1 cut?" -> 1 more POST /prompt
+ *   (C's graph), C Queued, "0 / 1 done"
  * POST /prompt and /api/prompt are intercepted and answered with a fake prompt id (never forwarded);
- * GET /queue answers with those fake ids; POST /gonggan/regen is blocked.
+ * GET /queue answers from the test's fake queue; POST /queue is intercepted (never forwarded);
+ * POST /gonggan/regen is blocked. ComfyUI execution events are dispatched in the page (nothing runs).
  * ZZ-test- project only; its timeline and version media are mocked.
  */
 import fs from "node:fs";
@@ -24,7 +28,7 @@ const MIN_RAM = 40 * 1024 ** 3;
 const VIEWPORT = { width: 1600, height: 900 };
 const TEST_PREFIX = "ZZ-test-batch-render";
 const PROMPT_POST = [/\/prompt(\?|$)/, /\/api\/prompt(\?|$)/];
-const QUEUE_GET = [/^\/queue$/, /^\/api\/queue$/];
+const QUEUE_PATH = [/^\/queue$/, /^\/api\/queue$/];
 const BLOCKED_POST = [/\/gonggan\/regen(\?|$)/, /\/api\/gonggan\/regen(\?|$)/];
 const LOAD_IMAGE_TYPES = new Set(["LoadImage", "LoadImageMask", "LoadImageOutput"]);
 
@@ -37,6 +41,10 @@ const timelineMocks = new Map();
 const mediaMocks = new Map();
 /** Intercepted prompt bodies (never forwarded). */
 const promptPosts = [];
+/** Intercepted POST /queue bodies (never forwarded). */
+const queuePosts = [];
+/** What GET /queue lists as pending (fake prompt ids). */
+let fakePending = [];
 let blockedAttempts = 0;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -121,15 +129,28 @@ function attachRequestGuard(page) {
       } catch (_) {}
       const promptId = `zz-batch-${runStamp}-${promptPosts.length + 1}`;
       promptPosts.push({ url, body, promptId });
+      fakePending.push(promptId);
       console.log(`INTERCEPTED POST ${new URL(url).pathname} (not forwarded) -> ${promptId}`);
       req.respond({ status: 200, contentType: "application/json", body: JSON.stringify({ prompt_id: promptId, number: 0, node_errors: {} }) });
       return;
     }
-    if (method === "GET" && matchesAny(QUEUE_GET, url)) {
+    if (method === "POST" && matchesAny(QUEUE_PATH, url)) {
+      let body = null;
+      try {
+        body = JSON.parse(req.postData() || "null");
+      } catch (_) {}
+      queuePosts.push(body);
+      const del = new Set(Array.isArray(body?.delete) ? body.delete : []);
+      fakePending = fakePending.filter((id) => !del.has(id));
+      console.log(`INTERCEPTED POST ${new URL(url).pathname} (not forwarded): ${JSON.stringify(body)}`);
+      req.respond({ status: 200, contentType: "application/json", body: "{}" });
+      return;
+    }
+    if (method === "GET" && matchesAny(QUEUE_PATH, url)) {
       req.respond({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ queue_running: [], queue_pending: promptPosts.map((p, i) => [i, p.promptId, {}, {}, []]) }),
+        body: JSON.stringify({ queue_running: [], queue_pending: fakePending.map((id, i) => [i, id, {}, {}, []]) }),
       });
       return;
     }
@@ -269,11 +290,13 @@ async function clickCut(page, cutId, { ctrl = false } = {}) {
 async function barState(page) {
   return page.evaluate(() => {
     const bar = document.querySelector(".gg-root.gg-shots .gg-selbar");
-    if (!bar) return null;
+    const btn = document.querySelector(".gg-root.gg-shots .gg-head .gg-render-btn");
+    if (!bar || !btn) return null;
     return {
       shown: bar.getClientRects().length > 0,
       count: parseInt(bar.querySelector(".gg-sel-count")?.textContent || "-1", 10),
-      render: !!bar.querySelector(".gg-sel-render")?.disabled,
+      render: !!btn.disabled,
+      renderInBar: !!bar.querySelector(".gg-sel-render, .gg-render-btn"),
       selected: [...document.querySelectorAll(".gg-root.gg-shots .gg-cut.gg-sel")].map((e) => e.dataset.cutId),
     };
   });
@@ -330,8 +353,50 @@ async function closeCtx(page) {
   await page.waitForFunction(() => !document.querySelector(".gg-ctx"), { timeout: 5000 });
 }
 
+async function clickCtxItem(page, label) {
+  const ok = await page.$$eval(
+    ".gg-ctx > .gg-ctx-item",
+    (els, l) => {
+      const el = els.find((e) => e.textContent.trim() === l);
+      if (!el || el.disabled) return false;
+      el.click();
+      return true;
+    },
+    label
+  );
+  if (!ok) throw new Error(`menu item "${label}" missing or disabled`);
+}
+
+/** Dispatch a ComfyUI api event in the page (same api instance the extension listens on). */
+async function fire(page, type, detail) {
+  await page.evaluate(async (t, d) => {
+    const { api } = await import("/scripts/api.js");
+    if (typeof api.dispatchCustomEvent === "function") api.dispatchCustomEvent(t, d);
+    else api.dispatchEvent(new CustomEvent(t, { detail: d }));
+  }, type, detail);
+}
+
+const BATCH_PROG = ".gg-root.gg-shots .gg-head .gg-render-row .gg-batch-prog";
+
+async function waitBatchProg(page, want, label) {
+  try {
+    await page.waitForFunction(
+      (s, w) => {
+        const el = document.querySelector(s);
+        return !!el && !el.hidden && el.offsetParent !== null && el.textContent.trim() === w;
+      },
+      { timeout: 10000 },
+      BATCH_PROG,
+      want
+    );
+  } catch (_) {
+    const got = await page.evaluate((s) => document.querySelector(s)?.textContent.trim() ?? null, BATCH_PROG);
+    throw new Error(`${label}: want "${want}", got ${JSON.stringify(got)}`);
+  }
+}
+
 async function renderToConfirm(page) {
-  await page.click(".gg-root.gg-shots .gg-sel-render");
+  await page.click(".gg-root.gg-shots .gg-head .gg-render-btn");
   await page.waitForSelector(".gg-confirm-dialog", { timeout: 15000 });
   return page.evaluate(() => ({
     title: document.querySelector(".gg-confirm-title")?.textContent.trim() || "",
@@ -478,10 +543,11 @@ async function main() {
     await reloadTimelineInUi(page, pid);
     await page.waitForSelector(cutSel(cutC.id), { timeout: 15000 });
 
-    // 1. bottom bar shown with nothing selected, Render disabled
+    // 1. bottom bar shown with nothing selected, top Render disabled, no Render in the bar, no batch counter
     let bar = await barState(page);
-    if (!bar?.shown || bar.count !== 0 || !bar.render) throw new Error(`empty bar: ${JSON.stringify(bar)}`);
-    console.log("PASS  bottom bar shown with 0 selected, Render disabled");
+    if (!bar?.shown || bar.count !== 0 || !bar.render || bar.renderInBar) throw new Error(`empty bar: ${JSON.stringify(bar)}`);
+    if (await page.$eval(BATCH_PROG, (el) => !el.hidden)) throw new Error("batch counter shown with no batch");
+    console.log("PASS  bottom bar shown with 0 selected, top Render disabled, counter hidden");
 
     // 2. Ctrl+A over Shots selects all cuts; over the canvas it leaves the Shots selection alone
     await hoverShots(page);
@@ -546,7 +612,45 @@ async function main() {
     await waitBadge(page, cardBadge(cutB.id), "", "empty card idle");
     bar = await barState(page);
     if (bar.count !== 3) throw new Error(`selection not kept after Render: ${JSON.stringify(bar)}`);
-    console.log('PASS  OK: 2 prompts in display order (A, C), jobs registered, cards Queued, toast "Queued 2 cuts (1 skipped: no workflow)"');
+    await waitBatchProg(page, "0 / 2 done", "counter after Render");
+    console.log('PASS  OK: 2 prompts in display order (A, C), jobs registered, cards Queued, toast "Queued 2 cuts (1 skipped: no workflow)", "0 / 2 done"');
+
+    // 6. Remove from queue on A only -> POST /queue {delete:[A]}, A badge cleared, counter drops A
+    const [postA, postC] = promptPosts;
+    await clickCut(page, cutA.id);
+    await rightClickAt(page, `${cutSel(cutA.id)} .gg-cut-title`);
+    if (await ctxItem(page, "Re-queue")) throw new Error("Re-queue listed for a cut that did not fail");
+    await clickCtxItem(page, "Remove from queue");
+    const untilQ = Date.now() + 10000;
+    while (!queuePosts.length && Date.now() < untilQ) await sleep(100);
+    if (queuePosts.length !== 1 || JSON.stringify(queuePosts[0]) !== JSON.stringify({ delete: [postA.promptId] })) {
+      throw new Error(`POST /queue body: ${JSON.stringify(queuePosts)}`);
+    }
+    await waitBadge(page, cardBadge(cutA.id), "", "card A cleared after Remove from queue");
+    await waitBadge(page, cardBadge(cutC.id), "Queued", "card C still queued");
+    await waitBatchProg(page, "0 / 1 done", "counter after Remove from queue");
+    console.log('PASS  Remove from queue: POST /queue {delete:[A]} (not forwarded), A cleared, "0 / 1 done"');
+
+    // 7. C errors -> Failed + "1 / 1 done"; Re-queue C -> confirm -> 1 more prompt (C's graph) -> Queued, "0 / 1 done"
+    fakePending = fakePending.filter((id) => id !== postC.promptId);
+    await fire(page, "execution_start", { prompt_id: postC.promptId, timestamp: Date.now() });
+    await fire(page, "execution_error", { prompt_id: postC.promptId, exception_message: "zz test error", timestamp: Date.now() });
+    await waitBadge(page, cardBadge(cutC.id), "Failed", "card C failed");
+    await waitBatchProg(page, "1 / 1 done", "counter after C failed");
+    await rightClickAt(page, `${cutSel(cutC.id)} .gg-cut-title`);
+    if (await ctxItem(page, "Remove from queue")) throw new Error("Remove from queue listed for a failed cut");
+    await clickCtxItem(page, "Re-queue");
+    await page.waitForSelector(".gg-confirm-dialog", { timeout: 15000 });
+    const rq = await page.$eval(".gg-confirm-title", (el) => el.textContent.trim());
+    if (rq !== "Queue 1 cut?") throw new Error(`Re-queue confirm: "${rq}"`);
+    await page.click(".gg-confirm-ok");
+    await waitPromptPosts(3);
+    if (postedMarkerTitle(promptPosts[2], markerNode.id) !== T_C) throw new Error("Re-queue did not queue C's graph");
+    const jobC = await jobOf(page, promptPosts[2].promptId);
+    if (!jobC || jobC.cutId !== cutC.id) throw new Error(`re-queued prompt not registered to C: ${JSON.stringify(jobC)}`);
+    await waitBadge(page, cardBadge(cutC.id), "Queued", "card C queued again");
+    await waitBatchProg(page, "0 / 1 done", "counter after Re-queue");
+    console.log('PASS  C error: Failed badge, "1 / 1 done"; Re-queue: "Queue 1 cut?" -> C queued again, "0 / 1 done"');
 
     timelineMocks.delete(pid);
     await checkRam("end");

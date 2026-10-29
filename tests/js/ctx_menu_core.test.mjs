@@ -165,6 +165,24 @@ describe("cutCardMenuItems Render selected", () => {
   });
 });
 
+describe("cutCardMenuItems Remove from queue / Re-queue", () => {
+  it("listed only for queued / failed cuts, right after Render selected", () => {
+    assert.ok(!keys(cutCardMenuItems({ native: true })).some((k) => k === "removeQueue" || k === "requeue"));
+    const items = cutCardMenuItems({ native: true, queuedCount: 1, failedCount: 2 });
+    const k = keys(items);
+    assert.deepEqual(k.slice(k.indexOf("renderSel"), k.indexOf("renderSel") + 3), ["renderSel", "removeQueue", "requeue"]);
+    assert.equal(byKey(items, "removeQueue").label, "Remove from queue");
+    assert.equal(byKey(items, "requeue").label, "Re-queue");
+    assert.equal(byKey(items, "requeue").disabled, false);
+    assert.equal(byKey(items, "requeue").title, "Queue 2 cuts to ComfyUI");
+  });
+  it("Re-queue off while busy or on imported projects", () => {
+    assert.equal(byKey(cutCardMenuItems({ native: true, sdkBusy: true, failedCount: 1 }), "requeue").disabled, true);
+    assert.equal(byKey(cutCardMenuItems({ native: false, failedCount: 1 }), "requeue").disabled, true);
+    assert.equal(byKey(cutCardMenuItems({ native: false, queuedCount: 1 }), "removeQueue").disabled, undefined);
+  });
+});
+
 describe("cutCardMenuItems native Regen", () => {
   it("enabled for one idle cut, off for multi-selection", () => {
     assert.equal(byKey(cutCardMenuItems({ native: true }), "regen").disabled, false);
