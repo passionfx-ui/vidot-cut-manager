@@ -14,9 +14,11 @@ from . import gg_wfstore
 
 try:
     from .gg_project import ConflictError
+    from .gg_project.folder_list import folder_list_response
     from .gg_project.project_settings import check_output_folder
 except ImportError:  # unittest / plain script
     from gg_project import ConflictError  # type: ignore
+    from gg_project.folder_list import folder_list_response  # type: ignore
     from gg_project.project_settings import check_output_folder  # type: ignore
 
 routes = PromptServer.instance.routes
@@ -539,6 +541,12 @@ async def gg_folder_check(request):
         return _err(400, "path must be a string")
     res = await asyncio.to_thread(check_output_folder, path or "")
     return web.json_response(res, status=200 if res.get("ok") else 400)
+
+
+@routes.get("/gonggan/folder/list")
+async def gg_folder_list(request):
+    status, body = await asyncio.to_thread(folder_list_response, request.rel_url.query.get("path", ""))
+    return web.json_response(body, status=status)
 
 
 @routes.post("/gonggan/project/import")
