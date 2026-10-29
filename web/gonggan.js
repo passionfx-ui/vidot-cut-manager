@@ -41,6 +41,7 @@ import {
 } from "./gg_trash_core.js";
 import { createTimelineGuard, shouldAdoptMutationTimeline } from "./gg_timeline_guard_core.js";
 import { createFieldSlots } from "./gg_field_slots_core.js";
+import { createEditSaveGate } from "./gg_edit_save_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import { parseImportList, summarizeImport, buildLlmPrompt, REFERENCE_CATEGORIES } from "./gg_import_core.js";
 import {
@@ -208,7 +209,7 @@ const PROGRESS_API_EVENTS = [
 let cutSelAnchor = "";
 const ctxUi = { el: null, sub: null, onDoc: null, onKey: null };
 const reorderUndoBurst = createUndoBurst({ windowMs: 1500 });
-let reorderPersistChain = Promise.resolve();
+const editGate = createEditSaveGate();  // serializes /gonggan/edit, /groups, /edit/reset and guards stale replies
 
 (function loadCss() {
   if (document.getElementById("gg-css")) return;
@@ -2662,9 +2663,7 @@ function scrollMovedCutsIntoView() {
 }
 
 function enqueueReorderPersist(fn) {
-  const run = async () => fn();
-  reorderPersistChain = reorderPersistChain.then(run, run);
-  return reorderPersistChain;
+  return editGate.run(fn);
 }
 
 async function commitShotsReorder(order, groups, opts = {}) {
@@ -3315,6 +3314,7 @@ function effectiveLenLabel(c) {
 function applyOrderGroupsLocally(order, groups) {
   const tl = state.timeline;
   if (!tl) return;
+  editGate.bump();
   const byId = new Map(tl.cuts.map((c) => [c.id, c]));
   const gById = new Map((groups || []).map((g) => [g.id, g]));
   const membership = new Map();
@@ -3347,6 +3347,7 @@ async function persistShotsReorder(order, groups) {
   const tl = state.timeline;
   if (!tl || !isNativeProject()) return true;
   applyOrderGroupsLocally(order, groups);
+  const mySeq = editGate.seq;
   bus.dispatchEvent(new Event("timeline"));
   try {
     // Order matters: scene membership (/groups) first, then the flat order (/edit). The server
@@ -3367,7 +3368,9 @@ async function persistShotsReorder(order, groups) {
     const res = await api.fetchApi("/gonggan/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const data = await res.json();
     if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
-    adoptMutationTimeline(data, tl.project.id);
+    // A newer local trim/reorder happened while this request was out: keep the newer local state
+    // (its own save is already queued) instead of replacing it with this older answer.
+    if (editGate.isCurrent(mySeq)) adoptMutationTimeline(data, tl.project.id);
     state.error = "";
   } catch (e) {
     const msg = e?.message || String(e);
@@ -5036,16 +5039,24 @@ function clampClip(c, tlIn, sec) {
 }
 
 function scheduleSave() {
+  editGate.bump();
   clearTimeout(ed.saveTimer);
   ed.saveTimer = setTimeout(saveEdit, 400);
   bus.dispatchEvent(new Event("dirty"));
 }
 
-async function saveEdit() {
+function saveEdit() {
+  return editGate.run(saveEditNow);
+}
+
+async function saveEditNow() {
+  // The body is built when this write actually starts (after earlier writes finished), so it
+  // always carries the newest local order/trims.
   const tl = state.timeline;
   if (!tl) return true;
   ed.saving = true;
   bus.dispatchEvent(new Event("dirty"));
+  const mySeq = editGate.seq;
   const body = {
     pid: tl.project.id,
     order: tl.cuts.map((c) => c.id),
@@ -5056,7 +5067,7 @@ async function saveEdit() {
     const res = await api.fetchApi("/gonggan/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const data = await res.json();
     if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
-    if (!ed.dragging && state.timeline && state.timeline.project.id === data.project.id) {
+    if (!ed.dragging && editGate.isCurrent(mySeq) && state.timeline && state.timeline.project.id === data.project.id) {
       state.timeline = adoptServerTimeline(data);
       state.error = "";
     }
@@ -5074,15 +5085,20 @@ async function resetEdit() {
   if (!tl) return;
   if (!confirm("Reset this timeline to the original order and lengths? (the current edit is kept as a backup file)")) return;
   stopPlay();
-  try {
-    const res = await api.fetchApi("/gonggan/edit/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pid: tl.project.id }) });
-    const data = await res.json();
-    if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
-    adoptMutationTimeline(data, tl.project.id);
-    state.error = "";
-  } catch (e) {
-    state.error = "Reset failed: " + e.message;
-  }
+  clearTimeout(ed.saveTimer);  // a trim still waiting to be saved must not undo the reset
+  ed.saveTimer = 0;
+  await editGate.run(async () => {
+    try {
+      const res = await api.fetchApi("/gonggan/edit/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pid: tl.project.id }) });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
+      editGate.bump();
+      adoptMutationTimeline(data, tl.project.id);
+      state.error = "";
+    } catch (e) {
+      state.error = "Reset failed: " + e.message;
+    }
+  });
   bus.dispatchEvent(new Event("timeline"));
 }
 
