@@ -97,6 +97,11 @@ import {
   resolveEffectiveWorkflowKind,
   shouldTryEmbeddedRepWorkflow,
   workflowSourceToastDetail,
+  VERSION_WF_MISSING,
+  findCutVersion,
+  isOpenVersion,
+  versionWorkflowSourceOrder,
+  workflowFromVersionRecord,
 } from "./gg_rep_wf_core.js";
 import {
   formatShotTabLabel,
@@ -1192,6 +1197,8 @@ let ggCutLoadsInFlight = 0;
 let wfLastLoadedCutId = "";
 let wfLastLoadedProjectId = "";
 let wfLastLoadedRepId = "";
+/** Version whose workflow was explicitly opened from its thumbnail; cleared by any other cut load. */
+let wfOpenVersion = null;
 /** ComfyWorkflow tab last opened by Gonggan shot load (never user workflows). */
 let ggOwnedShotWorkflow = null;
 /** Paths Gonggan created/renamed this session (lowercase) -> { projectId, cutId }. */
@@ -2092,10 +2099,11 @@ function workflowKindForCut(cut) {
   });
 }
 
-function markWorkflowLoadComplete(cutId, cutRec) {
+function markWorkflowLoadComplete(cutId, cutRec, openedVid) {
   wfLastLoadedCutId = cutId;
   wfLastLoadedProjectId = state.pid;
   wfLastLoadedRepId = repIdOf(cutRec || cutById(cutId));
+  wfOpenVersion = openedVid ? { projectId: state.pid, cutId, vid: openedVid } : null;
 }
 
 async function reloadOpenCutWorkflowIfRepChanged() {
@@ -2316,6 +2324,69 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
   sdk.msg = hasMedia ? `Shot: ${title} (preview — no workflow: ${msg})` : `Shot: ${title} — ${msg}`;
   bus.dispatchEvent(new Event("sdk"));
   ggToast("Shot", hasMedia ? `${title} — preview only (${msg})` : `${title} — ${msg}`, "warn");
+}
+
+async function fetchEmbeddedVersionWorkflow(vid) {
+  const res = await api.fetchApi(`/gonggan/media?id=${encodeURIComponent(vid)}`);
+  if (!res.ok) return null;
+  const wf = extractPngWorkflow(await res.arrayBuffer());
+  return wf && isUiWorkflowGraph(wf) ? wf : null;
+}
+
+async function fetchStoredVersionWorkflow(cutId, vid) {
+  const pid = state.timeline?.project?.id || state.pid;
+  const q = `/gonggan/version-workflow?pid=${encodeURIComponent(pid)}&cut=${encodeURIComponent(cutId)}&vid=${encodeURIComponent(vid)}`;
+  const res = await api.fetchApi(q);
+  if (!res.ok) return null;
+  return workflowFromVersionRecord(await res.json().catch(() => null));
+}
+
+const VERSION_SOURCE_DETAIL = { embedded: "embedded in result", stored: "stored version workflow" };
+
+/** Thumbnail click: open that version's own workflow in the shot tab. Never touches the pick. */
+async function loadVersionWorkflow(cutId, vid, loadToken) {
+  const cut = cutById(cutId);
+  const ver = findCutVersion(cut, vid);
+  if (!cut || !ver) return;
+  ggCutSwitchAutosaveBlocked = false;
+  const name = `${shotTitle(cut)} · v${versionIndexFromList(cut.versions_list, vid)}`;
+  for (const src of versionWorkflowSourceOrder(ver)) {
+    let wf = null;
+    try {
+      wf = src === "embedded" ? await fetchEmbeddedVersionWorkflow(vid) : await fetchStoredVersionWorkflow(cutId, vid);
+    } catch (e) {
+      console.warn(`[gonggan] version workflow (${src}) failed`, e);
+    }
+    if (isLoadTokenStale(loadToken)) return;
+    if (!wf) continue;
+    const loaded = await loadWorkflowIntoDedicatedTab(wf, cut, loadToken);
+    if (isLoadTokenStale(loadToken) || ggCutSwitchAutosaveBlocked || !loaded) return;
+    markWorkflowLoadComplete(cutId, cut, vid);
+    markGraphGongganCut(cutId);
+    sdk.msg = `Canvas: ${name} (${VERSION_SOURCE_DETAIL[src]})`;
+    bus.dispatchEvent(new Event("sdk"));
+    bus.dispatchEvent(new Event("gg-opentab"));
+    ggToast("Shot", `${name} — ${VERSION_SOURCE_DETAIL[src]}`, "ok");
+    return;
+  }
+  ggToast(VERSION_WF_MISSING, name, "warn");
+}
+
+function openVersionWorkflow(cutId, vid) {
+  if (!cutId || !vid) return;
+  clearTimeout(wfLoadDebounce);
+  wfLoadDebounce = 0;
+  const loadToken = ++wfLoadToken;
+  ggCutLoadsInFlight++;
+  ggCutLoadSeq = ggCutLoadSeq
+    .then(async () => {
+      if (loadToken !== wfLoadToken) return;
+      await loadVersionWorkflow(cutId, vid, loadToken);
+    })
+    .catch((e) => console.warn("[gonggan] version workflow load failed", e))
+    .finally(() => {
+      ggCutLoadsInFlight--;
+    });
 }
 
 let projectHasTemplate = false;
@@ -4607,12 +4678,15 @@ function cutPanelHtml(c, labels) {
   const regenTip = "Draft re-render through Comfy SDK → comfy-api-proxy → ComfyUI. Shows the job and asks before queueing.";
   const sendTip = "Copy ComfyUI's last output (from /history, else newest file in output/) into this cut as a new version";
   const rep = repIdOf(c);
+  const ws = ggWorkflowStore();
+  const tabOpen = !!ggOwnedShotWorkflow && (ws?.openWorkflows || []).includes(ggOwnedShotWorkflow);
   const vers = (c.versions_list || []).map((v) => {
     const repState = versionRepState(c, v.id);
     const on = repState === "manual";
+    const open = isOpenVersion(wfOpenVersion, { projectId: state.pid, cutId: c.id, vid: v.id, tabOpen });
     const tip = `${fmtSrc(v.source)} · ${v.model || ""} · ${new Date(v.created * 1000).toLocaleString()}`;
     return `
-    <div class="gg-ver-wrap${on ? " gg-rep" : repState === "implicit" ? " gg-implicit" : ""}" data-vid="${esc(v.id)}">
+    <div class="gg-ver-wrap${on ? " gg-rep" : repState === "implicit" ? " gg-implicit" : ""}${open ? " gg-ver-open" : ""}" data-vid="${esc(v.id)}">
       <div class="gg-ver" title="${esc(tip)}">
         <img src="${esc(posterUrl(v.id))}" loading="lazy" alt="" />
         <span class="gg-ver-src gg-src-${esc(v.source)}">${esc(fmtSrc(v.source))}</span>
@@ -4709,6 +4783,11 @@ function mountShots(el) {
       e.stopPropagation();
       const wrap = b.closest(".gg-ver-wrap");
       if (!b.disabled && wrap) setPick(c.id, wrap.dataset.vid);
+    }));
+    panel.querySelectorAll(".gg-ver-wrap > .gg-ver").forEach((t) => t.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const vid = t.closest(".gg-ver-wrap")?.dataset?.vid;
+      if (c && vid) openVersionWorkflow(c.id, vid);
     }));
     panel.querySelector(".gg-regen")?.addEventListener("click", () => regenCut(c.id));
     panel.querySelector(".gg-send")?.addEventListener("click", () => sendLastOutput(c.id));
