@@ -1,10 +1,10 @@
-/** Pure decisions for Render on the selected cuts (no DOM): queue order, empty-cut skips, modal and toast text. */
+/** Pure decisions for Queue on the selected cuts (no DOM): queue order, empty-cut skips, modal and toast text. */
 
 import { isRegenEmptyCut } from "./gg_native_regen_core.js";
 
-export const RENDER_EMPTY_TIP = "Select cuts to render";
-export const RENDER_NATIVE_TIP = "Native projects only";
-export const RENDER_BUSY_TIP = "Busy, try again in a moment";
+export const QUEUE_EMPTY_TIP = "Select cuts to queue";
+export const QUEUE_NATIVE_TIP = "Native projects only";
+export const QUEUE_BUSY_TIP = "Busy, try again in a moment";
 const LIST_MAX = 8;
 
 const cuts = (n) => `${n} cut${n === 1 ? "" : "s"}`;
@@ -52,9 +52,9 @@ export function queueDeleteBody(promptIds) {
   return { delete: [...new Set((Array.isArray(promptIds) ? promptIds : []).filter((id) => id != null && id !== "").map(String))] };
 }
 
-/** Top Render button state (also Render selected / Re-queue in the cut menu). */
-export function renderButtonState({ count = 0, native = false, busy = false } = {}) {
-  const title = !(count > 0) ? RENDER_EMPTY_TIP : !native ? RENDER_NATIVE_TIP : busy ? RENDER_BUSY_TIP : `Queue ${cuts(count)} to ComfyUI`;
+/** Status panel Queue button state (also Queue selected / Re-queue in the cut menu). */
+export function queueButtonState({ count = 0, native = false, busy = false } = {}) {
+  const title = !(count > 0) ? QUEUE_EMPTY_TIP : !native ? QUEUE_NATIVE_TIP : busy ? QUEUE_BUSY_TIP : `Queue ${cuts(count)} to ComfyUI`;
   return { disabled: !(count > 0) || !native || !!busy, title };
 }
 

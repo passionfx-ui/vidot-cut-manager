@@ -1,7 +1,24 @@
-/** Shots status panel (bottom of the sidebar, under the selection bar): view model only, no DOM. */
+/** Shots selection bar and status panel (bottom of the sidebar): view models only, no DOM. */
 
 import { formatCutHeaderLengths, formatCutVersionStatus } from "./gg_cuts_core.js";
 import { idleStateView, renderBadgeView } from "./gg_render_status_core.js";
+
+/**
+ * Selection bar: always shown with the same class (so the same fixed height); with nothing selected
+ * it stays visible and its actions are just disabled.
+ * @param {{ count?: number, anyGrouped?: boolean, selSize?: number }} s
+ *   count: selected cuts on the shown timeline; anyGrouped: one of them is in a scene; selSize: raw selection size
+ */
+export function selectionBarView(s = {}) {
+  const n = Math.max(0, Number(s.count) || 0);
+  return {
+    className: "gg-selbar",
+    countText: String(n),
+    group: { disabled: n === 0 },
+    ungroup: { disabled: !s.anyGrouped },
+    clear: { disabled: !(Number(s.selSize) > 0) },
+  };
+}
 
 /**
  * @param {{ count?: number, cut?: object|null, cutLabel?: string, name?: string, render?: object|null }} s

@@ -58,6 +58,11 @@ export function scrollTopToReveal({ viewTop, viewHeight, rowTop, rowHeight, scro
   return Math.max(0, rowBottom - vh + m);
 }
 
+/** True when no part of the row is inside the view (a partly visible row is left where it is). */
+export function rowFullyHidden({ viewTop, viewBottom, rowTop, rowBottom }) {
+  return Number(rowBottom) <= Number(viewTop) || Number(rowTop) >= Number(viewBottom);
+}
+
 export function shouldDeferRepaint({ composing }) {
   return !!composing;
 }

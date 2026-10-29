@@ -115,7 +115,8 @@ import {
   batchRenderPlan,
   batchRenderConfirmMessage,
   batchRenderSummary,
-  renderButtonState,
+  queueButtonState,
+  QUEUE_EMPTY_TIP,
   queueDeleteBody,
 } from "./gg_batch_render_core.js";
 import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
@@ -151,6 +152,7 @@ import {
   saveListMode,
   normalizeListMode,
   scrollTopToReveal,
+  rowFullyHidden,
   shouldFollowPlayback,
   shouldDeferRepaint,
   applyFieldOverrides,
@@ -164,7 +166,7 @@ import { rowContentKind, cutRowShellHtml, captionRowContentHtml, groupedListHtml
 import { decideVideoSync } from "./gg_playback_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { batchProgressView, createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
-import { statusPanelView } from "./gg_status_panel_core.js";
+import { selectionBarView, statusPanelView } from "./gg_status_panel_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
 import {
   stepMove,
@@ -261,7 +263,7 @@ const TIMELINE_TAB = "gg-timeline";
 const SHOTS_TAB = "gg-shots";
 /** Lower-left cut panel (versions, End card, Needs redo, Regen, Send last output). Still rendered, only hidden. */
 const SHOW_CUT_PANEL = false;
-/** With SHOW_CUT_PANEL off: the same slot shows a read-only status card for the selection (no actions). */
+/** With SHOW_CUT_PANEL off: the same slot shows a status card for the selection with the Queue button. */
 const SHOW_STATUS_PANEL = true;
 const CUT_PANEL_ROOT_CLASS = SHOW_CUT_PANEL ? "" : SHOW_STATUS_PANEL ? " gg-cutpanel-status" : " gg-cutpanel-off";
 /** "Show redo cuts only" option in the Shots toolbar. Off = not shown and the filter is forced off. */
@@ -3355,7 +3357,7 @@ function openCutContextMenu(e, cutId) {
     anyInScene: ids.some((id) => cutById(id)?.group_id),
     trashLabel: trashMenuLabel(),
     trashCount,
-    renderCount: ids.length,
+    queueCount: ids.length,
     queuedCount: ids.filter((id) => renderStatus.queuedPromptIds(state.pid, id).length).length,
     failedCount: failedIds.length,
   });
@@ -3366,9 +3368,9 @@ function openCutContextMenu(e, cutId) {
       items,
       {
         ...cutMenuActions(cutId),
-        renderSel: () => renderSelectedCuts(),
+        queueSel: () => queueSelectedCuts(),
         removeQueue: () => removeCutsFromQueue(ids),
-        requeue: () => renderSelectedCuts(failedIds),
+        requeue: () => queueSelectedCuts(failedIds),
         moveUp: () => applyStepMove(-1),
         moveDown: () => applyStepMove(1),
         group: () => createSceneGroup(ids),
@@ -5035,8 +5037,8 @@ function bindShotsTabActivated(hostEl, onCleanup) {
 }
 
 /**
- * Bottom bar of the Shots sidebar: always shown so the list never shifts; actions off with nothing selected.
- * Also sets the top Render button, which acts on the same selection.
+ * Bottom bar of the Shots sidebar: always shown at a fixed height so the list never shifts; actions off
+ * with nothing selected. Also sets the status panel Queue button, which acts on the same selection.
  */
 function updateSelectionBar(root) {
   if (!root) return;
@@ -5045,23 +5047,24 @@ function updateSelectionBar(root) {
   const tlIds = new Set((state.timeline?.cuts || []).map((c) => c.id));
   const ids = state.timeline ? cutSelIds().filter((id) => tlIds.has(id)) : [];
   const n = ids.length;
-  bar.classList.toggle("gg-selbar-empty", n === 0);
+  const v = selectionBarView({ count: n, anyGrouped: ids.some((id) => cutById(id)?.group_id), selSize: state.cutSel.size });
+  bar.className = v.className;
   const countEl = bar.querySelector(".gg-sel-count");
-  if (countEl) countEl.textContent = String(n);
+  if (countEl) countEl.textContent = v.countText;
   const set = (sel, disabled, title) => {
     const b = bar.querySelector(sel);
     if (!b) return;
     b.disabled = !!disabled;
     if (title !== undefined) b.title = title;
   };
-  set(".gg-sel-group", n === 0);
-  set(".gg-sel-ungroup", !ids.some((id) => cutById(id)?.group_id));
-  set(".gg-sel-x", state.cutSel.size === 0);
-  const r = renderButtonState({ count: n, native: isNativeProject(), busy: !!sdk.busy });
-  const renderBtn = root.querySelector(".gg-render-btn");
-  if (renderBtn) {
-    renderBtn.disabled = r.disabled;
-    renderBtn.title = r.title;
+  set(".gg-sel-group", v.group.disabled);
+  set(".gg-sel-ungroup", v.ungroup.disabled);
+  set(".gg-sel-x", v.clear.disabled);
+  const q = queueButtonState({ count: n, native: isNativeProject(), busy: !!sdk.busy });
+  const queueBtn = root.querySelector(".gg-queue-btn");
+  if (queueBtn) {
+    queueBtn.disabled = q.disabled;
+    queueBtn.title = q.title;
   }
 }
 
@@ -5091,7 +5094,14 @@ function paintSelection(root) {
     }
   });
   const on = root.querySelector(`[data-cut-id="${CSS.escape(state.cutId)}"]`);
-  if (on) on.scrollIntoView({ block: "nearest", inline: "nearest" });
+  const view = on?.closest(".gg-grp-wrap, .gg-final-wrap");
+  if (on && view) {
+    const r = on.getBoundingClientRect();
+    const v = view.getBoundingClientRect();
+    if (rowFullyHidden({ viewTop: v.top, viewBottom: v.bottom, rowTop: r.top, rowBottom: r.bottom })) {
+      on.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
   updateSelectionBar(root);
 }
 
@@ -5316,11 +5326,11 @@ function shotsNavOrder() {
 }
 
 /**
- * Render: queue each selected cut's current workflow in Shots display order, through the native Regen
+ * Queue: queue each selected cut's current workflow in Shots display order, through the native Regen
  * path (open the cut in its shot tab, then queue like ComfyUI's Queue button). One confirm for the batch;
  * empty cuts are skipped. The selection is restored afterwards. `cutIds` (Re-queue) replaces the selection.
  */
-async function renderSelectedCuts(cutIds) {
+async function queueSelectedCuts(cutIds) {
   const tl = state.timeline;
   if (!tl || !isNativeProject() || sdk.busy || batchRenderUi.running) return;
   const selected = cutIds || cutSelIds();
@@ -5360,7 +5370,7 @@ async function renderSelectedCuts(cutIds) {
     for (; i < total; i++) {
       const cutId = plan.queue[i];
       if (state.pid !== pid || !cutById(cutId)) break;
-      sdk.msg = `Render ${i + 1}/${total}: ${shotTitle(cutById(cutId))}`;
+      sdk.msg = `Queue ${i + 1}/${total}: ${shotTitle(cutById(cutId))}`;
       selectCut(cutId);
       const token = wfLoadToken;
       await waitCutLoadsSettled();
@@ -5385,7 +5395,7 @@ async function renderSelectedCuts(cutIds) {
       } else failed++;
     }
   } catch (e) {
-    console.warn("[gonggan] render selected failed", e);
+    console.warn("[gonggan] queue selected failed", e);
   } finally {
     failed += total - Math.min(i, total);
     batchRenderUi.running = false;
@@ -5558,6 +5568,7 @@ function statusPanelHtml() {
     name: head?.name,
     render: cut ? renderStatus.cutView(state.pid, cut.id) : null,
   });
+  if (v.kind === "multi") return `<div class="gg-sp-title gg-sp-count">${esc(v.text)}</div>`;
   if (v.kind !== "cut") return `<div class="gg-sp-empty">${esc(v.text)}</div>`;
   return `
     <div class="gg-sp-title" title="${esc(v.title)}"><span class="gg-num">${esc(v.label)}</span> <span class="gg-sp-name">${esc(v.name)}</span></div>
@@ -5565,12 +5576,24 @@ function statusPanelHtml() {
     <div class="gg-sp-meta"><span class="gg-sp-len" title="${esc(v.length.title)}">${esc(v.length.text)}</span><span class="gg-sp-ver" title="${esc(v.version.title)}">${esc(v.version.text)}</span></div>`;
 }
 
+/** Status panel body: selection info on top, Queue + queue status + batch counter in a row below. */
+function statusPanelShellHtml() {
+  return `
+        <div class="gg-sp-info"></div>
+        <div class="gg-sp-actions">
+          <button type="button" class="gg-btn gg-primary gg-queue-btn" disabled title="${esc(QUEUE_EMPTY_TIP)}">Queue</button>
+          <span class="gg-render-badge gg-render-global" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
+          <span class="gg-batch-prog" hidden></span>
+        </div>`;
+}
+
 function paintStatusPanel(panel) {
-  if (!panel) return;
+  const info = panel?.querySelector(".gg-sp-info");
+  if (!info) return;
   const html = statusPanelHtml();
-  if (panel.dataset.sp === html) return;
-  panel.dataset.sp = html;
-  panel.innerHTML = html;
+  if (info.dataset.sp === html) return;
+  info.dataset.sp = html;
+  info.innerHTML = html;
 }
 
 function mountShots(el) {
@@ -5905,11 +5928,6 @@ function mountShots(el) {
     root.innerHTML = `
       <div class="gg-head">
         <span class="gg-sdk-slot"></span>
-        <div class="gg-render-row">
-          <button type="button" class="gg-btn gg-primary gg-render-btn" disabled title="Select cuts to render">Render</button>
-          <span class="gg-render-badge gg-render-global" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
-          <span class="gg-batch-prog" hidden></span>
-        </div>
         <div class="gg-proj-row">
           <label class="gg-proj-wrap">
             <span class="gg-proj-label">Project:</span>
@@ -5952,7 +5970,7 @@ function mountShots(el) {
         <button type="button" class="gg-btn gg-sel-x" disabled title="Clear selection">×</button>
         <span class="gg-version" title="Shots plugin version — if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>
       </div>
-      <div class="gg-cutpanel"></div>
+      <div class="gg-cutpanel">${!SHOW_CUT_PANEL && SHOW_STATUS_PANEL ? statusPanelShellHtml() : ""}</div>
       <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>`;
     const projSel = root.querySelector(".gg-proj");
     projSel?.addEventListener("change", (e) => selectProject(e.target.value));
@@ -6009,7 +6027,7 @@ function mountShots(el) {
     root.querySelector(".gg-scene-add")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-group")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-ungroup")?.addEventListener("click", () => ungroupCuts(cutSelIds()));
-    root.querySelector(".gg-render-btn")?.addEventListener("click", () => void renderSelectedCuts());
+    root.querySelector(".gg-queue-btn")?.addEventListener("click", () => void queueSelectedCuts());
     root.querySelector(".gg-sel-x")?.addEventListener("click", () => {
       state.cutSel.clear();
       cutSelAnchor = "";
@@ -6231,7 +6249,7 @@ function mountShots(el) {
   };
   const onShotsEmptyClick = (e) => {
     if (!root.contains(e.target)) return;
-    if (e.target.closest(".gg-cut") || e.target.closest(".gg-selbar") || e.target.closest(".gg-cutpanel") || e.target.closest(".gg-render-row") || e.target.closest(".gg-ctx")) return;
+    if (e.target.closest(".gg-cut") || e.target.closest(".gg-selbar") || e.target.closest(".gg-cutpanel") || e.target.closest(".gg-ctx")) return;
     if (!state.cutSel.size) return;
     state.cutSel.clear();
     cutSelAnchor = "";

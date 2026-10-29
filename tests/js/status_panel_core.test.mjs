@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { statusPanelView } from "../../web/gg_status_panel_core.js";
+import { selectionBarView, statusPanelView } from "../../web/gg_status_panel_core.js";
 
 const withMedia = {
   id: "c1",
@@ -60,5 +60,33 @@ describe("statusPanelView", () => {
     assert.equal(f.status.mode, "failed");
     assert.equal(f.status.text, "Failed");
     assert.match(f.status.title, /OOM/);
+  });
+});
+
+describe("selectionBarView", () => {
+  it("nothing selected: same class as with a selection (never hidden), actions disabled", () => {
+    const v = selectionBarView({ count: 0, anyGrouped: false, selSize: 0 });
+    assert.equal(v.className, "gg-selbar");
+    assert.equal(v.countText, "0");
+    assert.deepEqual([v.group.disabled, v.ungroup.disabled, v.clear.disabled], [true, true, true]);
+    assert.deepEqual(selectionBarView(), v);
+  });
+
+  it("class does not change with the selection count", () => {
+    const classes = [0, 1, 2, 7].map((count) => selectionBarView({ count, selSize: count }).className);
+    assert.deepEqual(new Set(classes), new Set(["gg-selbar"]));
+  });
+
+  it("1+ selected: Group and clear on, Ungroup only when a selected cut is in a scene", () => {
+    const one = selectionBarView({ count: 1, anyGrouped: false, selSize: 1 });
+    assert.deepEqual([one.countText, one.group.disabled, one.ungroup.disabled, one.clear.disabled], ["1", false, true, false]);
+    const grouped = selectionBarView({ count: 3, anyGrouped: true, selSize: 3 });
+    assert.deepEqual([grouped.countText, grouped.ungroup.disabled], ["3", false]);
+  });
+
+  it("selection of cuts not on the shown timeline: count 0 but clear stays on", () => {
+    const v = selectionBarView({ count: 0, selSize: 2 });
+    assert.equal(v.group.disabled, true);
+    assert.equal(v.clear.disabled, false);
   });
 });

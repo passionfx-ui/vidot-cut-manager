@@ -4,7 +4,7 @@
  * Prompts are linked to cuts when queued; prompts without a cut in the shown project count toward
  * the global indicator. Finished prompts (success / error / interrupted, or gone from the queue) are dropped;
  * a cut whose last prompt errored or was interrupted shows 'failed' until it is queued again or succeeds.
- * The last Render batch is tracked for the "N / M done" counter.
+ * The last Queue batch is tracked for the "N / M done" counter.
  */
 
 import { gongganExtraProjectId } from "./gg_shot_names.js";
@@ -65,7 +65,7 @@ export function createRenderStatus(opts = {}) {
   let pending = [];
   /** @type {Map<string, { promptId: string, error: string }>} "projectId\ncutId" -> last failed prompt */
   const failedCuts = new Map();
-  /** Prompt ids of the last Render batch (null = no batch yet). */
+  /** Prompt ids of the last Queue batch (null = no batch yet). */
   let batch = null;
 
   const cutKey = (projectId, cutId) => `${projectId}\n${cutId}`;
@@ -178,7 +178,7 @@ export function createRenderStatus(opts = {}) {
     return failedCuts.has(cutKey(String(projectId), String(cutId)));
   }
 
-  /** A new Render batch starts (replaces the last one); its prompts are added as they are queued. */
+  /** A new Queue batch starts (replaces the last one); its prompts are added as they are queued. */
   function startBatch() {
     batch = [];
   }
@@ -374,9 +374,9 @@ export function renderGlobalView(g) {
   return { show: true, mode: "queued", text: "Queued", title };
 }
 
-/** "N / M done" counter next to the Render button (hidden with no batch). */
+/** "N / M done" counter next to the Queue button (hidden with no batch). */
 export function batchProgressView(b) {
   if (!b || !(b.total > 0)) return { show: false, text: "", title: "" };
   const failed = b.failed > 0 ? `, ${b.failed} failed` : "";
-  return { show: true, text: `${b.done} / ${b.total} done`, title: `Last Render batch: ${b.done} of ${b.total} prompts finished${failed}` };
+  return { show: true, text: `${b.done} / ${b.total} done`, title: `Last Queue batch: ${b.done} of ${b.total} prompts finished${failed}` };
 }

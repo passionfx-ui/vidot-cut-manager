@@ -11,12 +11,6 @@
 /* Shots sidebar */
 .gg-shots { display: flex; flex-direction: column; overflow: hidden; position: relative; }
 .gg-shots .gg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; border-bottom: 1px solid var(--gg-line); }
-.gg-shots .gg-render-row { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
-.gg-shots .gg-render-btn { flex: 0 0 auto; font-size: 14px; font-weight: 600; padding: 5px 20px; }
-.gg-root.gg-shots .gg-btn.gg-render-btn:disabled { opacity: 0.4; cursor: default; border-color: var(--gg-line); }
-.gg-shots .gg-render-row .gg-render-global { font-size: 12px; line-height: 20px; padding: 1px 8px; border-radius: 4px; }
-.gg-shots .gg-render-row .gg-render-global .gg-rs-dot { width: 8px; height: 8px; }
-.gg-shots .gg-batch-prog { font-size: 12px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--gg-fg); }
 /* Full-width Timeline toggle at the very bottom of Shots (under the status panel). */
 .gg-shots > .gg-timeline-toggle { flex: 0 0 auto; width: 100%; border-radius: 0; border-width: 1px 0 0; padding: 5px 8px; font-size: 12px; font-weight: 600; }
 .gg-root.gg-shots > .gg-timeline-toggle.gg-on { background: var(--gg-acc); color: #1a1a1a; border-color: var(--gg-acc); }
@@ -60,17 +54,23 @@
 .gg-shots .gg-grp-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .gg-shots .gg-grp-meta { color: var(--gg-dim); font-variant-numeric: tabular-nums; }
 .gg-shots .gg-grp-loose > .gg-grp-head .gg-grp-title { color: var(--gg-dim); font-weight: 500; }
-/* Bottom bar: always present so the cut list never shifts; dim with nothing selected. */
-.gg-shots .gg-selbar { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; min-width: 0; padding: 4px 6px; border-top: 1px solid var(--gg-line); background: #1f2228; font-size: 11px; }
+/* Bottom bar and status panel: always present at fixed heights so the cut list never shifts; actions dim with nothing selected. */
+.gg-shots .gg-selbar { flex: 0 0 auto; height: 38px; overflow: hidden; display: flex; align-items: center; gap: 4px; min-width: 0; padding: 4px 6px; border-top: 1px solid var(--gg-line); background: #1f2228; font-size: 11px; }
 .gg-shots .gg-selbar .gg-sel-label { white-space: nowrap; margin-right: 2px; font-variant-numeric: tabular-nums; }
-.gg-shots .gg-selbar.gg-selbar-empty .gg-sel-label { color: var(--gg-dim); }
 .gg-shots .gg-selbar .gg-btn { font-size: 11px; padding: 1px 6px; white-space: nowrap; }
 .gg-shots .gg-selbar .gg-sel-group, .gg-shots .gg-selbar .gg-sel-ungroup { font-size: 13px; padding: 4px 14px; }
 .gg-shots .gg-selbar .gg-btn:disabled { opacity: 0.4; cursor: default; border-color: var(--gg-line); }
 .gg-shots .gg-selbar .gg-version { position: static; align-self: flex-end; flex-shrink: 0; margin-left: auto; }
 .gg-shots.gg-cutpanel-off .gg-cutpanel { display: none; }
-/* Read-only status card for the selection (under the selection bar, above the Timeline bar). */
-.gg-shots.gg-cutpanel-status .gg-cutpanel { border-top: none; padding: 6px 10px 8px; max-height: none; overflow: hidden; display: flex; flex-direction: column; gap: 3px; }
+/* Status card for the selection with the Queue row (under the selection bar, above the Timeline bar). */
+.gg-shots.gg-cutpanel-status .gg-cutpanel { border-top: none; padding: 6px 10px 8px; height: 108px; max-height: none; overflow: hidden; display: flex; flex-direction: column; gap: 6px; }
+.gg-shots .gg-cutpanel .gg-sp-info { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 3px; }
+.gg-shots .gg-cutpanel .gg-sp-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.gg-shots .gg-queue-btn { flex: 0 0 auto; font-size: 14px; font-weight: 600; padding: 4px 20px; }
+.gg-root.gg-shots .gg-btn.gg-queue-btn:disabled { opacity: 0.4; cursor: default; border-color: var(--gg-line); }
+.gg-shots .gg-sp-actions .gg-render-global { font-size: 12px; line-height: 20px; padding: 1px 8px; border-radius: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.gg-shots .gg-sp-actions .gg-render-global .gg-rs-dot { width: 8px; height: 8px; }
+.gg-shots .gg-batch-prog { font-size: 12px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--gg-fg); }
 .gg-shots .gg-cutpanel .gg-sp-title { font-size: 14px; font-weight: 600; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gg-shots .gg-cutpanel .gg-sp-title .gg-num { font-size: inherit; }
 .gg-shots .gg-cutpanel .gg-sp-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 3px; font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; color: #cfe0f5; background: #22303f; }

@@ -333,7 +333,8 @@ async function createProjectViaUi(page, name, templateRef) {
 
 /**
  * Bottom selection bar (0.9.73): always shown under the list; buttons follow the selection.
- * 0.9.87: Render is the top `.gg-render-btn`; the full-width Timeline bar sits under the selection bar.
+ * 0.9.87: the full-width Timeline bar sits under the selection bar.
+ * 0.9.97: Queue (was the top Render) is in the status panel; bar and panel have fixed heights.
  */
 async function selbarState(page) {
   return page.evaluate(() => {
@@ -345,17 +346,21 @@ async function selbarState(page) {
     const list = root.querySelector(".gg-grp-wrap").getBoundingClientRect();
     const tlBar = root.querySelector(":scope > .gg-timeline-toggle")?.getBoundingClientRect();
     const panel = root.querySelector(":scope > .gg-cutpanel")?.getBoundingClientRect();
-    const head = root.querySelector(".gg-head").getBoundingClientRect();
-    const renderBtn = root.querySelector(".gg-head .gg-render-btn");
+    const queueBtn = root.querySelector(":scope > .gg-cutpanel .gg-queue-btn");
     const dis = (s) => !!bar.querySelector(s)?.disabled;
     return {
       visible: !bar.hidden && st.display !== "none" && st.visibility !== "hidden" && r.height > 0,
       count: parseInt(bar.querySelector(".gg-sel-count")?.textContent || "-1", 10),
-      renderInBar: !!bar.querySelector(".gg-sel-render, .gg-render-btn"),
-      renderInHead: !!renderBtn && renderBtn.getBoundingClientRect().bottom <= head.bottom + 0.5,
-      renderDisabled: !!renderBtn?.disabled,
+      barClass: bar.className,
+      queueInBar: !!bar.querySelector(".gg-sel-render, .gg-render-btn, .gg-queue-btn"),
+      queueInHead: !!root.querySelector(".gg-head .gg-queue-btn, .gg-head .gg-render-btn, .gg-head .gg-render-row"),
+      queueInPanel: !!queueBtn && queueBtn.textContent.trim() === "Queue",
+      queueDisabled: !!queueBtn?.disabled,
       groupDisabled: dis(".gg-sel-group"),
+      ungroupDisabled: dis(".gg-sel-ungroup"),
       xDisabled: dis(".gg-sel-x"),
+      barHeight: r.height,
+      panelHeight: panel ? panel.height : null,
       barTop: r.top,
       barBottom: r.bottom,
       panelTop: panel && panel.height > 0 ? panel.top : null,
@@ -648,7 +653,7 @@ async function main() {
     if (scenes < 1) throw new Error("expected a scene section after group");
   });
 
-  await runScenario("05", "Bottom stack: selection bar, status panel, Timeline bar; Render on top, list never shifts", async () => {
+  await runScenario("05", "Bottom stack: selection bar, status panel with Queue, Timeline bar; fixed heights, list never shifts", async () => {
     await page.keyboard.press("Escape");
     await sleep(300);
     const s0 = await selbarState(page);
@@ -660,21 +665,24 @@ async function main() {
     if (s0.tlBarTop == null || Math.abs(s0.tlBarTop - s0.panelBottom) > 1 || Math.abs(s0.rootBottom - s0.tlBarBottom) > 1 || !s0.tlBarFullWidth) {
       throw new Error(`Timeline bar not full width at the very bottom under the status panel: ${JSON.stringify(s0)}`);
     }
-    if (s0.renderInBar || !s0.renderInHead) throw new Error(`Render should be in the header, not the bar: ${JSON.stringify(s0)}`);
-    if (s0.count === 0 && (!s0.renderDisabled || !s0.groupDisabled)) throw new Error(`0 selected must disable actions: ${JSON.stringify(s0)}`);
+    if (s0.queueInBar || s0.queueInHead || !s0.queueInPanel) throw new Error(`Queue should be in the status panel only: ${JSON.stringify(s0)}`);
+    if (s0.count === 0 && (!s0.queueDisabled || !s0.groupDisabled || !s0.ungroupDisabled)) throw new Error(`0 selected must disable actions: ${JSON.stringify(s0)}`);
+    if (s0.barClass !== "gg-selbar") throw new Error(`bar class with 0 selected: "${s0.barClass}"`);
     await clickCut(page, 0);
     await sleep(250);
     const s1 = await selbarState(page);
-    if (!s1.visible || s1.count !== 1 || s1.renderDisabled || !s1.xDisabled) throw new Error(`1 selected: ${JSON.stringify(s1)}`);
+    if (!s1.visible || s1.count !== 1 || s1.queueDisabled || !s1.xDisabled) throw new Error(`1 selected: ${JSON.stringify(s1)}`);
     await shiftClickCut(page, 1);
     await page.waitForFunction(
       () => parseInt(document.querySelector(".gg-root.gg-shots .gg-sel-count")?.textContent || "0", 10) >= 2,
       { timeout: 5000 }
     );
     const s2 = await selbarState(page);
-    if (!s2.visible || s2.renderDisabled || s2.xDisabled) throw new Error(`2+ selected: ${JSON.stringify(s2)}`);
-    if (Math.abs(s2.listTop - s0.listTop) > 0.5 || Math.abs(s1.listTop - s0.listTop) > 0.5) {
-      throw new Error(`list moved with the selection: ${s0.listTop} / ${s1.listTop} / ${s2.listTop}`);
+    if (!s2.visible || s2.queueDisabled || s2.xDisabled) throw new Error(`2+ selected: ${JSON.stringify(s2)}`);
+    for (const k of ["listTop", "listBottom", "barHeight", "panelHeight"]) {
+      if (Math.abs(s2[k] - s0[k]) > 0.5 || Math.abs(s1[k] - s0[k]) > 0.5) {
+        throw new Error(`${k} changed with the selection: ${s0[k]} / ${s1[k]} / ${s2[k]}`);
+      }
     }
   });
 
@@ -895,8 +903,11 @@ async function main() {
     await reloadShots(page);
   });
 
-  await runScenario("13", "Status panel: title, status chip, length, version; no actions (mock timeline)", async () => {
-    timelineMocks.set(mainPid, buildMockTimeline(mainPid, runStamp));
+  await runScenario("13", "Status panel: title, status chip, length, version, Queue; count for 2+ (mock timeline)", async () => {
+    const mock = buildMockTimeline(mainPid, runStamp);
+    mock.cuts.push({ ...mock.cuts[0], id: `cut-b-${runStamp}`, name: "second", pos: 1, index: 1, start: 3 });
+    mock.total_sec = 6;
+    timelineMocks.set(mainPid, mock);
     await reloadShots(page);
     const read = () => page.evaluate(() => {
       const root = document.querySelector(".gg-root.gg-shots");
@@ -911,7 +922,9 @@ async function main() {
         chip: p?.querySelector(".gg-sp-chip")?.textContent?.trim() || "",
         len: p?.querySelector(".gg-sp-len")?.textContent?.trim() || "",
         ver: p?.querySelector(".gg-sp-ver")?.textContent?.trim() || "",
-        controls: p ? p.querySelectorAll("button, input, select, textarea, .gg-ver-wrap").length : -1,
+        info: p?.querySelector(".gg-sp-info")?.textContent?.replace(/\s+/g, " ").trim() || "",
+        controls: p ? [...p.querySelectorAll("button, input, select, textarea, .gg-ver-wrap")].map((el) => el.textContent.trim()) : null,
+        height: p ? p.getBoundingClientRect().height : -1,
       };
     });
     const s0 = await read();
@@ -924,7 +937,15 @@ async function main() {
     if (s1.chip !== "Done") throw new Error(`status chip should be Done (idle with output): ${JSON.stringify(s1)}`);
     if (s1.len !== "Length 3.0s") throw new Error(`length: ${JSON.stringify(s1)}`);
     if (!/^Best v0*3$/.test(s1.ver)) throw new Error(`version: ${JSON.stringify(s1)}`);
-    if (s1.controls !== 0) throw new Error(`status panel must have no controls: ${JSON.stringify(s1)}`);
+    if (JSON.stringify(s1.controls) !== '["Queue"]') throw new Error(`status panel must have only the Queue button: ${JSON.stringify(s1)}`);
+    await ctrlClickCut(page, 1);
+    await sleep(400);
+    const s2 = await read();
+    if (s2.selCount < 2 || s2.info !== `${s2.selCount} cuts selected`) throw new Error(`2+ selected should show the count: ${JSON.stringify(s2)}`);
+    if (JSON.stringify(s2.controls) !== '["Queue"]') throw new Error(`2+ selected keeps the Queue button: ${JSON.stringify(s2)}`);
+    if (Math.abs(s1.height - s0.height) > 0.5 || Math.abs(s2.height - s0.height) > 0.5) {
+      throw new Error(`status panel height changed: ${s0.height} / ${s1.height} / ${s2.height}`);
+    }
     timelineMocks.delete(mainPid);
     await reloadShots(page);
   });
