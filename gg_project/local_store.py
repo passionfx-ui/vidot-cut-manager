@@ -870,7 +870,7 @@ class LocalStore:
             ver = new_version(cut_id, asset, wf_sha, prompt_id)
             vpath = self._project_dir(pid) / "versions" / cut_id / f"{ver['id']}.json"
             _atomic_write_json(vpath, ver)
-            if not c.get("pick_version_id") or is_reference(c):
+            if is_reference(c):
                 c["pick_version_id"] = ver["id"]
             bump_entity(c)
             self._bump_project(doc)
@@ -892,7 +892,7 @@ class LocalStore:
                 continue
             if isinstance(data, dict) and not data.get("deleted_at"):
                 out.append(data)
-        out.sort(key=lambda v: v.get("created_at") or "", reverse=True)
+        out.sort(key=lambda v: (v.get("created_at") or "", v.get("id") or ""), reverse=True)
         return out
 
     def to_timeline(self, pid: str) -> dict | None:

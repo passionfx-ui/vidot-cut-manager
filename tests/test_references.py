@@ -78,11 +78,11 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(ref["media"]["id"], v2["id"])
         self.assertNotEqual(v1["id"], v2["id"])
 
-    def test_cut_pick_unchanged_for_normal_cuts(self):
+    def test_normal_cuts_are_not_auto_picked(self):
         cid = next(iter(self.store.get_project(self.pid)["cuts"]))
-        v1 = self.store.add_version(self.pid, cid, self._png("a.png"))
+        self.store.add_version(self.pid, cid, self._png("a.png"))
         self.store.add_version(self.pid, cid, self._png("b.png"))
-        self.assertEqual(self.store.get_project(self.pid)["cuts"][cid]["pick_version_id"], v1["id"])
+        self.assertIsNone(self.store.get_project(self.pid)["cuts"][cid]["pick_version_id"])
 
     def test_import_references_become_hidden_cuts(self):
         from gg_native_api import native_import_structure

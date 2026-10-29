@@ -5,6 +5,7 @@ import json
 import re
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -160,21 +161,56 @@ class LocalStoreTests(unittest.TestCase):
         asset = Path(self._tmp.name) / "projects" / pid / ver["asset"]["path"]
         self.assertTrue(asset.is_file())
         fresh = self.store.get_project(pid)
-        self.assertEqual(fresh["cuts"][cut_id]["pick_version_id"], ver["id"])
+        self.assertIsNone(fresh["cuts"][cut_id]["pick_version_id"])
 
-    def test_add_version_does_not_override_existing_pick(self):
+    def _png_src(self, name: str) -> Path:
+        p = Path(self._tmp.name) / name
+        p.write_bytes(b"\x89PNG\r\n\x1a\n" + name.encode() * 4)
+        return p
+
+    def _add(self, pid: str, cut_id: str, name: str) -> dict:
+        time.sleep(0.002)  # distinct uuid7 ms so newest-first order is deterministic
+        return self.store.add_version(pid, cut_id, self._png_src(name))
+
+    def _tl_cut(self, pid: str, cut_id: str) -> dict:
+        return next(c for c in self.store.to_timeline(pid)["cuts"] if c["id"] == cut_id)
+
+    def test_first_version_is_not_auto_picked(self):
         doc = self.store.create_project("Pick")
         pid = doc["id"]
         cut_id = self._first_cut(doc)["id"]
-        src1 = Path(self._tmp.name) / "a.png"
-        src2 = Path(self._tmp.name) / "b.png"
-        src1.write_bytes(b"\x89PNG\r\n\x1a\n" + b"a" * 20)
-        src2.write_bytes(b"\x89PNG\r\n\x1a\n" + b"b" * 20)
-        v1 = self.store.add_version(pid, cut_id, src1)
-        v2 = self.store.add_version(pid, cut_id, src2)
+        v1 = self._add(pid, cut_id, "a.png")
+        self.assertIsNone(self.store.get_project(pid)["cuts"][cut_id]["pick_version_id"])
+        row = self._tl_cut(pid, cut_id)
+        self.assertIsNone(row["pick"])
+        self.assertEqual(row["media"]["id"], v1["id"])
+
+    def test_no_pick_media_follows_newest_version(self):
+        doc = self.store.create_project("Pick")
+        pid = doc["id"]
+        cut_id = self._first_cut(doc)["id"]
+        v1 = self._add(pid, cut_id, "a.png")
+        v2 = self._add(pid, cut_id, "b.png")
         self.assertNotEqual(v1["id"], v2["id"])
-        fresh = self.store.get_project(pid)
-        self.assertEqual(fresh["cuts"][cut_id]["pick_version_id"], v1["id"])
+        self.assertIsNone(self.store.get_project(pid)["cuts"][cut_id]["pick_version_id"])
+        row = self._tl_cut(pid, cut_id)
+        self.assertIsNone(row["pick"])
+        self.assertEqual(row["media"]["id"], v2["id"])
+        self.assertEqual(row["versions_list"][0]["id"], v2["id"])
+
+    def test_manual_pick_sticks_after_newer_versions(self):
+        doc = self.store.create_project("Pick")
+        pid = doc["id"]
+        cut_id = self._first_cut(doc)["id"]
+        v1 = self._add(pid, cut_id, "a.png")
+        self._add(pid, cut_id, "b.png")
+        self.store.apply_timeline_edit(pid, [cut_id], {cut_id: {"in": 0, "sec": 3.0, "pick": v1["id"]}})
+        v3 = self._add(pid, cut_id, "c.png")
+        self.assertEqual(self.store.get_project(pid)["cuts"][cut_id]["pick_version_id"], v1["id"])
+        row = self._tl_cut(pid, cut_id)
+        self.assertEqual(row["pick"], v1["id"])
+        self.assertEqual(row["media"]["id"], v1["id"])
+        self.assertEqual(row["versions_list"][0]["id"], v3["id"])
 
     def test_conflict_error(self):
         doc = self.store.create_project("C")
