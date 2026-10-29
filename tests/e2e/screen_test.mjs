@@ -670,13 +670,20 @@ async function main() {
       throw new Error(`tab "${info.tab}" does not end with cut label "${info.cutLabel}" (expected <Project>/<Scene> ${info.cutLabel})`);
     }  });
 
-  await runScenario("08", "Template dropdown matches saved workflows", async () => {
+  await runScenario("08", "Template dropdown (Project Settings gear) matches saved workflows", async () => {
+    if (await page.$(".gg-root.gg-shots .gg-tpl-select")) {
+      throw new Error("Template selector should be in the Project Settings modal, not the sidebar header");
+    }
     const paths = await fetchWorkflowPaths(page);
-    await page.focus(".gg-root.gg-shots .gg-tpl-select");
+    await page.click(".gg-root.gg-shots .gg-proj-settings");
+    await page.waitForSelector('.gg-modal[aria-label="Project settings"] .gg-tpl-select', { timeout: 8000 });
+    await page.focus(".gg-modal .gg-tpl-select");
     await sleep(400);
-    const opts = await page.$$eval(".gg-root.gg-shots .gg-tpl-select option", (els) =>
+    const opts = await page.$$eval(".gg-modal .gg-tpl-select option", (els) =>
       els.map((o) => o.value).filter((v) => v)
     );
+    await page.click(".gg-modal .gg-modal-cancel");
+    await page.waitForFunction(() => !document.querySelector(".gg-modal-backdrop"), { timeout: 5000 });
     if (paths.length > 0 && opts.length === 0) throw new Error("dropdown empty but userdata has workflows");
     const pathSet = new Set(paths);
     const extras = opts.filter((v) => !pathSet.has(v));
