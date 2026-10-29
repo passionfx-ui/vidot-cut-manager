@@ -166,6 +166,9 @@
 .gg-shots .gg-grp-wrap { position: relative; }
 .gg-shots .gg-grp-wrap.gg-reorder-dragging { cursor: grabbing; }
 .gg-shots .gg-grp-wrap.gg-reorder-dragging .gg-cut { cursor: grabbing; }
+.gg-shots .gg-grp-head.gg-grp-drag { cursor: grab; user-select: none; }
+.gg-shots .gg-grp-wrap.gg-reorder-dragging .gg-grp-head { cursor: grabbing; }
+.gg-shots .gg-grp-sec.gg-grp-moving { opacity: 0.6; outline: 2px solid var(--gg-acc); outline-offset: -2px; }
 .gg-shots .gg-drag-ind {
   position: absolute;
   left: 6px;

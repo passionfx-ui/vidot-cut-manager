@@ -18,7 +18,7 @@ Plan a short film as projects, scenes and cuts, open each cut's workflow on the 
 
 ## What it does
 
-- **Shots sidebar tab** - projects, scenes, and cuts with thumbnails, drag-to-reorder, and **per-scene cut labels** (`1-1`, `1-2`, `2-1`, …) derived from scene blocks and timeline order.
+- **Shots sidebar tab** - projects, scenes, and cuts with thumbnails, drag-to-reorder (drag a cut, or drag a scene header to move the whole scene; **Esc** cancels), and **per-scene cut labels** (`1-1`, `1-2`, `2-1`, …) derived from scene blocks and timeline order.
 - **One click, one workflow** - clicking a cut opens that cut's workflow in a single reusable canvas tab (labelled `Project / Cut`). Unsaved edits are auto-saved when you switch cuts.
 - **Takes / versions** - *Send last ComfyUI output* attaches your latest render to the cut that queued it. Every take is kept; mark one as **Best**.
 - **Timeline bottom panel** - toggle with the **Timeline** button or **T**. All cuts in order on one track, trim handles, playback of the picked takes as a continuous rough cut.
