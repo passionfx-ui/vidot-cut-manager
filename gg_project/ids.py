@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from datetime import datetime, timezone
 
@@ -24,3 +25,12 @@ def uuid7(now_ms: int | None = None) -> str:
     uuid_int |= rand_b
     hex32 = f"{uuid_int:032x}"
     return f"{hex32[:8]}-{hex32[8:12]}-{hex32[12:16]}-{hex32[16:20]}-{hex32[20:]}"
+
+
+# Native project / cut / version ids are always lowercase uuid-shaped. Anything else (".." , "/", "C:", a trailing
+# dash, upper case that would alias on a case-insensitive disk ...) is never a native id and must never become a path.
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def is_uuid_id(value: object) -> bool:
+    return isinstance(value, str) and _UUID_RE.fullmatch(value) is not None
