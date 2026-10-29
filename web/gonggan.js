@@ -195,6 +195,8 @@ import {
   loadTimelineHeight,
   saveTimelineHeight,
   clampHeight,
+  firstShowTimelineHeight,
+  bottomPanelPercent,
   shouldIgnoreShortcut,
   pluginKeyScopeActive,
   timelineShortcutAllowed,
@@ -221,6 +223,15 @@ import {
   readSettingsFromFormValues,
   CAPTION_LANG_OPTIONS,
 } from "./gg_project_settings_core.js";
+import {
+  undoKeyAction,
+  undoScope,
+  createUndoHistory,
+  sameSnapshot,
+  fitOrderGroupsSnapshot,
+  snapshotTimelineEdit,
+  applyTimelineSnapshot,
+} from "./gg_undo_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -274,6 +285,9 @@ const PROGRESS_API_EVENTS = [
 let cutSelAnchor = "";
 const ctxUi = { el: null, sub: null, onDoc: null, onKey: null };
 const reorderUndoBurst = createUndoBurst({ windowMs: 1500 });
+// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y: Shots = cut list order + scenes, Timeline = clip order + trims.
+const shotsHistory = createUndoHistory();
+const timelineHistory = createUndoHistory();
 const editGate = createEditSaveGate();  // serializes /gonggan/edit, /groups, /edit/reset and guards stale replies
 
 (function loadCss() {
@@ -528,6 +542,8 @@ async function openTrashModal() {
 function selectProject(pid) {
   if (pid === state.pid) return;
   flushPendingCutFields();
+  shotsHistory.clear();
+  timelineHistory.clear();
   state.pid = pid;
   state.cutId = "";
   state.cutSel.clear();
@@ -2907,6 +2923,30 @@ function enqueueReorderPersist(fn) {
   return editGate.run(fn);
 }
 
+/** Cut list order + scenes before a Shots edit, for Ctrl+Z. */
+function recordShotsUndo() {
+  if (!state.timeline || !isNativeProject()) return;
+  shotsHistory.record(state.pid, snapshotOrderGroups(state.timeline));
+}
+
+/** Ctrl+Z / Ctrl+Shift+Z in Shots: put a cut list snapshot back through the reorder save path. */
+async function stepShotsHistory(action) {
+  const tl = state.timeline;
+  if (!tl || !isNativeProject()) return;
+  const pid = state.pid;
+  const current = snapshotOrderGroups(tl);
+  const snap = action === "redo" ? shotsHistory.redo(pid, current) : shotsHistory.undo(pid, current);
+  if (!snap) {
+    ggToast(action === "redo" ? "Nothing to redo" : "Nothing to undo", "", "info", { ttlMs: 1500 });
+    return;
+  }
+  reorderUndoBurst.reset();
+  const fit = fitOrderGroupsSnapshot(snap, current);
+  if (sameSnapshot(fit, current)) return;
+  const ok = await enqueueReorderPersist(() => persistShotsReorder(fit.order, fit.groups));
+  if (!ok) shotsHistory.clear();
+}
+
 async function commitShotsReorder(order, groups, opts = {}) {
   const { recordUndo = true, moveCount } = opts;
   if (!state.timeline || !isNativeProject()) return false;
@@ -2914,6 +2954,7 @@ async function commitShotsReorder(order, groups, opts = {}) {
   if (recordUndo) {
     const snap = snapshotOrderGroups(state.timeline);
     if (snap) undoTarget = reorderUndoBurst.push(snap, Date.now());
+    recordShotsUndo();
   }
   const ok = await enqueueReorderPersist(() => persistShotsReorder(order, groups));
   if (!ok) return false;
@@ -2925,6 +2966,7 @@ async function commitShotsReorder(order, groups, opts = {}) {
       actionLabel: "Undo",
       onAction: async () => {
         reorderUndoBurst.reset();
+        recordShotsUndo();
         const restored = await enqueueReorderPersist(() => persistShotsReorder(undoTarget.order, undoTarget.groups));
         if (restored) ggToast("Undone", "", "ok");
       },
@@ -3033,6 +3075,7 @@ async function applyTimelineOrderToCuts() {
     await saveEdit();
   }
   const reqPid = tl.project.id;
+  recordShotsUndo();
   await editGate.run(async () => {
     try {
       const data = await postJson("/gonggan/timeline/apply_order", { pid: reqPid });
@@ -3092,6 +3135,7 @@ function openShotsPanelContextMenu(e) {
 }
 
 async function ungroupSceneGroup(groupId) {
+  recordShotsUndo();
   await persistGroups(groupsClone().filter((g) => g.id !== groupId));
 }
 
@@ -3143,6 +3187,7 @@ async function createSceneGroup(cutIds) {
   groups.push({ id: "s" + Date.now(), name: title, cut_ids: ids, collapsed: false });
   state.cutSel.clear();
   cutSelAnchor = "";
+  recordShotsUndo();
   await persistGroups(groups);
 }
 
@@ -3150,6 +3195,7 @@ async function ungroupCuts(cutIds) {
   const ids = cutIds && cutIds.length ? cutIds : cutSelIds();
   state.cutSel.clear();
   cutSelAnchor = "";
+  recordShotsUndo();
   await persistGroups(stripCutsFromGroups(groupsClone(), ids));
 }
 
@@ -3186,6 +3232,7 @@ async function renameSceneGroup(groupId) {
 
 async function deleteSceneGroup(groupId) {
   if (!(await askConfirm({ message: "Delete this scene? (Cuts become ungrouped)", danger: true }))) return;
+  recordShotsUndo();
   await persistGroups(groupsClone().filter((g) => g.id !== groupId));
 }
 
@@ -4403,21 +4450,57 @@ function measureBottomPanelHeight() {
 
 let timelineHeightRestoreRaf = 0;
 let timelineHeightObserver = null;
+// No saved height yet: the first Timeline show shrinks ComfyUI's default bottom panel height by half.
+let timelineFirstShowPending = loadTimelineHeight(localStorage) == null;
+
+function canvasSplitter() {
+  const gutter = document.querySelector('[data-testid="graph-canvas-gutter"]');
+  return gutter?.closest(".p-splitter") || null;
+}
+
+/** Shrink the bottom panel to `want` px: same flex-basis form PrimeVue's Splitter writes, plus its saved state. */
+function shrinkBottomPanelTo(panel, want) {
+  const splitter = canvasSplitter();
+  const total = splitter ? splitter.getBoundingClientRect().height : 0;
+  if (!splitter || total <= want + 40) return;
+  const panes = [...splitter.children].filter((x) => x.getAttribute("data-pc-name") === "splitterpanel");
+  const bi = panes.indexOf(panel);
+  if (panes.length !== 2 || bi < 0) return;
+  const bottomPct = bottomPanelPercent(want, total);
+  const basis = (el, pct) => {
+    const cur = el.style.flexBasis || "";
+    el.style.flexBasis = /^calc\(\s*[\d.]+%/.test(cur) ? cur.replace(/^calc\(\s*[\d.]+%/, `calc(${pct}%`) : `${pct}%`;
+  };
+  basis(panes[bi], bottomPct);
+  basis(panes[1 - bi], 100 - bottomPct);
+  try {
+    localStorage.setItem("bottom-panel-splitter", JSON.stringify(bi === 1 ? [100 - bottomPct, bottomPct] : [bottomPct, 100 - bottomPct]));
+  } catch (_) {}
+}
 
 function applyStoredTimelinePanelHeight() {
   if (!isTimelinePanelOpen()) return;
-  const stored = loadTimelineHeight(localStorage);
-  const want = clampHeight(stored || TIMELINE_MIN_HEIGHT, window.innerHeight, TIMELINE_MIN_HEIGHT);
   const panel = document.querySelector(".bottom-panel");
   if (!panel) return;
   const cur = panel.getBoundingClientRect().height;
+  if (timelineFirstShowPending) {
+    if (cur < 60) return;  // not laid out yet
+    timelineFirstShowPending = false;
+    const want = firstShowTimelineHeight(cur, window.innerHeight);
+    if (want < cur - 8) shrinkBottomPanelTo(panel, want);
+    panel.style.minHeight = `${want}px`;
+    saveTimelineHeight(localStorage, want);
+    window.dispatchEvent(new Event("resize"));
+    return;
+  }
+  const stored = loadTimelineHeight(localStorage);
+  const want = clampHeight(stored || TIMELINE_MIN_HEIGHT, window.innerHeight, TIMELINE_MIN_HEIGHT);
   if (cur >= want - 8 && cur >= TIMELINE_MIN_HEIGHT) return;
-  const gutter = document.querySelector('[data-testid="graph-canvas-gutter"]');
-  const splitter = gutter?.closest(".p-splitter");
+  const splitter = canvasSplitter();
   if (splitter) {
     const total = splitter.getBoundingClientRect().height;
     if (total > want + 40) {
-      const bottomPct = Math.min(70, Math.max((want / total) * 100, (TIMELINE_MIN_HEIGHT / total) * 100));
+      const bottomPct = bottomPanelPercent(want, total);
       try {
         localStorage.setItem("bottom-panel-splitter", JSON.stringify([100 - bottomPct, bottomPct]));
       } catch (_) {}
@@ -4443,7 +4526,7 @@ function startTimelineHeightObserver() {
   const panel = document.querySelector(".bottom-panel");
   if (!panel || !window.ResizeObserver) return;
   timelineHeightObserver = new ResizeObserver(() => {
-    if (!isTimelinePanelOpen()) return;
+    if (!isTimelinePanelOpen() || timelineFirstShowPending) return;
     const h = measureBottomPanelHeight();
     if (h >= TIMELINE_MIN_HEIGHT) {
       saveTimelineHeight(localStorage, clampHeight(h, window.innerHeight, TIMELINE_MIN_HEIGHT));
@@ -4483,7 +4566,7 @@ function closeTimelinePanel() {
   if (!cmd?.execute) return;
   if (!isTimelinePanelOpen()) return;
   const h = measureBottomPanelHeight();
-  if (h >= TIMELINE_MIN_HEIGHT) {
+  if (h >= TIMELINE_MIN_HEIGHT && !timelineFirstShowPending) {
     saveTimelineHeight(localStorage, clampHeight(h, window.innerHeight, TIMELINE_MIN_HEIGHT));
   }
   cmd.execute(`Workspace.ToggleBottomPanelTab.${TIMELINE_TAB}`);
@@ -4523,6 +4606,33 @@ function onTimelineToggleKey(e) {
   e.preventDefault();
   e.stopPropagation();
   toggleTimelinePanel();
+}
+
+// Window capture, like Shots Ctrl+A: ComfyUI's own Ctrl+Z (graph undo) must not run while the pointer or
+// focus is in Shots / Timeline; outside them (canvas, inputs, menus, dialogs) the key is left alone.
+function onUndoRedoKey(e) {
+  const action = undoKeyAction(e);
+  if (!action) return;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ""))) return;
+  const ae = document.activeElement;
+  if (ae && ae !== t && (ae.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName || ""))) return;
+  if (ggModalOpen() || comfyPromptDialogOpen() || ctxUi.el) return;
+  if (document.querySelector(".p-contextmenu, .p-menu-overlay, .p-tieredmenu-overlay, .p-select-overlay")) return;
+  const shots = [...document.querySelectorAll(".gg-root.gg-shots")];
+  const tls = [...document.querySelectorAll(".gg-root.gg-timeline")];
+  const scope = undoScope({
+    hoverShots: shots.some(ggElHovered),
+    focusShots: shots.some(ggElHasFocus),
+    hoverTimeline: tls.some(ggElHovered),
+    focusTimeline: tls.some(ggElHasFocus),
+  });
+  if (!scope) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.repeat || ed.dragging || shotsUi.dragSession) return;
+  if (scope === "timeline") stepTimelineHistory(action);
+  else void stepShotsHistory(action);
 }
 
 /** Open Timeline when Shots becomes visible; close when Shots sidebar deactivates (if Timeline tab is active). */
@@ -5828,6 +5938,30 @@ function scheduleSave() {
   bus.dispatchEvent(new Event("dirty"));
 }
 
+/** `before` = snapshotTimelineEdit() taken before the edit; recorded only if the edit changed something. */
+function recordTimelineUndo(before) {
+  if (!before || !state.timeline) return;
+  if (sameSnapshot(before, snapshotTimelineEdit(state.timeline))) return;
+  timelineHistory.record(state.pid, before);
+}
+
+/** Ctrl+Z / Ctrl+Shift+Z in the Timeline: put clip order + trims back and save through POST /gonggan/edit. */
+function stepTimelineHistory(action) {
+  const tl = state.timeline;
+  if (!tl || ed.dragging) return;
+  const current = snapshotTimelineEdit(tl);
+  const snap = action === "redo" ? timelineHistory.redo(state.pid, current) : timelineHistory.undo(state.pid, current);
+  if (!snap) {
+    ggToast(action === "redo" ? "Nothing to redo" : "Nothing to undo", "", "info", { ttlMs: 1500 });
+    return;
+  }
+  if (!applyTimelineSnapshot(tl, snap)) return;
+  recomputeCutStarts();
+  play.idx = -1;
+  scheduleSave();
+  bus.dispatchEvent(new Event("timeline"));
+}
+
 // Data safety: a timeline edit made just before the page is hidden or closed is saved right away.
 function flushTimelineEdit() {
   if (!ed.savePending) return;
@@ -5882,13 +6016,14 @@ async function resetEdit() {
   stopPlay();
   clearTimeout(ed.saveTimer);  // a trim still waiting to be saved must not undo the reset
   ed.saveTimer = 0;
+  const before = snapshotTimelineEdit(tl);
   await editGate.run(async () => {
     try {
       const res = await api.fetchApi("/gonggan/edit/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pid: tl.project.id }) });
       const data = await res.json();
       if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
       editGate.bump();
-      adoptMutationTimeline(data, tl.project.id);
+      if (adoptMutationTimeline(data, tl.project.id)) recordTimelineUndo(before);
       state.error = "";
     } catch (e) {
       state.error = sentence("Reset failed: " + e.message, "Try again.");
@@ -6098,6 +6233,7 @@ function bindTrim(root) {
       const side = edge.dataset.side;
       const startX = e.clientX;
       const startIn = c.in, startSec = c.sec;
+      const before = snapshotTimelineEdit(state.timeline);
       const isVid = kindOf(c) === "video";
       const idx = clips.indexOf(c);
       const free = isFreeTrack();
@@ -6165,7 +6301,10 @@ function bindTrim(root) {
         ed.dragging = false;
         c.edited = true;
         play.idx = -1;
-        if (startIn !== c.in || startSec !== c.sec) scheduleSave();
+        if (startIn !== c.in || startSec !== c.sec) {
+          recordTimelineUndo(before);
+          scheduleSave();
+        }
         setTimeout(() => { const tip = root.querySelector(".gg-tip"); if (tip && !ed.dragging) tip.textContent = ""; }, 2500);
         bus.dispatchEvent(new Event("timeline"));
       };
@@ -6215,9 +6354,11 @@ function bindReorder(root) {
         if (!active) { selectCut(el.dataset.cutId, { fromTimeline: true }); return; }
         ed.dragging = false;
         if (target >= 0 && target !== from && target !== from + 1) {
+          const before = snapshotTimelineEdit(state.timeline);
           const [m] = cuts.splice(from, 1);
           cuts.splice(target > from ? target - 1 : target, 0, m);
           cuts.forEach((c, i) => { c.pos = i; });
+          recordTimelineUndo(before);
           play.idx = -1;
           scheduleSave();
         }
@@ -6267,9 +6408,11 @@ function bindMove(root) {
         ed.dragging = false;
         const tl = state.timeline;
         if (res && tl && (res.start !== start0 || res.order.join() !== clips.map((x) => x.id).join())) {
+          const before = snapshotTimelineEdit(tl);
           tl.track_order = res.order;
           for (const x of clips) if (res.starts[x.id] != null) x.start = res.starts[x.id];
           recomputeCutStarts();
+          recordTimelineUndo(before);
           play.idx = -1;
           scheduleSave();
         }
@@ -6786,6 +6929,7 @@ app.registerExtension({
     setupTabLabels();
     setupWipPeriodicAutosave();
     window.addEventListener("keydown", onTimelineToggleKey, true);
+    window.addEventListener("keydown", onUndoRedoKey, true);
     if (!loadTimelineOpen(localStorage)) {
       queueMicrotask(() => {
         if (isTimelinePanelOpen()) closeTimelinePanel();
