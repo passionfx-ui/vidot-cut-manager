@@ -21,6 +21,20 @@ export function selectionBarView(s = {}) {
 }
 
 /**
+ * Icon row under the cut list (replaces the selection bar): always shown at the same fixed height.
+ * @param {{ count?: number, hasProject?: boolean }} s  count: cuts that New scene / Delete would act on
+ */
+export function iconRowView(s = {}) {
+  const n = Math.max(0, Number(s.count) || 0);
+  return {
+    className: "gg-iconrow",
+    scene: { disabled: n === 0, title: "New scene" },
+    cut: { disabled: !s.hasProject, title: "New cut" },
+    del: { disabled: n === 0, title: "Delete" },
+  };
+}
+
+/**
  * @param {{ count?: number, cut?: object|null, cutLabel?: string, name?: string, render?: object|null }} s
  *   count: selected cuts; cut: the single selected cut; render: `renderStatus.cutView(...)` for it.
  * @returns {{ kind: 'empty'|'multi', text: string }

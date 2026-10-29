@@ -14,6 +14,7 @@ import {
   BUSY_TIP,
   REGEN_EMPTY_TIP,
   TRASH_TIP,
+  MENU_SEPARATOR,
 } from "../../web/gg_ctx_menu_core.js";
 
 const TIP = "read-only tip";
@@ -80,12 +81,14 @@ describe("cutActionItems", () => {
 });
 
 describe("cutCardMenuItems", () => {
-  it("native order: moves first, Regen/Send after Add Cut and before Delete, Trash last", () => {
+  it("native order: Group/Ungroup then a separator at the top, moves next, Regen/Send after Add Cut, Trash last", () => {
     const items = cutCardMenuItems({ native: true, sdkOk: true, canMoveUp: true, trashCount: 2, trashLabel: "Trash (2)…" });
     assert.deepEqual(keys(items), [
-      "moveUp", "moveDown", "moveToScene", "group", "split", "removeFromScene",
+      "group", "ungroup", "sep", "moveUp", "moveDown", "moveToScene", "split",
       "redo", "rename", "addCut", "regen", "queueSel", "send", "del", "trash",
     ]);
+    assert.deepEqual(items.slice(0, 3).map((i) => i.label), ["Group", "Ungroup", undefined]);
+    assert.equal(items[2], MENU_SEPARATOR);
     assert.equal(byKey(items, "queueSel").label, "Queue selected");
     assert.equal(byKey(items, "moveUp").disabled, false);
     assert.equal(byKey(items, "moveDown").disabled, true);
@@ -93,19 +96,20 @@ describe("cutCardMenuItems", () => {
     assert.equal(byKey(items, "trash").disabled, false);
     assert.equal(byKey(items, "trash").title, TRASH_TIP);
   });
-  it("imported project: no move items, trash off with read-only tip", () => {
+  it("imported project: Group/Ungroup still on top, no move items, trash off with read-only tip", () => {
     const items = cutCardMenuItems({ native: false, trashCount: 3, readonlyTip: TIP });
-    assert.equal(keys(items)[0], "group");
+    assert.deepEqual(keys(items).slice(0, 4), ["group", "ungroup", "sep", "split"]);
     assert.equal(byKey(items, "trash").disabled, true);
     assert.equal(byKey(items, "trash").title, TIP);
   });
   it("scene items follow inScene / anyInScene", () => {
     let items = cutCardMenuItems({ native: true });
     assert.equal(byKey(items, "split").disabled, true);
-    assert.equal(byKey(items, "removeFromScene").disabled, true);
+    assert.equal(byKey(items, "ungroup").disabled, true);
+    assert.ok(!byKey(items, "group").disabled);
     items = cutCardMenuItems({ native: true, anyInScene: true });
     assert.equal(byKey(items, "split").disabled, true);
-    assert.equal(byKey(items, "removeFromScene").disabled, false);
+    assert.equal(byKey(items, "ungroup").disabled, false);
     items = cutCardMenuItems({ native: true, inScene: true });
     assert.equal(byKey(items, "split").disabled, false);
   });
@@ -195,9 +199,8 @@ describe("cutCardMenuItems native Regen", () => {
 describe("sceneMenuItems", () => {
   it("order, collapse label and danger delete", () => {
     const items = sceneMenuItems({ collapsed: false, cutCount: 2 });
-    assert.deepEqual(keys(items), ["addCut", "selectCuts", "toggleCollapse", "rename", "ungroup", "deleteScene"]);
+    assert.deepEqual(keys(items), ["addCut", "selectCuts", "toggleCollapse", "rename", "ungroup"]);
     assert.equal(byKey(items, "toggleCollapse").label, "Collapse");
-    assert.equal(byKey(items, "deleteScene").danger, true);
     assert.equal(byKey(items, "addCut").disabled, false);
   });
   it("collapsed shows Expand; empty scene disables Add Cut / Select cuts", () => {
@@ -205,6 +208,46 @@ describe("sceneMenuItems", () => {
     assert.equal(byKey(items, "toggleCollapse").label, "Expand");
     assert.equal(byKey(items, "addCut").disabled, true);
     assert.equal(byKey(items, "selectCuts").disabled, true);
+  });
+});
+
+describe("menus list each action once", () => {
+  const ctxs = [
+    {},
+    { native: true, sdkOk: true, canMoveUp: true, canMoveDown: true, inScene: true, anyInScene: true, trashCount: 1 },
+    { native: true, multi: true, queueCount: 3, queuedCount: 1, failedCount: 2 },
+    { native: false, readonlyTip: TIP, multi: true, needsRedo: true },
+  ];
+  const menus = [
+    ["cut", cutCardMenuItems],
+    ["timeline clip", timelineClipMenuItems],
+    ["scene header", (c) => sceneMenuItems({ ...c, cutCount: 2 })],
+  ];
+  const groupLike = /^(group|ungroup|group into scene|remove from scene|delete scene|new scene)$/i;
+  for (const [name, build] of menus) {
+    it(`${name} menu: no duplicate keys or labels, no Group/Ungroup look-alikes`, () => {
+      for (const ctx of ctxs) {
+        const items = build(ctx).filter((it) => !it.separator);
+        const k = keys(items);
+        assert.equal(new Set(k).size, k.length, `duplicate key in ${name} menu: ${k}`);
+        const labels = items.map((it) => it.label);
+        assert.equal(new Set(labels).size, labels.length, `duplicate label in ${name} menu: ${labels}`);
+        const g = labels.filter((l) => groupLike.test(l));
+        assert.ok(g.every((l) => l === "Group" || l === "Ungroup"), `${name} menu: ${g}`);
+        assert.ok(!k.includes("removeFromScene") && !k.includes("deleteScene"));
+      }
+    });
+  }
+  it("cut menu: Group and Ungroup are the first two items, followed by one separator", () => {
+    for (const ctx of ctxs) {
+      const items = cutCardMenuItems(ctx);
+      assert.deepEqual(keys(items).slice(0, 3), ["group", "ungroup", "sep"]);
+      assert.equal(items.filter((it) => it.separator).length, 1);
+    }
+  });
+  it("scene header menu has a single Ungroup (Delete Scene did the same thing)", () => {
+    const items = sceneMenuItems({ cutCount: 2 });
+    assert.deepEqual(items.filter((it) => /scene|group/i.test(it.label)).map((it) => it.key), ["ungroup"]);
   });
 });
 
@@ -232,6 +275,10 @@ describe("attachMenuActions", () => {
     assert.ok(!("key" in out[0]));
     assert.equal(out[1].submenu, sub);
     assert.ok(!out[1].disabled);
+  });
+  it("keeps separators as-is (no action, not disabled)", () => {
+    const out = attachMenuActions([{ key: "a", label: "A" }, MENU_SEPARATOR], { a: () => {} });
+    assert.deepEqual(out[1], { separator: true });
   });
   it("disables items with no handler", () => {
     const out = attachMenuActions([{ key: "z", label: "Z" }], {});
