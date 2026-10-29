@@ -43,6 +43,7 @@ import { createTimelineGuard, shouldAdoptMutationTimeline } from "./gg_timeline_
 import { createFieldSlots } from "./gg_field_slots_core.js";
 import { createEditSaveGate } from "./gg_edit_save_core.js";
 import { confirmKeyAction, splitConfirmMessage } from "./gg_confirm_core.js";
+import { emptyListHint } from "./gg_empty_hint_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import { parseImportList, summarizeImport, buildLlmPrompt, REFERENCE_CATEGORIES } from "./gg_import_core.js";
 import {
@@ -166,7 +167,7 @@ const PID_KEY = "gg.pid";
 const TIMELINE_TAB = "gg-timeline";
 const SHOTS_TAB = "gg-shots";
 const bus = new EventTarget();
-const state = { projects: [], pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
+const state = { projects: [], projectsLoaded: false, pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
 // Every assignment to state.timeline that is not a load result counts as a mutation (see gg_timeline_guard_core.js).
 const timelineGuard = createTimelineGuard();
 let timelineAssignByLoad = false;
@@ -271,6 +272,7 @@ async function loadProjects() {
   try {
     const data = await getJson("/gonggan/projects");
     state.projects = data.projects || [];
+    state.projectsLoaded = true;
     state.error = "";
     if (!state.projects.some((p) => p.id === state.pid)) {
       const pick = state.projects.find((p) => p.id === data.active_project_id) || state.projects[0];
@@ -2826,6 +2828,10 @@ function openSceneContextMenu(e, groupId) {
 }
 
 function openShotsPanelContextMenu(e) {
+  if (state.projectsLoaded && !state.projects.length) {
+    openProjectContextMenu(e); // nothing to add cuts to yet: offer New Project…
+    return;
+  }
   e.preventDefault();
   e.stopPropagation();
   const nat = isNativeProject();
@@ -4755,8 +4761,9 @@ function mountShots(el) {
     const cutLabels = computeCutLabels(tl || { cuts: [] });
     const viewFinal = shotsUi.view === "final";
     const listCaption = normalizeListMode(shotsUi.listMode) === "caption";
-    const emptyHint = tl && isNativeProject() && !tl.cuts.length
-      ? '<div class="gg-dim gg-list-empty">No cuts yet. Right-click here and choose Add Cut.</div>'
+    const hintInfo = emptyListHint({ projectsLoaded: state.projectsLoaded, projectCount: state.projects.length, timeline: tl, native: !!tl && isNativeProject() });
+    const emptyHint = hintInfo
+      ? `<div class="gg-dim gg-list-empty${hintInfo.kind === "projects" ? " gg-no-projects" : ""}">${esc(hintInfo.text)}</div>`
       : "";
     const listHtml = emptyHint || sections.map((sec) => {
       if (sec.type === "ungrouped") {
