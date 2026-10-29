@@ -107,9 +107,9 @@ describe("captionEditChanged", () => {
 });
 
 describe("captionFieldPlaceholder", () => {
-  it("includes clamped language", () => {
-    assert.equal(captionFieldPlaceholder("Korean"), "Notes / dialogue (Korean)");
-    assert.equal(captionFieldPlaceholder("bad"), "Notes / dialogue (English)");
+  it("is plain Caption regardless of language", () => {
+    assert.equal(captionFieldPlaceholder("Korean"), "Caption");
+    assert.equal(captionFieldPlaceholder("bad"), "Caption");
   });
 });
 
