@@ -14,7 +14,10 @@ import threading
 import time
 from pathlib import Path
 
-from . import gg_data
+try:
+    from . import gg_data
+except ImportError:  # unit tests import this module directly
+    import gg_data  # type: ignore
 
 RUNNER = gg_data.PACK_DIR / "sdk_runner.py"
 REGEN_DIR = gg_data.CACHE_DIR / "regen"
@@ -242,44 +245,56 @@ def _output_root() -> Path:
     return Path(folder_paths.get_output_directory()).resolve()
 
 
-def last_output() -> dict | None:
-    """Newest output from ComfyUI's in-memory /history; falls back to the newest file in output/."""
-    root = _output_root()
+def pick_last_output(history: dict, root: Path, now: float | None = None) -> tuple[dict | None, str]:
+    """Only the newest finished ComfyUI run counts (no fallback to older runs or to files in output/).
+
+    Returns (output, "") or (None, reason) so the UI can say why nothing was attached.
+    """
+    items = list((history or {}).items())
+    if not items:
+        return None, "No finished ComfyUI run yet. Run the workflow first."
+    prompt_id, h = items[-1]
+    h = h if isinstance(h, dict) else {}
+    st = h.get("status") if isinstance(h.get("status"), dict) else {}
+    if st.get("status_str") == "error":
+        return None, "The last ComfyUI run failed, so nothing was sent. Fix it and run again."
+    root = Path(root).resolve()
+    for node_id, out in (h.get("outputs") or {}).items():
+        if not isinstance(out, dict):
+            continue
+        for key in ("images", "gifs", "videos", "video"):
+            for it in reversed(out.get(key) or []):
+                if not isinstance(it, dict) or it.get("type") != "output":
+                    continue
+                f = (root / (it.get("subfolder") or "") / it.get("filename", "")).resolve()
+                if f.is_file() and f.suffix.lower() in IMG_EXT | VID_EXT and root in f.parents:
+                    mtime = f.stat().st_mtime
+                    age = max(0.0, (time.time() if now is None else now) - mtime)
+                    return {"path": str(f), "from": "history", "prompt_id": prompt_id, "node": node_id,
+                            "name": f.name, "subfolder": it.get("subfolder") or "", "mtime": mtime,
+                            "age_sec": round(age, 1)}, ""
+    return None, "The last ComfyUI run saved no image or video (add a Save Image / Save Video node)."
+
+
+def last_output_info() -> dict:
+    """{"output": dict|None, "reason": str} for the newest finished run in ComfyUI's /history."""
     try:
         from server import PromptServer
         hist = PromptServer.instance.prompt_queue.get_history(max_items=64) or {}
-        for prompt_id, h in reversed(list(hist.items())):
-            for node_id, out in (h.get("outputs") or {}).items():
-                for key in ("images", "gifs", "videos", "video"):
-                    for it in reversed(out.get(key) or []):
-                        if not isinstance(it, dict) or it.get("type") != "output":
-                            continue
-                        f = (root / (it.get("subfolder") or "") / it.get("filename", "")).resolve()
-                        if f.is_file() and f.suffix.lower() in IMG_EXT | VID_EXT and root in f.parents:
-                            return {"path": str(f), "from": "history", "prompt_id": prompt_id, "node": node_id,
-                                    "name": f.name, "subfolder": it.get("subfolder") or ""}
-    except Exception:  # noqa: BLE001
-        pass
-    best = None
-    for f in root.rglob("*"):
-        if f.suffix.lower() not in IMG_EXT | VID_EXT or not f.is_file():
-            continue
-        rel = f.relative_to(root)
-        if rel.parts and rel.parts[0] == "gonggan":
-            continue  # our own exports
-        if best is None or f.stat().st_mtime > best.stat().st_mtime:
-            best = f
-    if best is None:
-        return None
-    rel = best.relative_to(root)
-    return {"path": str(best), "from": "output-folder", "name": best.name,
-            "subfolder": str(rel.parent) if str(rel.parent) != "." else "", "mtime": best.stat().st_mtime}
+    except Exception as ex:  # noqa: BLE001
+        return {"output": None, "reason": f"Could not read ComfyUI history: {ex}"}
+    lo, reason = pick_last_output(hist, _output_root())
+    return {"output": lo, "reason": reason}
 
+
+def last_output() -> dict | None:
+    return last_output_info()["output"]
 
 def send_last_output(pid: str, cut_id: str) -> dict:
-    lo = last_output()
+    info = last_output_info()
+    lo = info["output"]
     if not lo:
-        return {"ok": False, "message": "no ComfyUI output found"}
+        return {"ok": False, "message": info["reason"]}
     info = gg_data.add_version(pid, cut_id, Path(lo["path"]),
                                {"source": "comfy-" + lo["from"], "from_file": lo["name"],
                                 "prompt_id": lo.get("prompt_id")})
