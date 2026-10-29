@@ -22,6 +22,7 @@ import {
   autoScrollDelta,
   finalCutList,
   filterCuts,
+  redoFilterOn,
   fileBaseName,
   projectCompletion,
   formatDueDisplay,
@@ -169,6 +170,7 @@ import {
   snapshotOrderGroups,
   dropHighlight,
   moveScene,
+  sceneDropBeforeCut,
   sceneDropTarget,
 } from "./gg_reorder_core.js";
 import {
@@ -244,6 +246,8 @@ const TIMELINE_TAB = "gg-timeline";
 const SHOTS_TAB = "gg-shots";
 /** Lower-left cut panel (versions, End card, Needs redo, Regen, Send last output). Still rendered, only hidden. */
 const SHOW_CUT_PANEL = false;
+/** "Show redo cuts only" option in the Shots toolbar. Off = not shown and the filter is forced off. */
+const SHOW_REDO_FILTER = false;
 const bus = new EventTarget();
 const state = { projects: [], projectsLoaded: false, pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
 // Every assignment to state.timeline that is not a load result counts as a mutation (see gg_timeline_guard_core.js).
@@ -4180,14 +4184,11 @@ function bindSceneHeadReorder(root, wrap, indicator) {
         if (!tl) return;
         const order0 = tl.cuts.map((c) => c.id);
         const groups0 = groupsClone();
-        const mem = new Map();
-        for (const g of groups0) for (const id of g.cut_ids || []) mem.set(id, g.id);
-        const beforeCutId = drop.beforeGroupId
-          ? order0.find((id) => mem.get(id) === drop.beforeGroupId) ?? null
-          : order0.find((id) => !mem.has(id)) ?? null;
+        const beforeCutId = sceneDropBeforeCut(order0, groups0, gid, drop.beforeGroupId);
         const r = moveScene(order0, groups0, gid, { beforeCutId });
         if (!r.changed) return;
-        await commitShotsReorder(r.order, r.groups, { moveCount: order0.filter((id) => mem.get(id) === gid).length });
+        const moving = new Set(groups0.find((g) => g.id === gid)?.cut_ids || []);
+        await commitShotsReorder(r.order, r.groups, { moveCount: order0.filter((id) => moving.has(id)).length });
       };
       shotsUi.dragSession = { cancel };
       window.addEventListener("pointermove", move);
@@ -5085,7 +5086,7 @@ function shotsNavOrder() {
   const tl = state.timeline;
   if (!tl) return { order: [], hidden: [] };
   if (shotsUi.view === "final") return { order: finalCutList(tl).items.map((it) => it.cutId), hidden: [] };
-  const cuts = shotsUi.needsRedoOnly ? filterCuts(tl.cuts, { needsRedoOnly: true }) : tl.cuts;
+  const cuts = redoFilterOn(SHOW_REDO_FILTER, shotsUi.needsRedoOnly) ? filterCuts(tl.cuts, { needsRedoOnly: true }) : tl.cuts;
   const order = [];
   const hidden = [];
   for (const sec of shotsSections(cuts, tl.groups || [])) {
@@ -5613,7 +5614,7 @@ function mountShots(el) {
     const opts = state.projects.map((p) =>
       `<option value="${esc(p.id)}"${p.id === state.pid ? " selected" : ""}>${esc(projectOptionLabel(p))}</option>`).join("");
     let cuts = tl ? tl.cuts : [];
-    if (shotsUi.needsRedoOnly) cuts = filterCuts(cuts, { needsRedoOnly: true });
+    if (redoFilterOn(SHOW_REDO_FILTER, shotsUi.needsRedoOnly)) cuts = filterCuts(cuts, { needsRedoOnly: true });
     const groups = tl ? tl.groups || [] : [];
     const sections = shotsSections(cuts, groups);
     const cutLabels = computeCutLabels(tl || { cuts: [] });
@@ -5678,7 +5679,7 @@ function mountShots(el) {
           <button type="button" class="gg-btn${listCaption ? "" : " gg-on"}" data-mode="info" title="Show cut details">Info</button>
           <button type="button" class="gg-btn${listCaption ? " gg-on" : ""}" data-mode="caption" title="Edit dialogue / captions per cut">Caption</button>
         </div>
-        <label class="gg-filter-redo" title="Show only cuts marked for redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Show redo cuts only</label>
+        ${SHOW_REDO_FILTER ? `<label class="gg-filter-redo" title="Show only cuts marked for redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Show redo cuts only</label>` : ""}
       </div>
       <div class="gg-meta">
         <span class="gg-meta-text">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</span>

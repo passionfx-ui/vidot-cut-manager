@@ -209,6 +209,24 @@ export function moveScene(order, groups, groupId, target = {}) {
 }
 
 /**
+ * `beforeCutId` for moveScene from a scene drop. `beforeGroupId` null = after the last other scene
+ * (Ungrouped is always listed last, but its cuts may sit anywhere in the order).
+ *
+ * @param {string[]} order
+ * @param {object[]} groups
+ * @param {string} groupId scene being dragged
+ * @param {string|null} beforeGroupId
+ * @returns {string|null}
+ */
+export function sceneDropBeforeCut(order, groups, groupId, beforeGroupId) {
+  const mem = membershipMap(groups);
+  const ord = order || [];
+  if (beforeGroupId) return ord.find((id) => mem.get(id) === beforeGroupId) ?? null;
+  const lastOther = ord.findLastIndex((id) => mem.has(id) && mem.get(id) !== groupId);
+  return ord.slice(lastOther + 1).find((id) => !mem.has(id)) ?? null;
+}
+
+/**
  * Drop boundary for a scene-header drag. `sections` are the other scene sections in list order
  * (wrap-content coordinates); dropping past the last one means "end of scenes".
  *
