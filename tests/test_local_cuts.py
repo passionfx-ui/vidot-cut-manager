@@ -61,6 +61,7 @@ class LocalCutTests(unittest.TestCase):
     def test_add_cut_appears_on_timeline(self):
         entry = gd.add_local_cut("proj1")
         self.assertTrue(gd.LOCAL_CUT_ID_RE.fullmatch(entry["id"]))
+        self.assertEqual(entry["name"], "New cut")
         tl = gd.timeline("proj1")
         self.assertIsNotNone(tl)
         ids = [c["id"] for c in tl["cuts"]]

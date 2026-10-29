@@ -24,7 +24,7 @@ from .project_settings import merge_settings_patch, normalize_settings
 from .timeline import build_timeline, timeline_order
 from .workflow_hash import workflow_sha256
 
-_CUT_NAME_RE = re.compile(r"^cut(\d+)$", re.I)
+NEW_CUT_NAME = "New cut"
 _MEDIA_EXT = {
     ".png": "image",
     ".jpg": "image",
@@ -247,16 +247,6 @@ class LocalStore:
             else:
                 doc.setdefault("loose_order", []).append(cid)
 
-    def _next_cut_name(self, doc: dict[str, Any]) -> str:
-        max_n = 0
-        for c in self._cuts_map(doc).values():
-            if not isinstance(c, dict) or is_reference(c):
-                continue
-            m = _CUT_NAME_RE.match(str(c.get("name") or ""))
-            if m:
-                max_n = max(max_n, int(m.group(1)))
-        return f"cut{max_n + 1}"
-
     def list_projects(self, include_deleted: bool = False) -> list[dict[str, Any]]:
         rows = self._load_index()
         if include_deleted:
@@ -277,7 +267,7 @@ class LocalStore:
             if template_graph is not None:
                 workflow_sha = self.put_blob(pid, template_graph)
             proj_settings = normalize_settings(settings)
-            cut = new_cut(scene["id"], "cut1", proj_settings["cut_seconds"], workflow_sha)
+            cut = new_cut(scene["id"], NEW_CUT_NAME, proj_settings["cut_seconds"], workflow_sha)
             scene["cut_order"] = [cut["id"]]
             doc = entity_base(pid)
             doc.update({
@@ -453,7 +443,7 @@ class LocalStore:
             workflow_sha = None
             if template_graph is not None:
                 workflow_sha = self.put_blob(pid, template_graph)
-            cut_name = name or self._next_cut_name(doc)
+            cut_name = name or NEW_CUT_NAME
             sid = scene_id
             if sid and not self._scene(doc, sid):
                 sid = None

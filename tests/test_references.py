@@ -38,16 +38,16 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual([r["name"] for r in tl["references"]], ["Mina"])
         self.assertEqual(tl["references"][0]["category"], "Character")
         self.assertEqual(len(tl["cuts"]), 1)  # only the default cut
-        self.assertEqual(tl["cuts"][0]["name"], "cut1")
+        self.assertEqual(tl["cuts"][0]["name"], "New cut")
         doc = self.store.get_project(self.pid)
         self.assertEqual(len(timeline_order(doc)), 1)
         self.assertEqual(tl["total_sec"], 3.0)
 
-    def test_new_cut_numbering_ignores_references(self):
+    def test_new_cut_name_ignores_references(self):
         native_add_reference(self.pid, "cut9", "Prop")
         doc = self.store.add_cut(self.pid)
         names = sorted(c["name"] for c in doc["cuts"].values() if c.get("kind") != "reference")
-        self.assertEqual(names, ["cut1", "cut2"])
+        self.assertEqual(names, ["New cut", "New cut"])
 
     def test_validation_and_duplicates(self):
         with self.assertRaises(ValueError):
