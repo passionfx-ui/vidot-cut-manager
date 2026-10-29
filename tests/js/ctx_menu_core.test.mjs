@@ -84,8 +84,9 @@ describe("cutCardMenuItems", () => {
     const items = cutCardMenuItems({ native: true, sdkOk: true, canMoveUp: true, trashCount: 2, trashLabel: "Trash (2)…" });
     assert.deepEqual(keys(items), [
       "moveUp", "moveDown", "moveToScene", "group", "split", "removeFromScene",
-      "redo", "rename", "addCut", "regen", "send", "del", "trash",
+      "redo", "rename", "addCut", "regen", "renderSel", "send", "del", "trash",
     ]);
+    assert.equal(byKey(items, "renderSel").label, "Render selected");
     assert.equal(byKey(items, "moveUp").disabled, false);
     assert.equal(byKey(items, "moveDown").disabled, true);
     assert.equal(byKey(items, "trash").label, "Trash (2)…");
@@ -138,6 +139,23 @@ describe("timelineClipMenuItems", () => {
     const r = byKey(timelineClipMenuItems({ native: true, emptyCut: true }), "regen");
     assert.equal(r.disabled, true);
     assert.equal(r.title, REGEN_EMPTY_TIP);
+  });
+});
+
+describe("cutCardMenuItems Render selected", () => {
+  it("on for one or many cuts in a native project", () => {
+    assert.equal(byKey(cutCardMenuItems({ native: true }), "renderSel").disabled, false);
+    const multi = byKey(cutCardMenuItems({ native: true, multi: true, renderCount: 3 }), "renderSel");
+    assert.equal(multi.disabled, false);
+    assert.equal(multi.title, "Queue 3 cuts to ComfyUI");
+  });
+  it("off for imported projects, while busy, or with no cut", () => {
+    assert.equal(byKey(cutCardMenuItems({ native: false, sdkOk: true }), "renderSel").disabled, true);
+    assert.equal(byKey(cutCardMenuItems({ native: true, sdkBusy: true }), "renderSel").disabled, true);
+    assert.equal(byKey(cutCardMenuItems({ native: true, renderCount: 0 }), "renderSel").disabled, true);
+  });
+  it("timeline clip menu has no Render selected", () => {
+    assert.ok(!keys(timelineClipMenuItems({ native: true })).includes("renderSel"));
   });
 });
 

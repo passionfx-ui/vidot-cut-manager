@@ -8,6 +8,7 @@ import {
   isOpenTabCut,
   shotsKeyAction,
   stepCutId,
+  selectAllCutIds,
 } from "../../web/gg_cut_select_core.js";
 
 describe("shouldScheduleCutWorkflowLoad", () => {
@@ -184,6 +185,16 @@ describe("shotsKeyAction", () => {
     assert.equal(shotsKeyAction({ key: "Delete", ctrlKey: true }), null);
   });
 
+  it("Ctrl/Cmd+A selects all cuts (layout-independent, repeats too); not with Shift/Alt, menu or field editing", () => {
+    assert.equal(shotsKeyAction({ key: "a", code: "KeyA", ctrlKey: true }), "select-all");
+    assert.equal(shotsKeyAction({ key: "A", code: "KeyA", metaKey: true }), "select-all");
+    assert.equal(shotsKeyAction({ key: "ㅁ", code: "KeyA", ctrlKey: true }), "select-all");
+    assert.equal(shotsKeyAction({ key: "a", code: "KeyA", ctrlKey: true, repeat: true }), "select-all");
+    for (const extra of [{ shiftKey: true }, { altKey: true }, { menuOpen: true }, { fieldEditing: true }, { modalOpen: true }, { isComposing: true }]) {
+      assert.equal(shotsKeyAction({ key: "a", code: "KeyA", ctrlKey: true, ...extra }), null, JSON.stringify(extra));
+    }
+  });
+
   it("IME composition is ignored", () => {
     assert.equal(shotsKeyAction({ key: "ArrowDown", isComposing: true }), null);
     assert.equal(shotsKeyAction({ key: "Enter", isComposing: true }), null);
@@ -261,5 +272,13 @@ describe("stepCutId", () => {
   it("empty list", () => {
     assert.equal(stepCutId([], "a", 1), "");
     assert.equal(stepCutId(null, "a", -1), "");
+  });
+});
+
+describe("selectAllCutIds", () => {
+  it("list order without cuts in collapsed scenes", () => {
+    assert.deepEqual(selectAllCutIds(["a", "b", "c"], ["b"]), ["a", "c"]);
+    assert.deepEqual(selectAllCutIds(["a", "", "c"]), ["a", "c"]);
+    assert.deepEqual(selectAllCutIds(null), []);
   });
 });
