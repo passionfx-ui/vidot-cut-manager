@@ -2,6 +2,8 @@
  * 0.9.79 Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y: Shots (cut reorder, scene group) and Timeline (move, trim, Reset)
  * histories, key scope (canvas and text inputs left alone), history cleared on project switch, and the
  * first-show Timeline height (half of ComfyUI's default bottom panel, fresh browser profile).
+ * 0.9.81: Remove from Scene / Delete / Add Cut from the cut context menu, then Ctrl+Z / Ctrl+Y with the
+ * pointer moved off the panel (last-clicked panel fallback); a canvas click hands Ctrl+Z back to ComfyUI.
  * ZZ-test- projects only. Blocks POST /prompt and /gonggan/regen; no other request is changed.
  */
 import fs from "node:fs";
@@ -104,13 +106,25 @@ const undo = (page) => combo(page, ["Control"], "z");
 const redoShiftZ = (page) => combo(page, ["Control", "Shift"], "z");
 const redoY = (page) => combo(page, ["Control"], "y");
 
+/** Pointer onto an empty spot of the ComfyUI canvas (no node under it), focus dropped; no click. */
 async function hoverCanvasAndBlur(page) {
   const pt = await page.evaluate(() => {
+    const lc = window.app?.canvas;
+    const onNode = (el, x, y) => {
+      try {
+        const r = el.getBoundingClientRect();
+        const off = [x - r.left, y - r.top];
+        const pos = lc?.ds?.convertOffsetToCanvas ? lc.ds.convertOffsetToCanvas(off) : lc?.convertOffsetToCanvas?.(off);
+        return !!(pos && lc.graph?.getNodeOnPos?.(pos[0], pos[1]));
+      } catch {
+        return false;
+      }
+    };
     for (let fy = 0.15; fy <= 0.45; fy += 0.05) {
       for (let fx = 0.85; fx >= 0.4; fx -= 0.05) {
         const x = Math.round(innerWidth * fx), y = Math.round(innerHeight * fy);
         const el = document.elementFromPoint(x, y);
-        if (el && el.tagName === "CANVAS" && !el.closest(".gg-root")) return { x, y };
+        if (el && el.tagName === "CANVAS" && !el.closest(".gg-root") && !onNode(el, x, y)) return { x, y };
       }
     }
     return null;
@@ -119,6 +133,23 @@ async function hoverCanvasAndBlur(page) {
   await page.mouse.move(pt.x, pt.y, { steps: 4 });
   await page.evaluate(() => document.activeElement?.blur?.());
   await sleep(150);
+  return pt;
+}
+
+async function clickCtxItem(page, label) {
+  await page.waitForSelector(".gg-ctx", { timeout: 8000 });
+  for (const it of await page.$$(".gg-ctx > .gg-ctx-item")) {
+    if ((await page.evaluate((n) => n.textContent?.trim(), it)) === label) {
+      await it.click();
+      return;
+    }
+  }
+  throw new Error(`Context menu item not found: ${label}`);
+}
+
+async function rightClickCut(page, sel) {
+  const box = await (await page.waitForSelector(sel, { timeout: 15000 })).boundingBox();
+  await page.mouse.click(box.x + 12, box.y + 12, { button: "right" });
 }
 
 async function main() {
@@ -236,11 +267,13 @@ async function main() {
     await sleep(1200);
     if ((await sceneCount()) !== 1) throw new Error("Ctrl+Z in a text input must not undo Shots");
     await page.evaluate(() => document.querySelector(".gg-e2e-undo-input")?.remove());
-    await hoverCanvasAndBlur(page);
+    const canvasPt = await hoverCanvasAndBlur(page);
+    await page.mouse.click(canvasPt.x, canvasPt.y);  // canvas = last interacted area
+    await page.evaluate(() => document.activeElement?.blur?.());
     await undo(page);
     await sleep(1200);
-    if ((await sceneCount()) !== 1) throw new Error("Ctrl+Z over the ComfyUI canvas must not undo Shots");
-    console.log("PASS  Ctrl+Z in a text input or over the canvas is left to ComfyUI");
+    if ((await sceneCount()) !== 1) throw new Error("Ctrl+Z after clicking the ComfyUI canvas must not undo Shots");
+    console.log("PASS  Ctrl+Z in a text input or after a canvas click is left to ComfyUI");
 
     // ---- Timeline: move, trim, Reset
     const clipIds = await page.$$eval(".gg-timeline .gg-track .gg-clip", (els) => els.map((e) => e.dataset.cutId));
@@ -294,6 +327,68 @@ async function main() {
     await waitFor(sceneCount, scenesBefore - 1, "Ctrl+Z over Shots after a timeline click");
     if ((await trackState()) !== t2) throw new Error("Ctrl+Z over Shots must not touch the timeline");
     console.log("PASS  pointer over Shots wins over Timeline focus");
+
+    // ---- Shots: Remove from Scene via the cut context menu, then Ctrl+Z with the pointer off the panel
+    // (the menu lives on document.body: once it closes Shots is neither hovered nor focused)
+    await hover(page, ".gg-root.gg-shots .gg-grp-wrap");
+    await redoY(page);
+    await waitFor(sceneCount, 1, "Ctrl+Y groups again before Remove from Scene");
+    const sceneSize = async () => ((await tlNow()).groups || [])[0]?.cut_ids?.length ?? 0;
+    const size0 = await sceneSize();
+    if (size0 < 2) throw new Error(`test setup: scene should have 2+ cuts, has ${size0}`);
+    const tBeforeRemove = await trackState();
+    await rightClickCut(page, ".gg-root.gg-shots .gg-grp-sec[data-group-id] .gg-cut");
+    await clickCtxItem(page, "Remove from Scene");
+    await waitFor(sceneSize, size0 - 1, "Remove from Scene (context menu)");
+    await hoverCanvasAndBlur(page);
+    await undo(page);
+    await waitFor(sceneSize, size0, "Ctrl+Z right after Remove from Scene");
+    if ((await trackState()) !== tBeforeRemove) throw new Error("Ctrl+Z after Remove from Scene must not touch the timeline");
+    await redoY(page);
+    await waitFor(sceneSize, size0 - 1, "Ctrl+Y after Remove from Scene");
+    await undo(page);
+    await waitFor(sceneSize, size0, "Ctrl+Z again after Remove from Scene");
+    console.log("PASS  Remove from Scene (context menu) -> Ctrl+Z / Ctrl+Y with the pointer over the canvas");
+
+    // ---- Shots: Delete (soft) -> Ctrl+Z restores it in place; Ctrl+Y deletes again
+    const trashLen = async () => {
+      const d = await getJson(page, `/gonggan/trash?pid=${encodeURIComponent(pid)}`);
+      return (Array.isArray(d) ? d : d.items || d.cuts || []).length;
+    };
+    const orderD0 = await cutOrder();
+    const trash0 = await trashLen();
+    const victim = orderD0.split(",")[1];
+    await rightClickCut(page, `.gg-root.gg-shots .gg-cut[data-cut-id="${victim}"]`);
+    await clickCtxItem(page, "Delete");
+    await waitFor(async () => (await cutOrder()).includes(victim), false, "Delete (context menu)");
+    await hoverCanvasAndBlur(page);
+    await undo(page);
+    await waitFor(cutOrder, orderD0, "Ctrl+Z after Delete restores the cut in place");
+    await waitFor(sceneSize, size0, "Ctrl+Z after Delete keeps the scene");
+    await waitFor(trashLen, trash0, "Ctrl+Z after Delete empties it from Trash");
+    await redoY(page);
+    await waitFor(async () => (await cutOrder()).includes(victim), false, "Ctrl+Y after Delete");
+    await undo(page);
+    await waitFor(cutOrder, orderD0, "Ctrl+Z again after Delete");
+    console.log("PASS  Delete -> Ctrl+Z restores in place, Ctrl+Y deletes again");
+
+    // ---- Shots: Add Cut -> Ctrl+Z soft-deletes it; Ctrl+Y brings the same cut back
+    const orderA0 = await cutOrder();
+    await rightClickCut(page, ".gg-root.gg-shots .gg-cut");
+    await clickCtxItem(page, "Add Cut");
+    await waitFor(async () => (await cutOrder()).split(",").length, 4, "Add Cut (context menu)");
+    const orderA1 = await cutOrder();
+    const added = orderA1.split(",").find((id) => !orderA0.split(",").includes(id));
+    await sleep(1500);  // the new cut's workflow load settles
+    await hoverCanvasAndBlur(page);
+    await undo(page);
+    await waitFor(cutOrder, orderA0, "Ctrl+Z after Add Cut");
+    await waitFor(trashLen, trash0 + 1, "Ctrl+Z after Add Cut moves it to Trash");
+    await redoY(page);
+    await waitFor(cutOrder, orderA1, `Ctrl+Y after Add Cut brings ${added} back in place`);
+    await undo(page);
+    await waitFor(cutOrder, orderA0, "Ctrl+Z again after Add Cut");
+    console.log("PASS  Add Cut -> Ctrl+Z soft-deletes, Ctrl+Y restores the same cut");
 
     // ---- project switch clears the history
     await selectProject(page, b.project.id);

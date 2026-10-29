@@ -224,6 +224,8 @@ async function run() {
     // 2) edit a caption in A and switch to B within 400 ms: the edit must still be saved to A
     await pick(pidA);
     await page.waitForFunction(() => document.querySelectorAll(".gg-root.gg-shots .gg-cut").length === 1, { timeout: 8000 });
+    await page.click('.gg-root.gg-shots .gg-list-toggle [data-mode="caption"]');
+    await page.waitForFunction(() => !!document.querySelector(".gg-root.gg-shots .gg-cut .gg-caption-text"), { timeout: 5000 });
     const text = `switch-${runStamp}`;
     await page.evaluate((v) => {
       const ta = document.querySelector(".gg-root.gg-shots .gg-cut .gg-caption-text");

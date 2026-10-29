@@ -88,23 +88,28 @@ describe("shotTabCutParts", () => {
   });
 });
 
-describe("cutHeaderParts (cut card header, same Scene rule as the tab label)", () => {
+describe("cutHeaderParts (cut card header <cutLabel> <CutName>, no scene name)", () => {
   const groups = [{ id: "g1", name: "Scene1" }, { id: "g2", name: "  " }];
   const cuts = [
-    { id: "a", group_id: "g1" },
-    { id: "b", group_id: "g1" },
-    { id: "c", group_id: "g1" },
-    { id: "d", group_id: "g1" },
-    { id: "e", group_id: "" },
-    { id: "f", group_id: "g2" },
+    { id: "a", group_id: "g1", name: "A" },
+    { id: "b", group_id: "g1", name: "B" },
+    { id: "c", group_id: "g1", name: "C" },
+    { id: "d", group_id: "g1", name: "  New   cut " },
+    { id: "e", group_id: "", name: "Solo" },
+    { id: "f", group_id: "g2", name: "" },
   ];
   const t = { cuts, groups };
-  it("<cutLabel> <SceneName>", () => {
-    assert.deepEqual(cutHeaderParts(cuts[3], t), { cutLabel: "1-4", scene: "Scene1" });
+  it("<cutLabel> <CutName>, scene name left out", () => {
+    assert.deepEqual(cutHeaderParts(cuts[3], t), { cutLabel: "1-4", name: "New cut" });
+    assert.deepEqual(cutHeaderParts(cuts[4], t), { cutLabel: "2-1", name: "Solo" });
   });
-  it("no scene or empty scene name -> literal Scene", () => {
-    assert.deepEqual(cutHeaderParts(cuts[4], t), { cutLabel: "2-1", scene: "Scene" });
-    assert.deepEqual(cutHeaderParts(cuts[5], t), { cutLabel: "3-1", scene: "Scene" });
+  it("empty cut name -> (untitled)", () => {
+    assert.deepEqual(cutHeaderParts(cuts[5], t), { cutLabel: "3-1", name: "(untitled)" });
+  });
+  it("reference: its name is the label, no repeat", () => {
+    assert.deepEqual(cutHeaderParts({ id: "r", kind: "reference", name: "Hero" }, t), { cutLabel: "Hero", name: "" });
+  });
+  it("sceneLabelOrDefault (tab label scene word)", () => {
     assert.equal(sceneLabelOrDefault(""), "Scene");
     assert.equal(sceneLabelOrDefault("  Intro  "), "Intro");
   });
