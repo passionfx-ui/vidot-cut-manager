@@ -91,11 +91,18 @@ export function shouldIgnoreShortcut(e) {
 }
 
 /**
- * @param {{ shotsSidebarActive?: boolean, timelinePanelOpen?: boolean, timelineDomPresent?: boolean }} ctx
+ * Plugin keyboard shortcuts act only while the pointer hovers, or focus is inside,
+ * a plugin surface — never while the user works on the ComfyUI canvas.
+ * Omit the timeline fields to scope a shortcut to the Shots sidebar only.
+ * @param {{ hoverShots?: boolean, focusShots?: boolean, hoverTimeline?: boolean, focusTimeline?: boolean }} ctx
+ */
+export function pluginKeyScopeActive(ctx) {
+  return !!(ctx?.hoverShots || ctx?.focusShots || ctx?.hoverTimeline || ctx?.focusTimeline);
+}
+
+/**
+ * @param {{ hoverShots?: boolean, focusShots?: boolean, hoverTimeline?: boolean, focusTimeline?: boolean }} ctx
  */
 export function timelineShortcutAllowed(ctx) {
-  if (ctx?.shotsSidebarActive) return true;
-  if (ctx?.timelinePanelOpen) return true;
-  if (ctx?.timelineDomPresent) return true;
-  return false;
+  return pluginKeyScopeActive(ctx);
 }
