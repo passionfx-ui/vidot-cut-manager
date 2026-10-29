@@ -148,6 +148,7 @@ import {
 import { buildSrt, srtFileName, effectiveCaption, captionEditChanged, captionFieldPlaceholder } from "./gg_caption_core.js";
 import { decideVideoSync } from "./gg_playback_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
+import { createRenderStatus, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
 import {
   stepMove,
@@ -252,9 +253,10 @@ let playCutScrollId = "";
 const projectFieldUi = { timer: 0 };
 const JOBS_KEY = "gonggan.jobs";
 const progressTracker = createProgressTracker();
+const renderStatus = createRenderStatus();
 const progUi = { paintTimer: 0, statusDebounce: 0, timelineReloadTimer: 0, wired: false, handlers: {} };
 const PROGRESS_API_EVENTS = [
-  "status", "execution_start", "execution_cached", "executing", "progress", "progress_state",
+  "status", "promptQueued", "execution_start", "execution_cached", "executing", "progress", "progress_state",
   "executed", "execution_success", "execution_error", "execution_interrupted",
 ];
 let cutSelAnchor = "";
@@ -3228,6 +3230,7 @@ function loadPersistedJobs() {
     for (const j of list.slice(0, 200)) {
       if (j?.promptId && j?.cutId && j?.projectId) {
         progressTracker.registerPrompt(j.promptId, j.cutId, j.projectId);
+        renderStatus.link(j.promptId, j.cutId, j.projectId);
       }
     }
   } catch (_) {}
@@ -3318,7 +3321,7 @@ function applyLiveChipToRow(li, cut) {
   const chip = li?.querySelector(".gg-live-chip");
   if (!chip || !cut) return;
   const v = liveProgressView(cut);
-  chip.hidden = !v.show;
+  chip.hidden = !v.show || v.mode !== "failed";
   chip.classList.toggle("gg-live-run", v.mode === "running");
   chip.classList.toggle("gg-live-queue", v.mode === "queued");
   chip.classList.toggle("gg-live-failed", v.mode === "failed");
@@ -3417,7 +3420,42 @@ function paintAllCutProgress() {
     applyProgressToClip(el, cut);
   });
   paintProjectSummary(null);
-  updateOtherJobsChip();
+  paintAllRenderStatus();
+}
+
+function paintRenderBadge(badge, v) {
+  if (!badge) return;
+  const key = v.show ? `${v.mode}|${v.text}|${v.title}` : "";
+  if (badge.dataset.rs === key) return;
+  badge.dataset.rs = key;
+  badge.hidden = !v.show;
+  badge.classList.toggle("gg-rs-rendering", v.mode === "rendering");
+  badge.classList.toggle("gg-rs-queued", v.mode === "queued");
+  const text = badge.querySelector(".gg-rs-text");
+  if (text) text.textContent = v.text;
+  if (v.title) badge.title = v.title;
+  else badge.removeAttribute("title");
+}
+
+function paintRenderGlobal() {
+  const v = renderGlobalView(renderStatus.globalView(state.pid));
+  document.querySelectorAll(".gg-shots .gg-render-global").forEach((el) => paintRenderBadge(el, v));
+}
+
+/** Badge-only update for the given cuts (cut cards + timeline clips) and the header indicator. */
+function paintRenderStatus(cutIds) {
+  for (const id of cutIds || []) {
+    const v = renderBadgeView(renderStatus.cutView(state.pid, id));
+    const sel = `.gg-cut[data-cut-id="${CSS.escape(id)}"] .gg-render-badge, .gg-clip[data-cut-id="${CSS.escape(id)}"] .gg-render-badge`;
+    document.querySelectorAll(sel).forEach((el) => paintRenderBadge(el, v));
+  }
+  paintRenderGlobal();
+}
+
+function paintAllRenderStatus() {
+  const ids = new Set();
+  document.querySelectorAll(".gg-shots .gg-cut[data-cut-id], .gg-timeline .gg-clip[data-cut-id]").forEach((el) => ids.add(el.dataset.cutId));
+  paintRenderStatus(ids);
 }
 
 function clipStageDotClass(stage) {
@@ -3466,27 +3504,7 @@ function scheduleProgressPaint(cutId) {
         });
       }
     }
-    updateOtherJobsChip();
   }, 250);
-}
-
-function updateOtherJobsChip() {
-  const { running, pending } = progressTracker.getOther();
-  const chips = document.querySelectorAll(".gg-other-chip");
-  let text = "";
-  if (running === 1 && pending === 0) text = "Other job running";
-  else if (running > 0 || pending > 0) {
-    const parts = [];
-    if (running) parts.push(`${running} running`);
-    if (pending) parts.push(`${pending} queued`);
-    text = `Other jobs: ${parts.join(", ")}`;
-  }
-  const total = running + pending;
-  chips.forEach((el) => {
-    el.hidden = !text;
-    el.textContent = text ? `● ${total}` : "";
-    el.title = text || "Not started from a Shots cut";
-  });
 }
 
 function scheduleTimelineReload() {
@@ -3504,8 +3522,6 @@ function onProgressTrackerEvent(evt) {
       scheduleTimelineReload();
     }
     scheduleProgressPaint(evt.cutId);
-  } else {
-    updateOtherJobsChip();
   }
 }
 
@@ -3514,6 +3530,7 @@ async function syncProgressQueue() {
     const res = await api.fetchApi("/queue");
     const data = await res.json().catch(() => ({}));
     progressTracker.syncQueue(data);
+    renderStatus.syncQueue(data);
     scheduleProgressPaint();
     paintAllCutProgress();
   } catch (_) {}
@@ -3547,8 +3564,9 @@ function wireProgressListeners() {
   progUi.wired = true;
   for (const typ of PROGRESS_API_EVENTS) {
     progUi.handlers[typ] = (e) => {
-      if (typ === "status") onProgressStatusEvent(e);
+      if (typ === "status" || typ === "promptQueued") onProgressStatusEvent(e);
       else progressTracker.handleEvent(typ, e.detail);
+      paintRenderStatus(renderStatus.handle(typ, e.detail));
     };
     api.addEventListener(typ, progUi.handlers[typ]);
   }
@@ -4275,6 +4293,7 @@ function cutRowHtml(c, labels) {
           <span class="gg-cut-title">${esc(displayCutName(c))}</span>
           ${verInfo.text ? `<span class="gg-cut-ver" title="${esc(verInfo.title)}">${esc(verInfo.text)}</span>` : ""}
           <span class="gg-cut-len" title="${esc(lenInfo.title)}">${esc(lenInfo.text)}</span>
+          <span class="gg-render-badge" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
           ${headerBadges ? `<span class="gg-cut-header-badges">${headerBadges}</span>` : ""}
           <div class="gg-stage-row" title="">${stageDots}</div>
         </div>
@@ -5212,7 +5231,7 @@ function mountShots(el) {
           <button type="button" class="gg-btn gg-proj-settings" title="Project settings" aria-label="Project settings"${state.pid ? "" : " disabled"}>⚙</button>
         </div>
         <span class="gg-sdk-slot"></span>
-        <span class="gg-other-chip" hidden title="Not started from a Shots cut"></span>
+        <span class="gg-render-badge gg-render-global" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
         <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>
         <button class="gg-btn gg-reload" title="Reload">⟳</button>
       </div>
@@ -6263,6 +6282,7 @@ function mountTimeline(el) {
         <div class="gg-clip-label"><span class="gg-no">${esc(cutDisplayLabel(c, cutLabels))}</span>${esc(displayCutName(c))}</div>
         <div class="gg-clip-in">${kindOf(c) === "video" && c.in > 0 ? `in ${c.in.toFixed(1)}` : ""}</div>
         <div class="gg-clip-dur">${c.sec.toFixed(1)}s</div>
+        <span class="gg-render-badge gg-clip-rs" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
         <div class="gg-clip-prog" hidden><div class="gg-prog-bar"><div class="gg-prog-fill"></div></div></div>
         <div class="gg-edge gg-edge-l${i > 0 ? " gg-edge-split" : ""}" data-side="l" title="Trim in"></div>
         <div class="gg-edge gg-edge-r${i < cuts.length - 1 ? " gg-edge-split" : ""}" data-side="r" title="Trim out"></div>
@@ -6515,6 +6535,17 @@ app.registerExtension({
       const origQueue = api.queuePrompt.bind(api);
       api.queuePrompt = async (...args) => {
         const res = await origQueue(...args);
+        try {
+          if (res?.prompt_id) {
+            const target = promptCutTarget({
+              graphExtra: args[1]?.workflow?.extra?.gonggan ?? app.graph?.extra?.gonggan,
+              loadedCutId: wfLastLoadedCutId,
+              currentProjectId: state.pid,
+              shotTabActive: isGongganShotTabOpenAndActive(),
+            });
+            paintRenderStatus(renderStatus.queued(res.prompt_id, target));
+          }
+        } catch (_) {}
         try {
           // wfLastLoadedCutId is only set by loadCutWorkflow (Shots list path); timeline selectCut({fromTimeline}) never changes it.
           if (res?.prompt_id && wfLastLoadedCutId && state.pid && isGongganShotTabOpenAndActive()) {
