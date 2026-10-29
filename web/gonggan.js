@@ -86,6 +86,8 @@ import {
   shouldCancelPendingWorkflowLoad,
   shouldResetOpenTabTracking,
   shouldShowOpenTabMarker,
+  shotsKeyAction,
+  stepCutId,
 } from "./gg_cut_select_core.js";
 import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
 import {
@@ -5098,6 +5100,30 @@ function mountShots(el) {
   refreshProjectTemplateFlag();
   refreshSdk(false);
   const timer = setInterval(() => refreshSdk(false), 20000);
+  const shotsNavOrder = () => {
+    const tl = state.timeline;
+    if (!tl) return { order: [], hidden: [] };
+    if (shotsUi.view === "final") return { order: finalCutList(tl).items.map((it) => it.cutId), hidden: [] };
+    const cuts = shotsUi.needsRedoOnly ? filterCuts(tl.cuts, { needsRedoOnly: true }) : tl.cuts;
+    const order = [];
+    const hidden = [];
+    for (const sec of shotsSections(cuts, tl.groups || [])) {
+      for (const c of sec.cuts) {
+        order.push(c.id);
+        if (sec.group?.collapsed) hidden.push(c.id);
+      }
+    }
+    return { order, hidden };
+  };
+  const selectCutFromKeys = (cutId) => {
+    selectCut(cutId);
+    openTimelinePanelIfAllowed();
+    if (isTimelinePanelOpen()) scheduleRestoreTimelinePanelHeight();
+    paintSelection(root);
+    paintPanel();
+    const sel = CSS.escape(cutId);
+    root.querySelector(`.gg-cut[data-cut-id="${sel}"], .gg-final-item[data-cut-id="${sel}"]`)?.scrollIntoView({ block: "nearest" });
+  };
   const onShotsKey = (e) => {
     if (e.key === "Escape" && shotsUi.dragSession) {
       shotsUi.dragSession.cancel();
@@ -5106,7 +5132,26 @@ function mountShots(el) {
     if (!pluginKeyScopeActive({ hoverShots: ggElHovered(root), focusShots: ggElHasFocus(root) })) return;
     const tag = (e.target && e.target.tagName) || "";
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable) return;
-    if (e.key === "Escape") {
+    const ae = document.activeElement;
+    const action = shotsKeyAction({
+      key: e.key,
+      code: e.code,
+      altKey: e.altKey,
+      shiftKey: e.shiftKey,
+      ctrlKey: e.ctrlKey,
+      metaKey: e.metaKey,
+      isComposing: e.isComposing,
+      repeat: e.repeat,
+      modalOpen: ggModalOpen() || comfyPromptDialogOpen(),
+      menuOpen: !!ctxUi.el,
+      fieldEditing: !!(ae && isCardFieldEditing(ae)),
+    });
+    if (!action) return;
+    const handled = () => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    if (action === "escape") {
       closeCtxMenu();
       if (state.cutSel.size) {
         state.cutSel.clear();
@@ -5117,20 +5162,56 @@ function mountShots(el) {
       }
       return;
     }
-    if (e.key === "Delete" && cutsForDelete().length) {
-      e.preventDefault();
+    if (action === "delete") {
+      if (!cutsForDelete().length) return;
+      handled();
       deleteSelectedCuts();
       return;
     }
-    const ae = document.activeElement;
-    if (ae && isCardFieldEditing(ae)) return;
-    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-      if (!shotsSidebarActive() || !isNativeProject()) return;
-      const ids = cutSelIds();
-      if (!ids.length) return;
-      e.preventDefault();
-      const dir = e.key === "ArrowUp" ? -1 : 1;
-      void applyStepMove(dir);
+    if (!state.timeline) return;
+    const ids = cutSelIds();
+    switch (action) {
+      case "move-up":
+      case "move-down":
+        if (!shotsSidebarActive() || !isNativeProject() || !ids.length) return;
+        handled();
+        void applyStepMove(action === "move-up" ? -1 : 1);
+        return;
+      case "prev":
+      case "next": {
+        const { order, hidden } = shotsNavOrder();
+        if (!order.length) return;
+        handled();
+        const id = stepCutId(order, state.cutId, action === "prev" ? -1 : 1, hidden);
+        if (id) selectCutFromKeys(id);
+        return;
+      }
+      case "open":
+        if (e.target?.closest?.("button, a[href], summary, [role='button']")) return;
+        if (ids.length !== 1) return;
+        handled();
+        selectCutFromKeys(ids[0]);
+        return;
+      case "rename":
+        if (!isNativeProject() || ids.length !== 1) return;
+        handled();
+        void renameCut(ids[0]);
+        return;
+      case "group":
+        if (!ids.length) return;
+        handled();
+        void createSceneGroup(ids);
+        return;
+      case "ungroup":
+        if (!ids.some((id) => cutById(id)?.group_id)) return;
+        handled();
+        void ungroupCuts(ids);
+        return;
+      case "add":
+        if (!state.pid) return;
+        handled();
+        void (state.cutId && cutById(state.cutId) ? addCutAfter(state.cutId) : addLocalCut());
+        return;
     }
   };
   const onShotsEmptyClick = (e) => {
