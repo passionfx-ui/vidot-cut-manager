@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  IMPORT_LIMITS,
   AUTO_CUT_SPLIT_FORMAT_LINE,
   REFERENCE_CATEGORIES,
   parseImportList,
@@ -106,13 +107,15 @@ not a cut line
       ["- Cut: A | abc | x", 3],
       ["- Cut: A | 601 | x", 3],
       ["- Cut: A | -1 | x", 3],
+      ["- Cut: A | 0.1 | x", 3],
+      ["- Cut: A | 0.19 | x", 3],
     ]) {
       const text = `${AUTO_CUT_SPLIT_FORMAT_LINE}\n# Scene: S\n${body}\n`;
       const r = parseImportList(text);
       assert.equal(r.ok, false, body);
       assert.equal(
         firstErrorText(r),
-        `Line ${line}: seconds must be a number between 0 and 600`,
+        `Line ${line}: seconds must be a number between 0.2 and 600`,
         body
       );
     }
@@ -209,27 +212,40 @@ not a cut line
     assert.equal(firstErrorText(r), "Line 0: No cuts found");
   });
 
-  it("errors when cut count exceeds 1000", () => {
+  it("errors when cut count exceeds the server limit (500)", () => {
+    assert.equal(IMPORT_LIMITS.maxCuts, 500);
     let text = `${AUTO_CUT_SPLIT_FORMAT_LINE}\n# Scene: Bulk\n`;
-    for (let i = 0; i < 1001; i++) {
+    for (let i = 0; i < 501; i++) {
       text += `- Cut: C${i} | 1 | x\n`;
     }
     const r = parseImportList(text);
     assert.equal(r.ok, false);
-    assert.equal(r.counts.cuts, 1000);
-    assert.match(firstErrorText(r), /maximum 1000 cuts/);
+    assert.equal(r.counts.cuts, 500);
+    assert.match(firstErrorText(r), /maximum 500 cuts/);
   });
 
-  it("parses 1000 cuts within 200ms", () => {
+  it("accepts exactly 500 cuts, 0.2 s and a 4000-character caption; rejects 4001", () => {
+    let text = `${AUTO_CUT_SPLIT_FORMAT_LINE}\n# Scene: Edge\n`;
+    for (let i = 0; i < 499; i++) text += `- Cut: C${i} | 0.2 | x\n`;
+    text += `- Cut: Last | 600 | ${"a".repeat(4000)}\n`;
+    const ok = parseImportList(text);
+    assert.equal(ok.ok, true);
+    assert.equal(ok.counts.cuts, 500);
+    const bad = parseImportList(`${AUTO_CUT_SPLIT_FORMAT_LINE}\n# Scene: Edge\n- Cut: Big | 1 | ${"a".repeat(4001)}\n`);
+    assert.equal(bad.ok, false);
+    assert.equal(firstErrorText(bad), "Line 3: caption must be at most 4000 characters");
+  });
+
+  it("parses 500 cuts within 200ms", () => {
     let text = `${AUTO_CUT_SPLIT_FORMAT_LINE}\n# Scene: Perf\n`;
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < 500; i++) {
       text += `- Cut: Cut${i} | 1 | cap\n`;
     }
     const t0 = performance.now();
     const r = parseImportList(text);
     const elapsed = performance.now() - t0;
     assert.equal(r.ok, true);
-    assert.equal(r.counts.cuts, 1000);
+    assert.equal(r.counts.cuts, 500);
     assert.ok(elapsed < 200, `expected <200ms, got ${elapsed.toFixed(1)}ms`);
   });
 
