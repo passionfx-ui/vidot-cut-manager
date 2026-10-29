@@ -200,6 +200,8 @@ async function run() {
     await page.waitForFunction((p) => [...document.querySelectorAll(".gg-root.gg-shots .gg-proj option")].some((o) => o.value === p), { timeout: 15000 }, pid);
     if ((await page.$eval(sel, (e) => e.value)) !== pid) await page.select(sel, pid);
     await page.waitForFunction(() => document.querySelectorAll(".gg-root.gg-shots .gg-cut").length === 2, { timeout: 10000 });
+    await page.click('.gg-root.gg-shots .gg-list-toggle [data-mode="caption"]');
+    await page.waitForFunction(() => document.querySelectorAll(".gg-root.gg-shots .gg-cut .gg-caption-text").length === 2, { timeout: 5000 });
     const srv = async () => (await getJson(page, `/gonggan/timeline?pid=${encodeURIComponent(pid)}`)).data.cuts;
 
     // 1) two cuts edited 100 ms apart (inside one 400 ms window): both must reach the server
