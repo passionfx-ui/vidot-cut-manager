@@ -42,6 +42,7 @@ import {
   trimToSource,
   appliedTrimDelta,
 } from "./gg_trim_core.js";
+import { GAP, layoutTrack, clipAtTime, edgeSnapTargets, snapMoveStart, placeClip, prevClipEnd } from "./gg_tl_place_core.js";
 import {
   trashButtonLabel,
   normalizeTrashItems,
@@ -2591,10 +2592,10 @@ function selectCutRange(fromId, toId) {
   state.cutId = toId;
   cutSelAnchor = fromId;
   bus.dispatchEvent(new Event("select"));
-  const idx = state.timeline ? state.timeline.cuts.findIndex((c) => c.id === toId) : -1;
-  if (idx >= 0 && typeof seek === "function" && !play.on) {
+  const t = clipStartOf(toId);
+  if (t != null && typeof seek === "function" && !play.on) {
     play.idx = -1;
-    seek(startOf(idx) + 0.001);
+    seek(t + 0.001);
   }
 }
 
@@ -2620,10 +2621,10 @@ function selectCut(cutId, opts) {
   }
   state.cutId = cutId;
   bus.dispatchEvent(new Event("select"));
-  const i = state.timeline ? state.timeline.cuts.findIndex((c) => c.id === cutId) : -1;
-  if (i >= 0 && typeof seek === "function" && !play.on) {
+  const t = clipStartOf(cutId);
+  if (t != null && typeof seek === "function" && !play.on) {
     play.idx = -1;
-    seek(startOf(i) + 0.001);
+    seek(t + 0.001);
   }
   if (shouldCancelPendingWorkflowLoad({ fromTimeline })) {
     clearTimeout(wfLoadDebounce);
@@ -3012,12 +3013,38 @@ function openClipContextMenu(e, cutId) {
     attachMenuActions(timelineClipMenuItems(cutMenuCtx(cutId, false)), {
       ...cutMenuActions(cutId),
       open: () => selectCut(cutId),
+      applyOrder: () => applyTimelineOrderToCuts(),
       del: () => {
         selectOnlyCut(cutId);
         deleteSelectedCuts();
       },
     }),
   );
+}
+
+/** Shots cut list follows the timeline clip order (server keeps scenes together); the timeline is unchanged. */
+async function applyTimelineOrderToCuts() {
+  const tl = state.timeline;
+  if (!tl || !isNativeProject()) return;
+  if (!(await askConfirm({ message: "Cut numbers will be renumbered. Continue?" }))) return;
+  if (ed.savePending) {
+    clearTimeout(ed.saveTimer);
+    ed.savePending = false;
+    await saveEdit();
+  }
+  const reqPid = tl.project.id;
+  await editGate.run(async () => {
+    try {
+      const data = await postJson("/gonggan/timeline/apply_order", { pid: reqPid });
+      editGate.bump();
+      adoptMutationTimeline(data, reqPid);
+      state.error = "";
+    } catch (e) {
+      ggToast("Apply order failed", e.message, "warn");
+    }
+  });
+  bus.dispatchEvent(new Event("timeline"));
+  bus.dispatchEvent(new Event("select"));
 }
 
 function openSceneContextMenu(e, groupId) {
@@ -3656,13 +3683,19 @@ function applyOrderGroupsLocally(order, groups) {
 async function persistShotsReorder(order, groups) {
   const tl = state.timeline;
   if (!tl || !isNativeProject()) return true;
+  if (ed.savePending) {  // a timeline trim still waiting must be saved before this reply replaces the timeline
+    clearTimeout(ed.saveTimer);
+    ed.savePending = false;
+    await saveEdit();
+  }
   applyOrderGroupsLocally(order, groups);
   const mySeq = editGate.seq;
   bus.dispatchEvent(new Event("timeline"));
   try {
-    // Order matters: scene membership (/groups) first, then the flat order (/edit). The server
-    // lays cuts out as "scenes in list order, then ungrouped"; applying /edit first would use the
+    // Order matters: scene membership (/groups) first, then the flat order (/cut/reorder). The server
+    // lays cuts out as "scenes in list order, then ungrouped"; applying the order first would use the
     // OLD membership and a cut that leaves/enters a scene would snap back to its old position.
+    // The timeline keeps its own clip order (/edit never touches the cut list and vice versa).
     const gRes = await api.fetchApi("/gonggan/groups", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -3670,14 +3703,9 @@ async function persistShotsReorder(order, groups) {
     });
     const gData = await gRes.json();
     if (!gRes.ok || gData.ok === false) throw new Error(gData.message || `HTTP ${gRes.status}`);
-    const body = {
-      pid: tl.project.id,
-      order,
-      clips: Object.fromEntries(tl.cuts.map((c) => [c.id, { in: c.in, sec: c.sec, pick: c.pick || null }])),
-    };
-    const payload = JSON.stringify(body);
+    const payload = JSON.stringify({ pid: tl.project.id, order });
     // keepalive lets the save finish if the page closes; browsers cap keepalive bodies at 64 KB.
-    const res = await api.fetchApi("/gonggan/edit", { method: "POST", keepalive: payload.length < 60000, headers: { "Content-Type": "application/json" }, body: payload });
+    const res = await api.fetchApi("/gonggan/cut/reorder", { method: "POST", keepalive: payload.length < 60000, headers: { "Content-Type": "application/json" }, body: payload });
     const data = await res.json();
     if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
     // A newer local trim/reorder happened while this request was out: keep the newer local state
@@ -4632,12 +4660,10 @@ function mediaFromVersion(v) {
 function recomputeCutStarts() {
   const tl = state.timeline;
   if (!tl) return;
-  let at = 0;
-  for (const c of tl.cuts) {
-    c.start = r2(at);
-    at += c.sec;
-  }
-  tl.total_sec = r2(at);
+  const clips = trackClips();
+  const { starts, total } = layoutTrack(clips, isFreeTrack());
+  clips.forEach((c, i) => { c.start = starts[i]; });
+  tl.total_sec = total;
 }
 
 /** Optimistic promote: swap timeline media + clamp trim, then persist via /gonggan/edit. */
@@ -5746,8 +5772,27 @@ const play = { on: false, t: 0, idx: -1, raf: 0, last: 0 };
 const IMG_MIN = 0.5, IMG_MAX = 60, VID_MIN = 0.2;
 const r2 = (x) => Math.round(x * 100 + 1e-6) / 100;
 const cutsNow = () => (state.timeline ? state.timeline.cuts : []);
-const totalSec = () => cutsNow().reduce((a, c) => a + c.sec, 0);
-const startOf = (i) => cutsNow().slice(0, i).reduce((a, c) => a + c.sec, 0);
+/** Native timelines have their own clip order and start times (gaps allowed); imported ones are the cut list, packed. */
+const isFreeTrack = () => !!(state.timeline && Array.isArray(state.timeline.track_order));
+function trackClips() {
+  const tl = state.timeline;
+  if (!tl) return [];
+  if (!Array.isArray(tl.track_order)) return tl.cuts;
+  const byId = new Map(tl.cuts.map((c) => [c.id, c]));
+  const out = tl.track_order.map((id) => byId.get(id)).filter(Boolean);
+  const seen = new Set(out);
+  for (const c of tl.cuts) if (!seen.has(c)) out.push(c);
+  return out;
+}
+const totalSec = () => layoutTrack(trackClips(), isFreeTrack()).total;
+const startOf = (i) => {
+  const clips = trackClips();
+  return clips[i] ? layoutTrack(clips, isFreeTrack()).starts[i] : totalSec();
+};
+function clipStartOf(cutId) {
+  const i = trackClips().findIndex((c) => c.id === cutId);
+  return i >= 0 ? startOf(i) : null;
+}
 const kindOf = (c) => (c.media ? c.media.kind : null);
 const fmtClock = (t) => {
   t = Math.max(0, Number(t) || 0);
@@ -5803,10 +5848,12 @@ async function saveEditNow() {
   ed.saving = true;
   bus.dispatchEvent(new Event("dirty"));
   const mySeq = editGate.seq;
+  const clips = trackClips();
+  const free = isFreeTrack();
   const body = {
     pid: tl.project.id,
-    order: tl.cuts.map((c) => c.id),
-    clips: Object.fromEntries(tl.cuts.map((c) => [c.id, { in: c.in, sec: c.sec, pick: c.pick || null }])),
+    order: clips.map((c) => c.id),
+    clips: Object.fromEntries(clips.map((c) => [c.id, { in: c.in, sec: c.sec, pick: c.pick || null, ...(free ? { start: c.start } : {}) }])),
   };
   let ok = true;
   try {
@@ -5852,13 +5899,7 @@ async function resetEdit() {
 
 // ---- playback ----
 function itemAt(t) {
-  const cuts = cutsNow();
-  let at = 0;
-  for (let i = 0; i < cuts.length; i++) {
-    if (t < at + cuts[i].sec - 1e-6) return { i, local: t - at };
-    at += cuts[i].sec;
-  }
-  return cuts.length ? { i: cuts.length - 1, local: cuts[cuts.length - 1].sec } : { i: -1, local: 0 };
+  return clipAtTime(trackClips(), t);
 }
 
 let viewer = null;  // { box, img, vid, next, label, clock, playBtn, soundBtn }
@@ -5866,7 +5907,7 @@ let viewer = null;  // { box, img, vid, next, label, clock, playBtn, soundBtn }
 function showFrame(force) {
   if (!viewer) return;
   if (viewer.mode === "export") { paintHead(); return; }
-  const cuts = cutsNow();
+  const cuts = trackClips();
   const { i, local } = itemAt(play.t);
   const c = cuts[i];
   const { img, vid, label, blank } = viewer;
@@ -5879,7 +5920,11 @@ function showFrame(force) {
       bus.dispatchEvent(new Event("gg-playcut"));
     }
     document.querySelectorAll(".gg-timeline .gg-clip").forEach((el) => el.classList.toggle("gg-play", c && el.dataset.cutId === c.id));
-    if (!c) { img.hidden = vid.hidden = true; blank.hidden = false; blank.textContent = ""; label.textContent = ""; return; }
+    if (!c) {
+      vid.pause(); img.hidden = vid.hidden = true; blank.hidden = false; blank.textContent = ""; label.textContent = "";
+      if (i === GAP) paintHead();  // empty timeline gap: black while the playhead keeps moving
+      return;
+    }
     const dispNum = cutDisplayLabel(c, computeCutLabels(state.timeline));
     label.textContent = c.group_name ? `Scene · ${c.group_name} — ${dispNum}. ${c.name}` : `${dispNum}. ${c.name}`;
     if (c.media && c.media.kind === "video") {
@@ -5933,7 +5978,7 @@ function showFrame(force) {
 }
 
 function preloadNext(i) {
-  const c = cutsNow()[i];
+  const c = trackClips()[i];
   if (!viewer || !c || !c.media) return;
   const url = mediaUrl(c.media.id);
   if (c.media.kind === "video") {
@@ -6047,15 +6092,22 @@ function bindTrim(root) {
       e.preventDefault();
       e.stopPropagation();
       const el = edge.closest(".gg-clip");
-      const c = cutsNow().find((x) => x.id === el.dataset.cutId);
+      const clips = trackClips();
+      const c = clips.find((x) => x.id === el.dataset.cutId);
       if (!c) return;
       const side = edge.dataset.side;
       const startX = e.clientX;
       const startIn = c.in, startSec = c.sec;
       const isVid = kindOf(c) === "video";
-      const idx = cutsNow().indexOf(c);
-      const origin = startOf(idx) + (side === "r" ? startSec : 0);
-      const targets = trimSnapTargets(cutsNow().map((x) => x.sec), idx, play.t);
+      const idx = clips.indexOf(c);
+      const free = isFreeTrack();
+      const start0 = startOf(idx);
+      const origin = start0 + (side === "r" ? startSec : 0);
+      const targets = free ? edgeSnapTargets(clips, idx, play.t) : trimSnapTargets(clips.map((x) => x.sec), idx, play.t);
+      // Free placement: trims never move other clips except a longer clip pushing later ones; the left
+      // edge keeps the clip's end and stops at the previous clip.
+      const baseStarts = new Map(clips.map((x) => [x.id, x.start]));
+      const minLeftDelta = free && side === "l" ? prevClipEnd(clips, idx) - start0 : -Infinity;
       const inner = root.querySelector(".gg-tl-inner");
       const marker = root.querySelector(".gg-drop");
       const float = document.createElement("div");
@@ -6070,10 +6122,14 @@ function bindTrim(root) {
       const paint = (x) => {
         const raw = (x - startX) / ed.px;
         const hit = pickSnapTarget(origin + raw, targets, TRIM_SNAP_PX / ed.px);
-        const delta = hit != null ? hit - origin : quantizeTrimDelta(side, isVid, startIn, startSec, raw, snapSec);
+        const delta = Math.max(minLeftDelta, hit != null ? hit - origin : quantizeTrimDelta(side, isVid, startIn, startSec, raw, snapSec));
         const want = trimToSource({ side, isVideo: isVid, startIn, startSec, srcDur: c.src_dur, deltaSec: delta, vidMin: VID_MIN, imgMin: IMG_MIN, imgMax: IMG_MAX });
         const next = clampClip(c, want.in, want.sec);
         c.in = next.in; c.sec = next.sec;
+        if (free) {
+          for (const x of clips) x.start = baseStarts.get(x.id);
+          if (side === "l") c.start = r2(start0 + startSec - next.sec);
+        }
         layoutClips(root);
         const applied = appliedTrimDelta(side, isVid, startIn, startSec, next);
         const snapped = hit != null && Math.abs(origin + applied - hit) < 0.011;
@@ -6123,6 +6179,7 @@ function bindTrim(root) {
 
 // ---- reorder (pointer-based; ComfyUI owns HTML5 drop for workflow files) ----
 function bindReorder(root) {
+  if (isFreeTrack()) { bindMove(root); return; }
   const track = root.querySelector(".gg-track");
   const marker = root.querySelector(".gg-drop");
   root.querySelectorAll(".gg-clip").forEach((el) => {
@@ -6173,12 +6230,68 @@ function bindReorder(root) {
   });
 }
 
+/** Native timeline: drag a clip to any time (gap left behind), snapping to clip edges / playhead, never overlapping. */
+function bindMove(root) {
+  const marker = root.querySelector(".gg-drop");
+  root.querySelectorAll(".gg-clip").forEach((el) => {
+    el.addEventListener("pointerdown", (e) => {
+      if (e.button || e.target.closest(".gg-edge")) return;
+      const startX = e.clientX, startY = e.clientY;
+      const clips = trackClips();
+      const idx = clips.findIndex((x) => x.id === el.dataset.cutId);
+      if (idx < 0) return;
+      const c = clips[idx];
+      const start0 = startOf(idx);
+      const targets = edgeSnapTargets(clips, idx, play.t);
+      let active = false, res = null;
+      const move = (ev) => {
+        if (!active && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
+        if (!active) { active = true; ed.dragging = true; el.classList.add("gg-moving"); try { el.setPointerCapture(e.pointerId); } catch (_) {} }
+        const snap = snapMoveStart(start0 + (ev.clientX - startX) / ed.px, c.sec, targets, TRIM_SNAP_PX / ed.px);
+        res = placeClip(clips, idx, snap.start);
+        el.style.transform = `translateX(${(res.start - start0) * ed.px}px)`;
+        const snapped = snap.hit != null && Math.abs(res.start - snap.start) < 0.011;
+        marker.classList.toggle("gg-snap-hit", snapped);
+        marker.hidden = !snapped;
+        if (snapped) marker.style.left = snap.hit * ed.px + "px";
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", up);
+        marker.hidden = true;
+        marker.classList.remove("gg-snap-hit");
+        el.classList.remove("gg-moving");
+        el.style.transform = "";
+        if (!active) { selectCut(el.dataset.cutId, { fromTimeline: true }); return; }
+        ed.dragging = false;
+        const tl = state.timeline;
+        if (res && tl && (res.start !== start0 || res.order.join() !== clips.map((x) => x.id).join())) {
+          tl.track_order = res.order;
+          for (const x of clips) if (res.starts[x.id] != null) x.start = res.starts[x.id];
+          recomputeCutStarts();
+          play.idx = -1;
+          scheduleSave();
+        }
+        bus.dispatchEvent(new Event("timeline"));
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+    });
+  });
+}
+
 function layoutClips(root) {
-  const cuts = cutsNow();
-  const byId = new Map(cuts.map((c) => [c.id, c]));
+  recomputeCutStarts();
+  const byId = new Map(trackClips().map((c) => [c.id, c]));
+  let prevEnd = 0;
   root.querySelectorAll(".gg-clip").forEach((el) => {
     const c = byId.get(el.dataset.cutId);
-    if (c) el.style.width = c.sec * ed.px + "px";
+    if (!c) return;
+    el.style.width = c.sec * ed.px + "px";
+    el.style.marginLeft = Math.max(0, c.start - prevEnd) * ed.px + "px";
+    prevEnd = c.start + c.sec;
   });
   paintRuler(root);
 }
@@ -6422,7 +6535,7 @@ function mountTimeline(el) {
 
   const paintTrack = () => {
     const tl = state.timeline;
-    const cuts = cutsNow();
+    const cuts = trackClips();
     const cutLabels = computeCutLabels(tl || { cuts: [] });
     $r(".gg-tl-title").textContent = tl ? tl.project.name : "No project";
     const err = $r(".gg-error");
@@ -6467,10 +6580,10 @@ function mountTimeline(el) {
   const onSel = () => {
     paintSelection(root);
     if (!play.on && state.cutId) {
-      const idx = cutsNow().findIndex((c) => c.id === state.cutId);
-      if (idx >= 0) {
+      const t = clipStartOf(state.cutId);
+      if (t != null) {
         play.idx = -1;
-        play.t = startOf(idx) + 0.001;
+        play.t = t + 0.001;
         showFrame(true);
       }
     }
@@ -6533,8 +6646,8 @@ function paintTimelineNativeLocks() {
     btn.title = nat ? tip : "Render the timeline to one mp4 (CPU, ffmpeg)";
   });
   document.querySelectorAll(".gg-timeline .gg-reset").forEach((btn) => {
-    btn.disabled = nat;
-    btn.title = nat ? tip : "Reset to original order and lengths";
+    btn.disabled = false;
+    btn.title = nat ? "Rebuild the timeline from the cut list (order, original lengths, no gaps)" : "Reset to original order and lengths";
   });
   document.querySelectorAll(".gg-timeline .gg-ex-preset, .gg-timeline .gg-ex-sound").forEach((el) => {
     el.disabled = nat;

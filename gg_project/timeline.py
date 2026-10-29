@@ -28,6 +28,8 @@ def _active_cuts(project: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def timeline_order(project: dict[str, Any]) -> list[str]:
+    """Shots cut list order (scenes in list order, then ungrouped cuts). The timeline track has its own
+    order, see track_order()."""
     active = _active_cuts(project)
     order: list[str] = []
     seen: set[str] = set()
@@ -47,6 +49,65 @@ def timeline_order(project: dict[str, Any]) -> list[str]:
             order.append(cid)
             seen.add(cid)
     return order
+
+
+def stored_track(project: dict[str, Any]) -> dict[str, Any] | None:
+    """project["timeline"] = {order: [cut ids], clips: {cid: {in, sec, start?}}}, or None (never edited)."""
+    tl = project.get("timeline")
+    return tl if isinstance(tl, dict) else None
+
+
+def track_order(project: dict[str, Any]) -> list[str]:
+    """Timeline clip order: the stored order (active cuts only), then cuts it does not list yet
+    (new / restored) at the end in cut list order. No stored timeline: the cut list order."""
+    cut_order = timeline_order(project)
+    tl = stored_track(project)
+    if tl is None:
+        return cut_order
+    known = set(cut_order)
+    order = [cid for cid in dict.fromkeys(tl.get("order") or []) if isinstance(cid, str) and cid in known]
+    seen = set(order)
+    return order + [cid for cid in cut_order if cid not in seen]
+
+
+def clip_start(entry: Any) -> float | None:
+    v = entry.get("start") if isinstance(entry, dict) else None
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v < 0 or v == float("inf"):
+        return None
+    return float(v)
+
+
+def place_clips(items: list[tuple[float | None, float]]) -> tuple[list[float], float]:
+    """(wanted start or None, length) in track order -> (starts, end). A clip without a start is packed
+    right after the previous one; a clip never starts before the previous one ends (no overlap)."""
+    starts: list[float] = []
+    at = 0.0
+    for want, sec in items:
+        s = at if want is None else max(at, want)
+        starts.append(_round(s))
+        at = s + float(sec)
+    return starts, _round(at)
+
+
+def original_sec(row: dict[str, Any]) -> float:
+    """Length the cut card shows (cutOriginalSec in gg_cuts_core.js): video media length, else planned, else the cut's own."""
+    media = row.get("media") or {}
+    if media.get("kind") == "video" and isinstance(row.get("src_dur"), (int, float)) and row["src_dur"] > 0:
+        return float(row["src_dur"])
+    if isinstance(row.get("planned_sec"), (int, float)):
+        return float(row["planned_sec"])
+    return float(row.get("tl_sec") or 3.0)
+
+
+def reset_track(root: Path, project: dict[str, Any]) -> dict[str, Any]:
+    """Timeline rebuilt from the cut list: cut list order, no trims (in 0, original length), no gaps."""
+    tl = build_timeline(root, project)
+    clips: dict[str, dict[str, float]] = {}
+    for c in tl["cuts"]:
+        kind = (c.get("media") or {}).get("kind")
+        _, sec = clamp_clip(kind, 0.0, original_sec(c), c.get("src_dur"))
+        clips[c["id"]] = {"in": 0.0, "sec": sec}
+    return {"order": [c["id"] for c in tl["cuts"]], "clips": clips}
 
 
 def _scene_by_id(project: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -175,6 +236,9 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
         })
     cut_to_group = {cid: g["id"] for g in groups for cid in g["cut_ids"]}
     scene_index_by_id = {g["id"]: idx for idx, g in enumerate(groups, start=1)}
+    stored = stored_track(project)
+    stored_clips = stored.get("clips") if stored and isinstance(stored.get("clips"), dict) else {}
+    wanted: dict[str, float | None] = {}
     base: list[dict[str, Any]] = []
     for i, cid in enumerate(order):
         cut = active.get(cid)
@@ -193,7 +257,12 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
         sec = float(cut.get("sec") if isinstance(cut.get("sec"), (int, float)) else 3.0)
         tl_in = float(cut.get("in") or 0.0)
         kind = job["kind"] if job else None
-        cur_in, cur_sec = clamp_clip(kind, tl_in, sec, src_dur)
+        entry = stored_clips.get(cid) if isinstance(stored_clips.get(cid), dict) else {}
+        cur_in, cur_sec = clamp_clip(kind, entry.get("in", tl_in), entry.get("sec", sec), src_dur)
+        wanted[cid] = clip_start(entry)
+        media = _media_view(job)
+        if media and kind == "video" and src_dur:
+            media["seconds"] = src_dur
         vers_list = [
             {
                 "id": v["id"],
@@ -226,7 +295,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "sec": cur_sec,
             "src_dur": src_dur,
             "edited": False,
-            "media": _media_view(job),
+            "media": media,
             "versions": len(versions),
             "versions_list": vers_list,
             "pick": pick if job and pick == job["id"] else None,
@@ -241,8 +310,10 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "number": 0,
         })
     by_id = {c["id"]: c for c in base}
+    track = [cid for cid in track_order(project) if cid in by_id]
+    starts, total = place_clips([(wanted.get(cid), by_id[cid]["sec"]) for cid in track])
+    start_by_id = dict(zip(track, starts))
     cuts: list[dict[str, Any]] = []
-    at = 0.0
     global_num = 0
     scene_pos: dict[str, int] = {}
     for pos, cid in enumerate(order):
@@ -253,7 +324,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
         global_num += 1
         c["number"] = global_num
         c["pos"] = pos
-        c["start"] = _round(at)
+        c["start"] = start_by_id.get(cid, 0.0)
         gid = cut_to_group.get(cid) or ""
         g = next((x for x in groups if x["id"] == gid), None)
         c["group_id"] = gid
@@ -263,7 +334,6 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             c["cut_in_scene"] = scene_pos[gid]
         else:
             c["cut_in_scene"] = global_num
-        at += c["sec"]
         cuts.append(c)
     return {
         "ok": True,
@@ -275,10 +345,11 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "settings": normalize_settings(project.get("settings") if isinstance(project.get("settings"), dict) else None),
         },
         "cuts": cuts,
+        "track_order": track,
         "references": _reference_views(root, project),
         "groups": groups,
         "groups_customized": True,
-        "total_sec": _round(at),
+        "total_sec": total,
         "edited": False,
         "edit_updated_at": None,
     }

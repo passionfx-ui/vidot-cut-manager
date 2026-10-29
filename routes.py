@@ -227,10 +227,49 @@ async def gg_edit_reset(request):
     if not isinstance(pid, str) or not pid:
         return _err(400, "pid required")
     try:
-        tl = await asyncio.to_thread(gg_data.reset_edit, pid)
+        if gg_native_api.is_native_pid(pid):
+            tl = await asyncio.to_thread(gg_native_api.native_reset_timeline, pid)
+        else:
+            tl = await asyncio.to_thread(gg_data.reset_edit, pid)
     except ValueError as ex:
         return _err(400, str(ex))
     except Exception as ex:  # noqa: BLE001
+        return _err(500, str(ex))
+    if tl is None:
+        return _err(404, "project not found")
+    return web.json_response(tl)
+
+
+@routes.post("/gonggan/cut/reorder")
+async def gg_cut_reorder(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid required")
+    try:
+        tl = await asyncio.to_thread(gg_native_api.native_reorder_cuts, pid, data.get("order"))
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] cut reorder failed")
+        return _err(500, str(ex))
+    if tl is None:
+        return _err(404, "project not found")
+    return web.json_response(tl)
+
+
+@routes.post("/gonggan/timeline/apply_order")
+async def gg_timeline_apply_order(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid required")
+    try:
+        tl = await asyncio.to_thread(gg_native_api.native_apply_track_order, pid)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] apply timeline order failed")
         return _err(500, str(ex))
     if tl is None:
         return _err(404, "project not found")

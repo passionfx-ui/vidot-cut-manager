@@ -298,7 +298,8 @@ async function resetBaseline(page) {
   const extra = live.filter((id) => !baseline.ids.includes(id));
   if (extra.length) await postJson(page, "/gonggan/cut/delete", { pid: testPid, cuts: extra });
   await postJson(page, "/gonggan/groups", { pid: testPid, groups: baseline.groups });
-  await postJson(page, "/gonggan/edit", { pid: testPid, order: baseline.ids, clips: {} });
+  await postJson(page, "/gonggan/cut/reorder", { pid: testPid, order: baseline.ids });
+  await postJson(page, "/gonggan/edit/reset", { pid: testPid });
   await reloadShots(page);
   await hoverShots(page);
   await page.keyboard.press("Escape");
@@ -518,13 +519,14 @@ async function main() {
       await rightClickAt(page, clip(c3));
       const labels = await ctxLabels(page);
       const ok =
-        labels.length === 6 &&
+        labels.length === 7 &&
         labels[0] === "Open cut" &&
         labels[1] === "Regen" &&
         labels[2] === "Send last output" &&
         /needs redo/i.test(labels[3]) &&
         labels[4] === "Rename…" &&
-        labels[5] === "Delete";
+        labels[5] === "Apply order to cuts" &&
+        labels[6] === "Delete";
       if (!ok) throw new Error(`clip menu items: ${labels.join("|")}`);
       await clickCtxItem(page, "Open cut");
       await sleep(500);
