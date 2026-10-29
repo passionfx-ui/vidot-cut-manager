@@ -12,6 +12,7 @@ import {
   clampHeight,
   timelineToggleTooltip,
   shouldIgnoreShortcut,
+  pluginKeyScopeActive,
   timelineShortcutAllowed,
   isTimelineShortcutKey,
 } from "../../web/gg_timeline_toggle_core.js";
@@ -81,10 +82,38 @@ describe("shouldIgnoreShortcut", () => {
   });
 });
 
+describe("pluginKeyScopeActive", () => {
+  it("is off on the canvas (no hover, no focus)", () => {
+    assert.equal(pluginKeyScopeActive({}), false);
+    assert.equal(pluginKeyScopeActive(undefined), false);
+    assert.equal(
+      pluginKeyScopeActive({ hoverShots: false, focusShots: false, hoverTimeline: false, focusTimeline: false }),
+      false,
+    );
+  });
+  it("is on when hovering or focused inside Shots", () => {
+    assert.equal(pluginKeyScopeActive({ hoverShots: true }), true);
+    assert.equal(pluginKeyScopeActive({ focusShots: true }), true);
+  });
+  it("is on when hovering or focused inside Timeline", () => {
+    assert.equal(pluginKeyScopeActive({ hoverTimeline: true }), true);
+    assert.equal(pluginKeyScopeActive({ focusTimeline: true }), true);
+  });
+  it("Shots-only scope ignores missing timeline fields", () => {
+    assert.equal(pluginKeyScopeActive({ hoverShots: false, focusShots: false }), false);
+  });
+});
+
 describe("timelineShortcutAllowed", () => {
-  it("requires gonggan context", () => {
+  it("requires pointer or focus inside a plugin surface", () => {
     assert.equal(timelineShortcutAllowed({}), false);
-    assert.equal(timelineShortcutAllowed({ shotsSidebarActive: true }), true);
-    assert.equal(timelineShortcutAllowed({ timelinePanelOpen: true }), true);
+    assert.equal(timelineShortcutAllowed({ hoverShots: true }), true);
+    assert.equal(timelineShortcutAllowed({ focusShots: true }), true);
+    assert.equal(timelineShortcutAllowed({ hoverTimeline: true }), true);
+    assert.equal(timelineShortcutAllowed({ focusTimeline: true }), true);
+  });
+  it("ignores legacy panel-open / sidebar-active flags", () => {
+    assert.equal(timelineShortcutAllowed({ shotsSidebarActive: true }), false);
+    assert.equal(timelineShortcutAllowed({ timelinePanelOpen: true, timelineDomPresent: true }), false);
   });
 });
