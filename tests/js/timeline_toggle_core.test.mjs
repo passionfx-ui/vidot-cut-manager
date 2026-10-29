@@ -15,7 +15,30 @@ import {
   pluginKeyScopeActive,
   timelineShortcutAllowed,
   isTimelineShortcutKey,
+  firstShowTimelineHeight,
+  bottomPanelPercent,
 } from "../../web/gg_timeline_toggle_core.js";
+
+describe("firstShowTimelineHeight", () => {
+  it("is half of the default panel height", () => {
+    assert.equal(firstShowTimelineHeight(600, 1200), 300);
+    assert.equal(firstShowTimelineHeight(501, 1200), 251);
+  });
+  it("never goes below the minimum or above the viewport cap", () => {
+    assert.equal(firstShowTimelineHeight(300, 900), TIMELINE_MIN_HEIGHT);
+    assert.equal(firstShowTimelineHeight(0, 900), TIMELINE_MIN_HEIGHT);
+    assert.equal(firstShowTimelineHeight(2000, 900), 630);
+  });
+});
+
+describe("bottomPanelPercent", () => {
+  it("maps height to splitter percent with min and 70% cap", () => {
+    assert.equal(bottomPanelPercent(250, 1000), 25);
+    assert.equal(bottomPanelPercent(100, 1000), 22);
+    assert.equal(bottomPanelPercent(900, 1000), 70);
+    assert.equal(bottomPanelPercent(250, 0), 0);
+  });
+});
 
 describe("normalizeTimelineOpen", () => {
   it("defaults to on", () => {
