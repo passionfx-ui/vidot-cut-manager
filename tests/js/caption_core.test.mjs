@@ -7,7 +7,45 @@ import {
   effectiveCaption,
   captionEditChanged,
   captionFieldPlaceholder,
+  captionAtTime,
 } from "../../web/gg_caption_core.js";
+
+describe("captionAtTime", () => {
+  const clips = [
+    { id: "a", start: 0, sec: 2, caption: "First" },
+    { id: "b", start: 3, sec: 1.5, caption: "  \n" },
+    { id: "c", start: 4.5, sec: 2, caption: "Line 1\r\nLine 2  \n\n" },
+  ];
+
+  it("shows the clip caption only inside its span", () => {
+    assert.equal(captionAtTime(clips, 0), "First");
+    assert.equal(captionAtTime(clips, 1.99), "First");
+    assert.equal(captionAtTime(clips, 5), "Line 1\nLine 2");
+  });
+
+  it("shows nothing in a gap", () => {
+    assert.equal(captionAtTime(clips, 2), "");
+    assert.equal(captionAtTime(clips, 2.5), "");
+  });
+
+  it("shows nothing for a blank or missing caption", () => {
+    assert.equal(captionAtTime(clips, 3.5), "");
+    assert.equal(captionAtTime([{ start: 0, sec: 2 }], 1), "");
+  });
+
+  it("follows a trimmed clip length", () => {
+    const trimmed = [{ start: 0, sec: 1, in: 0.5, caption: "A" }, { start: 1, sec: 2, caption: "B" }];
+    assert.equal(captionAtTime(trimmed, 0.9), "A");
+    assert.equal(captionAtTime(trimmed, 1), "B");
+    const gap = [{ start: 0, sec: 1, in: 0.5, caption: "A" }, { start: 3, sec: 2, caption: "B" }];
+    assert.equal(captionAtTime(gap, 1.5), "");
+  });
+
+  it("shows nothing on an empty track", () => {
+    assert.equal(captionAtTime([], 0), "");
+    assert.equal(captionAtTime(null, 1), "");
+  });
+});
 
 describe("formatSrtTime", () => {
   it("formats zero and fractional seconds", () => {
