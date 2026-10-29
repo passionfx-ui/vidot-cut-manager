@@ -29,12 +29,26 @@ function resolveShotTabParts({ projectName, sceneName, cutLabel }) {
  * @param {{ cuts?: object[], groups?: { id: string, name?: string }[] } | null | undefined} timeline
  * @returns {{ sceneName: string, cutLabel: string }}
  */
-export function shotTabCutParts(cut, timeline) {
+export function shotTabCutParts(cut, timeline, labels) {
   if (cut?.kind === "reference") return { sceneName: "", cutLabel: cut.name || "Reference" };
   const gid = cut?.group_id ? String(cut.group_id) : "";
   const group = gid ? (timeline?.groups || []).find((g) => g.id === gid) : null;
   const sceneName = gid ? (group?.name ?? cut.group_name ?? "") : "";
-  return { sceneName, cutLabel: cutDisplayLabel(cut, computeCutLabels(timeline)) };
+  return { sceneName, cutLabel: cutDisplayLabel(cut, labels || computeCutLabels(timeline)) };
+}
+
+/** Scene word for labels: the scene name, or `Scene` when the cut has none. */
+export function sceneLabelOrDefault(sceneName) {
+  return collapseWs(sceneName) || TAB_LABEL_NO_SCENE;
+}
+
+/**
+ * Cut card header parts `<cutLabel> <Scene>` (same scene rule as the tab label).
+ * @returns {{ cutLabel: string, scene: string }}
+ */
+export function cutHeaderParts(cut, timeline, labels) {
+  const p = shotTabCutParts(cut, timeline, labels);
+  return { cutLabel: collapseWs(p.cutLabel), scene: sceneLabelOrDefault(p.sceneName) };
 }
 
 function truncateWithEllipsis(s, maxLen) {
@@ -65,7 +79,7 @@ export function formatShotTabLabel({ projectName, sceneName, cutLabel, edited })
   const parts = resolveShotTabParts({ projectName, sceneName, cutLabel });
   if (!parts) return null;
   const { project, cut } = parts;
-  const scene = parts.scene || TAB_LABEL_NO_SCENE;
+  const scene = sceneLabelOrDefault(parts.scene);
   const mark = edited ? " *" : "";
   const head = `${cut} ${scene}`;
   const full = `${head}${TAB_LABEL_PROJECT_SEP}${project}${mark}`;

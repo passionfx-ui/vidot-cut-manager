@@ -101,22 +101,44 @@ export function trimArrowGlyph(side) {
   return side === "r" ? ">" : "<";
 }
 
+/** Original length (never the timeline trim): a video's own media length, else the cut's base length. */
+export function cutOriginalSec(cut) {
+  const media = cut?.media;
+  const ms = Number(media?.seconds);
+  if (media?.kind === "video" && Number.isFinite(ms) && ms > 0) return ms;
+  return cutBaseSec(cut);
+}
+
 /**
+ * Cut card duration: the original length only; the trimmed length is shown on timeline clips.
  * @param {object} cut
  * @returns {{ text: string, title: string }}
  */
 export function formatCutHeaderLengths(cut) {
-  const orig = cutBaseSec(cut);
-  const eff = cutTimelineSec(cut);
-  const origLabel = formatSecShort(orig);
-  if (Math.abs(orig - eff) > 0.05) {
-    const effLabel = formatSecShort(eff);
-    return {
-      text: `${origLabel} > ${effLabel}`,
-      title: `Base ${origLabel}, timeline ${effLabel}`,
-    };
-  }
-  return { text: origLabel, title: origLabel };
+  const label = formatSecShort(cutOriginalSec(cut));
+  return { text: label, title: `Original length ${label}` };
+}
+
+/**
+ * Current version for the cut card status line: `Best vN` (manual pick) or `Latest vN` (no pick), plus
+ * the media kind / size.
+ * @param {object} cut
+ * @returns {{ text: string, detail: string, title: string }}
+ */
+export function formatCutVersionStatus(cut) {
+  const media = cut?.media;
+  if (!media || typeof media !== "object" || !media.id) return { text: "", detail: "", title: "No versions yet" };
+  const best = !!cut.pick;
+  const v = versionLabel(cut.versions_list, cut.pick || media.id);
+  const parts = [media.kind || "image"];
+  if (media.width && media.height) parts.push(`${media.width}x${media.height}`);
+  else if (media.model) parts.push(String(media.model));
+  const detail = parts.join(" · ");
+  return {
+    text: `${best ? "Best" : "Latest"} ${v}`,
+    detail,
+    title: `${best ? "Best (picked)" : "Latest (no Best picked)"} ${v} · ${detail}`,
+  };
 }
 
 /**

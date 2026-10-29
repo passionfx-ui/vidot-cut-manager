@@ -33,6 +33,16 @@ function queueIds(list) {
   return out;
 }
 
+/** Pending prompt ids in run order (ComfyUI runs the lowest queue number first). */
+function pendingOrder(list) {
+  const rows = [];
+  for (const entry of Array.isArray(list) ? list : []) {
+    if (Array.isArray(entry) && entry[1] != null) rows.push({ n: Number(entry[0]), id: String(entry[1]) });
+  }
+  rows.sort((a, b) => (Number.isFinite(a.n) ? a.n : Infinity) - (Number.isFinite(b.n) ? b.n : Infinity));
+  return rows.map((r) => r.id);
+}
+
 function percentOf(value, max) {
   const v = Number(value);
   const m = Number(max);
@@ -49,6 +59,19 @@ export function createRenderStatus(opts = {}) {
   const jobs = new Map();
   /** @type {Set<string>} */
   const finished = new Set();
+  /** Pending order from the last /queue reply (positions are unknown until then). */
+  let pending = [];
+
+  /** 1-based place among still-queued prompts, or null when not known. */
+  function positionOf(promptId) {
+    let pos = 0;
+    for (const id of pending) {
+      if (jobs.get(id)?.state !== "queued") continue;
+      pos++;
+      if (id === promptId) return pos;
+    }
+    return null;
+  }
 
   function cutOf(promptId) {
     return links.get(promptId)?.cutId || null;
@@ -174,10 +197,11 @@ export function createRenderStatus(opts = {}) {
   /** /queue reply: running/pending prompts get their state; tracked prompts no longer listed are dropped. */
   function syncQueue(queueJson, now = Date.now()) {
     const running = new Set(queueIds(queueJson?.queue_running));
-    const pending = new Set(queueIds(queueJson?.queue_pending));
+    const order = pendingOrder(queueJson?.queue_pending);
+    const waiting = new Set(order);
     const changed = [];
     for (const [id, j] of [...jobs]) {
-      if (running.has(id) || pending.has(id)) continue;
+      if (running.has(id) || waiting.has(id)) continue;
       if (j.state === "queued" && now - j.at < graceMs) continue;
       drop(id, true);
       changed.push(id);
@@ -188,9 +212,13 @@ export function createRenderStatus(opts = {}) {
         changed.push(id);
       }
     }
-    for (const id of pending) {
+    const prevOrder = pending.join("\n");
+    pending = order;
+    for (const id of order) {
       if (!jobs.has(id)) {
         jobs.set(id, { state: "queued", percent: null, node: null, at: now });
+        changed.push(id);
+      } else if (prevOrder !== order.join("\n")) {
         changed.push(id);
       }
     }
@@ -198,19 +226,25 @@ export function createRenderStatus(opts = {}) {
   }
 
   /**
-   * @returns {{ state: 'queued'|'rendering', percent: number|null, count: number } | null}
+   * position: 1-based queue place of the cut's earliest waiting prompt (queued only, null when unknown).
+   * @returns {{ state: 'queued'|'rendering', percent: number|null, count: number, position: number|null } | null}
    */
   function cutView(projectId, cutId) {
     if (!projectId || !cutId) return null;
     let best = null;
     let count = 0;
+    let position = null;
     for (const [id, j] of jobs) {
       const l = links.get(id);
       if (!l || l.cutId !== String(cutId) || l.projectId !== String(projectId)) continue;
       count++;
       if (!best || (j.state === "rendering" && best.state !== "rendering")) best = j;
+      const p = j.state === "queued" ? positionOf(id) : null;
+      if (p != null && (position == null || p < position)) position = p;
     }
-    return best ? { state: best.state, percent: best.state === "rendering" ? best.percent : null, count } : null;
+    if (!best) return null;
+    const rendering = best.state === "rendering";
+    return { state: best.state, percent: rendering ? best.percent : null, count, position: rendering ? null : position };
   }
 
   /**
@@ -232,15 +266,29 @@ export function createRenderStatus(opts = {}) {
   return { link, queued, handle, syncQueue, cutView, globalView };
 }
 
-/** Badge text for a cut view (null = hidden). */
+/** Badge text for a cut view (null = hidden). `pos` (`#N`) is the queue place, shown only on cut cards. */
 export function renderBadgeView(v) {
-  if (!v) return { show: false, mode: "", text: "", title: "" };
+  if (!v) return { show: false, mode: "", text: "", pos: "", title: "" };
   if (v.state === "rendering") {
     const pct = Number.isFinite(v.percent) ? ` ${v.percent}%` : "";
-    return { show: true, mode: "rendering", text: `Rendering${pct}`, title: `Rendering in ComfyUI${pct}` };
+    return { show: true, mode: "rendering", text: `Rendering${pct}`, pos: "", title: `Rendering in ComfyUI${pct}` };
   }
   const more = v.count > 1 ? ` (${v.count} prompts)` : "";
-  return { show: true, mode: "queued", text: "Queued", title: `Waiting in the ComfyUI queue${more}` };
+  const at = Number.isFinite(v.position) && v.position > 0 ? v.position : null;
+  return {
+    show: true,
+    mode: "queued",
+    text: "Queued",
+    pos: at ? `#${at}` : "",
+    title: `Waiting in the ComfyUI queue${at ? `, position ${at}` : ""}${more}`,
+  };
+}
+
+/** Cut card status word when nothing is queued or rendering for the cut. */
+export function idleStateView(hasMedia) {
+  return hasMedia
+    ? { text: "Done", title: "Not queued or rendering; the cut has a version" }
+    : { text: "Idle", title: "Not queued or rendering; no versions yet" };
 }
 
 /** Sidebar header indicator for prompts not tied to a cut in the shown project. */
