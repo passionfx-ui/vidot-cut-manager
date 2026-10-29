@@ -1,30 +1,38 @@
+import { computeCutLabels, cutDisplayLabel } from "./gg_cuts_core.js";
+
 function collapseWs(s) {
   return String(s ?? "").trim().replace(/\s+/g, " ");
 }
 
 const MAX_LABEL_CHARS = 28;
 const MIN_PROJECT_CHARS = 6;
-const TAB_LABEL_SEP = " / ";
+const TAB_LABEL_SEP = "/";
 const TAB_LABEL_ELL = "…";
 
-function resolveShotTabParts({ projectName, cutName, cutNumber }) {
+/**
+ * @param {{ projectName?: string, sceneName?: string, cutLabel?: string }}
+ * @returns {{ project: string, scene: string, cut: string } | null}
+ */
+function resolveShotTabParts({ projectName, sceneName, cutLabel }) {
   const project = collapseWs(projectName);
   if (!project) return null;
-  let cut = collapseWs(cutName);
-  if (!cut) {
-    if (cutNumber != null) {
-      if (typeof cutNumber === "string" && cutNumber.trim() !== "") {
-        cut = `Cut ${cutNumber.trim()}`;
-      } else if (Number.isFinite(Number(cutNumber))) {
-        cut = `Cut ${Number(cutNumber)}`;
-      } else {
-        cut = "Untitled cut";
-      }
-    } else {
-      cut = "Untitled cut";
-    }
-  }
-  return { project, cut };
+  const scene = collapseWs(sceneName);
+  const cut = collapseWs(cutLabel) || "Untitled cut";
+  return { project, scene, cut };
+}
+
+/**
+ * Scene name (the cut's group, "" when ungrouped) and per-scene cut label for a timeline cut.
+ * @param {object} cut
+ * @param {{ cuts?: object[], groups?: { id: string, name?: string }[] } | null | undefined} timeline
+ * @returns {{ sceneName: string, cutLabel: string }}
+ */
+export function shotTabCutParts(cut, timeline) {
+  if (cut?.kind === "reference") return { sceneName: "", cutLabel: cut.name || "Reference" };
+  const gid = cut?.group_id ? String(cut.group_id) : "";
+  const group = gid ? (timeline?.groups || []).find((g) => g.id === gid) : null;
+  const sceneName = gid ? (group?.name ?? cut.group_name ?? "") : "";
+  return { sceneName, cutLabel: cutDisplayLabel(cut, computeCutLabels(timeline)) };
 }
 
 function truncateWithEllipsis(s, maxLen) {
@@ -34,32 +42,45 @@ function truncateWithEllipsis(s, maxLen) {
   return s.slice(0, maxLen - 1) + TAB_LABEL_ELL;
 }
 
-/** Full untruncated tab tooltip text. */
-export function formatShotTabTitle({ projectName, cutName, cutNumber }) {
-  const parts = resolveShotTabParts({ projectName, cutName, cutNumber });
+/**
+ * Full untruncated tab tooltip: `<Project>/<Scene> <cutLabel>` (scene omitted when ungrouped),
+ * followed by ` · <cutName>` when the cut has a name.
+ */
+export function formatShotTabTitle({ projectName, sceneName, cutLabel, cutName }) {
+  const parts = resolveShotTabParts({ projectName, sceneName, cutLabel });
   if (!parts) return null;
-  return `${parts.project}${TAB_LABEL_SEP}${parts.cut}`;
+  const rest = parts.scene ? `${parts.scene} ${parts.cut}` : parts.cut;
+  const name = collapseWs(cutName);
+  return `${parts.project}${TAB_LABEL_SEP}${rest}${name ? ` · ${name}` : ""}`;
 }
 
-/** @returns {string|null} null when project name empty (do not override label). */
-export function formatShotTabLabel({ projectName, cutName, cutNumber, edited }) {
-  const parts = resolveShotTabParts({ projectName, cutName, cutNumber });
+/**
+ * `<Project>/<Scene> <cutLabel>` or `<Project>/<cutLabel>` for cuts not in a scene; ` *` when edited.
+ * Over budget: shorten the project, then the scene; the cut label and marker stay whole.
+ * @returns {string|null} null when project name empty (do not override label).
+ */
+export function formatShotTabLabel({ projectName, sceneName, cutLabel, edited }) {
+  const parts = resolveShotTabParts({ projectName, sceneName, cutLabel });
   if (!parts) return null;
-  const { project, cut } = parts;
-  const cutLabel = edited ? `${cut} *` : cut;
-  const full = `${project}${TAB_LABEL_SEP}${cutLabel}`;
+  const { project, scene } = parts;
+  const tail = edited ? `${parts.cut} *` : parts.cut;
+  const rest = scene ? `${scene} ${tail}` : tail;
+  const full = `${project}${TAB_LABEL_SEP}${rest}`;
   if (full.length <= MAX_LABEL_CHARS) return full;
 
   const minProjectSlot = MIN_PROJECT_CHARS + 1;
-  const projectOnlyMax = MAX_LABEL_CHARS - TAB_LABEL_SEP.length - cutLabel.length;
+  const projectOnlyMax = MAX_LABEL_CHARS - TAB_LABEL_SEP.length - rest.length;
   if (projectOnlyMax >= minProjectSlot) {
-    return truncateWithEllipsis(project, projectOnlyMax) + TAB_LABEL_SEP + cutLabel;
+    return truncateWithEllipsis(project, projectOnlyMax) + TAB_LABEL_SEP + rest;
   }
 
   const projectShort = truncateWithEllipsis(project, minProjectSlot);
-  const cutMax = MAX_LABEL_CHARS - TAB_LABEL_SEP.length - projectShort.length;
-  const cutShort = truncateWithEllipsis(cutLabel, cutMax);
-  return projectShort + TAB_LABEL_SEP + cutShort;
+  const restMax = MAX_LABEL_CHARS - TAB_LABEL_SEP.length - projectShort.length;
+  if (scene) {
+    const sceneMax = restMax - 1 - tail.length;
+    if (sceneMax >= 1) return projectShort + TAB_LABEL_SEP + truncateWithEllipsis(scene, sceneMax) + " " + tail;
+  }
+  return projectShort + TAB_LABEL_SEP + truncateWithEllipsis(tail, restMax);
 }
 
 function basenameOnly(filename) {
