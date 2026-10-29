@@ -51,6 +51,7 @@ import {
   normalizeTrashItems,
   formatTrashItem,
   movedToTrashToastMessage,
+  deleteCutsConfirmMessage,
 } from "./gg_trash_core.js";
 import { createTimelineGuard, shouldAdoptMutationTimeline } from "./gg_timeline_guard_core.js";
 import { createFieldSlots } from "./gg_field_slots_core.js";
@@ -166,7 +167,7 @@ import { rowContentKind, cutRowShellHtml, captionRowContentHtml, groupedListHtml
 import { decideVideoSync } from "./gg_playback_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { batchProgressView, createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
-import { selectionBarView, statusPanelView } from "./gg_status_panel_core.js";
+import { selectionBarView, iconRowView, statusPanelView } from "./gg_status_panel_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
 import {
   stepMove,
@@ -266,6 +267,8 @@ const SHOW_CUT_PANEL = false;
 /** With SHOW_CUT_PANEL off: the same slot shows a status card for the selection with the Queue button. */
 const SHOW_STATUS_PANEL = true;
 const CUT_PANEL_ROOT_CLASS = SHOW_CUT_PANEL ? "" : SHOW_STATUS_PANEL ? " gg-cutpanel-status" : " gg-cutpanel-off";
+/** Large `N selected · Group · Ungroup · ×` bar. Off = not rendered; the icon row takes its place. */
+const SHOW_SEL_BAR = false;
 /** "Show redo cuts only" option in the Shots toolbar. Off = not shown and the filter is forced off. */
 const SHOW_REDO_FILTER = false;
 /** "Cuts | Final cut list" toggle in the Shots toolbar. Off = not shown and the view is forced to "cuts". */
@@ -3009,6 +3012,13 @@ function showCtxMenu(x, y, items) {
   menu.className = "gg-ctx";
   menu.setAttribute("role", "menu");
   items.forEach((it) => {
+    if (it.separator) {
+      const sep = document.createElement("div");
+      sep.className = "gg-ctx-sep";
+      sep.setAttribute("role", "separator");
+      menu.appendChild(sep);
+      return;
+    }
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "gg-ctx-item" + (it.danger ? " gg-ctx-danger" : "") + (it.submenu ? " gg-ctx-parent" : "");
@@ -3375,7 +3385,7 @@ function openCutContextMenu(e, cutId) {
         moveDown: () => applyStepMove(1),
         group: () => createSceneGroup(ids),
         split: () => splitSceneHere(cutId),
-        removeFromScene: () => ungroupCuts(ids),
+        ungroup: () => ungroupCuts(ids),
         addCut: () => addCutAfter(cutId),
         del: () => deleteSelectedCuts(),
         trash: () => openTrashModal(),
@@ -3452,7 +3462,6 @@ function openSceneContextMenu(e, groupId) {
       toggleCollapse: () => toggleGroupCollapsed(groupId),
       rename: () => renameSceneGroup(groupId),
       ungroup: () => ungroupSceneGroup(groupId),
-      deleteScene: () => deleteSceneGroup(groupId),
     }),
   );
 }
@@ -5037,29 +5046,38 @@ function bindShotsTabActivated(hostEl, onCleanup) {
 }
 
 /**
- * Bottom bar of the Shots sidebar: always shown at a fixed height so the list never shifts; actions off
- * with nothing selected. Also sets the status panel Queue button, which acts on the same selection.
+ * Bottom bars of the Shots sidebar (selection bar when SHOW_SEL_BAR, icon row): always shown at a fixed
+ * height so the list never shifts; actions off with nothing selected. Also sets the status panel Queue
+ * button, which acts on the same selection.
  */
 function updateSelectionBar(root) {
   if (!root) return;
-  const bar = root.querySelector(".gg-selbar");
-  if (!bar) return;
   const tlIds = new Set((state.timeline?.cuts || []).map((c) => c.id));
   const ids = state.timeline ? cutSelIds().filter((id) => tlIds.has(id)) : [];
   const n = ids.length;
-  const v = selectionBarView({ count: n, anyGrouped: ids.some((id) => cutById(id)?.group_id), selSize: state.cutSel.size });
-  bar.className = v.className;
-  const countEl = bar.querySelector(".gg-sel-count");
-  if (countEl) countEl.textContent = v.countText;
-  const set = (sel, disabled, title) => {
-    const b = bar.querySelector(sel);
+  const setBtn = (scope, sel, disabled, title) => {
+    const b = scope.querySelector(sel);
     if (!b) return;
     b.disabled = !!disabled;
     if (title !== undefined) b.title = title;
   };
-  set(".gg-sel-group", v.group.disabled);
-  set(".gg-sel-ungroup", v.ungroup.disabled);
-  set(".gg-sel-x", v.clear.disabled);
+  const bar = root.querySelector(".gg-selbar");
+  if (bar) {
+    const v = selectionBarView({ count: n, anyGrouped: ids.some((id) => cutById(id)?.group_id), selSize: state.cutSel.size });
+    bar.className = v.className;
+    const countEl = bar.querySelector(".gg-sel-count");
+    if (countEl) countEl.textContent = v.countText;
+    setBtn(bar, ".gg-sel-group", v.group.disabled);
+    setBtn(bar, ".gg-sel-ungroup", v.ungroup.disabled);
+    setBtn(bar, ".gg-sel-x", v.clear.disabled);
+  }
+  const row = root.querySelector(".gg-iconrow");
+  if (row) {
+    const r = iconRowView({ count: n, hasProject: !!state.pid });
+    setBtn(row, ".gg-ir-scene", r.scene.disabled, r.scene.title);
+    setBtn(row, ".gg-ir-cut", r.cut.disabled, r.cut.title);
+    setBtn(row, ".gg-ir-del", r.del.disabled, r.del.title);
+  }
   const q = queueButtonState({ count: n, native: isNativeProject(), busy: !!sdk.busy });
   const queueBtn = root.querySelector(".gg-queue-btn");
   if (queueBtn) {
@@ -5576,6 +5594,31 @@ function statusPanelHtml() {
     <div class="gg-sp-meta"><span class="gg-sp-len" title="${esc(v.length.title)}">${esc(v.length.text)}</span><span class="gg-sp-ver" title="${esc(v.version.title)}">${esc(v.version.text)}</span></div>`;
 }
 
+const ICON_SVG_ATTRS = 'width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+const ICON_FOLDER = `<svg ${ICON_SVG_ATTRS}><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10v6M9 13h6"/></svg>`;
+const ICON_NEW_PAGE = `<svg ${ICON_SVG_ATTRS}><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M12 12v6M9 15h6"/></svg>`;
+const ICON_TRASH = `<svg ${ICON_SVG_ATTRS}><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg>`;
+
+/** Lower-left icon row of the Shots sidebar (fixed height): New scene, New cut, Delete; version on the right. */
+function iconRowHtml() {
+  const btn = (cls, tip, icon) =>
+    `<button type="button" class="gg-btn gg-ir-btn ${cls}" title="${tip}" aria-label="${tip}" disabled>${icon}</button>`;
+  return `<div class="gg-iconrow">
+        ${btn("gg-ir-scene", "New scene", ICON_FOLDER)}
+        ${btn("gg-ir-cut", "New cut", ICON_NEW_PAGE)}
+        ${btn("gg-ir-del", "Delete", ICON_TRASH)}
+        <span class="gg-version" title="Shots plugin version — if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>
+      </div>`;
+}
+
+/** Icon row Delete: the same soft delete as the cut menu / Delete key, after the in-app confirm. */
+async function confirmDeleteSelectedCuts() {
+  const n = cutsForDelete().length;
+  if (!n) return;
+  if (!(await askConfirm({ message: deleteCutsConfirmMessage(n), danger: true }))) return;
+  await deleteSelectedCuts();
+}
+
 /** Status panel body: selection info on top, Queue + queue status + batch counter in a row below. */
 function statusPanelShellHtml() {
   return `
@@ -5963,13 +6006,13 @@ function mountShots(el) {
       </div>
       <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${listHtml}</div>
       <div class="gg-final-wrap"${viewFinal ? "" : " hidden"}>${viewFinal && tl ? finalCutListHtml(tl) : ""}</div>
-      <div class="gg-selbar">
+      ${SHOW_SEL_BAR ? `<div class="gg-selbar">
         <span class="gg-sel-label"><span class="gg-sel-count">0</span> selected</span>
         <button type="button" class="gg-btn gg-sel-group" disabled>Group</button>
         <button type="button" class="gg-btn gg-sel-ungroup" disabled>Ungroup</button>
         <button type="button" class="gg-btn gg-sel-x" disabled title="Clear selection">×</button>
-        <span class="gg-version" title="Shots plugin version — if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>
-      </div>
+      </div>` : ""}
+      ${iconRowHtml()}
       <div class="gg-cutpanel">${!SHOW_CUT_PANEL && SHOW_STATUS_PANEL ? statusPanelShellHtml() : ""}</div>
       <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>`;
     const projSel = root.querySelector(".gg-proj");
@@ -6027,6 +6070,9 @@ function mountShots(el) {
     root.querySelector(".gg-scene-add")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-group")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-ungroup")?.addEventListener("click", () => ungroupCuts(cutSelIds()));
+    root.querySelector(".gg-ir-scene")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
+    root.querySelector(".gg-ir-cut")?.addEventListener("click", () => addLocalCut());
+    root.querySelector(".gg-ir-del")?.addEventListener("click", () => void confirmDeleteSelectedCuts());
     root.querySelector(".gg-queue-btn")?.addEventListener("click", () => void queueSelectedCuts());
     root.querySelector(".gg-sel-x")?.addEventListener("click", () => {
       state.cutSel.clear();
@@ -6249,7 +6295,7 @@ function mountShots(el) {
   };
   const onShotsEmptyClick = (e) => {
     if (!root.contains(e.target)) return;
-    if (e.target.closest(".gg-cut") || e.target.closest(".gg-selbar") || e.target.closest(".gg-cutpanel") || e.target.closest(".gg-ctx")) return;
+    if (e.target.closest(".gg-cut") || e.target.closest(".gg-selbar") || e.target.closest(".gg-iconrow") || e.target.closest(".gg-cutpanel") || e.target.closest(".gg-ctx")) return;
     if (!state.cutSel.size) return;
     state.cutSel.clear();
     cutSelAnchor = "";

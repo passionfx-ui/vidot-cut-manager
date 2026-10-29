@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { selectionBarView, statusPanelView } from "../../web/gg_status_panel_core.js";
+import { selectionBarView, iconRowView, statusPanelView } from "../../web/gg_status_panel_core.js";
 
 const withMedia = {
   id: "c1",
@@ -88,5 +88,29 @@ describe("selectionBarView", () => {
     const v = selectionBarView({ count: 0, selSize: 2 });
     assert.equal(v.group.disabled, true);
     assert.equal(v.clear.disabled, false);
+  });
+});
+
+describe("iconRowView", () => {
+  it("English tooltips, same class for any selection", () => {
+    const v = iconRowView({ count: 2, hasProject: true });
+    assert.deepEqual([v.scene.title, v.cut.title, v.del.title], ["New scene", "New cut", "Delete"]);
+    const classes = [0, 1, 5].map((count) => iconRowView({ count, hasProject: true }).className);
+    assert.deepEqual(new Set(classes), new Set(["gg-iconrow"]));
+  });
+
+  it("nothing selected: Delete and New scene off, New cut on with a project", () => {
+    const v = iconRowView({ count: 0, hasProject: true });
+    assert.deepEqual([v.scene.disabled, v.cut.disabled, v.del.disabled], [true, false, true]);
+  });
+
+  it("1+ selected: all on", () => {
+    const v = iconRowView({ count: 1, hasProject: true });
+    assert.deepEqual([v.scene.disabled, v.cut.disabled, v.del.disabled], [false, false, false]);
+  });
+
+  it("no project: everything off", () => {
+    const v = iconRowView();
+    assert.deepEqual([v.scene.disabled, v.cut.disabled, v.del.disabled], [true, true, true]);
   });
 });
