@@ -4,6 +4,7 @@
     python sdk_runner.py validate --workflow wf.json [--comfyui http://127.0.0.1:8188]
     python sdk_runner.py run --workflow wf.json --node 9 --out-dir DIR --confirm
     python sdk_runner.py run --workflow wf.json --confirm      (no download; job_id = ComfyUI prompt_id)
+    python sdk_runner.py run --workflow wf.json --confirm --timeout 600   (cancel after 600 s, default 1500)
 
 COMFY_BASE_URL (default http://127.0.0.1:8189, the local comfy-api-proxy) selects the target.
 `run` refuses to submit without --confirm. Every command prints one JSON object on stdout.
@@ -109,12 +110,16 @@ def cmd_run(a) -> dict:
         wf = client.workflows.from_json(graph)
         job = client.submit(wf)
         job_id = job.id
+        wait = a.timeout if a.timeout and a.timeout > 0 else 1500
         try:
-            job.wait(timeout=1500)
+            job.wait(timeout=wait)
         except TimeoutError:
             job.cancel()
-            return {"ok": False, "job_id": job_id, "error": "timed out after 1500 s; cancel requested"}
-        job = job.result()
+            return {"ok": False, "job_id": job_id, "error": f"timed out after {wait:g} s; cancel requested"}
+        try:
+            job = job.result()
+        except Exception as ex:  # noqa: BLE001
+            return {"ok": False, "job_id": job_id, "error": f"{type(ex).__name__}: {ex}"}
         files = []
         for o in job.get_outputs(a.node) if a.node else []:
             dest = out_dir / o.name
@@ -135,6 +140,7 @@ def main() -> int:
     r.add_argument("--node", default="", help="download this node's outputs to --out-dir (omit: outputs stay in ComfyUI)")
     r.add_argument("--out-dir", default="")
     r.add_argument("--confirm", action="store_true")
+    r.add_argument("--timeout", type=float, default=1500, help="seconds to wait before cancelling the job")
     a = ap.parse_args()
     try:
         res = {"status": cmd_status, "validate": cmd_validate, "run": cmd_run}[a.cmd](a)

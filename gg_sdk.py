@@ -519,6 +519,23 @@ def stop_generate_all() -> dict:
     return {"ok": True, "batch": generate_all_status()}
 
 
+def busy_message() -> str:
+    """Why another SDK job cannot start now ("" when the Regen / Queue slot and Generate All are idle)."""
+    with _lock:
+        if _batch.get("status") == "running":
+            return "Generate All is running. Wait for it to finish (or press Stop), then try again."
+        if _job.get("status") == "running":
+            return "A Queue / Regen job is running. Wait for it to finish, then try again."
+    return ""
+
+
+def run_api_workflow(wf_file: Path, wait_sec: float) -> dict:
+    """Submit one API-format workflow file through the SDK runner and wait for it (nothing downloaded).
+    {"ok", "job_id" (= ComfyUI prompt_id), "seconds"} or {"ok": False, "error", "job_id"?}."""
+    return _runner(["run", "--workflow", str(wf_file), "--confirm", "--timeout", f"{wait_sec:g}"],
+                   timeout=wait_sec + 120)
+
+
 # ---- send last ComfyUI output to a cut (no generation) ----
 IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 VID_EXT = {".mp4", ".webm"}

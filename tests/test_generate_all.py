@@ -1,5 +1,5 @@
 """0.9.116: Generate All — every cut in list order, one Comfy SDK job at a time (runner mocked, nothing rendered);
-UI-format cut workflows (Paste Cut List / AI Cut Split) converted to API format on the server, so no tab is needed."""
+UI-format cut workflows (AI Cut Split) converted to API format on the server, so no tab is needed."""
 from __future__ import annotations
 
 import json
