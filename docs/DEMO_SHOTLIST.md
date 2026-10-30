@@ -14,7 +14,7 @@ Prepare beforehand: a native project "Demo — Rainy Café" with 6 cuts in 2 sce
 | 7 | 1:04–1:20 | Timeline panel | Press play: rough cut plays across cuts; drag a trim handle; show total length / 3 s warning | "Watch the whole edit, trim in place" |
 | 8 | 1:20–1:32 | Caption mode | Type a line of dialogue, Export captions (.srt) | "Dialogue → SRT for Premiere / DaVinci" |
 | 9 | 1:32–1:40 | Missing image guard (optional) | Workflow with missing Load Image → red outline, queue blocked | "Catches missing inputs before you queue" |
-| 10 | 1:40–1:50 | End card | Repo URL, `git clone` line, MIT, #OpenSourceHiggsfield | "Open source · MIT · runs on your local ComfyUI" |
+| 10 | 1:40–1:50 | End card | Repo URL, `git clone` line, GPL-3.0, #OpenSourceHiggsfield | "Open source · GPL-3.0 · runs on your local ComfyUI" |
 
 Notes
 - Record with OBS at 1080p; zoom browser to 110% so text is readable.
