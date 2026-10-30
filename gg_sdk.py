@@ -435,11 +435,11 @@ def _claim_slot_for_batch(batch_id: str, pid: str, cut_id: str) -> bool:
     return True
 
 
-def _generate_one(batch_id: str, pid: str, cut_id: str) -> dict:
-    """One cut through the 0.9.114 native SDK path with its saved seeds: {"status", "error"?, "version"?}."""
+def _generate_one(batch_id: str, pid: str, cut_id: str, *, new_seed: bool = False) -> dict:
+    """One cut through the 0.9.114 native SDK path: {"status", "error"?, "version"?}."""
     na = _native_api()
     try:
-        p = native_plan(pid, cut_id, new_seed=False, convert=True, fill_start=True)
+        p = native_plan(pid, cut_id, new_seed=new_seed, convert=True, fill_start=True)
     except na.NativeWorkflowError as ex:
         return {"status": "skipped" if ex.code == "empty" else "failed", "error": str(ex)}
     except (ValueError, OSError) as ex:
@@ -457,6 +457,7 @@ def _generate_all_worker(batch_id: str) -> None:
     with _lock:
         n = len(_batch.get("items") or [])
         pid = _batch.get("pid")
+        new_seed = bool(_batch.get("new_seed"))
     for i in range(n):
         if _batch_stopping(batch_id):
             break
@@ -469,7 +470,7 @@ def _generate_all_worker(batch_id: str) -> None:
             cut_id = item["cut_id"]
         _batch_update(batch_id, i, status="generating", started_at=time.time())
         try:
-            res = _generate_one(batch_id, pid, cut_id)
+            res = _generate_one(batch_id, pid, cut_id, new_seed=new_seed)
         except Exception as ex:  # noqa: BLE001
             res = {"status": "failed", "error": str(ex)}
         _batch_update(batch_id, i, **res, finished_at=time.time())
@@ -483,7 +484,7 @@ def _generate_all_worker(batch_id: str) -> None:
     _batch_update(batch_id, status="stopped" if stopped else "done", finished_at=time.time())
 
 
-def start_generate_all(pid: str, cut_ids) -> dict:
+def start_generate_all(pid: str, cut_ids, *, new_seed: bool = False) -> dict:
     """Queue every cut in `cut_ids` (Shots list order) for one-at-a-time SDK generation; returns the batch."""
     if not isinstance(cut_ids, list) or not all(isinstance(c, str) and c for c in cut_ids):
         raise ValueError("cut_ids must be a list of cut ids")
@@ -497,8 +498,8 @@ def start_generate_all(pid: str, cut_ids) -> dict:
         if _batch.get("status") == "running":
             return {"ok": False, "message": "Generate All is already running", "batch": _batch_snapshot()}
         _batch.clear()
-        _batch.update(id=batch_id, status="running", pid=pid, stop=False, started_at=time.time(),
-                      items=[{"cut_id": c, "status": "waiting"} for c in ids])
+        _batch.update(id=batch_id, status="running", pid=pid, stop=False, new_seed=bool(new_seed),
+                      started_at=time.time(), items=[{"cut_id": c, "status": "waiting"} for c in ids])
     _batch_update(batch_id)
     threading.Thread(target=_generate_all_worker, args=(batch_id,), name="gonggan-generate-all", daemon=True).start()
     return {"ok": True, "batch": generate_all_status()}

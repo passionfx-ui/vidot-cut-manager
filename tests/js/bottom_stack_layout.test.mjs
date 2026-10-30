@@ -96,12 +96,15 @@ describe("Shots icon row replaces the selection bar", () => {
 });
 
 describe("Queue button in the status panel", () => {
-  it("status panel shell has the queue status, batch counter and Queue button last", () => {
+  it("status panel shell has the queue status, batch counter, Random seed checkbox, and Queue button last", () => {
     assert.ok(shellStart >= 0);
     assert.match(shell, /class="gg-sp-info"/);
+    assert.match(shell, /class="gg-random-seed-cb"/);
+    assert.match(shell, /esc\(RANDOM_SEED_LABEL\)/);
     assert.match(shell, /<button[^>]*class="gg-btn gg-primary gg-queue-btn"[^>]*>Queue<\/button>\s*<\/div>/);
     assert.ok(shell.indexOf("gg-render-global") < shell.indexOf("gg-batch-prog"));
-    assert.ok(shell.indexOf("gg-batch-prog") < shell.indexOf("gg-queue-btn"));
+    assert.ok(shell.indexOf("gg-batch-prog") < shell.indexOf("gg-random-seed"));
+    assert.ok(shell.indexOf("gg-random-seed") < shell.indexOf("gg-queue-btn"));
   });
 
   it("the Queue row is right-aligned in the status panel", () => {

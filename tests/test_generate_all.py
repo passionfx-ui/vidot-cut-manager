@@ -139,11 +139,11 @@ class GenerateAllBase(unittest.TestCase):
             return {"ok": True, "job_id": f"job-{cut}", "seconds": 1.0}
         return _run
 
-    def start(self, order, **runner_kw):
+    def start(self, order, *, new_seed=False, **runner_kw):
         cap = lambda pid, cut, job, wait_sec=0: {"ok": True, "version": {"id": f"v-{cut}"}}  # noqa: E731
         with mock.patch.object(gg_sdk, "_runner", self.runner(**runner_kw)), \
                 mock.patch.object(na, "native_capture_prompt_output", cap):
-            return gg_sdk.start_generate_all(self.pid, order)
+            return gg_sdk.start_generate_all(self.pid, order, new_seed=new_seed)
 
 
 class NativeConvertTests(GenerateAllBase):
@@ -229,6 +229,24 @@ class GenerateAllTests(GenerateAllBase):
         b = gg_sdk.generate_all_status()
         self.assertEqual([it["status"] for it in b["items"]], ["done", "failed"])
         self.assertIn("cut not found", b["items"][1]["error"])
+
+    def test_new_seed_flag_on_generate_all(self):
+        calls = []
+        orig = gg_sdk.native_plan
+
+        def track(pid, cut_id, **kw):
+            p = orig(pid, cut_id, **kw)
+            calls.append(kw.get("new_seed"))
+            return p
+
+        with mock.patch.object(gg_sdk, "native_plan", side_effect=track):
+            self.start([self.ids[0]], new_seed=False)
+        self.assertEqual(calls, [False])
+        calls.clear()
+        with mock.patch.object(gg_sdk, "native_plan", side_effect=track):
+            self.start([self.ids[1]], new_seed=True)
+        self.assertEqual(calls, [True])
+        self.assertTrue(gg_sdk.generate_all_status().get("new_seed"))
 
 
 if __name__ == "__main__":

@@ -5,7 +5,8 @@ import { versionRepState } from "./gg_cuts_core.js";
 export const SET_BEST_LABEL = "Set as Best";
 export const BEST_TIP = "Best (set by you)";
 export const SET_BEST_TIP = "Set as Best";
-export const IMPORT_LABEL = "Import";
+export const IMPORT_TILE_TIP = "Import image or video";
+export const IMPORT_MENU_LABEL = "Import image or video…";
 export const IMPORT_ACCEPT = "image/*,video/*";
 /** Back-to-newest arrow appears once the row is scrolled right past this many pixels. */
 export const NEWEST_BUTTON_MIN_SCROLL = 4;
@@ -71,22 +72,12 @@ export function versionStripMenuItems(row) {
   return [{ key: "best", label: SET_BEST_LABEL, disabled: best, title: best ? "Already Best" : "" }];
 }
 
-/** Import button at the left end of the row: native projects with a selected cut only. */
+/** + import tile at the left end of the version row: native projects with a selected cut only. */
 export function importButtonState({ hasCut, native, busy } = {}) {
   if (!native) return { disabled: true, title: "Import is not available for read-only (imported) projects" };
   if (!hasCut) return { disabled: true, title: "Select a cut to import" };
   if (busy) return { disabled: true, title: "Importing…" };
-  return { disabled: false, title: IMPORT_LABEL };
-}
-
-export const REGEN_LABEL = "Regen";
-
-/** Regen button next to Import: native projects with a selected cut, while no SDK job is starting. */
-export function regenButtonState({ hasCut, native, busy } = {}) {
-  if (!native) return { disabled: true, title: "Regen here is for native projects (use the cut's right-click menu)" };
-  if (!hasCut) return { disabled: true, title: "Select a cut to regenerate" };
-  if (busy) return { disabled: true, title: "Busy, try again in a moment" };
-  return { disabled: false, title: REGEN_LABEL };
+  return { disabled: false, title: IMPORT_TILE_TIP };
 }
 
 export const I2V_LABEL = "Image to Video";
@@ -96,7 +87,7 @@ export function cutHasStartImage(cut) {
   return (Array.isArray(cut?.versions_list) ? cut.versions_list : []).some((v) => v && v.id && v.kind !== "video" && !v.missing);
 }
 
-/** Image to Video button next to Regen: native projects, a selected cut with an image version, no SDK job starting. */
+/** Image to Video button after the import tile: native projects, a selected cut with an image version, no SDK job starting. */
 export function i2vButtonState({ hasCut, native, busy, hasImage } = {}) {
   if (!native) return { disabled: true, title: "Image to Video is for native projects" };
   if (!hasCut) return { disabled: true, title: "Select a cut to turn its image into a video" };

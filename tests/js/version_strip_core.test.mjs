@@ -7,8 +7,7 @@ import {
   SET_BEST_LABEL,
   formatClipDuration,
   importButtonState,
-  regenButtonState,
-  REGEN_LABEL,
+  IMPORT_TILE_TIP,
   i2vButtonState,
   I2V_LABEL,
   cutHasStartImage,
@@ -131,21 +130,11 @@ describe("horizontal scroll", () => {
 
 describe("importButtonState", () => {
   it("is enabled only for a selected cut of a native project", () => {
-    assert.deepEqual(importButtonState({ hasCut: true, native: true }), { disabled: false, title: "Import" });
+    assert.deepEqual(importButtonState({ hasCut: true, native: true }), { disabled: false, title: IMPORT_TILE_TIP });
     assert.equal(importButtonState({ hasCut: true, native: false }).disabled, true);
     assert.match(importButtonState({ hasCut: true, native: false }).title, /read-only/);
     assert.equal(importButtonState({ hasCut: false, native: true }).title, "Select a cut to import");
     assert.equal(importButtonState({ hasCut: true, native: true, busy: true }).disabled, true);
-  });
-});
-
-describe("regenButtonState", () => {
-  it("label and tooltip are Regen; enabled only for a selected native cut while idle", () => {
-    assert.equal(REGEN_LABEL, "Regen");
-    assert.deepEqual(regenButtonState({ hasCut: true, native: true }), { disabled: false, title: "Regen" });
-    assert.equal(regenButtonState({ hasCut: true, native: false }).disabled, true);
-    assert.equal(regenButtonState({ hasCut: false, native: true }).disabled, true);
-    assert.equal(regenButtonState({ hasCut: true, native: true, busy: true }).disabled, true);
   });
 });
 
@@ -174,8 +163,8 @@ describe("Image to Video button (0.9.117)", () => {
     assert.equal(cutHasStartImage(null), false);
   });
 
-  it("sits after Regen in the version row and runs imageToVideoCut", () => {
-    assert.match(fnBody("versionImportButtonHtml"), /gg-vs-import[\s\S]*gg-vs-regen[\s\S]*gg-vs-i2v/);
+  it("sits after the import tile and runs imageToVideoCut", () => {
+    assert.match(fnBody("versionStripLeadingHtml"), /gg-vs-import[\s\S]*gg-vs-i2v/);
     assert.match(js, /querySelector\("\.gg-vs-i2v"\)\?\.addEventListener\("click", \(e\) => \{\s*e\.stopPropagation\(\);\s*void imageToVideoCut\(cutId\);/);
     const body = fnBody("imageToVideoCut");
     assert.match(body, /"\/gonggan\/image-to-video"/);
@@ -184,7 +173,7 @@ describe("Image to Video button (0.9.117)", () => {
   });
 });
 
-describe("gonggan.js wiring", () => {
+describe("gonggan.js wiring (0.9.118)", () => {
   const fnBody = (name) => {
     const at = js.indexOf(`function ${name}(`);
     assert.ok(at >= 0, `${name} not found`);
@@ -222,14 +211,16 @@ describe("gonggan.js wiring", () => {
     assert.match(js.slice(at, at + 1200), /bindThumbFallbacks\(list\)/);
   });
 
-  it("Regen sits right after Import and runs the native SDK Regen; Queue goes through queueButtonClick", () => {
-    assert.match(fnBody("versionImportButtonHtml"), /gg-vs-import[\s\S]*gg-vs-regen/);
-    assert.match(js, /querySelector\("\.gg-vs-regen"\)\?\.addEventListener\("click", \(e\) => \{\s*e\.stopPropagation\(\);\s*void regenNativeCut\(cutId\);/);
+  it("import + tile is first; no visible Regen; Queue respects Random seed", () => {
+    assert.match(fnBody("versionStripLeadingHtml"), /gg-vs-import[\s\S]*gg-vs-plus/);
+    assert.ok(!js.includes("gg-vs-regen"));
+    assert.match(js, /querySelector\("\.gg-vs-import"\)\?\.addEventListener\("click"/);
     assert.match(js, /\.gg-queue-btn"\)\?\.addEventListener\("click", \(\) => void queueButtonClick\(\)\)/);
+    assert.match(js, /gg-random-seed-cb/);
     const qb = fnBody("queueButtonClick");
-    assert.match(qb, /queueClickAction\(\{ native: isNativeProject\(\), selected: ids\.length \}\)/);
-    assert.match(qb, /action === "single"\) return sdkGenerateNativeCut\(ids\[0\], \{ newSeed: false \}\)/);
+    assert.match(qb, /action === "single"\) return sdkGenerateNativeCut\(ids\[0\], \{ newSeed: loadRandomSeedOn\(localStorage\) \}\)/);
     assert.match(qb, /action === "all"\) return startGenerateAll\(\)/);
+    assert.match(fnBody("startGenerateAll"), /random_seed: loadRandomSeedOn\(localStorage\)/);
     assert.match(fnBody("regenNativeCut"), /sdkGenerateNativeCut\(cutId, \{ newSeed: true \}\)/);
   });
 });

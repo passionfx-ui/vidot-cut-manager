@@ -6,7 +6,20 @@ export const QUEUE_EMPTY_TIP = "Select cuts to queue";
 export const QUEUE_NATIVE_TIP = "Native projects only";
 export const QUEUE_BUSY_TIP = "Busy, try again in a moment";
 export const QUEUE_NO_PROJECT_TIP = "No project open";
+export const RANDOM_SEED_LS_KEY = "gonggan-cut.randomSeed";
+export const RANDOM_SEED_LABEL = "Random seed";
 const LIST_MAX = 8;
+
+/** Default on: each Queue (one cut / Generate All) uses new sampler seeds when enabled. */
+export function loadRandomSeedOn(localStorage) {
+  const v = localStorage?.getItem?.(RANDOM_SEED_LS_KEY);
+  if (v === "0") return false;
+  return true;
+}
+
+export function saveRandomSeedOn(localStorage, on) {
+  localStorage?.setItem?.(RANDOM_SEED_LS_KEY, on ? "1" : "0");
+}
 
 const cuts = (n) => `${n} cut${n === 1 ? "" : "s"}`;
 
