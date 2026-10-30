@@ -288,6 +288,16 @@ async function run() {
     const hint = await page.$eval(".gg-np-path", (el) => el.textContent);
     if (hint !== `Project folder: ${expectedFolder}`) throw new Error(`folder hint wrong: "${hint}"`);
     console.log("PASS  hint shows the project folder <location>\\<name>");
+    const setLoc = (v) => page.$eval(".gg-modal-folder", (el, val) => {
+      el.value = val;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }, v);
+    const sameNameLoc = path.join(location, name.toUpperCase());
+    await setLoc(`${sameNameLoc}\\`);
+    const sameHint = await page.$eval(".gg-np-path", (el) => el.textContent);
+    if (sameHint !== `Project folder: ${sameNameLoc}`) throw new Error(`location ending with the name should not be doubled: "${sameHint}"`);
+    await setLoc(location);
+    console.log("PASS  hint uses the location itself when it already ends with the project name (case-insensitive, trailing \\)");
     await page.click(".gg-modal-create");
     await page.waitForFunction(
       (n) => {

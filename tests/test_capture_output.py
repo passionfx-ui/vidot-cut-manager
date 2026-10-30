@@ -58,8 +58,8 @@ class PickPromptOutputTests(unittest.TestCase):
 
 
 class CaptureNewProjectTests(unittest.TestCase):
-    """Same shape as the reported project: New Project with a location, doubled non-ASCII folder name,
-    non-ASCII template_ref, one cut, no versions."""
+    """Same shape as the reported project: New Project with a non-ASCII location that already ends with
+    the project name (used as the project folder, 0.9.111), non-ASCII template_ref, one cut, no versions."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -71,7 +71,7 @@ class CaptureNewProjectTests(unittest.TestCase):
         (loc / "01_Planning").mkdir()
         res = na.create_native_project(NAME, None, None, str(loc))
         self.pid = res["project"]["id"]
-        self.folder = loc / NAME
+        self.folder = loc
         self.store.set_template(self.pid, "로컬이미지생성.json")
         self.cut = next(iter(self.store.get_project(self.pid)["cuts"]))
         self.out = self.root / "output" / "z-image-turbo_00001_.png"
