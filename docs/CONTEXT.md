@@ -17,6 +17,7 @@
 - MiniMax H3 보너스는 메인 상과 중복 가능.
 
 ## 3. 결정 사항 (시간순)
+- 2026-10-30: **0.9.105 렌더 결과 자동 쌓기** — 네이티브 프로젝트에서 컷에서 큐한 프롬프트가 끝나면(`execution_success`) 그 프롬프트의 결과가 그 컷의 새 버전이 됨(`POST /gonggan/capture-output`, 프롬프트당 1번, Best는 안 바뀜 → 최신이 썸네일). 그전에는 수동 Send last output뿐이라 결과가 안 쌓였음. Send last output은 그대로. Python 변경이라 ComfyUI 재시작 필요.
 - 2026-10-29: **0.9.82 Project Settings 정리** — 모달에는 설정 2개만: **Output folder**(기존 `settings.project_folder`, Save 때 `POST /gonggan/folder/check`로 존재/생성 가능 확인, 폴더는 만들지 않음, 비우면 기본 = 팩 `projects/` 저장소)와 **Default template**(Use last). 화면비·FPS·컷 길이·캡션 언어·Name은 이 모달에서 빠짐(저장된 값은 그대로, New Project 창은 그대로). **Rename Project…**는 프로젝트 우클릭 메뉴로 복귀. 새 라우트라 ComfyUI 재시작 필요.
 - 2026-10-29: **0.9.81 Info 카드 Caption 제거** — Shots Info 모드 컷 카드는 정보만(헤더·상태줄·썸네일 그대로) 보여 주고 Caption 칸 없음. Caption 편집은 Caption 모드에서만. 컷 카드 헤더는 큰 글씨 `<컷번호> <컷 이름>`(예: `1-4 New cut`), 씬 이름은 컷마다 반복하지 않고 Shots 씬 그룹 헤더에만(워크플로 탭 라벨 `1-4 Scene1 / Project`는 그대로). 저장된 `caption` 데이터·SRT 내보내기·타임라인 툴팁은 그대로. 아래 0.9.69의 "컷 카드 Caption"은 이제 Caption 모드에만 해당. 같은 버전에서 Shots 실행 취소 보강: 우클릭 메뉴 직후 Ctrl+Z는 마지막으로 클릭한 패널(Shots/Timeline)로 감(캔버스를 마지막에 클릭했으면 ComfyUI에 맡김), 컷 목록 변경 전부(씬 이름·컷 이름·컷 삭제/추가·휴지통 복원 포함)가 Shots 기록에 들어감.
 - 2026-10-29: **0.9.74 새 컷 이름 New cut** — 새로 만드는 컷 이름은 `New cut`(기존 컷은 그대로). 화면 번호는 위치 기준. Python 변경이라 ComfyUI 재시작 필요(2026-10-29 21:49 재시작 완료).

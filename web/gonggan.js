@@ -192,6 +192,7 @@ import { decideVideoSync } from "./gg_playback_core.js";
 import { noMediaText, noMediaThumbClass, versionMedia } from "./gg_missing_media_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { batchProgressView, createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
+import { captureRouteMissing, captureToast, createAutoCapture } from "./gg_auto_capture_core.js";
 import { selectionBarView, iconRowView, statusPanelView } from "./gg_status_panel_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
 import {
@@ -330,6 +331,8 @@ const projectFieldUi = { timer: 0 };
 const JOBS_KEY = "gonggan.jobs";
 const progressTracker = createProgressTracker();
 const renderStatus = createRenderStatus();
+const autoCapture = createAutoCapture({ isNativePid });
+let captureRestartToastShown = false;
 const progUi = { paintTimer: 0, statusDebounce: 0, timelineReloadTimer: 0, wired: false, handlers: {} };
 const PROGRESS_API_EVENTS = [
   "status", "promptQueued", "execution_start", "execution_cached", "executing", "progress", "progress_state",
@@ -5545,6 +5548,38 @@ async function sendLastOutput(cutId) {
   }
 }
 
+/** execution_success of a prompt queued from a native cut: its output becomes a version of that cut. */
+async function captureFinishedPrompt(promptId) {
+  const t = autoCapture.take(promptId, readJobsList());
+  if (!t) return;
+  let res;
+  let d = {};
+  try {
+    res = await api.fetchApi("/gonggan/capture-output", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pid: t.projectId, cut_id: t.cutId, prompt_id: String(promptId) }),
+    });
+    d = await res.json().catch(() => ({}));
+  } catch (e) {
+    d = { ok: false, message: String(e?.message || e) };
+  }
+  if (res && captureRouteMissing(res.status, d)) {
+    if (!captureRestartToastShown) {
+      captureRestartToastShown = true;
+      ggToast("Render not added to its cut", "Restart ComfyUI to add finished renders automatically. For now use right-click > Send last output.", "warn");
+    }
+    return;
+  }
+  const tl = state.timeline;
+  const shown = state.pid === t.projectId && tl?.project?.id === t.projectId;
+  const cut = shown ? tl.cuts.find((c) => c.id === t.cutId) : null;
+  const cutText = cut ? `${cutDisplayLabel(cut, computeCutLabels(tl))} ${cut.name || ""}`.trim() : "";
+  const msg = captureToast(d, cutText);
+  if (msg) ggToast(msg.summary, msg.detail, msg.kind);
+  if (d?.ok && !d.duplicate && state.pid === t.projectId) await loadTimeline();
+}
+
 api.addEventListener("gonggan.regen", (e) => {
   const j = e.detail || {};
   if (j.status === "done") { sdk.msg = `New version from SDK job ${j.sdk_job_id || ""}`; loadTimeline(); }
@@ -7578,6 +7613,7 @@ app.registerExtension({
               shotTabActive: isGongganShotTabOpenAndActive(),
             });
             paintRenderStatus(renderStatus.queued(res.prompt_id, target));
+            autoCapture.remember(res.prompt_id, target);
           }
         } catch (_) {}
         try {
@@ -7591,6 +7627,10 @@ app.registerExtension({
         } catch (_) {}
         return res;
       };
+      api.addEventListener("execution_success", (e) => { captureFinishedPrompt(e.detail?.prompt_id).catch(() => {}); });
+      for (const typ of ["execution_error", "execution_interrupted"]) {
+        api.addEventListener(typ, (e) => autoCapture.forget(e.detail?.prompt_id));
+      }
     }
     app.extensionManager.registerSidebarTab({
       id: SHOTS_TAB,
