@@ -102,4 +102,4 @@ node --test tests/js/*.test.mjs        # on Windows list the files explicitly
 Headless browser checks live in `tests/e2e/` (need a running ComfyUI; they never queue generations). Detailed design notes, routes and changelog: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## License
-[MIT](LICENSE) - copyright holder is listed as `passionfx-ui` (GitHub org); confirm the legal holder name before public release.
+GPL-3.0 - see [LICENSE](LICENSE). Copyright (c) 2026 passionfx-ui (GitHub org; confirm the legal holder name before public release).
