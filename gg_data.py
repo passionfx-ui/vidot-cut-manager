@@ -141,7 +141,8 @@ def _load_versions() -> dict:
             continue
         num = lambda v: v if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # noqa: E731
         out[vid] = {
-            "id": vid, "kind": MEDIA_KINDS[ext], "ext": ext, "mtime": media.stat().st_mtime,
+            "id": vid, "kind": "video" if meta.get("animated") is True else MEDIA_KINDS[ext],
+            "animated": meta.get("animated") is True, "ext": ext, "mtime": media.stat().st_mtime,
             "cut_id": mf.parent.name, "project_id": mf.parent.parent.name,
             "width": num(meta.get("width")), "height": num(meta.get("height")), "seconds": num(meta.get("seconds")),
             "model": str(meta.get("model") or ""), "aspect": str(meta.get("aspect") or ""),
@@ -200,7 +201,7 @@ def clip_seconds(cut: dict, job: dict | None) -> float:
 def _media_view(job: dict | None) -> dict | None:
     if not job:
         return None
-    return {k: job.get(k) for k in ("id", "kind", "width", "height", "seconds", "model", "source")}
+    return {k: job.get(k) for k in ("id", "kind", "animated", "width", "height", "seconds", "model", "source")}
 
 
 def list_projects() -> dict:
@@ -259,6 +260,9 @@ def media_duration(job: dict | None) -> float | None:
     """Real duration of a video result (PyAV, fallback ffprobe). Cached by id + mtime."""
     if not job or job.get("kind") != "video":
         return None
+    if job.get("animated"):
+        s = job.get("seconds")
+        return float(s) if isinstance(s, (int, float)) and s > 0 else None
     key = (job["id"], job["mtime"])
     with _lock:
         if key in _dur_cache:
@@ -510,7 +514,7 @@ def timeline(pid: str) -> dict | None:
         if e and "sec" not in e:
             e = None if not pick else {"pick": pick}
         cur_in, cur_sec = (e.get("in", seed_in), e.get("sec", seed_sec)) if e else (seed_in, seed_sec)
-        vers = [{"id": v["id"], "kind": v["kind"], "source": v.get("source"), "model": v.get("model"),
+        vers = [{"id": v["id"], "kind": v["kind"], "animated": bool(v.get("animated")), "source": v.get("source"), "model": v.get("model"),
                  "created": v["mtime"], "seconds": v.get("seconds"), "width": v.get("width"),
                  "height": v.get("height")} for v in _versions_of(c, by_cut, jobs)]
         cur_in, cur_sec = clamp_clip(kind, cur_in, cur_sec, src_dur)
@@ -997,6 +1001,16 @@ def add_version(pid: str, cut_id: str, src: Path, meta: dict) -> dict:
     ext = src.suffix.lower()
     if ext not in MEDIA_KINDS:
         raise ValueError(f"unsupported media type {ext}")
+    try:
+        from .gg_project.media_anim import animation_info
+    except ImportError:
+        from gg_project.media_anim import animation_info  # type: ignore
+    meta = dict(meta)
+    anim = animation_info(src) if MEDIA_KINDS[ext] == "image" else None
+    if MEDIA_KINDS[ext] == "image" and (meta.get("animated") is True or anim):
+        meta.update({"animated": True, **{k: anim[k] for k in ("frames", "seconds") if anim and anim.get(k)}})
+    else:
+        meta.pop("animated", None)
     vid = f"v{int(time.time() * 1000)}_{secrets.token_hex(3)}"
     d = VERSIONS_DIR / pid / cut_id
     d.mkdir(parents=True, exist_ok=True)

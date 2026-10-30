@@ -520,7 +520,7 @@ def stop_generate_all() -> dict:
 
 
 # ---- send last ComfyUI output to a cut (no generation) ----
-IMG_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 VID_EXT = {".mp4", ".webm"}
 
 
@@ -558,6 +558,8 @@ def _run_output(prompt_id: str, h, root: Path, now: float | None) -> tuple[dict 
     for node_id, out in (h.get("outputs") or {}).items():
         if not isinstance(out, dict):
             continue
+        flag = out.get("animated")
+        animated = any(flag) if isinstance(flag, (list, tuple)) else flag is True
         for key in ("images", "gifs", "videos", "video"):
             for it in reversed(out.get(key) or []):
                 if not isinstance(it, dict) or it.get("type") != "output":
@@ -568,7 +570,7 @@ def _run_output(prompt_id: str, h, root: Path, now: float | None) -> tuple[dict 
                     age = max(0.0, (time.time() if now is None else now) - mtime)
                     return {"path": str(f), "from": "history", "prompt_id": prompt_id, "node": node_id,
                             "name": f.name, "subfolder": it.get("subfolder") or "", "mtime": mtime,
-                            "age_sec": round(age, 1)}, ""
+                            "age_sec": round(age, 1), "animated": animated and f.suffix.lower() in IMG_EXT}, ""
     return None, "The last ComfyUI run saved no image or video (add a Save Image / Save Video node)."
 
 
@@ -604,5 +606,5 @@ def send_last_output(pid: str, cut_id: str) -> dict:
         return {"ok": False, "message": info["reason"]}
     info = gg_data.add_version(pid, cut_id, Path(lo["path"]),
                                {"source": "comfy-" + lo["from"], "from_file": lo["name"],
-                                "prompt_id": lo.get("prompt_id")})
+                                "prompt_id": lo.get("prompt_id"), "animated": lo.get("animated") is True})
     return {"ok": True, "version": info, "output": lo}

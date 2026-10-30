@@ -13,6 +13,7 @@ try:
     from .gg_project.ids import is_uuid_id
     from .gg_project.project_settings import TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings
     from .gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids
+    from .gg_project.media_anim import animation_info
 except ImportError:  # unittest / plain script
     from gg_data import PACK_DIR, clamp_clip  # type: ignore
     from gg_project import LocalStore  # type: ignore
@@ -20,6 +21,7 @@ except ImportError:  # unittest / plain script
     from gg_project.ids import is_uuid_id  # type: ignore
     from gg_project.project_settings import TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings  # type: ignore
     from gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids  # type: ignore
+    from gg_project.media_anim import animation_info  # type: ignore
 
 try:
     from . import gg_template
@@ -627,26 +629,25 @@ def _with_cut_prompt(graph: dict, cut: dict) -> dict:
 # ---- start image: a still image version of the cut copied into ComfyUI's input folder ----
 _STILL_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 INPUT_SUBFOLDER = "gonggan"
-NO_START_IMAGE = "This cut has no image version to start from. Generate or import an image first."
-
-
-def _is_animated_webp(path: Path) -> bool:
-    try:
-        with open(path, "rb") as f:
-            head = f.read(21)
-    except OSError:
-        return False
-    return len(head) == 21 and head[:4] == b"RIFF" and head[8:16] == b"WEBPVP8X" and bool(head[20] & 0x02)
+NO_START_IMAGE = ("This cut has no still image version to start from (videos and animated images are skipped). "
+                  "Generate or import an image first.")
 
 
 def is_still_image(path: Path | None) -> bool:
     return (path is not None and path.is_file() and path.suffix.lower() in _STILL_EXT
-            and not (path.suffix.lower() == ".webp" and _is_animated_webp(path)))
+            and animation_info(path) is None)
+
+
+def is_still_version(ver: dict | None, path: Path | None) -> bool:
+    asset = ver.get("asset") if isinstance(ver, dict) else None
+    return (isinstance(asset, dict) and asset.get("kind") != "video" and not asset.get("animated")
+            and is_still_image(path))
 
 
 def pick_start_version(pid: str, cut_id: str, selected_vid: str | None = None) -> tuple[dict, Path]:
     """The version a video starts from: Best, else `selected_vid` (the one open in the version row), else the
-    newest — the first of these that is a still image whose file exists. ValueError when there is none."""
+    newest — the first of these that is a still image whose file exists (video and animated image versions
+    are skipped). ValueError when there is none."""
     store = native_store()
     doc = store.get_project(pid)
     cut = (doc.get("cuts") or {}).get(cut_id) if doc else None
@@ -658,7 +659,7 @@ def pick_start_version(pid: str, cut_id: str, selected_vid: str | None = None) -
     for vid in dict.fromkeys(x for x in order if isinstance(x, str) and x):
         ver = by_id.get(vid)
         path = store.version_file(pid, ver) if ver else None
-        if ver and is_still_image(path):
+        if ver and is_still_version(ver, path):
             return ver, path
     raise ValueError(NO_START_IMAGE)
 
@@ -843,6 +844,7 @@ def _add_output_version(pid: str, cut_id: str, lo: dict) -> dict:
         path,
         workflow=workflow,
         prompt_id=lo.get("prompt_id") if isinstance(lo.get("prompt_id"), str) else None,
+        animated=lo.get("animated") is True,
     )
 
 
