@@ -183,6 +183,7 @@
     {
       "id": 78,
       "type": "LoadImage",
+      "title": "Start Image",
       "pos": [
         150,
         670
@@ -405,7 +406,7 @@
           "slot_index": 0
         }
       ],
-      "title": "CLIP Text Encode (Positive Prompt)",
+      "title": "Prompt",
       "properties": {
         "Node name for S&R": "CLIPTextEncode"
       },

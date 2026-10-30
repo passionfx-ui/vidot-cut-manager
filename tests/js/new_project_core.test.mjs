@@ -86,16 +86,23 @@ describe("New Project: request", () => {
     assert.deepEqual(newProjectRequest({ name: " ", location: "D:\\A" }), { error: "Enter a project name", field: "name" });
     assert.deepEqual(newProjectRequest({ name: "A", location: "  " }), { error: "Choose a location", field: "location" });
   });
-  it("body carries name, location and the template only when one is picked", () => {
-    assert.deepEqual(newProjectRequest({ name: " A ", location: " D:\\F ", template: "" }), { body: { name: "A", location: "D:\\F" } });
+  const DEFAULT_TEMPLATES = { image_template: "builtin:image", video_template: "builtin:video-ltx" };
+  it("body carries name, location and the Default template only when one is picked", () => {
+    assert.deepEqual(newProjectRequest({ name: " A ", location: " D:\\F ", template: "" }), {
+      body: { name: "A", location: "D:\\F", settings: DEFAULT_TEMPLATES },
+    });
     assert.deepEqual(newProjectRequest({ name: "A", location: "D:\\F", template: "t.json" }).body, {
       name: "A",
       location: "D:\\F",
       template_ref: "t.json",
+      settings: DEFAULT_TEMPLATES,
     });
   });
-  it("no other settings are sent", () => {
-    assert.deepEqual(Object.keys(newProjectRequest({ name: "A", location: "D:\\F", template: "t" }).body).sort(), ["location", "name", "template_ref"]);
+  it("Image / Video templates go into the settings, blank = built-in defaults (0.9.117)", () => {
+    const body = newProjectRequest({ name: "A", location: "D:\\F", imageTemplate: " my/img.json ", videoTemplate: "builtin:video-ltx-t2v" }).body;
+    assert.deepEqual(body.settings, { image_template: "my/img.json", video_template: "builtin:video-ltx-t2v" });
+    assert.deepEqual(Object.keys(body).sort(), ["location", "name", "settings"]);
+    assert.deepEqual(newProjectRequest({ name: "A", location: "D:\\F", imageTemplate: " ", videoTemplate: "" }).body.settings, DEFAULT_TEMPLATES);
   });
 });
 

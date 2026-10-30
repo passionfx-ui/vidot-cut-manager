@@ -9,6 +9,9 @@ import {
   importButtonState,
   regenButtonState,
   REGEN_LABEL,
+  i2vButtonState,
+  I2V_LABEL,
+  cutHasStartImage,
   needsDurationProbe,
   showNewestButton,
   stripScrollLeft,
@@ -143,6 +146,41 @@ describe("regenButtonState", () => {
     assert.equal(regenButtonState({ hasCut: true, native: false }).disabled, true);
     assert.equal(regenButtonState({ hasCut: false, native: true }).disabled, true);
     assert.equal(regenButtonState({ hasCut: true, native: true, busy: true }).disabled, true);
+  });
+});
+
+describe("Image to Video button (0.9.117)", () => {
+  const fnBody = (name) => {
+    const at = js.indexOf(`function ${name}(`);
+    assert.ok(at >= 0, `${name} not found`);
+    return js.slice(at, js.indexOf("\n}\n", at));
+  };
+
+  it("enabled only for a selected native cut with an image version while idle", () => {
+    assert.equal(I2V_LABEL, "Image to Video");
+    const on = { hasCut: true, native: true, hasImage: true };
+    assert.equal(i2vButtonState(on).disabled, false);
+    assert.match(i2vButtonState(on).title, /Video template/);
+    assert.equal(i2vButtonState({ ...on, native: false }).disabled, true);
+    assert.equal(i2vButtonState({ ...on, hasCut: false }).disabled, true);
+    assert.equal(i2vButtonState({ ...on, hasImage: false }).title, "This cut has no image version yet");
+    assert.equal(i2vButtonState({ ...on, busy: true }).disabled, true);
+  });
+
+  it("a start image is any image version whose file exists", () => {
+    assert.equal(cutHasStartImage({ versions_list: [{ id: "v1", kind: "video" }] }), false);
+    assert.equal(cutHasStartImage({ versions_list: [{ id: "v1", kind: "image", missing: true }] }), false);
+    assert.equal(cutHasStartImage({ versions_list: [{ id: "v2", kind: "video" }, { id: "v1", kind: "image" }] }), true);
+    assert.equal(cutHasStartImage(null), false);
+  });
+
+  it("sits after Regen in the version row and runs imageToVideoCut", () => {
+    assert.match(fnBody("versionImportButtonHtml"), /gg-vs-import[\s\S]*gg-vs-regen[\s\S]*gg-vs-i2v/);
+    assert.match(js, /querySelector\("\.gg-vs-i2v"\)\?\.addEventListener\("click", \(e\) => \{\s*e\.stopPropagation\(\);\s*void imageToVideoCut\(cutId\);/);
+    const body = fnBody("imageToVideoCut");
+    assert.match(body, /"\/gonggan\/image-to-video"/);
+    assert.match(body, /askConfirm\(\{ message: i2vConfirmMessage\(title, plan\) \}\)/);
+    assert.match(body, /"\/gonggan\/regen", \{ pid, cut_id: cutId, dry_run: false, confirm: true, plan: plan\.plan \}/);
   });
 });
 

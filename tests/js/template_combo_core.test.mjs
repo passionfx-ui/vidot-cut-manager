@@ -5,11 +5,13 @@ import { templateComboItems } from "../../web/gg_template_pick_core.js";
 
 const PATHS = ["zeta/Final.json", "alpha/draft.json", "gonggan/p/cut.json", "Beta.json"];
 const values = (items) => items.map((it) => it.value);
+const BUILTINS = ["builtin:image", "builtin:video-ltx", "builtin:video-ltx-t2v"];
 
-describe("templateComboItems (0.9.94)", () => {
-  it("(none) first, user templates A-Z, internal workflows hidden", () => {
-    assert.deepEqual(values(templateComboItems(PATHS, "")), ["", "alpha/draft.json", "Beta.json", "zeta/Final.json"]);
+describe("templateComboItems (0.9.94, built-ins 0.9.117)", () => {
+  it("(none) first, then the built-in templates, then user templates A-Z, internal workflows hidden", () => {
+    assert.deepEqual(values(templateComboItems(PATHS, "")), ["", ...BUILTINS, "alpha/draft.json", "Beta.json", "zeta/Final.json"]);
     assert.equal(templateComboItems(PATHS, "")[0].label, "(none)");
+    assert.equal(templateComboItems(PATHS, "")[1].label, "Image (default)");
   });
 
   it("keeps the saved ref even when internal or missing from the list", () => {
@@ -17,7 +19,12 @@ describe("templateComboItems (0.9.94)", () => {
     const gone = templateComboItems(PATHS, "old/deleted.json");
     assert.equal(gone.at(-1).value, "old/deleted.json");
     assert.equal(gone.at(-1).label, "old/deleted.json");
-    assert.deepEqual(values(templateComboItems([], "x.json")), ["", "x.json"]);
+    assert.deepEqual(values(templateComboItems([], "x.json")), ["", ...BUILTINS, "x.json"]);
+    assert.deepEqual(values(templateComboItems([], "builtin:video-ltx")), ["", ...BUILTINS], "a built-in is not listed twice");
+  });
+
+  it("Image / Video template fields have no (none)", () => {
+    assert.deepEqual(values(templateComboItems(["a.json"], "builtin:image", { none: false })), [...BUILTINS, "a.json"]);
   });
 });
 
@@ -31,7 +38,8 @@ describe("comboFilter", () => {
   });
 
   it("case-insensitive substring on the label, live per keystroke", () => {
-    assert.deepEqual(values(comboFilter(items, "A")), ["alpha/draft.json", "Beta.json", "zeta/Final.json"]);
+    assert.deepEqual(values(comboFilter(items, "A")), ["builtin:image", "builtin:video-ltx", "alpha/draft.json", "Beta.json", "zeta/Final.json"]);
+    assert.deepEqual(values(comboFilter(items, "default")), ["builtin:image", "builtin:video-ltx"]);
     assert.deepEqual(values(comboFilter(items, "FIN")), ["zeta/Final.json"]);
     assert.deepEqual(values(comboFilter(items, "none")), [""]);
     assert.deepEqual(comboFilter(items, "nothing-matches"), []);
@@ -43,7 +51,7 @@ describe("comboActiveIndex", () => {
   const items = templateComboItems(PATHS, "Beta.json");
 
   it("empty query highlights the current value, else (none)", () => {
-    assert.equal(comboActiveIndex(items, "Beta.json", ""), 2);
+    assert.equal(comboActiveIndex(items, "Beta.json", ""), 5);
     assert.equal(comboActiveIndex(items, "", ""), 0);
     assert.equal(comboActiveIndex(items, "not/listed.json", ""), 0);
   });

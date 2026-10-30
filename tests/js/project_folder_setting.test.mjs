@@ -44,6 +44,19 @@ describe("Project Settings modal: Output folder (0.9.82)", () => {
     assert.equal(projectSettingsModalPatch(cur, "  N:\\A "), null);
     assert.equal(projectSettingsModalPatch(null, "  "), null);
   });
+  it("Image / Video templates default to the built-ins (0.9.117)", () => {
+    assert.equal(DEFAULT_PROJECT_SETTINGS.image_template, "builtin:image");
+    assert.equal(DEFAULT_PROJECT_SETTINGS.video_template, "builtin:video-ltx");
+    assert.equal(normalizeProjectSettings({ image_template: "  ", video_template: " a\\b.json " }).image_template, "builtin:image");
+    assert.equal(normalizeProjectSettings({ video_template: " a\\b.json " }).video_template, "a/b.json");
+  });
+  it("patch carries only the changed templates (0.9.117)", () => {
+    assert.deepEqual(projectSettingsModalPatch(cur, "N:\\A", { image_template: "builtin:image", video_template: "builtin:video-ltx-t2v" }), {
+      video_template: "builtin:video-ltx-t2v",
+    });
+    assert.deepEqual(projectSettingsModalPatch(cur, "D:\\B", { image_template: "my.json" }), { project_folder: "D:\\B", image_template: "my.json" });
+    assert.equal(projectSettingsModalPatch(cur, "N:\\A", { image_template: "", video_template: "builtin:video-ltx" }), null, "blank = default");
+  });
   it("folder check errors: missing route asks for a restart, else the server message", () => {
     assert.match(folderCheckErrorText({ status: 404 }), /Restart ComfyUI/);
     assert.match(folderCheckErrorText({ status: 405 }), /Restart ComfyUI/);

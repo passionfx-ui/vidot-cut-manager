@@ -5,6 +5,27 @@ export const LAST_TEMPLATE_KEY = "gonggan-cut.lastTemplate";
 /** Stored in localStorage when the user explicitly chose (none). */
 export const LAST_TEMPLATE_NONE = "__none__";
 
+/** Templates shipped with the plugin (same refs and labels as BUILTIN_TEMPLATES in gg_template.py). */
+export const BUILTIN_TEMPLATES = [
+  { value: "builtin:image", label: "Image (default)", kind: "image" },
+  { value: "builtin:video-ltx", label: "Video LTX (default)", kind: "video" },
+  { value: "builtin:video-ltx-t2v", label: "Video LTX text-to-video", kind: "video" },
+];
+export const DEFAULT_IMAGE_TEMPLATE = "builtin:image";
+export const DEFAULT_VIDEO_TEMPLATE = "builtin:video-ltx";
+
+/** @param {string} ref */
+export function isBuiltinTemplate(ref) {
+  const r = String(ref ?? "").trim();
+  return BUILTIN_TEMPLATES.some((t) => t.value === r);
+}
+
+/** Text shown for a template ref: the built-in label, else the workflow path. */
+export function templateLabel(ref) {
+  const r = String(ref ?? "").trim();
+  return BUILTIN_TEMPLATES.find((t) => t.value === r)?.label ?? r;
+}
+
 /**
  * @param {Storage|null|undefined} storage
  * @returns {string|undefined} template ref, "" when last pick was (none), undefined when never set
@@ -75,17 +96,23 @@ export function filterTemplatePaths(paths, query, keep) {
 }
 
 /**
- * Default template combobox items: (none) first, then user templates A–Z. The current ref is always listed
- * (also an internal or since-deleted workflow), so a saved value still shows and stays selectable.
+ * Template combobox items: (none) first (only for Default template), then the built-in templates, then user
+ * templates A–Z. The current ref is always listed (also an internal or since-deleted workflow), so a saved value
+ * still shows and stays selectable.
  * @param {string[]} paths
  * @param {string} current saved template ref ("" = none)
+ * @param {{ none?: boolean }} [opts] none: false for the Image / Video template fields (always a template)
  * @returns {{ value: string, label: string }[]}
  */
-export function templateComboItems(paths, current) {
+export function templateComboItems(paths, current, { none = true } = {}) {
   const cur = String(current ?? "").trim();
-  const list = [...userTemplatePaths(paths, cur)].sort((a, b) => a.localeCompare(b));
-  if (cur && !list.includes(cur)) list.push(cur);
-  return [{ value: "", label: "(none)" }, ...list.map((p) => ({ value: p, label: p }))];
+  const list = [...userTemplatePaths(paths, cur)].filter((p) => !isBuiltinTemplate(p)).sort((a, b) => a.localeCompare(b));
+  if (cur && !isBuiltinTemplate(cur) && !list.includes(cur)) list.push(cur);
+  return [
+    ...(none ? [{ value: "", label: "(none)" }] : []),
+    ...BUILTIN_TEMPLATES.map((t) => ({ value: t.value, label: t.label })),
+    ...list.map((p) => ({ value: p, label: p })),
+  ];
 }
 
 /**
@@ -98,7 +125,7 @@ export function pickInitialTemplate(paths, last) {
   const l = String(last).trim();
   if (!l) return "";
   const list = paths || [];
-  return list.includes(l) ? l : "";
+  return list.includes(l) || isBuiltinTemplate(l) ? l : "";
 }
 
 /**

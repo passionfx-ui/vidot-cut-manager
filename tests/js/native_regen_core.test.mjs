@@ -10,6 +10,9 @@ import {
   sdkRegenErrorMessage,
   sdkPlanSummary,
   sdkJobToast,
+  i2vConfirmMessage,
+  i2vErrorMessage,
+  I2V_CONFIRM_TITLE,
 } from "../../web/gg_native_regen_core.js";
 import { splitConfirmMessage } from "../../web/gg_confirm_core.js";
 
@@ -105,5 +108,28 @@ describe("nativeRegenQueueCheck", () => {
   });
   it("every reason has an English message", () => {
     for (const r of ["superseded", "not-open", "empty"]) assert.match(REGEN_SKIP_MESSAGE[r], /Not queued\.$/);
+  });
+});
+
+describe("Image to Video text (0.9.117)", () => {
+  const plan = { template: "Video LTX (default)", start_version: "0123456789abcdef", start_node: "78", frames: 73, seed: 42, prompt: "A fox runs." };
+  it("confirm lists template, start image, frames, seed and prompt", () => {
+    const m = i2vConfirmMessage("Cut 3", plan);
+    assert.ok(m.startsWith(I2V_CONFIRM_TITLE));
+    assert.match(m, /Cut 3/);
+    assert.match(m, /Template: Video LTX \(default\)/);
+    assert.match(m, /Start image: version 01234567 into node 78/);
+    assert.match(m, /Frames: 73 · new seed 42/);
+    assert.match(m, /Prompt: A fox runs\./);
+    assert.match(m, /new version of this cut/);
+    assert.match(i2vConfirmMessage("C", { ...plan, prompt: "x".repeat(300) }), /x{160}…/);
+  });
+  it("plan summary names the Video template", () => {
+    assert.match(sdkPlanSummary({ nodes: 12, source: "image_to_video", seeds: { 3: 42 }, new_seed: true }), /Video template · new seed 42/);
+  });
+  it("errors: a missing route asks for a restart, else the server message as is", () => {
+    assert.equal(i2vErrorMessage({ status: 404, message: "Not Found" }), "Restart ComfyUI to use Image to Video.");
+    const msg = "Start image node not found. Rename the input node to Start Image.";
+    assert.equal(i2vErrorMessage({ status: 400, message: msg }), msg);
   });
 });
