@@ -91,7 +91,7 @@ def _clamp_caption_lang(value: Any) -> str:
 
 
 def _clamp_project_folder(value: Any) -> str:
-    """Optional local folder path (display + future sync target only; nothing is written there)."""
+    """Optional local project folder; when set, generated outputs are saved in its `assets` subfolder."""
     s = "".join(ch for ch in str(value or "") if ch >= " ").strip()
     return s[:260]
 
@@ -135,6 +135,49 @@ def check_output_folder(value: Any) -> dict[str, Any]:
     except OSError as ex:
         return fail(f"Cannot use this folder: {ex}")
     return {"ok": True, "path": path, "exists": False}
+
+
+PROJECT_ASSETS_DIR = "assets"
+_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+)
+
+
+def project_folder_name(name: Any) -> str:
+    """Folder name for a project name (same rule as web/gg_new_project_core.js projectFolderName)."""
+    s = "".join("_" if ch < " " or ch in '<>:"/\\|?*' else ch for ch in str(name or ""))
+    s = s.strip().rstrip(" .")[:120].rstrip(" .")
+    if not s:
+        return "Project"
+    if s.split(".", 1)[0].upper() in _RESERVED_NAMES:
+        s = f"{s}_"
+    return s
+
+
+def make_project_folder(location: Any, name: Any, created: list[Path] | None = None) -> Path:
+    """Create <location>/<project name>/assets for a new project and return <location>/<project name>.
+    The project folder must be new or empty; raises ValueError with a user-facing message.
+    Folders this call created are appended to `created` (outermost first)."""
+    loc = _clamp_project_folder(location)
+    if not loc:
+        raise ValueError("Choose a location")
+    res = check_output_folder(loc)
+    if not res["ok"]:
+        raise ValueError(res["message"])
+    folder = Path(loc).expanduser() / project_folder_name(name)
+    assets = folder / PROJECT_ASSETS_DIR
+    if len(str(assets)) > 260:
+        raise ValueError("The folder path is too long")
+    try:
+        if folder.exists() and (not folder.is_dir() or any(folder.iterdir())):
+            raise ValueError(f'"{folder.name}" already exists in this location')
+        missing = [p for p in (*reversed(assets.parents), assets) if not p.exists()]
+        assets.mkdir(parents=True, exist_ok=True)
+    except OSError as ex:
+        raise ValueError(f"Cannot create the project folder: {ex}") from None
+    if created is not None:
+        created.extend(missing)
+    return folder
 
 
 def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:

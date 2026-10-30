@@ -10,7 +10,7 @@ except ImportError:  # unittest / plain script
     from gg_data import clamp_clip, media_duration  # type: ignore
 
 from .entities import is_reference
-from .project_settings import normalize_settings
+from .project_settings import PROJECT_ASSETS_DIR, normalize_settings
 
 _IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _VID_EXT = {".mp4", ".webm"}
@@ -141,16 +141,29 @@ def _asset_kind(path: Path) -> str:
     return "image"
 
 
+def version_asset_file(project_dir: Path, asset: Any) -> Path | None:
+    """Media file of a version asset. A relative path lives inside the pack project folder; an absolute
+    path is a media file directly in an `assets` folder (outputs saved in the project's own folder)."""
+    rel = asset.get("path") if isinstance(asset, dict) else None
+    if not isinstance(rel, str) or not rel:
+        return None
+    p = Path(rel)
+    if p.drive or p.root:
+        if not p.is_absolute() or p.parent.name != PROJECT_ASSETS_DIR or p.suffix.lower() not in _IMG_EXT | _VID_EXT:
+            return None
+        path = p
+    else:
+        if ".." in p.parts:
+            return None
+        path = project_dir / p
+    return path if path.is_file() else None
+
+
 def _version_job(root: Path, pid: str, ver: dict[str, Any]) -> dict[str, Any] | None:
-    asset = ver.get("asset")
-    if not isinstance(asset, dict):
+    path = version_asset_file(root / "projects" / pid, ver.get("asset"))
+    if path is None:
         return None
-    rel = asset.get("path")
-    if not isinstance(rel, str):
-        return None
-    path = root / "projects" / pid / rel
-    if not path.is_file():
-        return None
+    asset = ver["asset"]
     kind = asset.get("kind") or _asset_kind(path)
     try:
         mtime = path.stat().st_mtime

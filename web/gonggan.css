@@ -561,3 +561,6 @@
 .gg-refs-name { flex: 1; min-width: 0; }
 .gg-refs-hint { font-size: 10px; opacity: .7; }
 .gg-shots .gg-list-empty { padding: 14px 12px; line-height: 1.5; }
+.gg-shots .gg-no-projects { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.gg-new-project-modal { width: min(420px, calc(100vw - 32px)); box-sizing: border-box; }
+.gg-new-project-modal .gg-modal-field { margin-bottom: 14px; }

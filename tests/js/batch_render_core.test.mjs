@@ -9,6 +9,7 @@ import {
   queueDeleteBody,
   QUEUE_EMPTY_TIP,
   QUEUE_NATIVE_TIP,
+  QUEUE_NO_PROJECT_TIP,
   QUEUE_BUSY_TIP,
 } from "../../web/gg_batch_render_core.js";
 import { splitConfirmMessage } from "../../web/gg_confirm_core.js";
@@ -60,6 +61,10 @@ describe("queueButtonState", () => {
   it("enabled for 1+ cuts in a native project", () => {
     assert.deepEqual(queueButtonState({ count: 1, native: true }), { disabled: false, title: "Queue 1 cut to ComfyUI" });
     assert.equal(queueButtonState({ count: 3, native: true }).title, "Queue 3 cuts to ComfyUI");
+  });
+  it("disabled with no project open", () => {
+    assert.deepEqual(queueButtonState({ count: 2, native: true, hasProject: false }), { disabled: true, title: QUEUE_NO_PROJECT_TIP });
+    assert.equal(QUEUE_NO_PROJECT_TIP, "No project open");
   });
 });
 
