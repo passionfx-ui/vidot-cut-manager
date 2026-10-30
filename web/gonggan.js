@@ -199,7 +199,7 @@ import {
   withNewEmptyScene,
   stripCutsFromGroups,
 } from "./gg_group_list_core.js";
-import { decideVideoSync } from "./gg_playback_core.js";
+import { decideVideoSync, pauseAllTimelineMedia } from "./gg_playback_core.js";
 import { noMediaText, noMediaThumbClass, playsAsVideo, versionMedia } from "./gg_missing_media_core.js";
 import {
   needsDurationProbe,
@@ -7622,6 +7622,7 @@ function showFrame(force) {
   const c = cuts[i];
   const { img, vid, label, blank } = viewer;
   if (i !== play.idx || force) {
+    if (i !== play.idx) pauseAllTimelineMedia(viewer, viewer?.box);
     play.idx = i;
     const playId = c ? c.id : "";
     if (playId !== lastPlayCutAnnounced) {
@@ -7774,7 +7775,7 @@ function leaveExportView() {
   if (!viewer || viewer.mode !== "export") return;
   viewer.mode = "";
   viewer.vid.controls = false;
-  viewer.vid.pause();
+  pauseAllTimelineMedia(viewer, viewer.box);
   viewer.vid.dataset.src = "";
   viewer.vid._ggSeekAt = 0;
   play.idx = -1;
@@ -7794,7 +7795,8 @@ function stopPlay() {
   play.on = false;
   if (play.raf) cancelAnimationFrame(play.raf);
   play.raf = 0;
-  if (viewer) viewer.vid.pause();
+  pauseAllTimelineMedia(viewer, document.querySelector(".gg-timeline"));
+  showFrame(true);
   paintHead();
 }
 

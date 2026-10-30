@@ -60,3 +60,26 @@ export function decideVideoSync(p) {
 
   return { seekTo, play, pause };
 }
+
+/**
+ * Pause every timeline viewer / track video and audio element (does not remove sources).
+ *
+ * @param {{ vid?: HTMLVideoElement, next?: HTMLVideoElement, box?: ParentNode }|null} viewer
+ * @param {ParentNode|null} [scope]
+ */
+export function pauseAllTimelineMedia(viewer, scope) {
+  const seen = new Set();
+  const pause = (el) => {
+    if (!el || seen.has(el)) return;
+    seen.add(el);
+    try {
+      el.pause();
+    } catch (_) {}
+  };
+  if (viewer) {
+    pause(viewer.vid);
+    pause(viewer.next);
+    if (viewer.box) viewer.box.querySelectorAll("video, audio").forEach(pause);
+  }
+  scope?.querySelectorAll?.("video, audio")?.forEach(pause);
+}

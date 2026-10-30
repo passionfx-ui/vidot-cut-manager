@@ -21,7 +21,7 @@ from .entities import (
 from .errors import ConflictError
 from .ids import is_uuid_id, now_iso, uuid7
 from .media_anim import animation_info
-from .project_settings import PROJECT_ASSETS_DIR, merge_settings_patch, normalize_settings
+from .project_settings import PROJECT_ASSETS_DIR, ensure_project_assets_dir, merge_settings_patch, normalize_settings
 from .timeline import (
     build_timeline,
     clip_start,
@@ -933,11 +933,11 @@ class LocalStore:
             dest_name = f"{vid}{ext}"
             folder = normalize_settings(doc.get("settings")).get("project_folder")
             if folder:
-                dest = Path(folder) / PROJECT_ASSETS_DIR / dest_name
-                if dest.exists():
-                    raise ValueError(f"{dest} already exists")
                 try:
-                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest_dir = ensure_project_assets_dir(Path(folder), ext)
+                    dest = dest_dir / dest_name
+                    if dest.exists():
+                        raise ValueError(f"{dest} already exists")
                     shutil.copy2(src, dest)
                 except OSError as ex:
                     raise ValueError(f"Cannot save to the project folder {folder}: {ex}") from None
