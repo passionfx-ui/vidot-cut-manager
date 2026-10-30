@@ -188,7 +188,10 @@ describe("gonggan.js wiring", () => {
     assert.match(fnBody("versionImportButtonHtml"), /gg-vs-import[\s\S]*gg-vs-regen/);
     assert.match(js, /querySelector\("\.gg-vs-regen"\)\?\.addEventListener\("click", \(e\) => \{\s*e\.stopPropagation\(\);\s*void regenNativeCut\(cutId\);/);
     assert.match(js, /\.gg-queue-btn"\)\?\.addEventListener\("click", \(\) => void queueButtonClick\(\)\)/);
-    assert.match(fnBody("queueButtonClick"), /ids\.length === 1\) return sdkGenerateNativeCut\(ids\[0\], \{ newSeed: false \}\)/);
+    const qb = fnBody("queueButtonClick");
+    assert.match(qb, /queueClickAction\(\{ native: isNativeProject\(\), selected: ids\.length \}\)/);
+    assert.match(qb, /action === "single"\) return sdkGenerateNativeCut\(ids\[0\], \{ newSeed: false \}\)/);
+    assert.match(qb, /action === "all"\) return startGenerateAll\(\)/);
     assert.match(fnBody("regenNativeCut"), /sdkGenerateNativeCut\(cutId, \{ newSeed: true \}\)/);
   });
 });
