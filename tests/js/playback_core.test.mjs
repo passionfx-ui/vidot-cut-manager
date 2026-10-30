@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { decideVideoSync } from "../../web/gg_playback_core.js";
+import { decideVideoSync, pauseAllTimelineMedia } from "../../web/gg_playback_core.js";
 
 const base = {
   want: 1,
@@ -102,5 +102,38 @@ describe("decideVideoSync", () => {
       paused: false,
     });
     assert.equal(r.pause, true);
+  });
+});
+
+describe("pauseAllTimelineMedia", () => {
+  it("pauses viewer videos and scoped media without duplicating", () => {
+    const calls = [];
+    const mk = () => ({ pause() { calls.push(this); } });
+    const vid = mk();
+    const next = mk();
+    const extra = mk();
+    const box = {
+      querySelectorAll(sel) {
+        assert.equal(sel, "video, audio");
+        return [extra];
+      },
+    };
+    pauseAllTimelineMedia({ vid, next, box }, null);
+    assert.equal(calls.length, 3);
+    assert.equal(calls[0], vid);
+    assert.equal(calls[1], next);
+    assert.equal(calls[2], extra);
+  });
+
+  it("pauses elements under an optional scope root", () => {
+    const track = { paused: false, pause() { this.paused = true; } };
+    const scope = {
+      querySelectorAll(sel) {
+        assert.equal(sel, "video, audio");
+        return [track];
+      },
+    };
+    pauseAllTimelineMedia(null, scope);
+    assert.equal(track.paused, true);
   });
 });

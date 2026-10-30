@@ -184,7 +184,7 @@ class CreateNativeProjectLocationTests(unittest.TestCase):
                 na.create_native_project("Film", None, None, str(loc))
         self.assertEqual(_tree(self.loc), ["Film", "Film/01_Planning"])
 
-    def test_outputs_saved_flat_in_assets(self):
+    def test_outputs_saved_in_assets_images(self):
         pid = na.create_native_project("Film", None, None, str(self.loc))["project"]["id"]
         folder = self.loc / "Film"
         cut_id = next(iter(self.store.get_project(pid)["cuts"]))
@@ -192,13 +192,27 @@ class CreateNativeProjectLocationTests(unittest.TestCase):
         src.write_bytes(PNG)
         ver = self.store.add_version(pid, cut_id, src)
         saved = Path(ver["asset"]["path"])
-        self.assertEqual(saved.parent, folder / "assets")
+        self.assertEqual(saved.parent, folder / "assets" / "images")
         self.assertTrue(saved.is_file())
-        self.assertEqual(_tree(folder), ["assets", f"assets/{saved.name}"])
+        self.assertEqual(
+            _tree(folder),
+            ["assets", "assets/images", f"assets/images/{saved.name}"],
+        )
         self.assertFalse((self.root / "pack" / "projects" / pid / "assets").exists())
         self.assertEqual(self.store.find_version_asset(ver["id"]), (pid, saved))
         cut = next(c for c in self.store.to_timeline(pid)["cuts"] if c["id"] == cut_id)
         self.assertEqual(cut["media"]["id"], ver["id"])
+
+    def test_outputs_video_in_assets_videos(self):
+        pid = na.create_native_project("Film", None, None, str(self.loc))["project"]["id"]
+        folder = self.loc / "Film"
+        cut_id = next(iter(self.store.get_project(pid)["cuts"]))
+        src = self.root / "out.mp4"
+        src.write_bytes(b"\x00" * 64)
+        ver = self.store.add_version(pid, cut_id, src)
+        saved = Path(ver["asset"]["path"])
+        self.assertEqual(saved.parent, folder / "assets" / "videos")
+        self.assertTrue(saved.is_file())
 
     def test_unreachable_project_folder_is_a_clear_error(self):
         pid = na.create_native_project("Film", None, None, str(self.loc))["project"]["id"]
@@ -232,9 +246,21 @@ class VersionAssetFileTests(unittest.TestCase):
         self.assertIsNone(version_asset_file(self.pdir, {"path": "assets/c/missing.png"}))
         self.assertIsNone(version_asset_file(self.pdir, None))
 
-    def test_absolute_only_media_directly_in_an_assets_folder(self):
+    def test_absolute_flat_assets_legacy(self):
         ok = self.root / "ext" / "assets" / "v.png"
         self.assertEqual(version_asset_file(self.pdir, {"path": str(ok)}), ok)
+
+    def test_absolute_typed_assets_subfolders(self):
+        img = self.root / "ext" / "assets" / "images" / "v.png"
+        vid = self.root / "ext" / "assets" / "videos" / "v.mp4"
+        img.parent.mkdir(parents=True)
+        vid.parent.mkdir(parents=True)
+        img.write_bytes(PNG)
+        vid.write_bytes(b"\x00" * 8)
+        self.assertEqual(version_asset_file(self.pdir, {"path": str(img)}), img)
+        self.assertEqual(version_asset_file(self.pdir, {"path": str(vid)}), vid)
+
+    def test_absolute_only_media_in_an_assets_tree(self):
         self.assertIsNone(version_asset_file(self.pdir, {"path": str(self.root / "ext" / "v.png")}))
         self.assertIsNone(version_asset_file(self.pdir, {"path": str(self.root / "ext" / "assets" / "notes.txt")}))
 
