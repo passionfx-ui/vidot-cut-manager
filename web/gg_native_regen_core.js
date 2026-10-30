@@ -14,12 +14,12 @@ export function regenConfirmMessage(label) {
 }
 
 /** What an older server (ComfyUI not restarted) answers to a native POST /gonggan/regen. */
-const OLD_SERVER_MESSAGE = "Not available for native projects yet";
+const OLD_SERVER_MESSAGES = ["Not available for native projects yet", "Not available for this project type yet"];
 
 /** Error text for a failed native SDK Regen / Queue request. */
 export function sdkRegenErrorMessage(message) {
   const m = String(message || "").trim();
-  if (m === OLD_SERVER_MESSAGE) return "Restart ComfyUI to generate through the Comfy SDK.";
+  if (OLD_SERVER_MESSAGES.includes(m)) return "Restart ComfyUI to generate through the Comfy SDK.";
   return m || "unknown error";
 }
 
