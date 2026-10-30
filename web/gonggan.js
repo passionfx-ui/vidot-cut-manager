@@ -15,6 +15,7 @@ import {
   computeCutLabels,
   cutDisplayLabel,
   computeEffectiveSec,
+  cutLengthDrift,
   lengthWarning,
   moveCuts,
   shotsDropTarget,
@@ -36,6 +37,7 @@ import {
   plannedLenInputPlaceholder,
   addCutTarget,
 } from "./gg_cuts_core.js";
+import { videoTooLongMessage } from "./gg_ltx_duration_core.js";
 import {
   TRIM_SNAP_PX,
   trimTipText,
@@ -189,6 +191,14 @@ import {
 } from "./gg_story_core.js";
 import { buildSrt, srtFileName, effectiveCaption, captionEditChanged, captionFieldPlaceholder, captionAtTime } from "./gg_caption_core.js";
 import {
+  EXPORT_PLAY_LABEL,
+  EXPORT_FOLDER_LABEL,
+  exportPanelActions,
+  exportDoneToastBody,
+  EXPORT_DONE_TOAST_TITLE,
+  EXPORT_FAIL_TOAST_TITLE,
+} from "./gg_export_ui_core.js";
+import {
   rowContentKind,
   cutRowShellHtml,
   captionRowContentHtml,
@@ -334,6 +344,10 @@ import {
   AI_MAKE_CUT_LABEL,
   AI_MAKE_CUT_WAIT_MS,
   AI_MAKE_CUT_TIMEOUT_TEXT,
+  AI_MAKE_CUT_CAPTIONS_KEY,
+  CAPTION_MODE_CHOICES,
+  CAPTION_MODE_DEFAULT,
+  readCaptionMode,
 } from "./gg_cut_list_core.js";
 import {
   generateAllOrder,
@@ -3070,7 +3084,7 @@ async function createCutsFromList(reqPid, cuts, wf) {
     recordShotsEntry(reqPid, { kind: "cuts", op: "add", ids, before, after: snapshotOrderGroups(state.timeline) });
     selectCut(ids[0]);
   }
-  ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, "Each cut has the project's Video template with its description as the prompt. Select them and press Queue to render in order.", "ok");
+  ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, "Each cut has the project's Video template with its prompt field set. Select them and press Queue to render in order.", "ok");
   return true;
 }
 
@@ -3099,6 +3113,10 @@ function openAiCutSplitModal() {
       <label class="gg-modal-field">Story
         <textarea class="gg-aisplit-story" rows="10" placeholder="Write or paste your story. A local text model splits it into cuts of at most 3 seconds."></textarea>
       </label>
+      <label class="gg-modal-field">Captions
+        <select class="gg-aisplit-captions">${CAPTION_MODE_CHOICES.map((c) => `<option value="${esc(c.value)}">${esc(c.label)}</option>`).join("")}</select>
+        <span class="gg-modal-hint">Cut caption field when creating cuts. Pre-split scripts keep dialogue verbatim.</span>
+      </label>
       <span class="gg-modal-hint gg-aisplit-status" aria-live="polite">${esc(AI_SPLIT_IDLE_HINT)}</span>
       <span class="gg-modal-hint gg-split-err gg-aisplit-err" aria-live="polite"></span>
       <div class="gg-mm-notice" role="alert" hidden></div>
@@ -3109,6 +3127,11 @@ function openAiCutSplitModal() {
     </div>`;
   document.body.appendChild(wrap);
   const story = wrap.querySelector(".gg-aisplit-story");
+  const captionsSel = wrap.querySelector(".gg-aisplit-captions");
+  captionsSel.value = readCaptionMode(localStorage.getItem(AI_MAKE_CUT_CAPTIONS_KEY));
+  captionsSel.addEventListener("change", () => {
+    localStorage.setItem(AI_MAKE_CUT_CAPTIONS_KEY, captionsSel.value);
+  });
   const status = wrap.querySelector(".gg-aisplit-status");
   const err = wrap.querySelector(".gg-aisplit-err");
   const notice = wrap.querySelector(".gg-mm-notice");
@@ -3156,6 +3179,7 @@ function openAiCutSplitModal() {
     runBtn.disabled = busy || (!result && !story.value.trim());
     runBtn.textContent = busy ? "Working…" : result ? `Create ${n} cut${n === 1 ? "" : "s"}` : "Split";
     story.disabled = busy;
+    if (captionsSel) captionsSel.disabled = busy;
   };
   story.addEventListener("input", () => {
     if (result) {
@@ -3238,7 +3262,11 @@ function openAiCutSplitModal() {
       if (await precheckOk() && wrap.isConnected) {
         status.textContent = "Starting… (loading the text model can take a minute)";
         ok = await follow({
-          start: () => postJson("/gonggan/ai-cut-split", { story: story.value, background: true }, { timeoutMs: AI_MAKE_CUT_WAIT_MS }),
+          start: () => postJson("/gonggan/ai-cut-split", {
+            story: story.value,
+            captions: captionsSel.value,
+            background: true,
+          }, { timeoutMs: AI_MAKE_CUT_WAIT_MS }),
         });
       } else {
         status.textContent = AI_SPLIT_IDLE_HINT;
@@ -5166,6 +5194,7 @@ function bindCutPanelFields(panel, c) {
     lenIn.tabIndex = -1;
     lenIn.placeholder = plannedLenInputPlaceholder(c);
     lenIn.title = "Planned length (seconds). Read-only.";
+    lenIn.classList.toggle("gg-len-drift", cutLengthDrift(c));
   }
   if (endChk) {
     endChk.checked = !!c.end_card;
@@ -5751,6 +5780,65 @@ function recomputeCutStarts() {
   tl.total_sec = total;
 }
 
+/** Optimistic display version: swap timeline media + clamp trim, then persist via /gonggan/edit. Does not change Best. */
+function applyDisplayVersionLocally(c, vid) {
+  if (!c || !vid) return false;
+  const v = (c.versions_list || []).find((x) => x.id === vid);
+  if (!v) return false;
+  if (c.display === vid && c.media?.id === vid) return false;
+  c.display = vid;
+  c.media = versionMedia(v);
+  c.src_dur = c.media && c.media.kind === "video" ? Math.max(0, Number(v?.seconds) || 0) : 0;
+  const clamped = clampClip(c, c.in, c.sec);
+  c.in = clamped.in;
+  c.sec = clamped.sec;
+  c.edited = true;
+  recomputeCutStarts();
+  play.idx = -1;
+  return true;
+}
+
+async function setDisplayVersion(cutId, vid) {
+  const c = cutsNow().find((x) => x.id === cutId);
+  if (!c) return;
+  const prev = {
+    display: c.display,
+    in: c.in,
+    sec: c.sec,
+    media: c.media ? { ...c.media } : null,
+    src_dur: c.src_dur,
+    edited: c.edited,
+  };
+  if (!applyDisplayVersionLocally(c, vid)) return;
+  bus.dispatchEvent(new Event("timeline"));
+  bus.dispatchEvent(new Event("select"));
+  clearTimeout(ed.saveTimer);
+  const ok = await saveEdit();
+  if (ok) {
+    if (
+      cutId === wfLastLoadedCutId &&
+      state.pid === wfLastLoadedProjectId &&
+      isGongganShotTabOpenAndActive()
+    ) {
+      const loadToken = ++wfLoadToken;
+      loadCutWorkflow(cutId, c, loadToken).catch((e) => console.warn("[gonggan] display workflow reload failed", e));
+    }
+    return;
+  }
+  c.display = prev.display;
+  c.media = prev.media;
+  c.src_dur = prev.src_dur;
+  c.in = prev.in;
+  c.sec = prev.sec;
+  c.edited = prev.edited;
+  recomputeCutStarts();
+  play.idx = -1;
+  bus.dispatchEvent(new Event("timeline"));
+  bus.dispatchEvent(new Event("select"));
+  const msg = (state.error || "").replace(/^Save failed:\s*/, "") || "unknown error";
+  ggToast("Version not applied", `Reverted to the previous version: ${msg}`, "warn");
+}
+
 /** Optimistic promote: swap timeline media + clamp trim, then persist via /gonggan/edit. `vid` null = clear
  * Best, so the newest version is current again (same as the server). */
 function applyPickLocally(c, vid) {
@@ -5759,6 +5847,8 @@ function applyPickLocally(c, vid) {
   const v = clear ? (c.versions_list || []).find((x) => x && x.id) : (c.versions_list || []).find((x) => x.id === vid);
   if (!v && !clear) return false;
   c.pick = clear ? null : vid;
+  if (clear) c.display = v?.id || null;
+  else c.display = vid;
   c.media = versionMedia(v);
   c.src_dur = c.media && c.media.kind === "video" ? Math.max(0, Number(v?.seconds) || 0) : 0;
   const clamped = clampClip(c, c.in, c.sec);
@@ -5782,6 +5872,7 @@ async function setPick(cutId, vid) {
   if (!c) return;
   const prev = {
     pick: c.pick,
+    display: c.display,
     in: c.in,
     sec: c.sec,
     media: c.media ? { ...c.media } : null,
@@ -5806,6 +5897,7 @@ async function setPick(cutId, vid) {
   }
   const v = (c.versions_list || []).find((x) => x.id === prev.pick);
   c.pick = prev.pick;
+  c.display = prev.display;
   c.media = prev.media || versionMedia(v);
   c.src_dur = prev.src_dur;
   c.in = prev.in;
@@ -5888,6 +5980,11 @@ async function planNativeSdkJob(pid, cutId, mode) {
 async function sdkGenerateNativeCut(cutId, { newSeed }) {
   const cut = cutById(cutId);
   if (!cut || !state.timeline || sdk.busy) return;
+  const tooLong = videoTooLongMessage(computeEffectiveSec(cut));
+  if (tooLong) {
+    ggToast("Queue", tooLong, "warn");
+    return;
+  }
   const title = shotTitle(cut);
   const pid = state.pid;
   sdk.busy = "regen";
@@ -5926,6 +6023,11 @@ function regenNativeCut(cutId) {
 async function imageToVideoCut(cutId, { startVid = "" } = {}) {
   const cut = cutById(cutId);
   if (!cut || !state.timeline || !isNativeProject() || sdk.busy) return;
+  const tooLong = videoTooLongMessage(computeEffectiveSec(cut));
+  if (tooLong) {
+    ggToast(MAKE_VIDEO_LABEL, tooLong, "warn");
+    return;
+  }
   const title = shotTitle(cut);
   const pid = state.pid;
   const open = wfOpenVersion;
@@ -6313,6 +6415,7 @@ function cutPanelHtml(c, labels) {
     </div>`;
   }).join("");
   const planned = c.planned_sec;
+  const lenDrift = c && cutLengthDrift(c) ? " gg-len-drift" : "";
   const lenVal = planned != null && Number.isFinite(planned) ? String(planned) : "";
   const lenPh = lenVal ? "" : plannedLenInputPlaceholder(c);
   const vIdx = rep ? versionIndexFromList(c.versions_list, rep) : 1;
@@ -6341,7 +6444,7 @@ function cutPanelHtml(c, labels) {
       <div class="gg-cut-fields">
         <div class="gg-cut-meta-row">
           <label class="gg-field-len"${metaTip}>Length (sec)
-            <input type="number" class="gg-len-input" min="0.5" max="600" step="0.1" value="${esc(lenVal)}"${lenPh ? ` placeholder="${esc(lenPh)}"` : ""} title="Planned length (seconds). Read-only." readonly tabindex="-1" />
+            <input type="number" class="gg-len-input${lenDrift}" min="0.5" max="600" step="0.1" value="${esc(lenVal)}"${lenPh ? ` placeholder="${esc(lenPh)}"` : ""} title="Planned length (seconds). Read-only." readonly tabindex="-1" />
           </label>
           <label class="gg-field-end"${metaTip}><input type="checkbox" class="gg-endcard-chk"${c.end_card ? " checked" : ""}${metaDisabled} /> End card</label>
           <label class="gg-field-redo"${metaTip}><input type="checkbox" class="gg-redo-chk"${c.needs_redo ? " checked" : ""}${metaDisabled} /> Needs redo</label>
@@ -6350,6 +6453,12 @@ function cutPanelHtml(c, labels) {
           <span class="gg-fname" title="Suggested export base name (read-only)">${esc(fname)}</span>
           <button type="button" class="gg-btn gg-fname-copy"${nat ? "" : ` disabled title="${esc(NATIVE_READONLY_TIP)}"`}>Copy</button>
         </div>
+        <label class="gg-field-prompt">Prompt
+          <textarea class="gg-cut-prompt-display" rows="2" readonly tabindex="-1" title="Image/video generation prompt">${esc(c.prompt || "")}</textarea>
+        </label>
+        <label class="gg-field-cap">Caption
+          <textarea class="gg-cut-caption-display" rows="2" readonly tabindex="-1" title="Dialogue and narration for this cut">${esc(c.caption || "")}</textarea>
+        </label>
       </div>
       <div class="gg-vers">${vers || '<span class="gg-dim">no versions yet</span>'}</div>
     </div>
@@ -6477,7 +6586,7 @@ function versionStripHtml(c, selVid) {
     const { wrapCls, tip, img } = versionThumbParts(c, byId.get(r.id), tabOpen);
     const title = r.state ? `${r.state} · ${tip}` : tip;
     const sel = r.id === selVid;
-    return `<div class="${wrapCls} gg-vs-item${r.best ? " gg-vs-best" : ""}${sel ? " gg-vs-sel" : ""}" data-vid="${esc(r.id)}"${sel ? ' aria-selected="true"' : ""}>
+    return `<div class="${wrapCls} gg-vs-item${r.best ? " gg-vs-best" : ""}${sel && !r.best ? " gg-vs-sel" : ""}" data-vid="${esc(r.id)}"${sel ? ' aria-selected="true"' : ""}>
       <div class="gg-ver" title="${esc(title)}">
         ${img}
         ${r.video ? `<span class="gg-vs-dur"${r.duration ? "" : " hidden"}>${esc(r.duration)}</span>` : ""}
@@ -6612,9 +6721,10 @@ function mountShots(el) {
     });
   };
   const stripCut = () => (state.timeline ? state.timeline.cuts.find((x) => x.id === state.cutId) || null : null);
-  /** Thumbnail click: it becomes the row's selected version and opens in the shot tab (existing version open). */
+  /** Thumbnail click: displayed version (preview + timeline) and open in the shot tab. */
   const selectStripVersion = (cutId, vid) => {
     Object.assign(stripPick, { pid: state.pid, cutId, vid });
+    void setDisplayVersion(cutId, vid);
     openVersionWorkflow(cutId, vid);
     paintVersionStrip();
   };
@@ -7555,7 +7665,13 @@ async function saveEditNow() {
   const body = {
     pid: tl.project.id,
     order: clips.map((c) => c.id),
-    clips: Object.fromEntries(clips.map((c) => [c.id, { in: c.in, sec: c.sec, pick: c.pick || null, ...(free ? { start: c.start } : {}) }])),
+    clips: Object.fromEntries(clips.map((c) => [c.id, {
+      in: c.in,
+      sec: c.sec,
+      pick: c.pick || null,
+      ...(isNativeProject() ? { display: c.display || null } : {}),
+      ...(free ? { start: c.start } : {}),
+    }])),
   };
   let ok = true;
   try {
@@ -8103,8 +8219,8 @@ function mountTimeline(el) {
         <div class="gg-ex-bar"><div class="gg-ex-fill"></div></div>
         <span class="gg-ex-text"></span>
         <button class="gg-btn gg-ex-cancel">Cancel</button>
-        <button class="gg-btn gg-ex-play" hidden>▶ Preview</button>
-        <a class="gg-btn gg-ex-open" target="_blank" rel="noopener" hidden>Open</a>
+        <button type="button" class="gg-btn gg-ex-play" disabled title="Export an mp4 first">${EXPORT_PLAY_LABEL}</button>
+        <button type="button" class="gg-btn gg-ex-folder" disabled title="Export an mp4 first">${EXPORT_FOLDER_LABEL}</button>
         <span class="gg-ex-path" title="Click to copy path"></span>
         <button class="gg-btn gg-ex-close" title="Hide">×</button>
       </div>
@@ -8235,7 +8351,8 @@ function mountTimeline(el) {
   $r(".gg-reset").addEventListener("click", resetEdit);
   $r(".gg-export").addEventListener("click", () => startExport($r(".gg-ex-preset").value, $r(".gg-ex-sound").checked));
   $r(".gg-ex-cancel").addEventListener("click", cancelExport);
-  $r(".gg-ex-play").addEventListener("click", () => showExport(exp.job));
+  $r(".gg-ex-play").addEventListener("click", () => { if (exp.job?.status === "done") showExport(exp.job); });
+  $r(".gg-ex-folder").addEventListener("click", () => revealExportFolder());
   $r(".gg-ex-close").addEventListener("click", () => { exp.hidden = true; paintExport(); });
   $r(".gg-ex-path").addEventListener("click", (e) => { navigator.clipboard?.writeText(e.target.textContent).catch(() => {}); });
   $r(".gg-reload").addEventListener("click", () => loadProjects());
@@ -8367,7 +8484,12 @@ function onExportJob(job) {
   paintExport();
   if (job.status === "running" && !exp.poll) exp.poll = setInterval(refreshExport, 1000);
   if (job.status !== "running" && exp.poll) { clearInterval(exp.poll); exp.poll = 0; }
-  if (was === "running" && job.status === "done") showExport(job);
+  if (was === "running" && job.status === "done") {
+    ggToast(EXPORT_DONE_TOAST_TITLE, exportDoneToastBody(job.file), "ok");
+  }
+  if (was === "running" && job.status === "error") {
+    ggToast(EXPORT_FAIL_TOAST_TITLE, job.error || "Unknown error", "err");
+  }
 }
 
 async function refreshExport() {
@@ -8419,6 +8541,23 @@ async function cancelExport() {
   refreshExport();
 }
 
+async function revealExportFolder() {
+  const job = exp.job;
+  const tl = state.timeline;
+  if (!job || job.status !== "done" || !tl) return;
+  try {
+    const res = await api.fetchApi("/gonggan/export/reveal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pid: tl.project.id, name: job.file || null }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.message || `HTTP ${res.status}`);
+  } catch (e) {
+    ggToast("Show in Folder", sentence(String(e.message || e), "Restart ComfyUI once if this button was just added."), "warn");
+  }
+}
+
 function showExport(job) {
   if (!viewer || !job || job.status !== "done") return;
   stopPlay();
@@ -8441,7 +8580,8 @@ function paintExport() {
   const row = root.querySelector(".gg-ex-row");
   const job = exp.job;
   const btn = root.querySelector(".gg-export");
-  const running = job && job.status === "running";
+  const act = exportPanelActions(job || {});
+  const running = act.running;
   btn.disabled = !!running;
   btn.textContent = running ? "Exporting…" : "Export mp4";
   row.hidden = !job || exp.hidden;
@@ -8452,16 +8592,24 @@ function paintExport() {
   row.classList.toggle("gg-ex-bad", job.status === "error" || job.status === "cancelled");
   const text = row.querySelector(".gg-ex-text");
   if (running) text.textContent = `${job.project} · ${job.preset} · ${job.step || ""} · ${pct}%`;
-  else if (job.status === "done") text.textContent = `✓ ${job.preset} · ${fmtClock(job.expected_sec || 0)} · ${fmtMB(job.size || 0)} · ${Math.round((job.finished_at - job.started_at) || 0)}s`;
+  else if (job.status === "done") {
+    text.textContent = `✓ ${job.preset} · ${fmtClock(job.expected_sec || 0)} · ${fmtMB(job.size || 0)} · ${Math.round((job.finished_at - job.started_at) || 0)}s`;
+    if (job.path) text.title = job.path;
+  }
   else if (job.status === "cancelled") text.textContent = "Export cancelled";
   else if (job.status === "error") text.textContent = "Export failed: " + (job.error || "");
   row.querySelector(".gg-ex-cancel").hidden = !running;
-  const done = job.status === "done";
-  row.querySelector(".gg-ex-play").hidden = !done;
-  const open = row.querySelector(".gg-ex-open");
-  open.hidden = !done;
-  if (done) open.href = exportUrl(job.file);
-  row.querySelector(".gg-ex-path").textContent = done ? job.path : "";
+  const play = row.querySelector(".gg-ex-play");
+  const folder = row.querySelector(".gg-ex-folder");
+  play.hidden = false;
+  folder.hidden = false;
+  play.disabled = act.playDisabled;
+  folder.disabled = act.folderDisabled;
+  play.title = act.playTip;
+  folder.title = act.folderTip;
+  play.textContent = EXPORT_PLAY_LABEL;
+  folder.textContent = EXPORT_FOLDER_LABEL;
+  row.querySelector(".gg-ex-path").textContent = act.hasFile ? (job.path || "") : "";
 }
 
 api.addEventListener("gonggan.export", (e) => onExportJob(e.detail));

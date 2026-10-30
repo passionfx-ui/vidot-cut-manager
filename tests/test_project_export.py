@@ -51,7 +51,7 @@ class ProjectExportTests(unittest.TestCase):
         by = {c["id"]: c for c in tl["cuts"]}
         self.assertEqual(by[self.c1]["media"]["id"], vid["id"])
         self.assertEqual(by[self.c2]["media"], {"id": img["id"], "kind": "image"} | {k: by[self.c2]["media"][k] for k in by[self.c2]["media"] if k not in ("id", "kind")})
-        self.assertEqual(out_dir.name, "04_Export")
+        self.assertEqual(out_dir.name, "edit")
         res = gg_export.start(self.pid, "720p", tl=tl, out_dir=out_dir, resolve=na.native_media_path)
         self.assertTrue(res["ok"], res)
         for _ in range(600):
