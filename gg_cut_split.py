@@ -29,7 +29,7 @@ log = logging.getLogger("gonggan-cut")
 
 DEFAULT_CLIP = "qwen3vl_4b_int8_convrot.safetensors"
 DEFAULT_CLIP_TYPE = "stable_diffusion"
-MAX_LENGTH = 2048
+MAX_LENGTH = 768
 RETRIES = 1
 RUN_TIMEOUT = 600.0
 HTTP_TIMEOUT = 10.0
