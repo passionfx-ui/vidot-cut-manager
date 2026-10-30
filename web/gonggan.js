@@ -654,9 +654,8 @@ function isNativeProject() {
 }
 
 function projectOptionLabel(p) {
-  const prefix = p.native ? "[Native] " : "";
   const suffix = p.native ? "" : " (read-only)";
-  return `${prefix}${p.name || p.id} (${p.cut_count ?? 0})${suffix}`;
+  return `${p.name || p.id}${suffix}`;
 }
 
 let projectModalEl = null;
