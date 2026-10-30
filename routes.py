@@ -762,7 +762,7 @@ async def gg_regen(request):
     if not isinstance(pid, str) or not isinstance(cid, str):
         return _err(400, "pid and cut_id required")
     if gg_native_api.is_native_pid(pid):
-        return _err(400, gg_native_api.NATIVE_UNAVAILABLE)
+        return await _native_regen(pid, cid, data)
     seed = data.get("seed")
     try:
         seed = int(seed) if seed is not None else None
@@ -774,6 +774,22 @@ async def gg_regen(request):
         if seed is None:
             return _err(400, "confirmed run needs the seed shown in the dry run")
         return web.json_response(await asyncio.to_thread(gg_sdk.run_confirmed, pid, cid, seed))
+    except ValueError as ex:
+        return _err(400, str(ex))
+
+
+async def _native_regen(pid: str, cid: str, data: dict):
+    """Native cut: its current saved workflow through the Comfy SDK. The dry run (default) resolves it and sets
+    the seeds (`mode` "regen" = new random seeds, "queue" = saved seeds); a real run needs
+    {"dry_run": false, "confirm": true, "plan": <plan name from the dry run>} and runs exactly that file."""
+    try:
+        if data.get("dry_run", True) or data.get("confirm") is not True:
+            plan = await asyncio.to_thread(gg_sdk.native_plan, pid, cid, new_seed=data.get("mode") != "queue",
+                                           canvas=data.get("api_workflow"))
+            return web.json_response({"ok": True, "dry_run": True, "queued": False, "plan": plan})
+        return web.json_response(await asyncio.to_thread(gg_sdk.run_native_confirmed, pid, cid, data.get("plan")))
+    except gg_native_api.NativeWorkflowError as ex:
+        return web.json_response({"ok": False, "message": str(ex), "code": ex.code}, status=400)
     except ValueError as ex:
         return _err(400, str(ex))
 

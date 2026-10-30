@@ -13,6 +13,39 @@ export function regenConfirmMessage(label) {
   return label ? `${REGEN_CONFIRM_TITLE}\n\n${label}` : REGEN_CONFIRM_TITLE;
 }
 
+/** What an older server (ComfyUI not restarted) answers to a native POST /gonggan/regen. */
+const OLD_SERVER_MESSAGE = "Not available for native projects yet";
+
+/** Error text for a failed native SDK Regen / Queue request. */
+export function sdkRegenErrorMessage(message) {
+  const m = String(message || "").trim();
+  if (m === OLD_SERVER_MESSAGE) return "Restart ComfyUI to generate through the Comfy SDK.";
+  return m || "unknown error";
+}
+
+const SOURCE_LABEL = { embedded: "current version", stored: "saved workflow", template: "project template", history: "last run", canvas: "open tab" };
+
+/** Status line after the dry run: which workflow and seed will run. */
+export function sdkPlanSummary(plan = {}) {
+  const parts = [`${plan.nodes || 0} nodes`, SOURCE_LABEL[plan.source] || plan.source || "workflow"];
+  const seeds = Object.values(plan.seeds || {});
+  if (seeds.length) parts.push(`${plan.new_seed ? "new seed" : "seed"} ${seeds[0]}${seeds.length > 1 ? ` (+${seeds.length - 1})` : ""}`);
+  else parts.push("no sampler seed");
+  return `${parts.join(" · ")} · via Comfy SDK`;
+}
+
+/**
+ * Toast for a `gonggan.regen` event of a native SDK job; null while it is running or for legacy jobs.
+ * @param {{ native?: boolean, status?: string, error?: string }} job
+ * @param {string} [cutText] cut label shown in the toast
+ */
+export function sdkJobToast(job = {}, cutText = "") {
+  if (!job.native) return null;
+  if (job.status === "done") return { summary: "New version added", detail: cutText, kind: "ok" };
+  if (job.status === "error") return { summary: "SDK job failed", detail: [cutText, job.error].filter(Boolean).join(" — "), kind: "warn" };
+  return null;
+}
+
 /**
  * Node count to judge an empty cut by: the live graph when the cut is open, else the count seen
  * when it was last opened or left; null when unknown.

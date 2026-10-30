@@ -460,6 +460,60 @@ def native_version_workflow(pid: str, cut_id: str, vid: str) -> dict | None:
     return None
 
 
+class NativeWorkflowError(ValueError):
+    """No API-format workflow for an SDK run; `code` is "empty" or "ui_only"."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+UI_ONLY_MESSAGE = ("This cut's workflow is saved only in UI (graph) format and cannot be converted outside the "
+                   "canvas. Open the cut once (its shot tab), then try again.")
+
+
+def native_cut_api_workflow(pid: str, cut_id: str, canvas: dict | None = None) -> dict:
+    """The cut's current saved workflow in API format for an SDK run: {"workflow", "source"}.
+
+    Order: the current version's API prompt embedded in its PNG, the stored cut/version workflow when it is
+    API format, the ComfyUI history prompt of the current version's run, then `canvas` (the API prompt of
+    that cut's open shot tab, sent by the browser only after a "ui_only" answer)."""
+    try:
+        from . import gg_sdk
+        from .gg_project.cut_source import current_version_id
+    except ImportError:
+        import gg_sdk  # type: ignore
+        from gg_project.cut_source import current_version_id  # type: ignore
+
+    src = native_cut_source_workflow(pid, cut_id)
+    store = native_store()
+    cut = store.get_project(pid)["cuts"][cut_id]
+    versions = store.list_versions(pid, cut_id)
+    cur_id = current_version_id(cut, versions)
+    cur = next((v for v in versions if v.get("id") == cur_id), None)
+    if cur_id:
+        path = native_media_path(cur_id)
+        if path is not None and path.suffix.lower() == ".png":
+            api = gg_wfstore.extract_png_meta(path).get("prompt")
+            if isinstance(api, dict) and gg_template._is_api_workflow(api):
+                return {"workflow": api, "source": "embedded"}
+    wf = src.get("workflow")
+    if isinstance(wf, dict) and gg_template._is_api_workflow(wf):
+        return {"workflow": wf, "source": src.get("source") or "stored"}
+    run = cur.get("run") if cur and isinstance(cur.get("run"), dict) else {}
+    if isinstance(run.get("prompt_id"), str):
+        api = gg_sdk.history_prompt(run["prompt_id"])
+        if api and gg_template._is_api_workflow(api):
+            return {"workflow": api, "source": "history"}
+    if canvas is not None:
+        if not isinstance(canvas, dict) or not gg_template._is_api_workflow(canvas):
+            raise ValueError("canvas workflow must be an API-format prompt")
+        return {"workflow": canvas, "source": "canvas"}
+    if not wf:
+        raise NativeWorkflowError("empty", "This cut has no workflow yet. Not queued.")
+    raise NativeWorkflowError("ui_only", UI_ONLY_MESSAGE)
+
+
 def _skip_native_media_lookup(media_id: str) -> bool:
     """Legacy imported job/version ids are never native version UUIDs."""
     try:
