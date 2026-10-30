@@ -1,5 +1,7 @@
 /**
  * Cut rename from the cut context menu (Rename…): Esc keeps, Enter renames, card title updates.
+ * Inline rename by double-clicking the card title (fresh New cut and an unselected cut): the click's
+ * select + workflow load must not close the field; Enter renames, Esc cancels.
  * ZZ-test- projects only. Blocks POST /prompt and /gonggan/regen.
  */
 import fs from "node:fs";
@@ -252,6 +254,85 @@ async function run() {
     );
     console.log("PASS  Enter renames the cut and the card title updates");
 
+    // Double-click on the title: the first click of the pair also selects the cut and loads its workflow.
+    const cardSel = (id) => `.gg-root.gg-shots .gg-cut[data-cut-id="${id}"]`;
+    const titleOf = (id) => page.$eval(`${cardSel(id)} .gg-cut-title`, (e) => e.textContent.trim());
+    const isOn = (id) => page.$eval(cardSel(id), (e) => e.classList.contains("gg-on"));
+    const fieldState = (id) =>
+      page.evaluate((s) => {
+        const inp = document.querySelector(`${s} .gg-cut-title-input`);
+        return {
+          open: !!inp,
+          focused: !!inp && document.activeElement === inp,
+          allSelected: !!inp && inp.selectionStart === 0 && inp.selectionEnd === inp.value.length,
+          value: inp ? inp.value : null,
+        };
+      }, cardSel(id));
+    const openInline = async (id, label) => {
+      const el = await page.waitForSelector(`${cardSel(id)} .gg-cut-title`, { timeout: 10000 });
+      const box = await el.boundingBox();
+      await page.mouse.click(box.x + Math.min(20, box.width / 2), box.y + box.height / 2, { count: 2 });
+      await page.waitForSelector(`${cardSel(id)} .gg-cut-title-input`, { timeout: 3000 }).catch(() => {});
+      await sleep(1500);
+      const s = await fieldState(id);
+      const graphCut = await page.evaluate(() => window.app?.graph?.extra?.gonggan?.cutId || "");
+      if (graphCut !== id) throw new Error(`${label}: the click should have loaded this cut's workflow (graph cut ${graphCut})`);
+      if (!s.open || !s.focused || !s.allSelected) {
+        throw new Error(`${label}: inline field must stay open, focused and selected after the click's workflow load: ${JSON.stringify(s)}`);
+      }
+      return s;
+    };
+    const waitTitle = (id, text) =>
+      page.waitForFunction(
+        (s, t) => document.querySelector(`${s} .gg-cut-title`)?.textContent.includes(t) && !document.querySelector(`${s} .gg-cut-title-input`),
+        { timeout: 10000 },
+        cardSel(id),
+        text
+      );
+
+    const knownIds = await page.$$eval(".gg-root.gg-shots .gg-cut[data-cut-id]", (els) => els.map((e) => e.dataset.cutId));
+    await page.click(".gg-root.gg-shots .gg-ir-cut");
+    const newHandle = await page.waitForFunction(
+      (known) => [...document.querySelectorAll(".gg-root.gg-shots .gg-cut[data-cut-id]")].find((e) => !known.includes(e.dataset.cutId) && e.classList.contains("gg-on"))?.dataset.cutId,
+      { timeout: 15000 },
+      knownIds
+    );
+    const newCutId = await newHandle.jsonValue();
+    const newBefore = await titleOf(newCutId);
+    const sNew = await openInline(newCutId, "fresh New cut");
+    if (!newBefore.includes(sNew.value)) throw new Error(`fresh New cut prefill ${sNew.value} vs title ${newBefore}`);
+    await page.keyboard.type("Inline new", { delay: 5 });
+    await page.keyboard.press("Enter");
+    await waitTitle(newCutId, "Inline new");
+    console.log("PASS  double-click on a fresh New cut title: field stays open; Enter renames");
+
+    if (await isOn(cutId)) throw new Error("first cut should not be selected before the double-click");
+    await openInline(cutId, "unselected cut");
+    await page.keyboard.type("Inline wide", { delay: 5 });
+    await page.keyboard.press("Enter");
+    await waitTitle(cutId, "Inline wide");
+    console.log("PASS  double-click on an unselected cut title: field stays open; Enter renames");
+
+    // The save repaints the list, so query the card fresh and retry if it is replaced mid-click.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const target = (await page.$(`${cardSel(newCutId)} .gg-cut-thumb`)) || (await page.$(cardSel(newCutId)));
+        await target.click();
+        break;
+      } catch (e) {
+        if (attempt >= 4) throw e;
+        await sleep(300);
+      }
+    }
+    await sleep(1500);
+    if (await isOn(cutId)) throw new Error("first cut should be unselected before the Esc case");
+    await openInline(cutId, "Esc case");
+    await page.keyboard.type("Not this", { delay: 5 });
+    await page.keyboard.press("Escape");
+    await waitTitle(cutId, "Inline wide");
+    if ((await titleOf(cutId)).includes("Not this")) throw new Error("Esc must cancel the inline rename");
+    console.log("PASS  double-click then Esc cancels; the title keeps its name");
+
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => window.app?.extensionManager?.workflow, { timeout: 120000 });
     await sleep(1500);
@@ -259,8 +340,10 @@ async function run() {
     await page.waitForSelector(`.gg-root.gg-shots .gg-cut[data-cut-id="${cutId}"]`, { timeout: 20000 }).catch(() => {});
     if (!mock.on) {
       const t = await title();
-      if (!t.includes("Platform wide")) throw new Error(`name not persisted after reload: ${t}`);
-      console.log("PASS  renamed cut persists after reload");
+      if (!t.includes("Inline wide")) throw new Error(`name not persisted after reload: ${t}`);
+      const tNew = await page.$eval(`.gg-root.gg-shots .gg-cut[data-cut-id="${newCutId}"] .gg-cut-title`, (e) => e.textContent.trim());
+      if (!tNew.includes("Inline new")) throw new Error(`New cut name not persisted after reload: ${tNew}`);
+      console.log("PASS  renamed cuts persist after reload");
     } else {
       console.log("SKIP  persistence after reload: server not restarted");
     }
