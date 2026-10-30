@@ -40,7 +40,7 @@ def test_copies_with_unique_names_and_leaves_originals(project, tmp_path):
     second = na.native_import_version(pid, cut, src)["version"]
 
     a, b = Path(first["asset"]["path"]), Path(second["asset"]["path"])
-    assert a.parent == assets and b.parent == assets
+    assert a.parent == assets / "images" and b.parent == assets / "images"
     assert a != b and a.name != src.name
     assert a.read_bytes() == PNG and b.read_bytes() == PNG
     assert src.read_bytes() == PNG
