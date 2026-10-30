@@ -11,6 +11,9 @@ import {
   QUEUE_NATIVE_TIP,
   QUEUE_NO_PROJECT_TIP,
   QUEUE_BUSY_TIP,
+  loadRandomSeedOn,
+  saveRandomSeedOn,
+  RANDOM_SEED_LS_KEY,
 } from "../../web/gg_batch_render_core.js";
 import { splitConfirmMessage } from "../../web/gg_confirm_core.js";
 
@@ -65,6 +68,18 @@ describe("queueButtonState", () => {
   it("disabled with no project open", () => {
     assert.deepEqual(queueButtonState({ count: 2, native: true, hasProject: false }), { label: "Queue", mode: "queue", disabled: true, title: QUEUE_NO_PROJECT_TIP });
     assert.equal(QUEUE_NO_PROJECT_TIP, "No project open");
+  });
+});
+
+describe("loadRandomSeedOn", () => {
+  it("defaults on; off only when localStorage is 0", () => {
+    const ls = { store: {}, getItem(k) { return this.store[k] ?? null; }, setItem(k, v) { this.store[k] = v; } };
+    assert.equal(loadRandomSeedOn(ls), true);
+    saveRandomSeedOn(ls, false);
+    assert.equal(ls.store[RANDOM_SEED_LS_KEY], "0");
+    assert.equal(loadRandomSeedOn(ls), false);
+    saveRandomSeedOn(ls, true);
+    assert.equal(loadRandomSeedOn(ls), true);
   });
 });
 

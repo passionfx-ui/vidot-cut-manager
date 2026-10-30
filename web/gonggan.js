@@ -134,6 +134,9 @@ import {
   queueButtonState,
   QUEUE_EMPTY_TIP,
   queueDeleteBody,
+  loadRandomSeedOn,
+  saveRandomSeedOn,
+  RANDOM_SEED_LABEL,
 } from "./gg_batch_render_core.js";
 import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
 import {
@@ -206,10 +209,8 @@ import {
   stripScrollLeft,
   wheelToScrollLeft,
   importButtonState,
-  IMPORT_LABEL,
+  IMPORT_TILE_TIP,
   IMPORT_ACCEPT,
-  regenButtonState,
-  REGEN_LABEL,
   i2vButtonState,
   I2V_LABEL,
   cutHasStartImage,
@@ -3662,6 +3663,7 @@ function cutMenuCtx(cutId, multi) {
     sdkBusy: !!sdk.busy,
     sdkOk: !!(sdk.st && sdk.st.ok),
     emptyCut: native && regenEmptyCut(cutId),
+    importBusy: stripImportBusy,
     readonlyTip: NATIVE_READONLY_TIP,
   };
 }
@@ -3704,6 +3706,7 @@ function openCutContextMenu(e, cutId) {
       items,
       {
         ...cutMenuActions(cutId),
+        importVer: () => pickVersionImportFiles(cutId),
         i2v: () => imageToVideoCut(cutId),
         queueSel: () => queueSelectedCuts(),
         removeQueue: () => removeCutsFromQueue(ids),
@@ -5803,7 +5806,7 @@ function queueButtonClick() {
   }
   const ids = cutSelIds();
   const action = queueClickAction({ native: isNativeProject(), selected: ids.length });
-  if (action === "single") return sdkGenerateNativeCut(ids[0], { newSeed: false });
+  if (action === "single") return sdkGenerateNativeCut(ids[0], { newSeed: loadRandomSeedOn(localStorage) });
   if (action === "all") return startGenerateAll();
   return queueSelectedCuts();
 }
@@ -5844,7 +5847,12 @@ async function startGenerateAll() {
   genAll.starting = true;
   document.querySelectorAll(".gg-shots").forEach((root) => updateSelectionBar(root));
   try {
-    const d = await postJson("/gonggan/generate-all", { pid, cut_ids: ids, confirm: true });
+    const d = await postJson("/gonggan/generate-all", {
+      pid,
+      cut_ids: ids,
+      confirm: true,
+      random_seed: loadRandomSeedOn(localStorage),
+    });
     setGenerateAllBatch(d.batch);
     sdk.msg = `Generate All: ${ids.length} cut${ids.length === 1 ? "" : "s"} queued through Comfy SDK`;
     ggToast("Generate All started", `${ids.length} cut${ids.length === 1 ? "" : "s"}, one at a time in list order`, "ok");
@@ -6265,24 +6273,26 @@ async function importVersionFiles(pid, cutId, files) {
   else ggToast(`Imported ${added} file${added === 1 ? "" : "s"}`, "", "ok");
 }
 
-function versionImportButtonHtml(c) {
+function versionStripLeadingHtml(c) {
   const s = importButtonState({ hasCut: !!c, native: isNativeProject(), busy: stripImportBusy });
-  const r = regenButtonState({ hasCut: !!c, native: isNativeProject(), busy: !!sdk.busy });
   const v = i2vButtonState({ hasCut: !!c, native: isNativeProject(), busy: !!sdk.busy, hasImage: cutHasStartImage(c) });
-  return `<button type="button" class="gg-btn gg-vs-import" title="${esc(s.title)}"${s.disabled ? " disabled" : ""}>${esc(IMPORT_LABEL)}</button>` +
-    `<button type="button" class="gg-btn gg-vs-regen" title="${esc(r.title)}" aria-label="${esc(r.title)}"${r.disabled ? " disabled" : ""}>${esc(REGEN_LABEL)}</button>` +
+  const tile =
+    `<button type="button" class="gg-ver-wrap gg-vs-import" title="${esc(s.title)}" aria-label="${esc(s.title)}"${s.disabled ? " disabled" : ""}>` +
+    `<div class="gg-ver"><span class="gg-vs-plus" aria-hidden="true">+</span></div></button>`;
+  const i2v =
     `<button type="button" class="gg-btn gg-vs-i2v" title="${esc(v.title)}" aria-label="${esc(v.title)}"${v.disabled ? " disabled" : ""}>${esc(I2V_LABEL)}</button>`;
+  return tile + i2v;
 }
 
-/** Version row below the icon row: Import, Regen and Image to Video first, then the selected cut's versions, newest on the left. */
+/** Version row below the icon row: import tile and Image to Video, then the selected cut's versions, newest on the left. */
 function versionStripHtml(c) {
-  const importBtn = versionImportButtonHtml(c);
-  if (!c) return importBtn + '<div class="gg-vs-empty gg-dim">Select a cut to see its versions</div>';
+  const leading = versionStripLeadingHtml(c);
+  if (!c) return leading + '<div class="gg-vs-empty gg-dim">Select a cut to see its versions</div>';
   const rows = versionStripRows(c, stripProbe.dur);
-  if (!rows.length) return importBtn + '<div class="gg-vs-empty gg-dim">No versions</div>';
+  if (!rows.length) return leading + '<div class="gg-vs-empty gg-dim">No versions</div>';
   const tabOpen = ownedShotTabOpen();
   const byId = new Map((c.versions_list || []).map((v) => [v.id, v]));
-  return importBtn + rows.map((r) => {
+  return leading + rows.map((r) => {
     const { wrapCls, tip, img } = versionThumbParts(c, byId.get(r.id), tabOpen);
     const title = r.state ? `${r.state} · ${tip}` : tip;
     return `<div class="${wrapCls} gg-vs-item${r.best ? " gg-vs-best" : ""}" data-vid="${esc(r.id)}">
@@ -6349,6 +6359,9 @@ function statusPanelShellHtml() {
           <span class="gg-render-badge gg-render-global" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
           <span class="gg-batch-prog" hidden></span>
           <span class="gg-genall-prog" hidden></span>
+          <label class="gg-random-seed" title="When on, each Queue (one cut or Generate All) uses new random sampler seeds">
+            <input type="checkbox" class="gg-random-seed-cb" /> ${esc(RANDOM_SEED_LABEL)}
+          </label>
           <button type="button" class="gg-btn gg-primary gg-queue-btn" disabled title="${esc(QUEUE_EMPTY_TIP)}">Queue</button>
         </div>`;
 }
@@ -6438,11 +6451,8 @@ function mountShots(el) {
     syncStripNewest();
     list.querySelector(".gg-vs-import")?.addEventListener("click", (e) => {
       e.stopPropagation();
+      if (e.currentTarget.disabled) return;
       pickVersionImportFiles(cutId);
-    });
-    list.querySelector(".gg-vs-regen")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      void regenNativeCut(cutId);
     });
     list.querySelector(".gg-vs-i2v")?.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -6875,6 +6885,12 @@ function mountShots(el) {
     root.querySelector(".gg-ai-split")?.addEventListener("click", () => openAiCutSplitModal());
     root.querySelector(".gg-ir-del")?.addEventListener("click", () => void confirmDeleteSelectedCuts());
     root.querySelector(".gg-queue-btn")?.addEventListener("click", () => void queueButtonClick());
+    const randomSeedCb = root.querySelector(".gg-random-seed-cb");
+    if (randomSeedCb && !randomSeedCb.dataset.bound) {
+      randomSeedCb.dataset.bound = "1";
+      randomSeedCb.checked = loadRandomSeedOn(localStorage);
+      randomSeedCb.addEventListener("change", () => saveRandomSeedOn(localStorage, randomSeedCb.checked));
+    }
     const vsList = root.querySelector(".gg-vs-list");
     vsList?.addEventListener("scroll", () => {
       stripScroll.left = vsList.scrollLeft;
