@@ -998,7 +998,7 @@ class LocalStore:
     def apply_timeline_edit(self, pid: str, order: list[str], clips: dict) -> dict:
         """Timeline track only: clip order and per-clip in/sec/start go to doc["timeline"]. The cut list
         (scene cut_order, loose_order) and the cut's own sec/in are never changed here. A clip `pick`
-        still sets the cut's pick_version_id (validated against its versions). A clip without "start"
+        still sets the cut's pick_version_id (validated against its versions); "pick": null clears it. A clip without "start"
         keeps its stored start; "start": null packs it after the previous clip."""
         with self._lock:
             doc = self._load_project_doc(pid)
@@ -1029,9 +1029,9 @@ class LocalStore:
                 if entry:
                     new_clips[cid] = entry
                 pick = e.get("pick")
-                if isinstance(pick, str) and pick:
+                if (isinstance(pick, str) and pick) or ("pick" in e and pick is None):
                     c = cuts_map[cid]
-                    vers = self.list_versions(pid, cid)
+                    vers = self.list_versions(pid, cid) if pick else []
                     new_pick = pick if any(v.get("id") == pick for v in vers) else None
                     if c.get("pick_version_id") != new_pick:
                         c["pick_version_id"] = new_pick

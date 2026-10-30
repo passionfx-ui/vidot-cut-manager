@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
@@ -157,8 +158,30 @@ class NativeCutSourceIntegrationTests(unittest.TestCase):
         self.store.apply_timeline_edit(pid, [cut_id], {cut_id: {"in": 0, "sec": 3.0, "pick": v_img["id"]}})
 
         data = na.native_cut_source_workflow(pid, cut_id, kind="video")
-        self.assertEqual(data["workflow"], WF_IMAGE)
-        self.assertIn("no video workflow", data.get("fallback") or "")
+        self.assertNotEqual(data["workflow"], WF_IMAGE)
+        self.assertEqual(data["source"], "template")
+        self.assertEqual(data["kind_used"], "video")
+
+    def test_video_tab_gets_start_image_and_description(self):
+        """Make Video tab: project Video template, selected image in Start Image, description in Prompt."""
+        video_tpl = {"nodes": [
+            {"id": 1, "type": "LoadImage", "title": "Start Image", "widgets_values": ["old.png", "image"]},
+            {"id": 2, "type": "CLIPTextEncode", "title": "Prompt", "widgets_values": ["old"]},
+        ], "links": [], "version": 0.4}
+        doc = self.store.create_project("P")
+        pid = doc["id"]
+        cut_id = next(iter(doc["cuts"].values()))["id"]
+        v_img = self.store.add_version(pid, cut_id, self._png("a.png"), workflow=WF_IMAGE)
+        with mock.patch.object(na, "project_video_template", return_value=("V", video_tpl)), \
+             mock.patch.object(na, "cut_prompt_text", return_value="a cat runs"), \
+             mock.patch.object(na, "stage_start_image", return_value=f"gonggan/start_{v_img['id']}.png"):
+            data = na.native_cut_source_workflow(pid, cut_id, kind="video")
+        nodes = {n["id"]: n for n in data["workflow"]["nodes"]}
+        self.assertEqual(nodes[1]["widgets_values"][0], f"gonggan/start_{v_img['id']}.png")
+        self.assertEqual(nodes[2]["widgets_values"][0], "a cat runs")
+        self.assertEqual(video_tpl["nodes"][1]["widgets_values"][0], "old")
+        # image request still opens the image workflow
+        self.assertEqual(na.native_cut_source_workflow(pid, cut_id, kind="image")["workflow"], WF_IMAGE)
 
     def test_version_media_kind(self):
         self.assertEqual(version_media_kind({"asset": {"kind": "video"}}), "video")

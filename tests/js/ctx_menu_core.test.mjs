@@ -16,7 +16,9 @@ import {
   TRASH_TIP,
   I2V_NO_IMAGE_TIP,
   MENU_SEPARATOR,
+  SELECT_ALL_LABEL,
 } from "../../web/gg_ctx_menu_core.js";
+import { queueButtonState } from "../../web/gg_batch_render_core.js";
 
 const TIP = "read-only tip";
 const keys = (items) => items.map((it) => it.key);
@@ -96,6 +98,20 @@ describe("cutCardMenuItems", () => {
     assert.equal(byKey(items, "trash").label, "Trash (2)…");
     assert.equal(byKey(items, "trash").disabled, false);
     assert.equal(byKey(items, "trash").title, TRASH_TIP);
+  });
+  it("Select All (0.9.125): first item, label 'Select All', no toggle tip, off only with an empty list", () => {
+    const on = cutCardMenuItems({ native: true, hasListCuts: true });
+    assert.equal(on[0].key, "selectAll");
+    assert.equal(on[0].label, "Select All");
+    assert.equal(SELECT_ALL_LABEL, "Select All");
+    assert.equal(on[0].disabled, false);
+    assert.equal(on[0].title, undefined);
+    assert.equal(byKey(cutCardMenuItems({ native: true, hasListCuts: true, allSelected: true }), "selectAll").title, undefined);
+    assert.equal(byKey(cutCardMenuItems({ native: true }), "selectAll").disabled, true);
+  });
+  it("Queue stays disabled with nothing selected", () => {
+    assert.equal(queueButtonState({ count: 0, native: true }).disabled, true);
+    assert.equal(queueButtonState({ count: 1, native: true }).disabled, false);
   });
   it("Import image or video (0.9.118): native only, one cut, same disabled rules as the + tile", () => {
     const on = byKey(cutCardMenuItems({ native: true }), "importVer");

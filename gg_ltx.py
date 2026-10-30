@@ -31,23 +31,21 @@ DESCRIPTION_MAX_LEN = 300
 DESCRIPTION_ALIASES = ("description", "content", "ltx_prompt")
 
 # AI Cut Split instructions; the story follows "STORY:" (gg_cut_split.build_prompt).
-CUT_SPLIT_PROMPT = """You are a film director and storyboard artist. Split the story below into cuts for short AI-generated video clips.
+CUT_SPLIT_PROMPT = """You are a storyboard artist. Split the story below into cuts for short AI video clips.
 
-Return ONLY a JSON array, with no other text and no markdown code fences:
-[
-  {"cut": 1, "duration": 3, "description": "one short line describing the shot"}
-]
+Output ONLY compact JSON on ONE line. No prose, no explanation, no markdown, no code fences, no line breaks, no spaces between fields. Example:
+[{"cut":1,"duration":3,"description":"Wide shot, a fox crosses a snowy field at dawn"},{"cut":2,"duration":2,"description":"Close-up, the fox sniffs the air"}]
 
 Fields:
-- "cut": whole number, 1, 2, 3 ... in story order.
-- "duration": seconds, a number from 0.5 to 3 (never more than 3).
-- "description": one short line in English, under 200 characters: who or what, the action, the place, the shot size and the camera move. It is used directly as the video prompt and as the cut name.
+- "cut": 1, 2, 3 ... in story order.
+- "duration": seconds, 0.5 to 3 (never more than 3).
+- "description": short English line, at most 15 words: shot size, who or what, the action, the place. It is the video prompt and the cut name.
 
-Guidance:
-- One action per cut, at most 3 seconds. Split longer actions into several cuts.
-- Every description must stand alone: name the characters and the place again each time (no "he", no "same room").
+Rules:
+- One action per cut. Split longer actions into several cuts.
+- Name the characters and the place in every description (no "he", no "same room").
 - No dialogue, no on-screen text, no cut numbers inside description.
-- Valid JSON only: double quotes, no trailing commas, no comments.
+- Double quotes, no trailing commas, no comments. Stop right after the closing ].
 
 STORY:
 """
@@ -187,6 +185,33 @@ def extract_json_array(text: str) -> str | None:
             i += 1
         start = s.find("[", start + 1)
     return None
+
+
+def json_array_unclosed(text: str) -> bool:
+    """True when the answer starts a JSON array of objects ("[{") that never closes, i.e. the text was cut off
+    (TextGenerate stopped at max_length)."""
+    s = re.sub(r"```[a-zA-Z]*\s*", "", str(text or ""))
+    m = re.search(r"\[\s*\{", s)
+    if not m:
+        return False
+    depth, in_str, i = 0, False, m.start()
+    while i < len(s):
+        ch = s[i]
+        if in_str:
+            if ch == "\\":
+                i += 1
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch in "[{":
+            depth += 1
+        elif ch in "]}":
+            depth -= 1
+            if depth == 0:
+                return False
+        i += 1
+    return True
 
 
 def extract_cut_items(text: str) -> Any:
