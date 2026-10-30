@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
 import { submitAskDialog } from "./ask_text_helpers.mjs";
 import { waitForDomCutCountSync } from "./dom_sync_helpers.mjs";
+import { fillNewProjectModal } from "./new_project_helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -308,14 +309,8 @@ async function createProjectViaUi(page, name, templateRef) {
     );
   });
   await clickCtxItem(page, "New Project…");
-  await page.waitForSelector(".gg-modal", { timeout: 10000 });
-  await page.click(".gg-modal-name", { clickCount: 3 });
-  await page.type(".gg-modal-name", name, { delay: 8 });
-  if (templateRef) {
-    await page.waitForFunction(() => document.querySelector(".gg-modal-tpl option[value]"), { timeout: 20000 }).catch(() => {});
-    await page.select(".gg-modal-tpl", templateRef).catch(() => {});
-  }
-  await page.click(".gg-modal .gg-primary");
+  await fillNewProjectModal(page, { name, templateRef });
+  await page.click(".gg-modal-create");
   await page.waitForFunction(
     (n) => {
       const sel = document.querySelector(".gg-root.gg-shots .gg-proj");
@@ -332,14 +327,13 @@ async function createProjectViaUi(page, name, templateRef) {
 }
 
 /**
- * Bottom selection bar (0.9.73): always shown under the list; buttons follow the selection.
- * 0.9.87: the full-width Timeline bar sits under the selection bar.
- * 0.9.97: Queue (was the top Render) is in the status panel; bar and panel have fixed heights.
+ * Bottom stack of the Shots sidebar: icon row (New scene / New cut / Delete, 0.9.98; the old selection bar
+ * is not rendered), status panel with Queue (0.9.97), full-width Timeline bar (0.9.87); fixed heights.
  */
-async function selbarState(page) {
+async function iconRowState(page) {
   return page.evaluate(() => {
     const root = document.querySelector(".gg-root.gg-shots");
-    const bar = root?.querySelector(".gg-selbar");
+    const bar = root?.querySelector(".gg-iconrow");
     if (!bar) return null;
     const st = getComputedStyle(bar);
     const r = bar.getBoundingClientRect();
@@ -350,15 +344,16 @@ async function selbarState(page) {
     const dis = (s) => !!bar.querySelector(s)?.disabled;
     return {
       visible: !bar.hidden && st.display !== "none" && st.visibility !== "hidden" && r.height > 0,
-      count: parseInt(bar.querySelector(".gg-sel-count")?.textContent || "-1", 10),
+      count: root.querySelectorAll(".gg-cut.gg-sel").length || root.querySelectorAll(".gg-cut.gg-on").length,
       barClass: bar.className,
-      queueInBar: !!bar.querySelector(".gg-sel-render, .gg-render-btn, .gg-queue-btn"),
+      selBarRendered: !!root.querySelector(".gg-selbar"),
+      queueInBar: !!bar.querySelector(".gg-queue-btn"),
       queueInHead: !!root.querySelector(".gg-head .gg-queue-btn, .gg-head .gg-render-btn, .gg-head .gg-render-row"),
       queueInPanel: !!queueBtn && queueBtn.textContent.trim() === "Queue",
       queueDisabled: !!queueBtn?.disabled,
-      groupDisabled: dis(".gg-sel-group"),
-      ungroupDisabled: dis(".gg-sel-ungroup"),
-      xDisabled: dis(".gg-sel-x"),
+      sceneDisabled: dis(".gg-ir-scene"),
+      cutDisabled: dis(".gg-ir-cut"),
+      delDisabled: dis(".gg-ir-del"),
       barHeight: r.height,
       panelHeight: panel ? panel.height : null,
       barTop: r.top,
@@ -405,10 +400,11 @@ async function ctrlClickCut(page, index) {
   }
 }
 
+/** Cuts the selection actions act on: marked rows, else the open cut (same rule as the app's cutSelIds). */
 async function selectionCount(page) {
   return page.evaluate(() => {
-    const bar = document.querySelector(".gg-root.gg-shots .gg-sel-count");
-    return bar ? parseInt(bar.textContent, 10) : 0;
+    const root = document.querySelector(".gg-root.gg-shots");
+    return root.querySelectorAll(".gg-cut.gg-sel").length || root.querySelectorAll(".gg-cut.gg-on").length;
   });
 }
 
@@ -626,7 +622,7 @@ async function main() {
     await waitForDomCutCountSync(page);
   });
 
-  await runScenario("04", "Multi-select and Group into scene", async () => {
+  await runScenario("04", "Multi-select and New scene (icon row)", async () => {
     while ((await countCuts(page)) < 4) {
       await rightClickEmptyShots(page);
       await clickCtxItem(page, "Add Cut");
@@ -637,48 +633,47 @@ async function main() {
     await ctrlClickCut(page, 2);
     await ctrlClickCut(page, 3);
     await page.waitForFunction(
-      () => {
-        const bar = document.querySelector(".gg-root.gg-shots .gg-selbar");
-        const n = parseInt(document.querySelector(".gg-root.gg-shots .gg-sel-count")?.textContent || "0", 10);
-        return bar && !bar.hidden && n >= 2;
-      },
+      () => document.querySelectorAll(".gg-root.gg-shots .gg-cut.gg-sel").length >= 2
+        && !document.querySelector(".gg-root.gg-shots .gg-ir-scene")?.disabled,
       { timeout: 5000 }
     );
     const nSel = await selectionCount(page);
-    if (nSel < 2) throw new Error(`selection bar should show for 3 selected (count=${nSel})`);
-    await page.click(".gg-root.gg-shots .gg-sel-group");
+    if (nSel < 2) throw new Error(`expected 2+ selected cuts (count=${nSel})`);
+    await page.click(".gg-root.gg-shots .gg-ir-scene");
     await submitAskDialog(page);
     await sleep(1000);
     const scenes = await page.$$eval(".gg-root.gg-shots .gg-grp-sec[data-group-id]", (els) => els.length);
     if (scenes < 1) throw new Error("expected a scene section after group");
   });
 
-  await runScenario("05", "Bottom stack: selection bar, status panel with Queue, Timeline bar; fixed heights, list never shifts", async () => {
+  await runScenario("05", "Bottom stack: icon row, status panel with Queue, Timeline bar; fixed heights, list never shifts", async () => {
     await page.keyboard.press("Escape");
     await sleep(300);
-    const s0 = await selbarState(page);
-    if (!s0?.visible) throw new Error(`bar not shown: ${JSON.stringify(s0)}`);
-    if (s0.barTop < s0.listBottom - 1) throw new Error(`bar not under the list: ${JSON.stringify(s0)}`);
+    const s0 = await iconRowState(page);
+    if (!s0?.visible) throw new Error(`icon row not shown: ${JSON.stringify(s0)}`);
+    if (s0.selBarRendered) throw new Error("the old selection bar should not be rendered");
+    if (s0.barTop < s0.listBottom - 1) throw new Error(`icon row not under the list: ${JSON.stringify(s0)}`);
     if (s0.panelTop == null || Math.abs(s0.panelTop - s0.barBottom) > 1) {
-      throw new Error(`status panel not directly under the selection bar: ${JSON.stringify(s0)}`);
+      throw new Error(`status panel not directly under the icon row: ${JSON.stringify(s0)}`);
     }
     if (s0.tlBarTop == null || Math.abs(s0.tlBarTop - s0.panelBottom) > 1 || Math.abs(s0.rootBottom - s0.tlBarBottom) > 1 || !s0.tlBarFullWidth) {
       throw new Error(`Timeline bar not full width at the very bottom under the status panel: ${JSON.stringify(s0)}`);
     }
     if (s0.queueInBar || s0.queueInHead || !s0.queueInPanel) throw new Error(`Queue should be in the status panel only: ${JSON.stringify(s0)}`);
-    if (s0.count === 0 && (!s0.queueDisabled || !s0.groupDisabled || !s0.ungroupDisabled)) throw new Error(`0 selected must disable actions: ${JSON.stringify(s0)}`);
-    if (s0.barClass !== "gg-selbar") throw new Error(`bar class with 0 selected: "${s0.barClass}"`);
+    if (s0.count === 0 && (!s0.queueDisabled || !s0.sceneDisabled || !s0.delDisabled)) throw new Error(`0 selected must disable actions: ${JSON.stringify(s0)}`);
+    if (s0.cutDisabled) throw new Error(`New cut should stay enabled with a project open: ${JSON.stringify(s0)}`);
+    if (s0.barClass !== "gg-iconrow") throw new Error(`icon row class: "${s0.barClass}"`);
     await clickCut(page, 0);
     await sleep(250);
-    const s1 = await selbarState(page);
-    if (!s1.visible || s1.count !== 1 || s1.queueDisabled || !s1.xDisabled) throw new Error(`1 selected: ${JSON.stringify(s1)}`);
+    const s1 = await iconRowState(page);
+    if (!s1.visible || s1.count !== 1 || s1.queueDisabled || s1.sceneDisabled || s1.delDisabled) throw new Error(`1 selected: ${JSON.stringify(s1)}`);
     await shiftClickCut(page, 1);
     await page.waitForFunction(
-      () => parseInt(document.querySelector(".gg-root.gg-shots .gg-sel-count")?.textContent || "0", 10) >= 2,
+      () => document.querySelectorAll(".gg-root.gg-shots .gg-cut.gg-sel").length >= 2,
       { timeout: 5000 }
     );
-    const s2 = await selbarState(page);
-    if (!s2.visible || s2.queueDisabled || s2.xDisabled) throw new Error(`2+ selected: ${JSON.stringify(s2)}`);
+    const s2 = await iconRowState(page);
+    if (!s2.visible || s2.queueDisabled || s2.sceneDisabled || s2.delDisabled) throw new Error(`2+ selected: ${JSON.stringify(s2)}`);
     for (const k of ["listTop", "listBottom", "barHeight", "panelHeight"]) {
       if (Math.abs(s2[k] - s0[k]) > 0.5 || Math.abs(s1[k] - s0[k]) > 0.5) {
         throw new Error(`${k} changed with the selection: ${s0[k]} / ${s1[k]} / ${s2[k]}`);
@@ -915,7 +910,7 @@ async function main() {
       return {
         statusMode: !!root?.classList.contains("gg-cutpanel-status"),
         visible: !!p?.getClientRects().length,
-        selCount: parseInt(root?.querySelector(".gg-sel-count")?.textContent || "-1", 10),
+        selCount: root ? root.querySelectorAll(".gg-cut.gg-sel").length || root.querySelectorAll(".gg-cut.gg-on").length : -1,
         empty: p?.querySelector(".gg-sp-empty")?.textContent?.trim() || "",
         title: p?.querySelector(".gg-sp-title")?.textContent?.replace(/\s+/g, " ").trim() || "",
         cardLabel: root?.querySelector(".gg-cut .gg-num")?.textContent?.trim() || "",

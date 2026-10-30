@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
 import { waitForDomCutCountSync } from "./dom_sync_helpers.mjs";
+import { fillNewProjectModal } from "./new_project_helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -201,14 +202,8 @@ async function createProjectViaUi(page, name, templateRef) {
     );
   });
   await clickCtxItem(page, "New Project…");
-  await page.waitForSelector(".gg-modal", { timeout: 10000 });
-  await page.click(".gg-modal-name", { clickCount: 3 });
-  await page.type(".gg-modal-name", name, { delay: 8 });
-  if (templateRef !== undefined) {
-    await page.waitForFunction(() => document.querySelector(".gg-modal-tpl"), { timeout: 10000 }).catch(() => {});
-    await page.select(".gg-modal-tpl", templateRef || "").catch(() => {});
-  }
-  await page.click(".gg-modal .gg-primary");
+  await fillNewProjectModal(page, { name, templateRef });
+  await page.click(".gg-modal-create");
   await page.waitForFunction(
     (n) => {
       const sel = document.querySelector(".gg-root.gg-shots .gg-proj");

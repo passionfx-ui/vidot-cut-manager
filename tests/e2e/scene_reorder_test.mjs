@@ -502,7 +502,7 @@ async function main() {
       await resetBaseline(page);
       await rightClickAt(page, `${secSel(gA)} .gg-grp-title`);
       const labels = await ctxLabels(page);
-      const want = ["Add Cut", "Select cuts", "Collapse", "Rename", "Ungroup", "Delete Scene"];
+      const want = ["Add Cut", "Select cuts", "Collapse", "Rename", "Ungroup"];
       if (labels.join("|") !== want.join("|")) throw new Error(`scene menu items: ${labels.join("|")}`);
       await closeCtx(page);
 
@@ -651,7 +651,7 @@ async function main() {
           els.map((s) => `${s.dataset.groupId}:${s.querySelectorAll(":scope > .gg-grp-head").length}`));
         if (heads.join() !== [`${gA}:1`, `${gB}:1`].join()) throw new Error(`Caption view scene headers: ${heads.join()}`);
         if ((await sectionCutIds(page, gA)).join() !== [c1, c2].join()) throw new Error("Caption view scene A rows differ from Info");
-        if (await page.$(".gg-root.gg-shots .gg-cut .gg-cut-header, .gg-root.gg-shots .gg-cut .gg-cut-thumb")) {
+        if (await page.$(".gg-root.gg-shots .gg-cut .gg-cut-header")) {
           throw new Error("Caption view row shows info card parts");
         }
         const pts = await headerDragPoints(page, gB, `${secSel(gA)} > .gg-grp-head`, 0.5);

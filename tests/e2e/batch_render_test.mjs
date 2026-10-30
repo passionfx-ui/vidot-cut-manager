@@ -1,6 +1,6 @@
 /**
  * Headless Chrome: Queue button on selected cuts (0.9.73; Shots header in 0.9.87; status panel as Queue in 0.9.97).
- * - bottom bar is always shown: 0 selected -> status panel Queue disabled; no Queue in the bar or header
+ * - icon row is always shown: 0 selected -> status panel Queue disabled; no Queue in the icon row or header
  * - Ctrl+A over Shots selects every cut; over the canvas it does not touch the Shots selection
  * - 3 cuts selected (one empty, selected first) -> status panel "3 cuts selected" -> Queue -> one confirm
  *   "Queue 2 cuts?"; Cancel sends nothing
@@ -288,16 +288,18 @@ async function clickCut(page, cutId, { ctrl = false } = {}) {
   await sleep(300);
 }
 
+/** Icon row under the list (0.9.98; the old selection bar is not rendered) + status panel Queue. */
 async function barState(page) {
   return page.evaluate(() => {
-    const bar = document.querySelector(".gg-root.gg-shots .gg-selbar");
-    const btn = document.querySelector(".gg-root.gg-shots .gg-cutpanel .gg-queue-btn");
+    const root = document.querySelector(".gg-root.gg-shots");
+    const bar = root?.querySelector(".gg-iconrow");
+    const btn = root?.querySelector(".gg-cutpanel .gg-queue-btn");
     if (!bar || !btn) return null;
     return {
       shown: bar.getClientRects().length > 0,
-      count: parseInt(bar.querySelector(".gg-sel-count")?.textContent || "-1", 10),
+      count: root.querySelectorAll(".gg-cut.gg-sel").length || root.querySelectorAll(".gg-cut.gg-on").length,
       queue: !!btn.disabled,
-      queueInBar: !!bar.querySelector(".gg-sel-render, .gg-render-btn, .gg-queue-btn"),
+      queueInBar: !!bar.querySelector(".gg-queue-btn"),
       queueInHead: !!document.querySelector(".gg-root.gg-shots .gg-head .gg-queue-btn, .gg-root.gg-shots .gg-head .gg-render-btn"),
       queueText: btn.textContent.trim(),
       panelInfo: document.querySelector(".gg-root.gg-shots .gg-cutpanel .gg-sp-info")?.textContent.replace(/\s+/g, " ").trim() || "",
@@ -547,13 +549,13 @@ async function main() {
     await reloadTimelineInUi(page, pid);
     await page.waitForSelector(cutSel(cutC.id), { timeout: 15000 });
 
-    // 1. bottom bar shown with nothing selected, status panel Queue disabled, no Queue in the bar/header, no batch counter
+    // 1. icon row shown with nothing selected, status panel Queue disabled, no Queue in the icon row/header, no batch counter
     let bar = await barState(page);
     if (!bar?.shown || bar.count !== 0 || !bar.queue || bar.queueInBar || bar.queueInHead || bar.queueText !== "Queue") {
-      throw new Error(`empty bar: ${JSON.stringify(bar)}`);
+      throw new Error(`empty icon row: ${JSON.stringify(bar)}`);
     }
     if (await page.$eval(BATCH_PROG, (el) => !el.hidden)) throw new Error("batch counter shown with no batch");
-    console.log("PASS  bottom bar shown with 0 selected, status panel Queue disabled, counter hidden");
+    console.log("PASS  icon row shown with 0 selected, status panel Queue disabled, counter hidden");
 
     // 2. Ctrl+A over Shots selects all cuts; over the canvas it leaves the Shots selection alone
     await hoverShots(page);

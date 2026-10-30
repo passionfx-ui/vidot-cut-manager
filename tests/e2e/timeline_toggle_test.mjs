@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
+import { fillNewProjectModal } from "./new_project_helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -196,13 +197,8 @@ async function createProjectViaUi(page, name, templateRef) {
     );
   });
   await clickCtxItem(page, "New Project…");
-  await page.waitForSelector(".gg-modal", { timeout: 10000 });
-  await page.click(".gg-modal-name", { clickCount: 3 });
-  await page.type(".gg-modal-name", name, { delay: 8 });
-  if (templateRef) {
-    await page.select(".gg-modal-tpl", templateRef).catch(() => {});
-  }
-  await page.click(".gg-modal .gg-primary");
+  await fillNewProjectModal(page, { name, templateRef });
+  await page.click(".gg-modal-create");
   await page.waitForFunction(
     (n) => {
       const sel = document.querySelector(".gg-root.gg-shots .gg-proj");
@@ -349,21 +345,21 @@ async function main() {
       if (!btn) return null;
       const r = btn.getBoundingClientRect();
       const rr = root.getBoundingClientRect();
-      const bar = root.querySelector(".gg-selbar").getBoundingClientRect();
+      const bar = root.querySelector(".gg-iconrow").getBoundingClientRect();
       return {
         direct: btn.parentElement === root,
         inHead: !!btn.closest(".gg-head"),
         fullWidth: Math.abs(r.width - rr.width) < 2,
         atBottom: Math.abs(rr.bottom - r.bottom) <= 1,
-        underSelbar: r.top >= bar.bottom - 1,
+        underIconRow: r.top >= bar.bottom - 1,
         pressed: btn.getAttribute("aria-pressed"),
         color: getComputedStyle(btn).color,
       };
     });
-    if (!place || !place.direct || place.inHead || !place.fullWidth || !place.atBottom || !place.underSelbar || place.pressed !== "true") {
+    if (!place || !place.direct || place.inHead || !place.fullWidth || !place.atBottom || !place.underIconRow || place.pressed !== "true") {
       throw new Error(`Timeline toggle should be the full-width bar at the very bottom (on): ${JSON.stringify(place)}`);
     }
-    console.log("PASS  Timeline toggle is the full-width bottom bar under the selection bar");
+    console.log("PASS  Timeline toggle is the full-width bottom bar under the icon row");
     if (place.color !== "rgb(26, 26, 26)") throw new Error(`open Timeline bar text should be dark #1a1a1a (got ${place.color})`);
     console.log("PASS  open Timeline bar has dark text on yellow");
 
