@@ -5,7 +5,9 @@
  * timeline save is still waiting (0.9.78 hang) with Ctrl+Z / Ctrl+Y, the same in Caption list mode (scene
  * headers once, scene drag, cut drag from the caption field), and cut ids / media / versions / source
  * workflow unchanged by a move. 0.9.104: the icon row New scene stacks one empty scene per click
- * (Scene 1, 2, 3 above Ungrouped), with Ctrl+Z / Ctrl+Y.
+ * (Scene 1, 2, 3 above Ungrouped), with Ctrl+Z / Ctrl+Y. 0.9.108: a cut dropped on an empty scene's header
+ * or empty body moves into it (tinted on dragover, Ctrl+Z / Ctrl+Y); New scene goes after the last scene even
+ * with a cut of the first scene selected; New cut with no cut selected goes into Ungrouped at the bottom.
  * ZZ temp native project (2 scenes x 2 cuts), soft-deleted at the end. Blocks POST /prompt and /gonggan/regen.
  */
 import fs from "node:fs";
@@ -92,11 +94,16 @@ async function postJson(page, route, body) {
   }, route, body);
 }
 
+/** The native store reads the project file without its lock, so a poll that lands on a save's file
+ * replace can get a one-off 404 on Windows; retry that a few times. */
 async function serverTimeline(page) {
   return page.evaluate(async (pid) => {
-    const res = await fetch(`/gonggan/timeline?pid=${encodeURIComponent(pid)}`);
-    if (!res.ok) throw new Error(`timeline HTTP ${res.status}`);
-    return res.json();
+    for (let i = 0; ; i++) {
+      const res = await fetch(`/gonggan/timeline?pid=${encodeURIComponent(pid)}`);
+      if (res.ok) return res.json();
+      if (res.status !== 404 || i >= 4) throw new Error(`timeline HTTP ${res.status}`);
+      await new Promise((r) => setTimeout(r, 150));
+    }
   }, testPid);
 }
 
@@ -282,6 +289,20 @@ async function dragHeader(page, pts, { beforeUp } = {}) {
     released = true;
   } finally {
     if (!released) await page.mouse.up().catch(() => {});
+  }
+}
+
+/** page.click that survives the Shots panel re-rendering between Puppeteer's lookup and its click
+ * (the error is thrown before any mouse event, so retrying cannot double-click). */
+async function clickFresh(page, selector) {
+  for (let i = 0; ; i++) {
+    try {
+      await page.click(selector);
+      return;
+    } catch (e) {
+      if (i >= 4 || !/not clickable|detached|not an Element/i.test(e.message || "")) throw e;
+      await sleep(150);
+    }
   }
 }
 
@@ -713,7 +734,7 @@ async function main() {
       const serverScenes = async () => ((await serverTimeline(page)).groups || []).map((g) => `${g.name}:${g.cut_ids.length}`);
       const want = ["Scene A:2", "Scene B:1", "Scene 1:0", "Scene 2:0", "Scene 3:0"];
       // Three clicks back to back: each must add its own scene (no lost click, no reused name).
-      for (let i = 0; i < 3; i++) await page.click(btn);
+      for (let i = 0; i < 3; i++) await clickFresh(page, btn);
       if (await page.$(".gg-ask-backdrop")) throw new Error("New scene should not ask for a name");
       let got = [];
       for (let i = 0; i < 30; i++) {
@@ -752,6 +773,187 @@ async function main() {
       await sleep(400);
       const titles = await page.$$eval(".gg-root.gg-shots .gg-grp-sec[data-group-id] .gg-grp-title", (els) => els.map((e) => e.textContent.trim()));
       if (titles.at(-1) !== "Scene · Scene 3") throw new Error(`after Ctrl+Y the last scene is ${titles.at(-1)}`);
+    });
+
+    const short = { [c1]: "c1", [c2]: "c2", [c3]: "c3", [c4]: "c4" };
+    /** Server scenes as `Name[c1,c2]` plus the cut order, e.g. "Scene A[c1,c2] Scene 1[] | c1,c2,c3,c4". */
+    const serverState = async () => {
+      const tl = await serverTimeline(page);
+      const s = (id) => short[id] || "new";
+      return `${(tl.groups || []).map((g) => `${g.name}[${g.cut_ids.map(s).join(",")}]`).join(" ")} | ${tl.cuts.map((c) => s(c.id)).join(",")}`;
+    };
+    const waitServerState = async (want, what) => {
+      let got = "";
+      for (let i = 0; i < 30; i++) {
+        got = await serverState();
+        if (got === want) return;
+        await sleep(300);
+      }
+      throw new Error(`${what}: server ${got} != ${want}`);
+    };
+    const shotsLayout = () => page.$$eval(".gg-root.gg-shots .gg-grp-sec", (els) => els.map((s) =>
+      `${s.classList.contains("gg-grp-loose") ? "Ungrouped" : s.querySelector(".gg-grp-title")?.textContent.replace(/^Scene · /, "").trim()}:${s.querySelectorAll(".gg-cut").length}`).join(" "));
+    const waitShotsLayout = async (want, what) => {
+      let got = "";
+      for (let i = 0; i < 20; i++) {
+        got = await shotsLayout();
+        if (got === want) return;
+        await sleep(250);
+      }
+      throw new Error(`${what}: Shots sections ${got} != ${want}`);
+    };
+    const keyInList = async (key) => {
+      const box = await (await page.$(".gg-root.gg-shots .gg-grp-wrap")).boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + Math.min(40, box.height / 2));
+      await page.keyboard.down("Control");
+      await page.keyboard.press(key);
+      await page.keyboard.up("Control");
+    };
+    /** Icon row New scene; resolves with the id of the new (empty) scene named `name`. */
+    const clickNewScene = async (name) => {
+      await clickFresh(page, ".gg-root.gg-shots .gg-ir-scene");
+      for (let i = 0; i < 30; i++) {
+        const g = ((await serverTimeline(page)).groups || []).find((x) => x.name === name);
+        if (g) {
+          await page.waitForSelector(secSel(g.id), { timeout: 8000 });
+          return g.id;
+        }
+        await sleep(300);
+      }
+      throw new Error(`New scene did not add "${name}"`);
+    };
+    /** Drag a cut (pressed on its title) to fraction `fy` of `dstSel`'s box, checking the empty scene `gid` is tinted before release. */
+    const dragCutOntoEmptyScene = async (cutId, gid, dstSel, fy) => {
+      await page.$eval(dstSel, (el) => el.scrollIntoView({ block: "center" }));
+      const pts = await page.evaluate((srcSel, d, f) => {
+        const wrap = document.querySelector(".gg-root.gg-shots .gg-grp-wrap");
+        const src = document.querySelector(srcSel);
+        const dst = document.querySelector(d);
+        if (!wrap || !src || !dst) return null;
+        const w = wrap.getBoundingClientRect();
+        const s = src.getBoundingClientRect();
+        const r = dst.getBoundingClientRect();
+        const from = { x: s.x + s.width / 2, y: s.y + s.height / 2 };
+        const to = { x: from.x, y: r.y + r.height * f };
+        const ok = from.y > w.top && from.y < w.bottom && to.y > w.top + 50 && to.y < w.bottom - 50;
+        return { from, to, ok, geo: { wTop: w.top, wBottom: w.bottom, dTop: r.top, dBottom: r.bottom } };
+      }, `${cutSel(cutId)} .gg-cut-title`, dstSel, fy);
+      if (!pts) throw new Error("drag points not found");
+      if (!pts.ok) throw new Error(`drop point too close to the auto-scroll edge ${JSON.stringify(pts.geo)}`);
+      await dragHeader(page, pts, {
+        beforeUp: async () => {
+          const st = await page.evaluate((s) => {
+            const sec = document.querySelector(s);
+            const ind = document.querySelector(".gg-root.gg-shots .gg-drag-ind");
+            return {
+              target: !!sec?.classList.contains("gg-drop-target"),
+              cross: !!sec?.classList.contains("gg-drop-cross"),
+              tinted: document.querySelectorAll(".gg-root.gg-shots .gg-drop-target").length,
+              line: !!ind && !ind.hidden,
+            };
+          }, secSel(gid));
+          if (!st.target || !st.cross || st.tinted !== 1) throw new Error(`empty scene not highlighted on dragover: ${JSON.stringify(st)}`);
+          if (st.line) throw new Error("drop line shown over an empty scene");
+        },
+      });
+    };
+
+    await runScenario("s12", "Cut dropped on an EMPTY scene (header, then body) moves into it; highlight; Ctrl+Z / Ctrl+Y", async () => {
+      await resetBaseline(page);
+      await postJson(page, "/gonggan/groups", { pid: testPid, groups: [baseline.groups[0], { ...baseline.groups[1], cut_ids: [c3] }] });
+      await reloadShots(page);
+      await page.keyboard.press("Escape");
+      const e1 = await clickNewScene("Scene 1");
+      await waitShotsLayout("Scene A:2 Scene B:1 Scene 1:0 Ungrouped:1", "after New scene");
+
+      // Ungrouped c4 onto the empty scene's header.
+      await dragCutOntoEmptyScene(c4, e1, `${secSel(e1)} > .gg-grp-head`, 0.5);
+      await waitToast(page, "Moved 1 cut(s)");
+      const dropped1 = "Scene A[c1,c2] Scene B[c3] Scene 1[c4] | c1,c2,c3,c4";
+      await waitServerState(dropped1, "header drop");
+      await waitShotsLayout("Scene A:2 Scene B:1 Scene 1:1", "header drop");
+      if ((await sectionCutIds(page, e1)).join() !== c4) throw new Error("c4 not shown inside Scene 1");
+      if (JSON.stringify(await domLabels(page)) !== JSON.stringify({ [c1]: "1-1", [c2]: "1-2", [c3]: "2-1", [c4]: "3-1" })) {
+        throw new Error(`labels after drop ${JSON.stringify(await domLabels(page))}`);
+      }
+      await keyInList("KeyZ");
+      await waitServerState("Scene A[c1,c2] Scene B[c3] Scene 1[] | c1,c2,c3,c4", "Ctrl+Z");
+      await waitShotsLayout("Scene A:2 Scene B:1 Scene 1:0 Ungrouped:1", "Ctrl+Z");
+      await keyInList("KeyY");
+      await waitServerState(dropped1, "Ctrl+Y");
+      await waitShotsLayout("Scene A:2 Scene B:1 Scene 1:1", "Ctrl+Y");
+
+      // A scene cut onto the (empty) body of a second new scene.
+      const e2 = await clickNewScene("Scene 2");
+      await waitShotsLayout("Scene A:2 Scene B:1 Scene 1:1 Scene 2:0", "second New scene");
+      await sleep(300);
+      await dragCutOntoEmptyScene(c1, e2, `${secSel(e2)} > .gg-cutlist`, 0.5);
+      await waitToast(page, "Moved 1 cut(s)");
+      const dropped2 = "Scene A[c2] Scene B[c3] Scene 1[c4] Scene 2[c1] | c2,c3,c4,c1";
+      await waitServerState(dropped2, "body drop");
+      await waitShotsLayout("Scene A:1 Scene B:1 Scene 1:1 Scene 2:1", "body drop");
+      await keyInList("KeyZ");
+      await waitServerState("Scene A[c1,c2] Scene B[c3] Scene 1[c4] Scene 2[] | c1,c2,c3,c4", "Ctrl+Z body drop");
+      await waitShotsLayout("Scene A:2 Scene B:1 Scene 1:1 Scene 2:0", "Ctrl+Z body drop");
+      await keyInList("KeyY");
+      await waitServerState(dropped2, "Ctrl+Y body drop");
+
+      const fp = await cutFingerprint(page);
+      const changed = baseline.ids.filter((id) => fp[id] !== baseline.fingerprint[id]);
+      if (changed.length) throw new Error(`cut data/files/workflow changed for ${changed.join()}`);
+    });
+
+    await runScenario("s13", "New scene with a cut of the FIRST scene selected still goes after the last scene, above Ungrouped", async () => {
+      await resetBaseline(page);
+      await postJson(page, "/gonggan/groups", { pid: testPid, groups: [baseline.groups[0], { ...baseline.groups[1], cut_ids: [c3] }] });
+      await reloadShots(page);
+      await page.keyboard.press("Escape");
+      await page.keyboard.down("Control");
+      await page.click(`${cutSel(c1)} .gg-cut-title`);
+      await page.keyboard.up("Control");
+      await page.waitForSelector(`${cutSel(c1)}.gg-sel`, { timeout: 8000 });
+      await clickNewScene("Scene 1");
+      await waitServerState("Scene A[c1,c2] Scene B[c3] Scene 1[] | c1,c2,c3,c4", "New scene");
+      await waitShotsLayout("Scene A:2 Scene B:1 Scene 1:0 Ungrouped:1", "New scene");
+      await clickNewScene("Scene 2");
+      await waitServerState("Scene A[c1,c2] Scene B[c3] Scene 1[] Scene 2[] | c1,c2,c3,c4", "second New scene");
+      await waitShotsLayout("Scene A:2 Scene B:1 Scene 1:0 Scene 2:0 Ungrouped:1", "second New scene");
+      if (!(await page.$(`${cutSel(c1)}.gg-sel`))) throw new Error("New scene dropped the cut selection");
+    });
+
+    await runScenario("s14", "New cut with no cut selected goes into Ungrouped at the bottom, below the last scene", async () => {
+      await resetBaseline(page);
+      await page.keyboard.press("Escape");
+      await clickNewScene("Scene 1");
+      await waitShotsLayout("Scene A:2 Scene B:2 Scene 1:0", "New scene");
+      // Switching projects clears the current cut: a fresh "nothing selected" state.
+      const other = await postJson(page, "/gonggan/project/create", { name: `${TEST_PREFIX} other ${runStamp}` });
+      createdProjectIds.push(other.project.id);
+      await page.evaluate(() => document.querySelector(".gg-root.gg-shots .gg-reload")?.click());
+      await page.waitForSelector(`.gg-root.gg-shots .gg-proj option[value="${other.project.id}"]`, { timeout: 30000 });
+      await page.select(".gg-root.gg-shots .gg-proj", other.project.id);
+      await sleep(1200);
+      await selectTestProject(page);
+      await waitShotsLayout("Scene A:2 Scene B:2 Scene 1:0", "back on the test project");
+      if (await page.$(".gg-root.gg-shots .gg-cut.gg-on, .gg-root.gg-shots .gg-cut.gg-sel")) {
+        throw new Error("a cut is still selected after the project switch");
+      }
+      await page.waitForFunction(() => !document.querySelector(".gg-root.gg-shots .gg-ir-cut")?.disabled, { timeout: 8000 });
+      await clickFresh(page, ".gg-root.gg-shots .gg-ir-cut");
+      await waitServerState("Scene A[c1,c2] Scene B[c3,c4] Scene 1[] | c1,c2,c3,c4,new", "New cut");
+      const tl = await serverTimeline(page);
+      const added = tl.cuts.at(-1);
+      if (added.group_id) throw new Error(`new cut joined scene ${added.group_id}`);
+      await waitShotsLayout("Scene A:2 Scene B:2 Scene 1:0 Ungrouped:1", "New cut");
+      const dom = await domCutIds(page);
+      if (dom.at(-1) !== added.id) throw new Error("new cut is not the last row of the list");
+      if ((await page.$$eval(".gg-root.gg-shots .gg-grp-loose .gg-cut", (els) => els.map((e) => e.dataset.cutId))).join() !== added.id) {
+        throw new Error("new cut is not in the Ungrouped section");
+      }
+      await sleep(400);
+      await keyInList("KeyZ");
+      await waitServerState("Scene A[c1,c2] Scene B[c3,c4] Scene 1[] | c1,c2,c3,c4", "Ctrl+Z New cut");
+      await waitShotsLayout("Scene A:2 Scene B:2 Scene 1:0", "Ctrl+Z New cut");
     });
   } finally {
     try {

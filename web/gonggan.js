@@ -209,6 +209,7 @@ import {
   moveScene,
   sceneDropBeforeCut,
   sceneDropTarget,
+  emptySceneDropTarget,
   listOrder,
 } from "./gg_reorder_core.js";
 import {
@@ -2810,7 +2811,7 @@ async function addLocalCut() {
     return;
   }
   const cuts = state.timeline ? state.timeline.cuts : [];
-  const { after, group } = addCutTarget({ timelineCuts: cuts, activeCutId: state.cutId });
+  const { after, group } = addCutTarget({ timelineCuts: cuts, activeCutId: state.cutId, looseWhenNone: isNativeProject() });
   const body = { pid: state.pid };
   if (group) body.group = group;
   if (after) body.after = after;
@@ -4174,6 +4175,21 @@ function collectShotRowRects(wrap) {
   return rows;
 }
 
+/** Scene sections with no cut rows (New scene), in wrap-content coordinates. */
+function collectEmptySceneRects(wrap) {
+  const wrapRect = wrap.getBoundingClientRect();
+  return [...wrap.querySelectorAll(".gg-grp-sec[data-group-id]")]
+    .filter((s) => !s.querySelector(".gg-cut"))
+    .map((s) => {
+      const r = s.getBoundingClientRect();
+      return {
+        groupId: s.dataset.groupId,
+        top: r.top - wrapRect.top + wrap.scrollTop,
+        bottom: r.bottom - wrapRect.top + wrap.scrollTop,
+      };
+    });
+}
+
 function bindShotsReorder(root) {
   if (!isNativeProject()) return;
   const wrap = root.querySelector(".gg-grp-wrap");
@@ -4252,9 +4268,15 @@ function bindShotsReorder(root) {
         const rows = collectShotRowRects(wrap);
         const wr = wrap.getBoundingClientRect();
         const wrapY = clientYToWrapY(lastClientY, wr.top, wrap.scrollTop);
-        drop = shotsDropTarget(order, rows, wrapY);
-        indicator.hidden = false;
-        indicator.style.top = `${drop.lineY}px`;
+        const empty = emptySceneDropTarget(collectEmptySceneRects(wrap), wrapY);
+        if (empty) {
+          drop = { toIndex: 0, toGroupId: empty.groupId, lineY: 0, emptyScene: true };
+          indicator.hidden = true;
+        } else {
+          drop = shotsDropTarget(order, rows, wrapY);
+          indicator.hidden = false;
+          indicator.style.top = `${drop.lineY}px`;
+        }
         const hi = dropHighlight(tl.groups || [], movingIds(), drop.toGroupId);
         const sec = hi.groupId
           ? wrap.querySelector(`.gg-grp-sec[data-group-id="${CSS.escape(hi.groupId)}"]`)
@@ -4324,14 +4346,16 @@ function bindShotsReorder(root) {
         if (!tl) return;
         const order0 = tl.cuts.map((c) => c.id);
         const ids = movingIds();
-        const r = moveCuts(order0, groupsClone(), ids, { toIndex: dropRestIndex(order0, ids, drop.toIndex), toGroupId: drop.toGroupId });
+        const r = drop.emptyScene
+          ? moveToScene(order0, groupsClone(), ids, drop.toGroupId)
+          : moveCuts(order0, groupsClone(), ids, { toIndex: dropRestIndex(order0, ids, drop.toIndex), toGroupId: drop.toGroupId });
         const order = listOrder(r.order, r.groups);
         const same =
           order.length === order0.length &&
           order.every((id, i) => id === order0[i]) &&
           JSON.stringify(r.groups) === JSON.stringify(tl.groups || []);
         if (same) return;
-        await commitShotsReorder(order, r.groups);
+        await commitShotsReorder(order, r.groups, { moveCount: ids.length });
       };
       shotsUi.dragSession = { cancel };
       window.addEventListener("pointermove", move);
