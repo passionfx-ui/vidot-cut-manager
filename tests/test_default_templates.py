@@ -259,15 +259,39 @@ class ProjectDefaultsTests(ProjectDefaultsBase):
         with self.assertRaisesRegex(ValueError, "Image template: Prompt node not found"):
             na.native_add_cut_list(pid, [{"cut": 1, "duration": 2, "description": "Fox"}])
 
-    def test_empty_cut_runs_image_template_with_its_caption(self):
+    def test_empty_cut_runs_image_template_with_info_notes(self):
         pid = self.new_project()
         before = set(self.store.get_project(pid)["cuts"])
         cid = next(c for c in self.store.add_cut(pid)["cuts"] if c not in before)
-        self.store.update_cut(pid, cid, {"caption": "A lighthouse at dusk"})
+        self.store.update_cut(pid, cid, {"notes": "A lighthouse at dusk"})
         res = na.native_cut_api_workflow(pid, cid, convert=True)
         self.assertEqual(res["source"], "template")
         self.assertEqual(wn.prompt_text(res["workflow"]), "A lighthouse at dusk")
-        self.assertEqual(res["workflow"]["10"]["class_type"], "SaveImage")
+
+    def test_new_cut_without_text_refuses_generate(self):
+        pid = self.new_project()
+        before = set(self.store.get_project(pid)["cuts"])
+        cid = next(c for c in self.store.add_cut(pid)["cuts"] if c not in before)
+        with self.assertRaisesRegex(ValueError, na.WRITE_PROMPT_FIRST):
+            na.native_cut_api_workflow(pid, cid, convert=True)
+
+    def test_native_add_cut_injects_prompt_field(self):
+        pid = self.new_project()
+        res = na.native_add_cut(pid, None, None)
+        cid = res["cut"]["id"]
+        self.store.update_cut(pid, cid, {"prompt": "Red fox in snow"})
+        wf = na.native_cut_api_workflow(pid, cid, convert=True)["workflow"]
+        self.assertEqual(wn.prompt_text(wf), "Red fox in snow")
+
+    def test_native_add_cut_info_fallback_not_template_default(self):
+        pid = self.new_project()
+        res = na.native_add_cut(pid, None, None)
+        cid = res["cut"]["id"]
+        na.native_rename_cut(pid, cid, "Harbor Dawn")
+        self.store.update_cut(pid, cid, {"notes": "Boats on calm water"})
+        wf = na.native_cut_api_workflow(pid, cid, convert=True)["workflow"]
+        self.assertEqual(wn.prompt_text(wf), "Harbor Dawn. Boats on calm water")
+        self.assertEqual(wf["10"]["class_type"], "SaveImage")
 
 
 class ImageToVideoTests(ProjectDefaultsBase):
@@ -275,7 +299,7 @@ class ImageToVideoTests(ProjectDefaultsBase):
         super().setUp()
         self.pid = self.new_project()
         self.cut = next(iter(self.store.get_project(self.pid)["cuts"]))
-        self.store.update_cut(self.pid, self.cut, {"caption": "A fox looks up", "planned_sec": 2})
+        self.store.update_cut(self.pid, self.cut, {"prompt": "A fox looks up", "planned_sec": 2})
 
     def add(self, name: str, maker=_png) -> dict:
         return self.store.add_version(self.pid, self.cut, maker(self.root / name))
@@ -340,7 +364,7 @@ class ImageToVideoTests(ProjectDefaultsBase):
         self.assertFalse(self.regen_dir.exists(), "no plan written")
 
     def test_prompt_from_the_image_when_the_cut_has_no_description(self):
-        self.store.update_cut(self.pid, self.cut, {"caption": ""})
+        self.store.update_cut(self.pid, self.cut, {"prompt": "", "notes": ""})
         img = gg_template.read_workflow_ref("builtin:image")
         wn.set_prompt(img, "Harbor at sunrise")
         self.store.add_version(self.pid, self.cut, _png(self.root / "a.png"), workflow=img)
@@ -348,6 +372,15 @@ class ImageToVideoTests(ProjectDefaultsBase):
         self.store.add_version(self.pid, self.cut, _png(self.root / "b.png"))
         with self.assertRaisesRegex(ValueError, "no description"):
             gg_sdk.image_to_video_plan(self.pid, self.cut)
+
+    def test_image_to_video_appends_caption_to_prompt(self):
+        self.store.update_cut(self.pid, self.cut, {"prompt": "Wide shot", "caption": "Where are you?"})
+        self.add("still.png")
+        plan = gg_sdk.image_to_video_plan(self.pid, self.cut)
+        self.assertEqual(plan["prompt"], "Wide shot Dialogue: Where are you?")
+        wf = json.loads((self.regen_dir / f"{plan['plan']}.json").read_text(encoding="utf-8"))
+        import gg_wfnodes as wn
+        self.assertIn("Where are you?", wn.prompt_text(wf))
 
     def test_generate_all_fills_titled_start_image(self):
         v = self.add("still.png")

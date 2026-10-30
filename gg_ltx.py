@@ -24,31 +24,95 @@ DEFAULT_KIND = "t2v"
 DURATION_MIN = 0.5
 DURATION_MAX = 3.0
 DEFAULT_FPS = 24.0
-MAX_FRAMES = 73
+MAX_FRAMES = 73  # AI Cut Split / paste list (≤3 s @ 24 fps)
+WORKFLOW_MAX_SEC = 10.0
+WORKFLOW_MAX_FRAMES = 257  # LTX 2B distilled (~10 s @ 24 fps)
+VIDEO_TOO_LONG_MSG = (
+    "Video too long for this model (max 10 s). Shorten the cut on the timeline and try again."
+)
 MAX_CUTS = 200
 NAME_MAX_LEN = 80
 DESCRIPTION_MAX_LEN = 300
 DESCRIPTION_ALIASES = ("description", "content", "ltx_prompt")
+TITLE_ALIASES = ("title", "name")
+CAPTION_ALIASES = ("caption",)
+NOTES_ALIASES = ("notes", "info")
+TITLE_MAX_LEN = NAME_MAX_LEN
+TITLE_SHORT_MAX = 40
+TITLE_WORD_MAX = 5
+_RE_TITLE_CAMERA = re.compile(
+    r"\b(wide shot|close-up|close up|closeup|tracking shot|tracking|pan shot|pan\b|zoom|dolly|"
+    r"aerial|pov|medium shot|extreme close|establishing shot|over-the-shoulder|ots\b|"
+    r"camera|cinematic|lens|angle|shot size|4k|8k)\b",
+    re.IGNORECASE,
+)
+_TITLE_CAMERA_PHRASES = (
+    "wide shot", "close-up", "close up", "closeup", "tracking shot", "tracking",
+    "pan shot", "medium shot", "extreme close", "establishing shot", "over-the-shoulder",
+    "aerial shot", "aerial",
+)
 
 # AI Cut Split instructions; the story follows "STORY:" (gg_cut_split.build_prompt).
 CUT_SPLIT_PROMPT = """You are a storyboard artist. Split the story below into cuts for short AI video clips.
 
 Output ONLY compact JSON on ONE line. No prose, no explanation, no markdown, no code fences, no line breaks, no spaces between fields. Example:
-[{"cut":1,"duration":3,"description":"Wide shot, a fox crosses a snowy field at dawn"},{"cut":2,"duration":2,"description":"Close-up, the fox sniffs the air"}]
+[{"cut":1,"duration":3,"title":"Fox at dawn","description":"Wide shot, a fox crosses a snowy field at dawn","caption":""},{"cut":2,"duration":2,"title":"Fox close-up","description":"Close-up, the fox sniffs the air","caption":"Fox: Where is home?"}]
 
 Fields:
 - "cut": 1, 2, 3 ... in story order.
 - "duration": seconds, 0.5 to 3 (never more than 3).
-- "description": short English line, at most 15 words: shot size, who or what, the action, the place. It is the video prompt and the cut name.
+- "title": short English scene name, 2 to 5 words, Title Case, no trailing period, no camera or style terms. Cut name only; never dialogue or a full sentence.
+- "description": short English video prompt, at most 15 words: shot size, who or what, the action, the place. Never dialogue.
+- "caption": spoken lines and narration copied from the story for this cut, or "" when none.
 
 Rules:
 - One action per cut. Split longer actions into several cuts.
 - Name the characters and the place in every description (no "he", no "same room").
-- No dialogue, no on-screen text, no cut numbers inside description.
+- Keep dialogue in "caption" only, not in "title" or "description".
 - Double quotes, no trailing commas, no comments. Stop right after the closing ].
-
-STORY:
 """
+
+_CAPTION_MODE_HINTS = {
+    "dialogue_only": ('Caption: only spoken dialogue (quoted lines and "Name: line"). Use "" when there is no dialogue.',
+                      'Do not put narration in "caption".'),
+    "include_narration": ('Caption: copy dialogue and narration from the story for each cut verbatim.',
+                          'Use "" only when the cut has no dialogue or narration.'),
+    "no_captions": ('Caption: always "".',),
+}
+
+
+def normalize_cut_title(raw: Any) -> str:
+    """Short cut title for Shots: 2–5 words, Title Case, ~40 chars, no camera jargon."""
+    if not isinstance(raw, str):
+        return ""
+    t = " ".join(raw.split()).rstrip(".")
+    for ph in _TITLE_CAMERA_PHRASES:
+        t = re.sub(re.escape(ph), " ", t, flags=re.IGNORECASE)
+    t = " ".join(t.split())
+    cleaned: list[str] = []
+    for w in t.split():
+        token = w.strip(",;:")
+        if not token:
+            continue
+        if _RE_TITLE_CAMERA.search(token):
+            continue
+        cleaned.append(token)
+        if len(cleaned) >= TITLE_WORD_MAX:
+            break
+
+    def _title_word(w: str) -> str:
+        if len(w) > 1 and w.isupper():
+            return w
+        return w[:1].upper() + w[1:].lower() if w else w
+
+    t = " ".join(_title_word(w) for w in cleaned)
+    return t[:TITLE_SHORT_MAX].strip()
+
+
+def cut_split_caption_hint(mode: str) -> str:
+    """Extra prompt lines for the Captions option (AI Make Cut dialog)."""
+    key = mode if mode in _CAPTION_MODE_HINTS else "dialogue_only"
+    return "\n".join(_CAPTION_MODE_HINTS[key])
 
 _SAVE_FPS_NODES = ("SaveAnimatedWEBP", "SaveAnimatedPNG", "SaveWEBM", "CreateVideo", "VHS_VideoCombine")
 _LENGTH_NODES = ("EmptyLTXVLatentVideo", "LTXVImgToVideo")
@@ -67,11 +131,55 @@ def load_ltx_workflow(kind: str | None = None) -> dict:
     return graph
 
 
-def frames_for_duration(sec: float, fps: float) -> int:
-    """LTX frame count for `sec` seconds: a multiple of 8 plus 1, capped at MAX_FRAMES (3 s @ 24 fps)."""
+def frames_for_duration(sec: float, fps: float, *, max_frames: int | None = MAX_FRAMES) -> int:
+    """LTX frame count for `sec` seconds: round(sec·fps) to the nearest 8n+1 frame count."""
     n = math.floor(float(sec) * float(fps) / 8 + 0.5)
     frames = max(1, n) * 8 + 1
-    return min(frames, MAX_FRAMES)
+    if max_frames is not None:
+        frames = min(frames, max_frames)
+    return frames
+
+
+def workflow_has_ltx_length(graph: dict) -> bool:
+    if not isinstance(graph, dict):
+        return False
+    if _is_ui(graph):
+        return any(isinstance(n, dict) and n.get("type") in _LENGTH_NODES for n in graph.get("nodes") or [])
+    return any(isinstance(n, dict) and n.get("class_type") in _LENGTH_NODES for n in graph.values())
+
+
+def check_ltx_generation_duration(graph: dict, sec: float) -> str | None:
+    """User-facing error when `sec` exceeds this workflow's LTX limit, else None."""
+    if not workflow_has_ltx_length(graph):
+        return None
+    s = float(sec)
+    if s > WORKFLOW_MAX_SEC + 1e-6:
+        return VIDEO_TOO_LONG_MSG
+    fps = workflow_fps(graph)
+    frames = frames_for_duration(s, fps, max_frames=None)
+    if frames > WORKFLOW_MAX_FRAMES:
+        return VIDEO_TOO_LONG_MSG
+    return None
+
+
+def patch_ltx_duration(graph: dict, sec: float) -> dict:
+    """Copy of `graph` with LTX length nodes set from `sec` (no prompt change)."""
+    if not isinstance(graph, dict):
+        raise ValueError("workflow must be an object")
+    g = copy.deepcopy(graph)
+    if not workflow_has_ltx_length(g):
+        return g
+    frames = frames_for_duration(float(sec), workflow_fps(g), max_frames=None)
+    if _is_ui(g):
+        for n in g["nodes"]:
+            wv = n.get("widgets_values") if isinstance(n, dict) else None
+            if n.get("type") in _LENGTH_NODES and isinstance(wv, list) and len(wv) > _LENGTH_WIDGET_INDEX:
+                wv[_LENGTH_WIDGET_INDEX] = frames
+    else:
+        for n in g.values():
+            if isinstance(n, dict) and n.get("class_type") in _LENGTH_NODES and isinstance(n.get("inputs"), dict):
+                n["inputs"]["length"] = frames
+    return g
 
 
 def clamp_duration(value: Any) -> float:
@@ -123,7 +231,7 @@ def inject_ltx(graph: dict, prompt: str, duration: float) -> dict:
     if not isinstance(graph, dict):
         raise ValueError("workflow must be an object")
     g = copy.deepcopy(graph)
-    frames = frames_for_duration(duration, workflow_fps(g))
+    frames = frames_for_duration(duration, workflow_fps(g), max_frames=MAX_FRAMES)
     gg_wfnodes.set_prompt(g, prompt)
     if _is_ui(g):
         for n in g["nodes"]:
@@ -288,19 +396,57 @@ def validate_cut_list(entries: Any) -> list[dict]:
             errors.append(f'{where}: "{key}" must be text (got {_show(desc)}).')
         elif len(desc) > DESCRIPTION_MAX_LEN:
             errors.append(f'{where}: "{key}" is too long ({len(desc)} characters, max {DESCRIPTION_MAX_LEN}).')
+        title_key = next((k for k in TITLE_ALIASES if e.get(k) is not None), None)
+        title = e.get(title_key) if title_key else None
+        if isinstance(title, str):
+            title = " ".join(title.split())
+        cap_key = next((k for k in CAPTION_ALIASES if e.get(k) is not None), None)
+        caption = e.get(cap_key) if cap_key else None
+        if isinstance(caption, str):
+            caption = caption.replace("\r\n", "\n").replace("\r", "\n")
+        elif caption is not None and not isinstance(caption, str):
+            errors.append(f'{where}: "caption" must be text (got {_show(caption)}).')
+        notes_key = next((k for k in NOTES_ALIASES if e.get(k) is not None), None)
+        notes = e.get(notes_key) if notes_key else None
+        if isinstance(notes, str):
+            notes = notes.replace("\r\n", "\n").replace("\r", "\n").strip()
+        elif notes is not None and not isinstance(notes, str):
+            errors.append(f'{where}: "notes" must be text (got {_show(notes)}).')
         if len(errors) == bad:
-            rows.append({"order": float(num), "sec": round(float(sec), 2), "description": desc})
+            if title is None or title == "":
+                title = normalize_cut_title(desc[:TITLE_MAX_LEN].strip() if desc else "")
+            elif len(title) > TITLE_MAX_LEN:
+                errors.append(f'{where}: "title" is too long ({len(title)} characters, max {TITLE_MAX_LEN}).')
+            else:
+                title = normalize_cut_title(title)
+            if caption is None:
+                caption = "" if title_key or cap_key is not None else desc
+            if isinstance(caption, str) and len(caption) > DESCRIPTION_MAX_LEN:
+                errors.append(f'{where}: "caption" is too long ({len(caption)} characters, max {DESCRIPTION_MAX_LEN}).')
+            if notes is None:
+                notes = ""
+            elif len(notes) > DESCRIPTION_MAX_LEN:
+                errors.append(f'{where}: "notes" is too long ({len(notes)} characters, max {DESCRIPTION_MAX_LEN}).')
+        if len(errors) == bad:
+            rows.append({"order": float(num), "sec": round(float(sec), 2), "description": desc, "title": title or "",
+                         "caption": caption if isinstance(caption, str) else "", "notes": notes if isinstance(notes, str) else ""})
     if errors:
         raise CutListError(errors)
     rows.sort(key=lambda r: r["order"])
     out = []
     for n, r in enumerate(rows, 1):
         d = r["description"]
-        out.append({"cut": n, "duration": r["sec"], "description": d, "name": d[:NAME_MAX_LEN].strip(),
-                    "caption": d, "sec": r["sec"], "prompt": d})
+        name = (r.get("title") or d)[:NAME_MAX_LEN].strip() or d[:NAME_MAX_LEN].strip()
+        cap = r.get("caption")
+        if cap is None:
+            cap = ""
+        out.append({"cut": n, "duration": r["sec"], "description": d, "title": name, "name": name,
+                    "caption": cap, "notes": r.get("notes") or "", "sec": r["sec"], "prompt": d})
     return out
 
 
 def public_cuts(rows: list[dict]) -> list[dict]:
-    """Validated rows in the paste/API schema [{cut, duration, description}]."""
-    return [{"cut": r["cut"], "duration": r["duration"], "description": r["description"]} for r in rows]
+    """Validated rows in the paste/API schema [{cut, duration, title, description, caption}]."""
+    return [{"cut": r["cut"], "duration": r["duration"], "title": r.get("title") or r.get("name") or "",
+             "description": r["description"], "caption": r.get("caption") if r.get("caption") is not None else ""}
+            for r in rows]

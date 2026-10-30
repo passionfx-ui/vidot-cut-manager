@@ -153,6 +153,17 @@ def check_output_folder(value: Any) -> dict[str, Any]:
 PROJECT_ASSETS_DIR = "assets"
 PROJECT_ASSETS_IMAGES = "images"
 PROJECT_ASSETS_VIDEOS = "videos"
+STANDARD_EDIT_DIR = "03_Edit"
+FALLBACK_MP4_EXPORT_DIR = "edit"
+
+
+def project_mp4_export_dir(project_base: Path) -> Path:
+    """MP4 export folder under a project: use existing `03_Edit`, else `<project>/edit` (created on export)."""
+    base = Path(project_base)
+    standard = base / STANDARD_EDIT_DIR
+    if standard.is_dir():
+        return standard
+    return base / FALLBACK_MP4_EXPORT_DIR
 _MEDIA_IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
 _MEDIA_VIDEO_EXTS = frozenset({".mp4", ".webm"})
 

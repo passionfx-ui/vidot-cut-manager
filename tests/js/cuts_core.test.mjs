@@ -5,6 +5,12 @@ import {
   computeCutLabels,
   cutDisplayLabel,
   computeEffectiveSec,
+  cutGenerationSec,
+  cutGenerationPromptText,
+  cutVideoGenerationPromptText,
+  cutInfoText,
+  WRITE_PROMPT_FIRST,
+  cutLengthDrift,
   lengthWarning,
   moveCut,
   moveCuts,
@@ -172,9 +178,37 @@ describe("cut header lengths", () => {
   });
 });
 
+describe("cutGenerationPromptText", () => {
+  it("uses Prompt then title and Info notes", () => {
+    assert.equal(cutGenerationPromptText({ prompt: "Fox", name: "T", notes: "N" }), "Fox");
+    assert.equal(cutGenerationPromptText({ prompt: "", name: "Harbor", notes: "Mist" }), "Harbor. Mist");
+    assert.equal(cutInfoText({ name: "New cut", notes: "Scene only" }), "Scene only");
+    assert.equal(cutGenerationPromptText({ name: "New cut", notes: "" }), "");
+    assert.equal(WRITE_PROMPT_FIRST, "Write a prompt for this cut first.");
+  });
+});
+
+describe("cutVideoGenerationPromptText", () => {
+  it("appends Dialogue caption for video", () => {
+    assert.equal(
+      cutVideoGenerationPromptText({ prompt: "Fox runs", caption: "  Hi  " }),
+      "Fox runs Dialogue: Hi",
+    );
+    assert.equal(cutVideoGenerationPromptText({ prompt: "Fox runs", caption: "" }), "Fox runs");
+    assert.equal(cutVideoGenerationPromptText({ prompt: "", caption: "Hi" }), "");
+  });
+});
+
 describe("computeEffectiveSec + lengthWarning", () => {
-  it("uses planned_sec when set", () => {
-    assert.equal(computeEffectiveSec({ sec: 3, planned_sec: 2 }), 2);
+  it("uses timeline sec before planned for generation length", () => {
+    assert.equal(cutGenerationSec({ sec: 3, planned_sec: 2 }), 3);
+    assert.equal(computeEffectiveSec({ sec: 3, planned_sec: 2 }), 3);
+  });
+
+  it("cutLengthDrift when trimmed away from planned", () => {
+    assert.equal(cutLengthDrift({ sec: 2.5, planned_sec: 3 }), true);
+    assert.equal(cutLengthDrift({ sec: 3, planned_sec: 3 }), false);
+    assert.equal(cutLengthDrift({ sec: 2.5 }), false);
   });
 
   it("plannedLenInputPlaceholder matches effective sec or 3", () => {

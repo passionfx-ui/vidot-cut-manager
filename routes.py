@@ -337,6 +337,17 @@ async def gg_export_file(request):
     return web.FileResponse(path, headers={"Content-Type": "video/mp4", "Cache-Control": "no-cache"})
 
 
+@routes.post("/gonggan/export/reveal")
+async def gg_export_reveal(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    name = data.get("name") if isinstance(data.get("name"), str) else None
+    res = await asyncio.to_thread(gg_export.reveal_project_export, pid, name)
+    return web.json_response(res, status=200 if res.get("ok") else 404)
+
+
 # ---------------- Comfy SDK path ----------------
 from . import gg_sdk  # noqa: E402
 
@@ -903,9 +914,9 @@ async def gg_ai_cut_split(request):
     background = data.get("background") is True
     try:
         if background:
-            job = await asyncio.to_thread(gg_cut_split.start_job, data.get("story"))
+            job = await asyncio.to_thread(gg_cut_split.start_job, data.get("story"), data.get("captions"))
             return web.json_response({"ok": True, "job": job}, status=202)
-        res = await asyncio.to_thread(gg_cut_split.ai_cut_split, data.get("story"))
+        res = await asyncio.to_thread(gg_cut_split.ai_cut_split, data.get("story"), data.get("captions"))
     except gg_cut_split.CutSplitError as ex:
         return web.json_response({"ok": False, "code": ex.code, "message": str(ex), **ex.extra},
                                  status=_CUT_SPLIT_STATUS.get(ex.code, 502))

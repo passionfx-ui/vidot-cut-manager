@@ -229,8 +229,12 @@ def _segment_cmd(exe: str, clip: dict, src: Path | None, out: Path, w: int, h: i
     kind = clip["media"]["kind"] if clip.get("media") else None
     clip_audio = False
     if kind == "video" and src is not None:
-        cmd += ["-ss", f"{clip['in']:.3f}", "-t", f"{dur + 0.5:.3f}", "-i", str(src)]
-        clip_audio = sound and _has_audio(src)
+        ext = src.suffix.lower()
+        if ext in _ANIMATED_STILL_EXTS:
+            cmd += ["-ignore_loop", "0", "-t", f"{dur + 0.5:.3f}", "-i", str(src)]
+        else:
+            cmd += ["-ss", f"{clip['in']:.3f}", "-t", f"{dur + 0.5:.3f}", "-i", str(src)]
+            clip_audio = sound and _has_audio(src)
     elif kind == "image" and src is not None:
         cmd += ["-loop", "1", "-framerate", str(fps), "-t", f"{dur + 0.5:.3f}", "-i", str(src)]
     else:
@@ -251,6 +255,8 @@ def _segment_cmd(exe: str, clip: dict, src: Path | None, out: Path, w: int, h: i
 
 
 GAP_CLIP = {"media": None, "in": 0.0}
+# Animated stills stored as kind "video" (WebP/GIF/APNG) must not use -ss before -i; ffmpeg mishandles them.
+_ANIMATED_STILL_EXTS = frozenset({".webp", ".gif", ".apng"})
 
 
 def export_plan(cuts: list[dict], fps: int) -> list[tuple[dict, int]]:
@@ -396,3 +402,70 @@ def export_file(name: str) -> Path | None:
     except ValueError:
         return None
     return p if p.is_file() else None
+
+
+def _open_folder(folder: Path) -> None:
+    folder = folder.resolve()
+    if os.name == "nt":
+        os.startfile(folder)  # noqa: S606
+    else:
+        import sys
+        cmd = ["open", str(folder)] if sys.platform == "darwin" else ["xdg-open", str(folder)]
+        subprocess.run(cmd, check=False, creationflags=_flags() if os.name == "nt" else 0)
+
+
+def _allowed_export_folder(pid: str, folder: Path) -> bool:
+    folder = folder.resolve()
+    try:
+        from . import gg_native_api as na
+    except ImportError:
+        import gg_native_api as na  # type: ignore
+    if na.is_native_pid(pid):
+        got = na.native_export_timeline(pid)
+        if got is None:
+            return False
+        base = got[1].resolve()
+        try:
+            folder.relative_to(base if base.is_dir() else base.parent)
+            return True
+        except ValueError:
+            return folder == base or folder == base.parent
+    leg = output_dir().resolve()
+    try:
+        folder.relative_to(leg)
+        return True
+    except ValueError:
+        return folder == leg
+
+
+def reveal_project_export(pid: str, file_name: str | None = None) -> dict:
+    """Open the project's MP4 export folder in the system file manager (Windows Explorer on Windows)."""
+    if not isinstance(pid, str) or not pid:
+        return {"ok": False, "message": "pid required"}
+    folder: Path | None = None
+    with _lock:
+        job = dict(_job)
+    if job.get("pid") == pid and job.get("status") == "done" and job.get("path"):
+        if file_name and job.get("file") != file_name:
+            return {"ok": False, "message": "That export file is not available"}
+        out = Path(job["path"])
+        if out.is_file():
+            folder = out.parent
+    if folder is None:
+        try:
+            from . import gg_native_api as na
+        except ImportError:
+            import gg_native_api as na  # type: ignore
+        got = na.native_export_timeline(pid)
+        if got is None:
+            return {"ok": False, "message": "project not found"}
+        folder = got[1]
+    folder = folder.resolve()
+    if not _allowed_export_folder(pid, folder):
+        return {"ok": False, "message": "folder not allowed"}
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        _open_folder(folder)
+    except OSError as ex:
+        return {"ok": False, "message": str(ex)[-200:]}
+    return {"ok": True, "path": str(folder)}

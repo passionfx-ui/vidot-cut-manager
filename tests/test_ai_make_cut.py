@@ -19,6 +19,7 @@ for p in (REPO, TESTS):
 
 import gg_cut_split
 import gg_ltx
+import gg_script_presplit
 from test_ai_cut_split import CutSplitTestBase, FakeComfy
 from test_cut_split_model import FakeRequest, load_routes
 
@@ -48,12 +49,11 @@ class CompactPromptTests(unittest.TestCase):
     def test_prompt_demands_compact_json_without_prose(self):
         p = gg_ltx.CUT_SPLIT_PROMPT
         for want in ("compact JSON on ONE line", "No prose", "no code fences", "no line breaks", "at most 15 words",
-                     "Stop right after the closing ]"):
+                     "Stop right after the closing ]", '"title"', '"caption"'):
             self.assertIn(want, p)
         example = next(line for line in p.splitlines() if line.startswith("[{"))
-        self.assertNotIn(": ", example)
         self.assertEqual(len(json.loads(example)), 2)
-        self.assertTrue(p.rstrip().endswith("STORY:"))
+        self.assertTrue(gg_cut_split.build_prompt("x").endswith("x"))
 
 
 class PaperBoatParseTests(CutSplitTestBase):
@@ -63,7 +63,7 @@ class PaperBoatParseTests(CutSplitTestBase):
         self.assertEqual([c["duration"] for c in cuts], [3.0, 2.5, 3.0, 2.0, 2.5])
         self.assertIn("paper boat on a rainy street", cuts[0]["description"])
         self.assertIn("lighthouse keeper waves", cuts[3]["description"])
-        self.assertEqual(set(cuts[0]), {"cut", "duration", "description"})
+        self.assertEqual(set(cuts[0]), {"cut", "duration", "title", "description", "caption"})
 
     def test_full_run_with_the_compact_answer(self):
         fake = FakeComfy(answers=[PAPER_BOAT_ANSWER])
@@ -106,7 +106,10 @@ class JobTests(CutSplitTestBase):
     def setUp(self):
         super().setUp()
         gg_cut_split._job.clear()
+        if gg_cut_split._run_lock.locked():
+            gg_cut_split._run_lock.release()
         self.addCleanup(gg_cut_split._job.clear)
+        self.addCleanup(lambda: gg_cut_split._run_lock.release() if gg_cut_split._run_lock.locked() else None)
 
     def run_job(self, fake, story=PAPER_BOAT_STORY):
         """start_job without its thread, then the thread body inline."""
@@ -114,7 +117,8 @@ class JobTests(CutSplitTestBase):
                 mock.patch.object(gg_cut_split, "_http", fake.http_call):
             first = gg_cut_split.start_job(story, start_thread=False)
             self.assertTrue(gg_cut_split._run_lock.locked())
-            gg_cut_split._job_main(first["id"], story, gg_cut_split.model_settings())
+            mode = first.get("captions") or gg_script_presplit.DEFAULT_CAPTION_MODE
+            gg_cut_split._job_main(first["id"], story, gg_cut_split.model_settings(), mode)
         return first, gg_cut_split.job_status(first["id"])
 
     def test_running_snapshot(self):
@@ -204,7 +208,7 @@ class JobRouteTests(unittest.TestCase):
         with mock.patch.object(self.cut_split, "start_job", return_value=job) as start, \
                 mock.patch.object(self.cut_split, "ai_cut_split") as sync_run:
             res = self.call("POST", "/gonggan/ai-cut-split", {"story": "S", "background": True})
-        start.assert_called_once_with("S")
+        start.assert_called_once_with("S", None)
         sync_run.assert_not_called()
         self.assertEqual((res.status, res.body), (202, {"ok": True, "job": job}))
 
@@ -212,7 +216,7 @@ class JobRouteTests(unittest.TestCase):
         with mock.patch.object(self.cut_split, "ai_cut_split", return_value={"cuts": []}) as sync_run, \
                 mock.patch.object(self.cut_split, "start_job") as start:
             res = self.call("POST", "/gonggan/ai-cut-split", {"story": "S"})
-        sync_run.assert_called_once_with("S")
+        sync_run.assert_called_once_with("S", None)
         start.assert_not_called()
         self.assertEqual((res.status, res.body), (200, {"ok": True, "cuts": []}))
 
