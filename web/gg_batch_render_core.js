@@ -4,7 +4,7 @@ import { isRegenEmptyCut } from "./gg_native_regen_core.js";
 
 /** Empty title when Queue is off because nothing is selected (0.9.120: no tooltip). */
 export const QUEUE_EMPTY_TIP = "";
-export const QUEUE_NATIVE_TIP = "Native projects only";
+export const QUEUE_NATIVE_TIP = "Not available for read-only (imported) projects";
 export const QUEUE_BUSY_TIP = "Busy, try again in a moment";
 export const QUEUE_NO_PROJECT_TIP = "No project open";
 export const RANDOM_SEED_LS_KEY = "gonggan-cut.randomSeed";

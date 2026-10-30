@@ -90,7 +90,7 @@ export function cutHasStartImage(cut) {
 
 /** Image to Video button after the import tile: native projects, a selected cut with an image version, no SDK job starting. */
 export function i2vButtonState({ hasCut, native, busy, hasImage } = {}) {
-  if (!native) return { disabled: true, title: "Image to Video is for native projects" };
+  if (!native) return { disabled: true, title: "Image to Video is not available for read-only (imported) projects" };
   if (!hasCut) return { disabled: true, title: "Select a cut to turn its image into a video" };
   if (!hasImage) return { disabled: true, title: "This cut has no image version yet" };
   if (busy) return { disabled: true, title: "Busy, try again in a moment" };
