@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-gonggan-cut"
-version = "0.9.114"
+version = "0.9.115"
 description = "Vidot Studio – Cut Manager: shot list and rough-cut timeline inside ComfyUI"
 readme = "README.md"
 license = { text = "GPL-3.0-only" }

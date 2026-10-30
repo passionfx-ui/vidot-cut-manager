@@ -295,6 +295,14 @@ import {
   snapshotTimelineEdit,
   applyTimelineSnapshot,
 } from "./gg_undo_core.js";
+import {
+  CUT_SPLIT_PROMPT,
+  LTX_WORKFLOWS,
+  parseCutList,
+  cutListSummary,
+  createCutsConfirmMessage,
+  cutListPayload,
+} from "./gg_cut_list_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -2853,6 +2861,106 @@ async function addLocalCut() {
   } catch (e) {
     ggToast("Cut", e.message, "warn");
   }
+}
+
+async function copyTextToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch {
+      ok = false;
+    }
+    ta.remove();
+    return ok;
+  }
+}
+
+async function copyCutSplitPrompt() {
+  if (await copyTextToClipboard(CUT_SPLIT_PROMPT)) {
+    ggToast("Copied", "Paste it into any LLM, add your story after STORY:, then use Paste Cut List.", "ok");
+  } else {
+    ggToast("Copy failed", "The clipboard is not available in this browser.", "warn");
+  }
+}
+
+/** Paste Cut List: JSON from the LLM -> new cuts (after the last cut), each with the LTX workflow and its prompt. */
+function openPasteCutListModal() {
+  if (!isNativeProject() || document.querySelector(".gg-cutlist-modal")) return;
+  const reqPid = state.pid;
+  const wrap = document.createElement("div");
+  wrap.className = "gg-modal-backdrop";
+  wrap.innerHTML = `
+    <div class="gg-modal gg-cutlist-modal" role="dialog" aria-label="Paste Cut List">
+      <h3 class="gg-modal-title">Paste Cut List</h3>
+      <label class="gg-modal-field">LLM answer (JSON array)
+        <textarea class="gg-cutlist-text" rows="12" spellcheck="false" placeholder='[{"cut": 1, "duration": 3, "content": "...", "ltx_prompt": "..."}]'></textarea>
+      </label>
+      <label class="gg-modal-field">Workflow for the new cuts
+        <select class="gg-cutlist-wf">${LTX_WORKFLOWS.map((w) => `<option value="${esc(w.id)}">${esc(w.label)}</option>`).join("")}</select>
+      </label>
+      <span class="gg-modal-hint gg-cutlist-summary" aria-live="polite"></span>
+      <span class="gg-modal-hint gg-split-err gg-cutlist-err" aria-live="polite"></span>
+      <div class="gg-modal-actions">
+        <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
+        <button type="button" class="gg-btn gg-primary gg-cutlist-create" disabled>Create cuts</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  const ta = wrap.querySelector(".gg-cutlist-text");
+  const wfSel = wrap.querySelector(".gg-cutlist-wf");
+  const summary = wrap.querySelector(".gg-cutlist-summary");
+  const err = wrap.querySelector(".gg-cutlist-err");
+  const createBtn = wrap.querySelector(".gg-cutlist-create");
+  let parsed = parseCutList("");
+  let busy = false;
+  const close = () => wrap.remove();
+  const sync = () => {
+    parsed = parseCutList(ta.value);
+    summary.textContent = cutListSummary(parsed);
+    err.textContent = ta.value.trim() ? parsed.errors.slice(0, 4).join(" ") : "";
+    createBtn.disabled = busy || !parsed.ok;
+  };
+  ta.addEventListener("input", sync);
+  wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", close);
+  wrap.addEventListener("mousedown", (e) => { if (e.target === wrap && !busy) close(); });
+  wrap.addEventListener("keydown", (e) => { if (e.key === "Escape" && !busy) { e.stopPropagation(); close(); } });
+  createBtn.addEventListener("click", async () => {
+    if (!parsed.ok || busy) return;
+    const wf = LTX_WORKFLOWS.find((w) => w.id === wfSel.value) || LTX_WORKFLOWS[0];
+    if (!(await askConfirm({ message: createCutsConfirmMessage(parsed.cuts, wf.label) }))) return;
+    if (state.pid !== reqPid) { close(); return; }
+    busy = true;
+    sync();
+    const order = displayedCutIds();
+    const before = snapshotOrderGroups(state.timeline);
+    try {
+      const d = await postJson("/gonggan/cut/add-list", cutListPayload(reqPid, parsed.cuts, wf.id, order[order.length - 1]));
+      if (d.timeline && adoptMutationTimeline(d.timeline, reqPid)) bus.dispatchEvent(new Event("timeline"));
+      else await loadTimeline();
+      const ids = d.cut_ids || [];
+      if (ids.length) {
+        recordShotsEntry(reqPid, { kind: "cuts", op: "add", ids, before, after: snapshotOrderGroups(state.timeline) });
+        selectCut(ids[0]);
+      }
+      close();
+      ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, "Each cut has the LTX workflow with its prompt. Select a cut and press Queue to generate it.", "ok");
+    } catch (e) {
+      busy = false;
+      sync();
+      err.textContent = e.message;
+    }
+  });
+  ta.focus();
 }
 
 function displayedCutIds() {
@@ -6309,6 +6417,10 @@ function mountShots(el) {
           <button type="button" class="gg-btn${listCaption ? " gg-on" : ""}" data-mode="caption" title="Edit dialogue / captions per cut">Caption</button>
         </div>
         ${SHOW_REDO_FILTER ? `<label class="gg-filter-redo" title="Show only cuts marked for redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Show redo cuts only</label>` : ""}
+        ${tl && isNativeProject() ? `<div class="gg-cutlist-btns">
+          <button type="button" class="gg-btn gg-copy-split" title="Copy a prompt for any LLM that splits your story into cuts with LTX-Video prompts">Copy Cut Split Prompt</button>
+          <button type="button" class="gg-btn gg-paste-cuts" title="Paste the LLM's JSON answer to create the cuts">Paste Cut List</button>
+        </div>` : ""}
       </div>
       <div class="gg-meta">
         <span class="gg-meta-text">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</span>
@@ -6388,6 +6500,8 @@ function mountShots(el) {
     root.querySelector(".gg-ir-scene")?.addEventListener("click", () =>
       isNativeProject() ? void addEmptyScene() : createSceneGroup(cutSelIds()));
     root.querySelector(".gg-ir-cut")?.addEventListener("click", () => addLocalCut());
+    root.querySelector(".gg-copy-split")?.addEventListener("click", () => void copyCutSplitPrompt());
+    root.querySelector(".gg-paste-cuts")?.addEventListener("click", () => openPasteCutListModal());
     root.querySelector(".gg-ir-del")?.addEventListener("click", () => void confirmDeleteSelectedCuts());
     root.querySelector(".gg-queue-btn")?.addEventListener("click", () => void queueButtonClick());
     const vsList = root.querySelector(".gg-vs-list");

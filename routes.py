@@ -574,6 +574,32 @@ async def gg_project_import(request):
     return web.json_response(res)
 
 
+@routes.post("/gonggan/cut/add-list")
+async def gg_cut_add_list(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    if not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid required")
+    after = data.get("after")
+    workflow = data.get("workflow")
+    if after is not None and not isinstance(after, str):
+        return _err(400, "after must be a string")
+    if workflow is not None and not isinstance(workflow, str):
+        return _err(400, "workflow must be a string")
+    try:
+        res = await asyncio.to_thread(gg_native_api.native_add_cut_list, pid, data.get("cuts"), workflow, after)
+    except FileNotFoundError:
+        return _err(404, "project not found")
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] cut list add failed")
+        return _err(500, str(ex))
+    return web.json_response(res)
+
+
 @routes.post("/gonggan/reference/add")
 async def gg_reference_add(request):
     data = await _json_body(request)

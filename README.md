@@ -77,6 +77,27 @@ Then run `start_proxy.bat` (proxy on `127.0.0.1:8189`). Regenerate is a dry run 
 
 ![Timeline playback](docs/images/timeline.png)
 
+## Script to cuts with LTX (local, open weights)
+
+Turn a story into ready-to-render cuts (native projects). No LLM is built in and nothing goes over the network: you use any chat LLM yourself.
+
+1. In the Shots toolbar click **Copy Cut Split Prompt**, paste it into any LLM and add your story after `STORY:`.
+2. The LLM answers with a JSON array: `[{"cut": 1, "duration": 3, "content": "...", "ltx_prompt": "..."}]` (durations up to 3 s).
+3. Click **Paste Cut List**, paste the answer (code fences or extra text around the array are fine), pick the workflow (**Text to video** by default, or **Image to video**) and **Create cuts**.
+4. Each new cut gets: name and caption = `content`, length = `duration`, prompt = `ltx_prompt`, and its own copy of the LTX example workflow with `ltx_prompt` in the positive *CLIP Text Encode* and the frame count set from the duration (`frames = min(round(duration × fps / 8) × 8 + 1, 73)`, fps from the workflow's save node, 24 in the examples).
+5. Select a cut and press **Queue** (or right-click > **Regen**) to render it locally. Nothing is queued when the cuts are created.
+
+Workflows: [`examples/workflows/ltxv_text_to_video.json`](examples/workflows/ltxv_text_to_video.json) and [`ltxv_image_to_video.json`](examples/workflows/ltxv_image_to_video.json) (ComfyUI's LTX-Video examples; image to video starts from the `Load Image` node, pick an image per cut).
+
+Models to install (from the loader nodes of these workflows):
+
+| Loader node | File | ComfyUI folder |
+| --- | --- | --- |
+| Load Checkpoint | `ltxv-2b-0.9.8-distilled.safetensors` ([Lightricks/LTX-Video](https://huggingface.co/Lightricks/LTX-Video)) | `models/checkpoints/` |
+| Load CLIP (type `ltxv`) | `t5xxl_fp8_e4m3fn_scaled.safetensors` ([comfyanonymous/flux_text_encoders](https://huggingface.co/comfyanonymous/flux_text_encoders)) | `models/text_encoders/` |
+
+The LTX-Video weights are **not included** in this repository. Download them yourself under the [LTX-Video Open Weights License](examples/workflows/LTX-Video-Open-Weights-License-0.X.txt). Bundled workflows target `ltxv-2b-0.9.8-distilled.safetensors` plus `t5xxl_fp8_e4m3fn_scaled.safetensors` (see table above). The model is replaceable: the cut's workflow is a normal workflow, so open the cut and swap in any other model or template; Queue runs whatever the cut's workflow is.
+
 ### Settings (optional)
 Copy `gonggan_settings.default.json` to `gonggan_settings.json` to point `data_root` / `uid` at an external legacy project data folder (read-only import of older projects). Leave `data_root` empty to use native projects only.
 
