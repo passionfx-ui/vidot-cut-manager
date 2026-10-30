@@ -522,7 +522,8 @@ class LocalStore:
                 c = new_cut(sid, str(e.get("name") or NEW_CUT_NAME)[:80], sec or 3.0, sha)
                 c["planned_sec"] = sec
                 c["caption"] = str(e.get("caption") or "")[: self._CAPTION_MAX_LEN]
-                c["prompt"] = str(e.get("prompt") or "")
+                c["prompt"] = str(e.get("prompt") or e.get("description") or "")
+                c["notes"] = str(e.get("notes") or "")[: self._CAPTION_MAX_LEN]
                 cuts[c["id"]] = c
                 doc["cuts"] = cuts
                 self._insert_cut_in_order(doc, c["id"], sid, prev)
@@ -533,7 +534,7 @@ class LocalStore:
             self._save_project_doc(pid, doc, "add_cuts", ids[0])
             return doc, ids
 
-    _CUT_UPDATE_FIELDS = frozenset({"planned_sec", "notes", "caption", "end_card", "needs_redo"})
+    _CUT_UPDATE_FIELDS = frozenset({"planned_sec", "notes", "caption", "prompt", "end_card", "needs_redo"})
     _CAPTION_MAX_LEN = 4000
     _DUE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -588,6 +589,12 @@ class LocalStore:
             self._check_cut_rev(c, expected_rev)
             if "planned_sec" in fields:
                 c["planned_sec"] = self._validate_planned_sec(fields["planned_sec"])
+                track = stored_track(doc)
+                clips = track.get("clips") if isinstance(track, dict) else None
+                entry = clips.get(cut_id) if isinstance(clips, dict) else None
+                if not (isinstance(entry, dict) and isinstance(entry.get("sec"), (int, float))):
+                    if c["planned_sec"] is not None:
+                        c["sec"] = c["planned_sec"]
             if "notes" in fields:
                 notes = fields["notes"]
                 if notes is not None and not isinstance(notes, str):
@@ -601,6 +608,11 @@ class LocalStore:
                 if len(cap) > self._CAPTION_MAX_LEN:
                     raise ValueError(f"caption must be at most {self._CAPTION_MAX_LEN} characters")
                 c["caption"] = cap
+            if "prompt" in fields:
+                prompt = fields["prompt"]
+                if prompt is not None and not isinstance(prompt, str):
+                    raise ValueError("prompt must be a string")
+                c["prompt"] = prompt if prompt is not None else ""
             if "end_card" in fields:
                 if not isinstance(fields["end_card"], bool):
                     raise ValueError("end_card must be a boolean")
@@ -996,10 +1008,8 @@ class LocalStore:
         return build_timeline(self.root, doc)
 
     def apply_timeline_edit(self, pid: str, order: list[str], clips: dict) -> dict:
-        """Timeline track only: clip order and per-clip in/sec/start go to doc["timeline"]. The cut list
-        (scene cut_order, loose_order) and the cut's own sec/in are never changed here. A clip `pick`
-        still sets the cut's pick_version_id (validated against its versions); "pick": null clears it. A clip without "start"
-        keeps its stored start; "start": null packs it after the previous clip."""
+        """Timeline track: clip order and per-clip in/sec/start in doc["timeline"]. Also writes trimmed `sec`
+        back to each cut (planned_sec stays the original plan). Pick still sets pick_version_id."""
         with self._lock:
             doc = self._load_project_doc(pid)
             if not doc or doc.get("deleted_at"):
@@ -1028,6 +1038,17 @@ class LocalStore:
                     entry["start"] = round(st, 2)
                 if entry:
                     new_clips[cid] = entry
+                    c = cuts_map.get(cid)
+                    if c and "sec" in entry:
+                        new_sec = round(float(entry["sec"]), 2)
+                        if c.get("sec") != new_sec:
+                            c["sec"] = new_sec
+                            bump_entity(c)
+                    if c and "in" in entry:
+                        new_in = round(float(entry["in"]), 2)
+                        if c.get("in") != new_in:
+                            c["in"] = new_in
+                            bump_entity(c)
                 pick = e.get("pick")
                 if (isinstance(pick, str) and pick) or ("pick" in e and pick is None):
                     c = cuts_map[cid]
@@ -1035,6 +1056,14 @@ class LocalStore:
                     new_pick = pick if any(v.get("id") == pick for v in vers) else None
                     if c.get("pick_version_id") != new_pick:
                         c["pick_version_id"] = new_pick
+                        bump_entity(c)
+                display = e.get("display")
+                if (isinstance(display, str) and display) or ("display" in e and display is None):
+                    c = cuts_map[cid]
+                    vers = self.list_versions(pid, cid) if display else []
+                    new_disp = display if any(v.get("id") == display for v in vers) else None
+                    if c.get("display_version_id") != new_disp:
+                        c["display_version_id"] = new_disp
                         bump_entity(c)
             doc["timeline"] = {"order": order, "clips": new_clips}
             self._bump_project(doc)
@@ -1050,6 +1079,16 @@ class LocalStore:
                 raise FileNotFoundError(pid)
             old = stored_track(doc)
             doc["timeline"] = reset_track(self.root, doc)
+            cuts_map = self._cuts_map(doc)
+            for cid, clip in (doc["timeline"].get("clips") or {}).items():
+                c = cuts_map.get(cid)
+                if not c or not isinstance(clip, dict):
+                    continue
+                if isinstance(clip.get("sec"), (int, float)):
+                    c["sec"] = round(float(clip["sec"]), 2)
+                if isinstance(clip.get("in"), (int, float)):
+                    c["in"] = round(float(clip["in"]), 2)
+                bump_entity(c)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "timeline_reset", pid)
             if old is not None:

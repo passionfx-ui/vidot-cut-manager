@@ -16,6 +16,7 @@ import {
   makeVideoPlanOk,
   stripHeaderState,
   BEST_BUTTON_LABEL,
+  BEST_THUMB_BORDER,
   MAKE_VIDEO_LABEL,
   IMPORT_BUTTON_LABEL,
   MAKE_VIDEO_TIP,
@@ -156,10 +157,11 @@ describe("version row header: Best, Make Video, Import (0.9.125)", () => {
     assert.match(MAKE_VIDEO_TIP, /selected image/);
   });
 
-  it("selected version: clicked, else open in the canvas, else Best, else current / newest", () => {
+  it("selected version: clicked, else open in the canvas, else display, else Best, else current / newest", () => {
     const c = cut();
     assert.equal(stripSelectedVid(c), "v3", "no Best: current (newest)");
     assert.equal(stripSelectedVid({ ...c, pick: "v2", media: { id: "v2" } }), "v2", "Best");
+    assert.equal(stripSelectedVid({ ...c, display: "v1", media: { id: "v1" } }), "v1", "display");
     assert.equal(stripSelectedVid(c, { open: "v1" }), "v1");
     assert.equal(stripSelectedVid(c, { picked: "v2", open: "v1" }), "v2", "a click wins");
     assert.equal(stripSelectedVid(c, { picked: "gone", open: "also-gone" }), "v3", "unknown ids are ignored");
@@ -323,13 +325,16 @@ describe("gonggan.js wiring (0.9.118)", () => {
     assert.match(js, /closest\("\.gg-vstrip"\)/, "clicks in the row do not clear the cut selection");
   });
 
-  it("thumb click only selects (and opens it, as before); right-click keeps Set as Best", () => {
+  it("thumb click sets the displayed version (timeline + preview) and opens the workflow; Best stays separate", () => {
     const at = js.indexOf("const bindStripItems");
     const body = js.slice(at, js.indexOf("const paintVersionStrip", at));
     assert.match(body, /wrap\.addEventListener\("click", \(e\) => \{\s*e\.stopPropagation\(\);\s*selectStripVersion\(c\.id, vid\);\s*\}\);/);
     assert.ok(!/setPick|toggleBest/.test(body.slice(0, body.indexOf("contextmenu"))), "a click never changes Best");
     assert.match(body, /versionStripMenuItems\(row\), \{ best: \(\) => setPick\(c\.id, vid\) \}/);
-    assert.match(body, /const selectStripVersion = \(cutId, vid\) => \{\s*Object\.assign\(stripPick, \{ pid: state\.pid, cutId, vid \}\);\s*openVersionWorkflow\(cutId, vid\);/);
+    assert.match(body, /const selectStripVersion = \(cutId, vid\) => \{\s*Object\.assign\(stripPick, \{ pid: state\.pid, cutId, vid \}\);\s*void setDisplayVersion\(cutId, vid\);/);
+    assert.match(js, /async function setDisplayVersion\(cutId, vid\)/);
+    assert.match(js, /function applyDisplayVersionLocally\(c, vid\)/);
+    assert.match(js, /display: c\.display \|\| null/);
   });
 
   it("thumbnails carry no icons: no star, no play badge, no + tile; Best = highlighted border; video keeps its length", () => {
@@ -338,9 +343,10 @@ describe("gonggan.js wiring (0.9.118)", () => {
     for (const gone of ["gg-vs-star", "★", "☆", "▶", "gg-vs-plus", "gg-badge"]) assert.ok(!html.includes(gone), gone);
     for (const gone of ["gg-vs-star", "gg-vs-plus", ".gg-vs-import {"]) assert.ok(!css.includes(gone), gone);
     assert.ok(!js.includes("gg-vs-star") && !js.includes("gg-ver-wrap gg-vs-import"), "star / + tile markup removed");
-    assert.match(html, /\$\{r\.best \? " gg-vs-best" : ""\}\$\{sel \? " gg-vs-sel" : ""\}/);
+    assert.match(html, /\$\{r\.best \? " gg-vs-best" : ""\}\$\{sel && !r\.best \? " gg-vs-sel" : ""\}/);
     assert.match(html, /\$\{r\.video \? `<span class="gg-vs-dur"/);
-    assert.match(css, /\.gg-shots \.gg-vstrip \.gg-vs-best \.gg-ver \{ border: 2px solid var\(--gg-acc\); \}/);
+    assert.match(css, new RegExp(`\\.gg-shots \\.gg-vstrip \\.gg-vs-best \\.gg-ver \\{ border: 2px solid ${BEST_THUMB_BORDER.replace("#", "\\#")}; \\}`));
+    assert.match(css, /\.gg-shots \.gg-vstrip \.gg-vs-sel \.gg-ver \{ box-shadow: 0 0 0 2px var\(--gg-fg\); \}/);
     assert.match(css, /\.gg-shots \.gg-vs-dur \{ position: absolute; right: 2px; bottom: 2px;/);
     const at = js.indexOf("const paintVersionStrip");
     assert.match(js.slice(at, at + 1200), /bindThumbFallbacks\(list\)/);

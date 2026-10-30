@@ -99,13 +99,23 @@ def original_sec(row: dict[str, Any]) -> float:
     return float(row.get("tl_sec") or 3.0)
 
 
+def cut_reset_sec(project: dict[str, Any], cut: dict[str, Any]) -> float:
+    """Original length when resetting the timeline (ignores timeline trims stored in cut sec)."""
+    if isinstance(cut.get("planned_sec"), (int, float)):
+        return float(cut["planned_sec"])
+    settings = normalize_settings(project.get("settings") if isinstance(project.get("settings"), dict) else None)
+    return float(settings.get("cut_seconds", 3.0))
+
+
 def reset_track(root: Path, project: dict[str, Any]) -> dict[str, Any]:
     """Timeline rebuilt from the cut list: cut list order, no trims (in 0, original length), no gaps."""
     tl = build_timeline(root, project)
+    active = _active_cuts(project)
     clips: dict[str, dict[str, float]] = {}
     for c in tl["cuts"]:
         kind = (c.get("media") or {}).get("kind")
-        _, sec = clamp_clip(kind, 0.0, original_sec(c), c.get("src_dur"))
+        base = cut_reset_sec(project, active.get(c["id"]) or {})
+        _, sec = clamp_clip(kind, 0.0, base, c.get("src_dur"))
         clips[c["id"]] = {"in": 0.0, "sec": sec}
     return {"order": [c["id"] for c in tl["cuts"]], "clips": clips}
 
@@ -194,13 +204,14 @@ def _version_job(root: Path, pid: str, ver: dict[str, Any]) -> dict[str, Any] | 
 
 
 def current_version(cut: dict[str, Any], versions: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The cut's current version record (newest first list): its pick, else the newest. Chosen whether or
-    not its file still exists, so a missing file shows as no media instead of silently another version."""
-    pick = cut.get("pick_version_id")
-    if isinstance(pick, str):
-        hit = next((v for v in versions if v.get("id") == pick), None)
-        if hit:
-            return hit
+    """The cut's displayed version (newest first list): display_version_id, else Best pick, else the newest.
+    Chosen whether or not its file still exists, so a missing file shows as no media instead of silently another version."""
+    for key in ("display_version_id", "pick_version_id"):
+        vid = cut.get(key)
+        if isinstance(vid, str):
+            hit = next((v for v in versions if v.get("id") == vid), None)
+            if hit:
+                return hit
     return versions[0] if versions else None
 
 
@@ -280,6 +291,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
         cur = current_version(cut, versions)
         job = jobs.get(cur["id"]) if cur else None
         pick = cut.get("pick_version_id")
+        display = cut.get("display_version_id")
         src_dur = media_duration(job) if job else None
         sec = float(cut.get("sec") if isinstance(cut.get("sec"), (int, float)) else 3.0)
         tl_in = float(cut.get("in") or 0.0)
@@ -327,7 +339,8 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "media": media,
             "versions": len(versions),
             "versions_list": vers_list,
-            "pick": pick if cur and pick == cur["id"] else None,
+            "pick": pick if isinstance(pick, str) and any(v.get("id") == pick for v in versions) else None,
+            "display": display if isinstance(display, str) and any(v.get("id") == display for v in versions) else None,
             "prompt_aspect": "",
             "planned_sec": cut.get("planned_sec") if isinstance(cut.get("planned_sec"), (int, float)) else None,
             "end_card": bool(cut.get("end_card")),

@@ -22,10 +22,12 @@ from pathlib import Path
 try:
     from . import gg_data
     from . import gg_ltx
+    from . import gg_script_presplit
     from . import gg_sdk
 except ImportError:  # unit tests import this module directly
     import gg_data  # type: ignore
     import gg_ltx  # type: ignore
+    import gg_script_presplit  # type: ignore
     import gg_sdk  # type: ignore
 
 log = logging.getLogger("gonggan-cut")
@@ -257,9 +259,10 @@ def _check_can_run(lister=None) -> None:
                             {"missing": info})
 
 
-def build_prompt(story: str, problems: list[str] | None = None) -> str:
+def build_prompt(story: str, captions_mode: str | None = None, problems: list[str] | None = None) -> str:
     """The fixed cut split prompt + story; on a retry, the previous answer's problems after it."""
-    text = gg_ltx.CUT_SPLIT_PROMPT + story.strip()
+    mode = gg_script_presplit.normalize_caption_mode(captions_mode)
+    text = gg_ltx.CUT_SPLIT_PROMPT + gg_ltx.cut_split_caption_hint(mode) + "\n\nSTORY:\n" + story.strip()
     if problems:
         text += ("\n\nYOUR PREVIOUS ANSWER WAS NOT A VALID CUT LIST:\n" + "\n".join(f"- {p}" for p in problems[:8])
                  + "\nAnswer again with ONLY the corrected JSON array.")
@@ -410,15 +413,16 @@ def _begin(story) -> dict:
     return model_settings()
 
 
-def _split(story: str, model: dict, on_attempt=None) -> dict:
+def _split(story: str, model: dict, captions_mode: str | None = None, on_attempt=None) -> dict:
     """The TextGenerate runs (at most RETRIES + 1); releases _run_lock and frees the models at the end."""
+    mode = gg_script_presplit.normalize_caption_mode(captions_mode)
     t0 = time.time()
     try:
         problems: list[str] = []
         for attempt in range(1, RETRIES + 2):
             if on_attempt:
                 on_attempt(attempt)
-            raw = _generate(build_prompt(story, problems), model)
+            raw = _generate(build_prompt(story, mode, problems), model)
             try:
                 cuts = parse_answer(raw)
             except gg_ltx.CutListError as ex:
@@ -438,10 +442,17 @@ def _split(story: str, model: dict, on_attempt=None) -> dict:
         _run_lock.release()
 
 
-def ai_cut_split(story) -> dict:
-    """Story -> validated cuts [{cut, duration, description}] from TextGenerate in ComfyUI. Creates nothing."""
+def ai_cut_split(story, captions_mode=None) -> dict:
+    """Story -> validated cuts from pre-split parsing or TextGenerate in ComfyUI. Creates nothing."""
+    mode = gg_script_presplit.normalize_caption_mode(captions_mode)
     model = _begin(story)
-    return _split(story, model)
+    presplit = gg_script_presplit.presplit_public(story, mode)
+    if presplit is not None:
+        try:
+            return {"model": model["clip_name"], "attempts": 0, "seconds": 0.0, "cuts": presplit, "presplit": True}
+        finally:
+            _run_lock.release()
+    return _split(story, model, mode)
 
 
 # One background run at a time (the UI polls it). The last result stays here until the next run starts, so a
@@ -469,9 +480,15 @@ def _job_update(job_id: str, **fields) -> None:
             _job.update(fields)
 
 
-def _job_main(job_id: str, story: str, model: dict) -> None:
+def _job_main(job_id: str, story: str, model: dict, captions_mode: str | None) -> None:
     try:
-        res = _split(story, model, on_attempt=lambda n: _job_update(job_id, attempt=n))
+        mode = gg_script_presplit.normalize_caption_mode(captions_mode)
+        presplit = gg_script_presplit.presplit_public(story, mode)
+        if presplit is not None:
+            _job_update(job_id, state="done", finished=time.time(), cuts=presplit, model=model["clip_name"],
+                        attempts=0, presplit=True)
+            return
+        res = _split(story, model, mode, on_attempt=lambda n: _job_update(job_id, attempt=n))
         _job_update(job_id, state="done", finished=time.time(), cuts=res["cuts"], model=res["model"],
                     attempts=res["attempts"])
     except CutSplitError as ex:
@@ -479,19 +496,29 @@ def _job_main(job_id: str, story: str, model: dict) -> None:
     except Exception as ex:  # noqa: BLE001
         log.exception("[gonggan-cut] AI Cut Split job failed")
         _job_update(job_id, state="error", finished=time.time(), code="sdk", message=f"AI Make Cut failed: {ex}")
+    finally:
+        if _run_lock.locked():
+            _run_lock.release()
 
 
-def start_job(story, start_thread=True) -> dict:
+def start_job(story, captions_mode=None, start_thread=True) -> dict:
     """Same checks as ai_cut_split, then the run continues in a background thread; returns its first snapshot."""
+    mode = gg_script_presplit.normalize_caption_mode(captions_mode)
     model = _begin(story)
     job_id = secrets.token_hex(6)
     with _job_lock:
         _job.clear()
         _job.update({"id": job_id, "state": "running", "story": story, "model": model["clip_name"], "attempt": 1,
-                     "max_attempts": RETRIES + 1, "started": time.time(), "finished": None})
+                     "max_attempts": RETRIES + 1, "started": time.time(), "finished": None, "captions": mode})
+    presplit = gg_script_presplit.presplit_public(story, mode)
+    if presplit is not None:
+        _job_update(job_id, state="done", finished=time.time(), cuts=presplit, attempts=0, presplit=True)
+        if _run_lock.locked():
+            _run_lock.release()
+        return job_status(job_id) or {}
     if start_thread:
         try:
-            threading.Thread(target=_job_main, args=(job_id, story, model), name="gonggan-ai-make-cut",
+            threading.Thread(target=_job_main, args=(job_id, story, model, mode), name="gonggan-ai-make-cut",
                              daemon=True).start()
         except Exception:
             _run_lock.release()
