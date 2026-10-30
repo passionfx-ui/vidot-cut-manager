@@ -303,12 +303,16 @@ async def gg_export_start(request):
     pid = data.get("pid")
     if not isinstance(pid, str) or not pid:
         return _err(400, "pid required")
+    extra = {}
     if gg_native_api.is_native_pid(pid):
-        return _err(400, gg_native_api.NATIVE_UNAVAILABLE)
+        got = await asyncio.to_thread(gg_native_api.native_export_timeline, pid)
+        if got is None:
+            return _err(404, "project not found")
+        extra = {"tl": got[0], "out_dir": got[1], "resolve": gg_native_api.native_media_path}
     try:
         res = await asyncio.to_thread(
             gg_export.start, pid, str(data.get("preset") or "720p"), data.get("width"), data.get("height"),
-            data.get("fps") or 24, bool(data.get("sound", True)),
+            data.get("fps") or 24, bool(data.get("sound", True)), **extra,
         )
     except ValueError as ex:
         return _err(400, str(ex))
