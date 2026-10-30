@@ -489,6 +489,50 @@ class LocalStore:
             self._save_project_doc(pid, doc, "add_cut", cut["id"])
             return doc
 
+    def add_cuts(
+        self,
+        pid: str,
+        entries: list[dict[str, Any]],
+        after: str | None = None,
+    ) -> tuple[dict[str, Any], list[str]]:
+        """Paste Cut List: new cuts in list order after `after` (in its scene, else loose at the end), one save.
+
+        entries: [{name, caption, sec, prompt, graph}]; `graph` becomes the cut's own workflow."""
+        if not isinstance(entries, list) or not entries:
+            raise ValueError("nothing to add")
+        if len(entries) > self._IMPORT_MAX_CUTS:
+            raise ValueError(f"at most {self._IMPORT_MAX_CUTS} cuts per import")
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                raise FileNotFoundError(pid)
+            before = track_order(doc)
+            cuts = self._cuts_map(doc)
+            ref = cuts.get(after) if after else None
+            if not isinstance(ref, dict) or ref.get("deleted_at") or is_reference(ref):
+                ref, after = None, None
+            sid = ref.get("scene_id") if ref else None
+            if not (isinstance(sid, str) and self._scene(doc, sid)):
+                sid = None
+            ids: list[str] = []
+            prev = after
+            for e in entries:
+                sec = self._validate_planned_sec(e.get("sec"))
+                sha = self.put_blob(pid, e["graph"]) if isinstance(e.get("graph"), dict) else None
+                c = new_cut(sid, str(e.get("name") or NEW_CUT_NAME)[:80], sec or 3.0, sha)
+                c["planned_sec"] = sec
+                c["caption"] = str(e.get("caption") or "")[: self._CAPTION_MAX_LEN]
+                c["prompt"] = str(e.get("prompt") or "")
+                cuts[c["id"]] = c
+                doc["cuts"] = cuts
+                self._insert_cut_in_order(doc, c["id"], sid, prev)
+                prev = c["id"]
+                ids.append(c["id"])
+            self._keep_track_order(doc, before)
+            self._bump_project(doc)
+            self._save_project_doc(pid, doc, "add_cuts", ids[0])
+            return doc, ids
+
     _CUT_UPDATE_FIELDS = frozenset({"planned_sec", "notes", "caption", "end_card", "needs_redo"})
     _CAPTION_MAX_LEN = 4000
     _DUE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
