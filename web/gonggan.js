@@ -173,6 +173,7 @@ import {
 import { buildSrt, srtFileName, effectiveCaption, captionEditChanged, captionFieldPlaceholder, captionAtTime } from "./gg_caption_core.js";
 import { rowContentKind, cutRowShellHtml, captionRowContentHtml, groupedListHtml, shotsSections } from "./gg_group_list_core.js";
 import { decideVideoSync } from "./gg_playback_core.js";
+import { noMediaText, noMediaThumbClass, versionMedia } from "./gg_missing_media_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { batchProgressView, createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
 import { selectionBarView, iconRowView, statusPanelView } from "./gg_status_panel_core.js";
@@ -355,23 +356,22 @@ function thumbHtml(media, cls) {
   return `<img class="${cls} gg-thumb-img" draggable="false" src="${esc(posterUrl(media.id))}" loading="lazy" decoding="async" alt="" />`;
 }
 
+/** A thumb whose file failed to load becomes the same "no media" placeholder thumbHtml(null) draws. */
+function showNoMediaThumb(el) {
+  if (!el.isConnected) return;
+  const ph = document.createElement("div");
+  ph.className = noMediaThumbClass(el.classList);
+  ph.textContent = "no media";
+  el.closest(".gg-clip")?.classList.add("gg-clip-empty");
+  el.replaceWith(ph);
+}
+
 function bindThumbFallbacks(root) {
   if (!root) return;
-  root.querySelectorAll("video.gg-thumb-vid").forEach((v) => {
-    if (v._ggThumbErr) return;
-    v._ggThumbErr = true;
-    v.addEventListener("error", () => {
-      v.classList.add("gg-thumb-broken");
-      if (v.preload === "none") v.preload = "metadata";
-    });
-  });
-  root.querySelectorAll("img.gg-thumb-img").forEach((im) => {
-    if (im._ggThumbErr) return;
-    im._ggThumbErr = true;
-    im.addEventListener("error", () => {
-      im.classList.add("gg-thumb-broken");
-      im.removeAttribute("src");
-    });
+  root.querySelectorAll("video.gg-thumb-vid, img.gg-thumb-img").forEach((el) => {
+    if (el._ggThumbErr) return;
+    el._ggThumbErr = true;
+    el.addEventListener("error", () => showNoMediaThumb(el));
   });
 }
 
@@ -5143,11 +5143,6 @@ function repIdOf(c) {
   return (c && (c.pick || (c.media && c.media.id))) || "";
 }
 
-function mediaFromVersion(v) {
-  if (!v) return null;
-  return { id: v.id, kind: v.kind, width: v.width, height: v.height, seconds: v.seconds, model: v.model, source: v.source };
-}
-
 function recomputeCutStarts() {
   const tl = state.timeline;
   if (!tl) return;
@@ -5163,8 +5158,8 @@ function applyPickLocally(c, vid) {
   const v = (c.versions_list || []).find((x) => x.id === vid);
   if (!v) return false;
   c.pick = vid;
-  c.media = mediaFromVersion(v);
-  c.src_dur = v.kind === "video" ? Math.max(0, Number(v.seconds) || 0) : 0;
+  c.media = versionMedia(v);
+  c.src_dur = c.media && c.media.kind === "video" ? Math.max(0, Number(v.seconds) || 0) : 0;
   const clamped = clampClip(c, c.in, c.sec);
   c.in = clamped.in;
   c.sec = clamped.sec;
@@ -5203,7 +5198,7 @@ async function setPick(cutId, vid) {
   }
   const v = (c.versions_list || []).find((x) => x.id === prev.pick);
   c.pick = prev.pick;
-  c.media = prev.media || (v ? mediaFromVersion(v) : null);
+  c.media = prev.media || versionMedia(v);
   c.src_dur = prev.src_dur;
   c.in = prev.in;
   c.sec = prev.sec;
@@ -5506,7 +5501,7 @@ function cutPanelHtml(c, labels) {
     return `
     <div class="gg-ver-wrap${on ? " gg-rep" : repState === "implicit" ? " gg-implicit" : ""}${open ? " gg-ver-open" : ""}" data-vid="${esc(v.id)}">
       <div class="gg-ver" title="${esc(tip)}">
-        <img src="${esc(posterUrl(v.id))}" loading="lazy" alt="" />
+        ${v.missing ? thumbHtml(null, "gg-ver-img") : `<img class="gg-ver-img gg-thumb-img" src="${esc(posterUrl(v.id))}" loading="lazy" alt="" />`}
         <span class="gg-ver-src gg-src-${esc(v.source)}">${esc(fmtSrc(v.source))}</span>
         ${on ? '<span class="gg-ver-rep">Rep</span>' : ""}
       </div>
@@ -5668,6 +5663,7 @@ function mountShots(el) {
     const c = state.timeline && state.timeline.cuts.find((x) => x.id === state.cutId);
     const labels = computeCutLabels(state.timeline);
     panel.innerHTML = cutPanelHtml(c, labels);
+    bindThumbFallbacks(panel);
     panel.querySelectorAll(".gg-promote").forEach((b) => b.addEventListener("click", (e) => {
       e.stopPropagation();
       const wrap = b.closest(".gg-ver-wrap");
@@ -6541,7 +6537,7 @@ function showFrame(force) {
       if (img.dataset.src !== url) { img.dataset.src = url; img.src = url; }
     } else {
       vid.pause(); vid.hidden = true; img.hidden = true; blank.hidden = false;
-      blank.textContent = `${dispNum}. ${c.name} — no media`;
+      blank.textContent = noMediaText(dispNum, c.name);
     }
     preloadNext(i + 1);
   }
@@ -6597,8 +6593,19 @@ function preloadNext(i) {
   }
 }
 
+/** The current clip's file failed to load (e.g. deleted on disk): show the same blank as a cut with no media. */
+function showViewerNoMedia(el) {
+  if (!viewer || viewer.mode === "export") return false;
+  const c = trackClips()[play.idx];
+  if (!c || !c.media || el.dataset.src !== mediaUrl(c.media.id)) return false;
+  const { img, vid, blank } = viewer;
+  vid.pause(); vid.hidden = true; img.hidden = true; blank.hidden = false;
+  blank.textContent = noMediaText(cutDisplayLabel(c, computeCutLabels(state.timeline)), c.name);
+  return true;
+}
+
 /** Viewer main + preload video: surface load failures; clear stuck _ggWait on abort/emptied. */
-function wireViewerMedia(vid, next, blank) {
+function wireViewerMedia(vid, next, blank, img) {
   if (!vid || vid._ggMediaWired) return;
   vid._ggMediaWired = true;
   const clearWait = () => {
@@ -6606,6 +6613,7 @@ function wireViewerMedia(vid, next, blank) {
   };
   vid.addEventListener("error", () => {
     clearWait();
+    if (showViewerNoMedia(vid)) return;
     const err = vid.error;
     const detail = err ? `${err.message || "error"} (code ${err.code})` : "unknown error";
     if (blank) {
@@ -6614,6 +6622,7 @@ function wireViewerMedia(vid, next, blank) {
     }
     vid.hidden = true;
   });
+  img?.addEventListener("error", () => showViewerNoMedia(img));
   vid.addEventListener("emptied", clearWait);
   vid.addEventListener("abort", clearWait);
   if (next && !next._ggMediaWired) {
@@ -7009,7 +7018,7 @@ function mountTimeline(el) {
     label: root.querySelector(".gg-v-label"),
     caption: root.querySelector(".gg-v-cap"),
   };
-  wireViewerMedia(viewer.vid, viewer.next, viewer.blank);
+  wireViewerMedia(viewer.vid, viewer.next, viewer.blank, viewer.img);
   const $r = (q) => root.querySelector(q);
   const paintButtons = () => {
     $r(".gg-snap").classList.toggle("gg-on", ed.snap);
@@ -7178,6 +7187,7 @@ function mountTimeline(el) {
         <div class="gg-edge gg-edge-r${i < cuts.length - 1 ? " gg-edge-split" : ""}" data-side="r" title="Trim out"></div>
       </div>`;
     }).join("");
+    bindThumbFallbacks($r(".gg-track"));
     layoutClips(root);
     bindTrim(root);
     bindReorder(root);
@@ -7365,6 +7375,7 @@ function bindHoverPlay(root) {
     const host = v.parentElement;
     if (!host) return;
     host.addEventListener("mouseenter", () => {
+      if (!v.isConnected) return;
       v.preload = "auto";
       v.loop = true;
       v.play().catch(() => {});
