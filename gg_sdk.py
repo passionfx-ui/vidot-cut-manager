@@ -4,11 +4,13 @@ ComfyUI's own python never imports comfy_sdk. Generation only happens through re
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
 import os
 import random
+import secrets
 import subprocess
 import threading
 import time
@@ -230,9 +232,132 @@ def run_confirmed(pid: str, cut_id: str, seed: int) -> dict:
         if _job.get("status") == "running":
             return {"ok": False, "message": "a regen job is already running"}
     p = plan(pid, cut_id, seed)
-    _set(status="running", pid=pid, cut_id=cut_id, seed=p["seed"], started_at=time.time(), error=None, versions=[])
+    _set(status="running", native=False, pid=pid, cut_id=cut_id, seed=p["seed"], started_at=time.time(), error=None,
+         versions=[])
     threading.Thread(target=_run_worker, args=(p,), name="gonggan-regen", daemon=True).start()
     return {"ok": True, "queued": True, "plan": {k: v for k, v in p.items() if k != "workflow"}}
+
+
+# ---- native cuts: the cut's own saved workflow (API format) through the SDK, output -> new version ----
+SEED_KEYS = ("seed", "noise_seed")
+_NATIVE_PLAN_RE = re.compile(r"native_[0-9a-f-]{36}_[0-9a-f-]{36}_\d{8}-\d{6}_[0-9a-f]{6}", re.I)
+
+
+def _is_int(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _seed_slots(wf: dict):
+    """(node id, inputs, key) of each sampler/noise node's seed widget. A seed fed by a link points at the
+    source node's int widget (e.g. a primitive seed node). Each widget once."""
+    seen = set()
+    for nid, node in wf.items():
+        if not isinstance(node, dict) or not isinstance(node.get("inputs"), dict):
+            continue
+        ct = str(node.get("class_type") or "").lower()
+        if "sampler" not in ct and "noise" not in ct:
+            continue
+        for key in SEED_KEYS:
+            val = node["inputs"].get(key)
+            slot = None
+            if _is_int(val):
+                slot = (str(nid), node["inputs"], key)
+            elif isinstance(val, list) and val:
+                src = wf.get(str(val[0]))
+                src_in = src.get("inputs") if isinstance(src, dict) else None
+                if isinstance(src_in, dict):
+                    k = next((k for k in (*SEED_KEYS, "value") if _is_int(src_in.get(k))), None)
+                    if k:
+                        slot = (str(val[0]), src_in, k)
+            if slot and (slot[0], slot[2]) not in seen:
+                seen.add((slot[0], slot[2]))
+                yield slot
+
+
+def workflow_seeds(wf: dict) -> dict:
+    """{"<node id>.<input>": seed} of an API workflow's sampler seeds."""
+    return {f"{nid}.{key}": inputs[key] for nid, inputs, key in _seed_slots(wf)}
+
+
+def randomize_seeds(wf: dict, rng=None) -> tuple[dict, dict]:
+    """Copy of an API workflow with every sampler seed / noise_seed set to a new random value."""
+    rng = rng or random
+    out = copy.deepcopy(wf)
+    seeds = {}
+    for nid, inputs, key in list(_seed_slots(out)):
+        inputs[key] = rng.randint(1, 2**31 - 1)
+        seeds[f"{nid}.{key}"] = inputs[key]
+    return out, seeds
+
+
+def history_prompt(prompt_id: str) -> dict | None:
+    """API prompt of one run still in ComfyUI's /history (None after a restart or when unknown)."""
+    try:
+        from server import PromptServer
+        h = PromptServer.instance.prompt_queue.get_history(prompt_id=prompt_id) or {}
+    except Exception:  # noqa: BLE001
+        return None
+    p = (h.get(prompt_id) or {}).get("prompt")
+    api = p[2] if isinstance(p, (list, tuple)) and len(p) > 2 else None
+    return api if isinstance(api, dict) else None
+
+
+def _native_api():
+    try:
+        from . import gg_native_api
+    except ImportError:
+        import gg_native_api  # type: ignore
+    return gg_native_api
+
+
+def native_plan(pid: str, cut_id: str, *, new_seed: bool, canvas: dict | None = None) -> dict:
+    """Resolve the cut's current saved workflow, set its seeds (new random ones for Regen, the saved ones for
+    Queue) and store it under cache/regen. Never queues; run_native_confirmed runs exactly this file."""
+    src = _native_api().native_cut_api_workflow(pid, cut_id, canvas)
+    if new_seed:
+        wf, seeds = randomize_seeds(src["workflow"])
+    else:
+        wf, seeds = src["workflow"], workflow_seeds(src["workflow"])
+    name = f"native_{pid}_{cut_id}_{time.strftime('%Y%m%d-%H%M%S')}_{secrets.token_hex(3)}"
+    REGEN_DIR.mkdir(parents=True, exist_ok=True)
+    (REGEN_DIR / f"{name}.json").write_text(json.dumps(wf, ensure_ascii=False, indent=1), encoding="utf-8")
+    return {"pid": pid, "cut_id": cut_id, "plan": name, "source": src["source"], "new_seed": bool(new_seed),
+            "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf)}
+
+
+def _run_native_worker(wf_file: Path, pid: str, cut_id: str) -> None:
+    res = _runner(["run", "--workflow", str(wf_file), "--confirm"], timeout=1800)
+    if not res.get("ok"):
+        _set(status="error", error=res.get("error") or res.get("message"), finished_at=time.time())
+        return
+    try:
+        cap = _native_api().native_capture_prompt_output(pid, cut_id, str(res.get("job_id") or ""), wait_sec=15)
+    except Exception as ex:  # noqa: BLE001
+        cap = {"ok": False, "message": str(ex)}
+    if not cap.get("ok"):
+        _set(status="error", error=cap.get("message"), sdk_job_id=res.get("job_id"), finished_at=time.time())
+        return
+    _set(status="done", versions=[cap["version"]["id"]], sdk_job_id=res.get("job_id"),
+         render_seconds=res.get("seconds"), finished_at=time.time())
+
+
+def run_native_confirmed(pid: str, cut_id: str, plan_name) -> dict:
+    if not isinstance(plan_name, str) or not _NATIVE_PLAN_RE.fullmatch(plan_name) \
+            or not plan_name.startswith(f"native_{pid}_{cut_id}_"):
+        raise ValueError("unknown plan; run Regen again")
+    wf_file = REGEN_DIR / f"{plan_name}.json"
+    if not wf_file.is_file():
+        raise ValueError("plan not found; run Regen again")
+    with _lock:
+        if _job.get("status") == "running":
+            return {"ok": False, "message": "a regen job is already running"}
+        _job.clear()
+        _job.update(status="running", native=True, pid=pid, cut_id=cut_id, started_at=time.time(), error=None,
+                    versions=[])
+    _set()
+    threading.Thread(target=_run_native_worker, args=(wf_file, pid, cut_id), name="gonggan-regen-native",
+                     daemon=True).start()
+    return {"ok": True, "queued": True, "plan": plan_name}
 
 
 # ---- send last ComfyUI output to a cut (no generation) ----

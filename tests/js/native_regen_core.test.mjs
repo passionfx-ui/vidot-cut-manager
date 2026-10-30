@@ -7,8 +7,34 @@ import {
   nativeRegenQueueCheck,
   REGEN_CONFIRM_TITLE,
   REGEN_SKIP_MESSAGE,
+  sdkRegenErrorMessage,
+  sdkPlanSummary,
+  sdkJobToast,
 } from "../../web/gg_native_regen_core.js";
 import { splitConfirmMessage } from "../../web/gg_confirm_core.js";
+
+describe("native SDK Regen / Queue text", () => {
+  it("an old server's answer asks for a restart", () => {
+    assert.match(sdkRegenErrorMessage("Not available for native projects yet"), /Restart ComfyUI/);
+    assert.equal(sdkRegenErrorMessage("a regen job is already running"), "a regen job is already running");
+    assert.equal(sdkRegenErrorMessage(""), "unknown error");
+  });
+
+  it("plan summary names the source and the seed", () => {
+    assert.equal(sdkPlanSummary({ nodes: 9, source: "embedded", new_seed: true, seeds: { "3.seed": 42 } }),
+      "9 nodes · current version · new seed 42 · via Comfy SDK");
+    assert.equal(sdkPlanSummary({ nodes: 2, source: "stored", seeds: { "3.seed": 7, "5.noise_seed": 8 } }),
+      "2 nodes · saved workflow · seed 7 (+1) · via Comfy SDK");
+    assert.match(sdkPlanSummary({ nodes: 1, source: "stored", seeds: {} }), /no sampler seed/);
+  });
+
+  it("job toasts only for native jobs when done or failed", () => {
+    assert.deepEqual(sdkJobToast({ native: true, status: "done" }, "1-1 Rain"), { summary: "New version added", detail: "1-1 Rain", kind: "ok" });
+    assert.deepEqual(sdkJobToast({ native: true, status: "error", error: "boom" }, "1-1 Rain"), { summary: "SDK job failed", detail: "1-1 Rain — boom", kind: "warn" });
+    assert.equal(sdkJobToast({ native: true, status: "running" }), null);
+    assert.equal(sdkJobToast({ native: false, status: "done" }), null);
+  });
+});
 
 describe("regenConfirmMessage", () => {
   it("question is the modal title, cut label the body", () => {

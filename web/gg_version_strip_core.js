@@ -79,6 +79,16 @@ export function importButtonState({ hasCut, native, busy } = {}) {
   return { disabled: false, title: IMPORT_LABEL };
 }
 
+export const REGEN_LABEL = "Regen";
+
+/** Regen button next to Import: native projects with a selected cut, while no SDK job is starting. */
+export function regenButtonState({ hasCut, native, busy } = {}) {
+  if (!native) return { disabled: true, title: "Regen here is for native projects (use the cut's right-click menu)" };
+  if (!hasCut) return { disabled: true, title: "Select a cut to regenerate" };
+  if (busy) return { disabled: true, title: "Busy, try again in a moment" };
+  return { disabled: false, title: REGEN_LABEL };
+}
+
 /** Show the left arrow (back to newest) only when the row is scrolled right. */
 export function showNewestButton(scrollLeft) {
   return Number(scrollLeft) > NEWEST_BUTTON_MIN_SCROLL;

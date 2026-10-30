@@ -7,6 +7,8 @@ import {
   SET_BEST_LABEL,
   formatClipDuration,
   importButtonState,
+  regenButtonState,
+  REGEN_LABEL,
   needsDurationProbe,
   showNewestButton,
   stripScrollLeft,
@@ -134,6 +136,16 @@ describe("importButtonState", () => {
   });
 });
 
+describe("regenButtonState", () => {
+  it("label and tooltip are Regen; enabled only for a selected native cut while idle", () => {
+    assert.equal(REGEN_LABEL, "Regen");
+    assert.deepEqual(regenButtonState({ hasCut: true, native: true }), { disabled: false, title: "Regen" });
+    assert.equal(regenButtonState({ hasCut: true, native: false }).disabled, true);
+    assert.equal(regenButtonState({ hasCut: false, native: true }).disabled, true);
+    assert.equal(regenButtonState({ hasCut: true, native: true, busy: true }).disabled, true);
+  });
+});
+
 describe("gonggan.js wiring", () => {
   const fnBody = (name) => {
     const at = js.indexOf(`function ${name}(`);
@@ -170,5 +182,13 @@ describe("gonggan.js wiring", () => {
     assert.match(fnBody("versionStripHtml"), /versionThumbParts\(/);
     const at = js.indexOf("const paintVersionStrip");
     assert.match(js.slice(at, at + 1200), /bindThumbFallbacks\(list\)/);
+  });
+
+  it("Regen sits right after Import and runs the native SDK Regen; Queue goes through queueButtonClick", () => {
+    assert.match(fnBody("versionImportButtonHtml"), /gg-vs-import[\s\S]*gg-vs-regen/);
+    assert.match(js, /querySelector\("\.gg-vs-regen"\)\?\.addEventListener\("click", \(e\) => \{\s*e\.stopPropagation\(\);\s*void regenNativeCut\(cutId\);/);
+    assert.match(js, /\.gg-queue-btn"\)\?\.addEventListener\("click", \(\) => void queueButtonClick\(\)\)/);
+    assert.match(fnBody("queueButtonClick"), /ids\.length === 1\) return sdkGenerateNativeCut\(ids\[0\], \{ newSeed: false \}\)/);
+    assert.match(fnBody("regenNativeCut"), /sdkGenerateNativeCut\(cutId, \{ newSeed: true \}\)/);
   });
 });
