@@ -62,8 +62,11 @@ async def gg_project_create(request):
     settings = data.get("settings")
     if settings is not None and not isinstance(settings, dict):
         return _err(400, "settings must be an object")
+    location = data.get("location")
+    if location is not None and not isinstance(location, str):
+        return _err(400, "location must be a string")
     try:
-        res = await asyncio.to_thread(gg_native_api.create_native_project, name.strip(), ref or None, settings)
+        res = await asyncio.to_thread(gg_native_api.create_native_project, name.strip(), ref or None, settings, location)
     except ValueError as ex:
         return _err(400, str(ex))
     except Exception as ex:  # noqa: BLE001
