@@ -5,6 +5,7 @@ import { isRegenEmptyCut } from "./gg_native_regen_core.js";
 export const QUEUE_EMPTY_TIP = "Select cuts to queue";
 export const QUEUE_NATIVE_TIP = "Native projects only";
 export const QUEUE_BUSY_TIP = "Busy, try again in a moment";
+export const QUEUE_NO_PROJECT_TIP = "No project open";
 const LIST_MAX = 8;
 
 const cuts = (n) => `${n} cut${n === 1 ? "" : "s"}`;
@@ -52,8 +53,9 @@ export function queueDeleteBody(promptIds) {
   return { delete: [...new Set((Array.isArray(promptIds) ? promptIds : []).filter((id) => id != null && id !== "").map(String))] };
 }
 
-/** Status panel Queue button state (also Queue selected / Re-queue in the cut menu). */
-export function queueButtonState({ count = 0, native = false, busy = false } = {}) {
+/** Status panel Queue button state (also Queue selected / Re-queue in the cut menu); off while no project is open. */
+export function queueButtonState({ count = 0, native = false, busy = false, hasProject = true } = {}) {
+  if (!hasProject) return { disabled: true, title: QUEUE_NO_PROJECT_TIP };
   const title = !(count > 0) ? QUEUE_EMPTY_TIP : !native ? QUEUE_NATIVE_TIP : busy ? QUEUE_BUSY_TIP : `Queue ${cuts(count)} to ComfyUI`;
   return { disabled: !(count > 0) || !native || !!busy, title };
 }

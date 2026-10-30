@@ -9,11 +9,13 @@ try:
     from .gg_project import LocalStore
     from .gg_project.timeline import timeline_order
     from .gg_project.ids import is_uuid_id
+    from .gg_project.project_settings import make_project_folder
 except ImportError:  # unittest / plain script
     from gg_data import PACK_DIR, clamp_clip  # type: ignore
     from gg_project import LocalStore  # type: ignore
     from gg_project.timeline import timeline_order  # type: ignore
     from gg_project.ids import is_uuid_id  # type: ignore
+    from gg_project.project_settings import make_project_folder  # type: ignore
 
 try:
     from . import gg_template
@@ -82,15 +84,36 @@ def resolve_template_graph(template_ref: str | None) -> dict | None:
         return None
 
 
-def create_native_project(name: str, template_ref: str | None = None, settings: dict | None = None) -> dict:
+def create_native_project(
+    name: str,
+    template_ref: str | None = None,
+    settings: dict | None = None,
+    location: str | None = None,
+) -> dict:
+    """With a location, the project folder <location>/<name> (only an `assets` subfolder) is created
+    first and becomes settings.project_folder."""
     name = (name or "").strip()
     if not name:
         raise ValueError("name required")
     ref = (template_ref or "").strip() or None
     graph = resolve_template_graph(ref) if ref else None
+    folder = None
+    created: list[Path] = []
+    if location is not None:
+        folder = make_project_folder(location, name, created)
+        settings = {**(settings or {}), "project_folder": str(folder)}
     store = native_store()
-    doc = store.create_project(name, template_ref=ref, template_graph=graph, settings=settings)
-    return {"ok": True, "project": {"id": doc["id"], "name": doc.get("name"), "native": True}}
+    try:
+        doc = store.create_project(name, template_ref=ref, template_graph=graph, settings=settings)
+    except Exception:
+        for d in reversed(created):
+            try:
+                d.rmdir()
+            except OSError:
+                pass
+        raise
+    project_folder = (doc.get("settings") or {}).get("project_folder") or ""
+    return {"ok": True, "project": {"id": doc["id"], "name": doc.get("name"), "native": True, "folder": project_folder}}
 
 
 def rename_native_project(pid: str, name: str) -> dict:
