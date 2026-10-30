@@ -133,8 +133,12 @@ class WorkflowSelectionTests(NativeBase):
             na.native_cut_api_workflow(self.pid, self.cut, canvas=UI)
 
     def test_empty_cut(self):
+        """No workflow and no readable Image template (0.9.117: otherwise an empty cut runs the Image template)."""
+        self.store.update_project(self.pid, {"settings": {"image_template": "missing/gone.json"}})
+        before = set(self.store.get_project(self.pid)["cuts"])
+        empty = next(c for c in self.store.add_cut(self.pid)["cuts"] if c not in before)
         with self.assertRaises(na.NativeWorkflowError) as cm:
-            na.native_cut_api_workflow(self.pid, self.cut)
+            na.native_cut_api_workflow(self.pid, empty)
         self.assertEqual(cm.exception.code, "empty")
 
     def test_unknown_cut(self):

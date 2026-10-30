@@ -8,6 +8,7 @@ export const SDK_OFF_TIP = "Comfy SDK not ready";
 export const BUSY_TIP = "Busy, try again in a moment";
 export const REGEN_EMPTY_TIP = "Empty cut: no workflow to queue";
 export const TRASH_TIP = "Deleted cuts – click to restore";
+export const I2V_NO_IMAGE_TIP = "This cut has no image version yet";
 /** Divider line between menu items (no action). */
 export const MENU_SEPARATOR = Object.freeze({ key: "sep", separator: true });
 
@@ -62,9 +63,11 @@ export function cutActionItems(ctx = {}) {
 /**
  * @param {{ native?: boolean, multi?: boolean, needsRedo?: boolean, sdkBusy?: boolean, sdkOk?: boolean,
  *   emptyCut?: boolean, readonlyTip?: string, canMoveUp?: boolean, canMoveDown?: boolean, inScene?: boolean, anyInScene?: boolean,
- *   trashLabel?: string, trashCount?: number, queueCount?: number, queuedCount?: number, failedCount?: number }} ctx
+ *   trashLabel?: string, trashCount?: number, queueCount?: number, queuedCount?: number, failedCount?: number,
+ *   hasImage?: boolean }} ctx
  *   queueCount: selected cuts (default 1); queuedCount / failedCount: selected cuts with a still-queued /
- *   failed prompt (Remove from queue / Re-queue are listed only then)
+ *   failed prompt (Remove from queue / Re-queue are listed only then); hasImage: the cut has an image version
+ *   (Image to Video, native only)
  */
 export function cutCardMenuItems(ctx = {}) {
   const nat = !!ctx.native;
@@ -82,6 +85,8 @@ export function cutCardMenuItems(ctx = {}) {
         { key: "moveToScene", label: "Move to scene \u25B8", disabled: false },
       ]
     : [];
+  const i2vTitle = ctx.multi ? SINGLE_CUT_TIP : ctx.sdkBusy ? BUSY_TIP : !ctx.hasImage ? I2V_NO_IMAGE_TIP : "";
+  const i2vItems = nat ? [{ key: "i2v", label: "Image to Video", disabled: !!i2vTitle, title: i2vTitle }] : [];
   return [
     { key: "group", label: "Group" },
     { key: "ungroup", label: "Ungroup", disabled: !ctx.inScene && !ctx.anyInScene },
@@ -92,6 +97,7 @@ export function cutCardMenuItems(ctx = {}) {
     a.rename,
     { key: "addCut", label: "Add Cut" },
     a.regen,
+    ...i2vItems,
     { key: "queueSel", label: "Queue selected", disabled: q.disabled, title: q.title },
     ...queueItems,
     a.send,

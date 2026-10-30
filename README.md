@@ -25,7 +25,7 @@ Plan a short film as projects, scenes and cuts, open each cut's workflow on the 
 - **Production tracking** - summary bar `Image a/N · Video b/N · Best c/N`, project completion %, *Needs redo* flag, **Show redo cuts only** filter, 3-second rule warning (with *End card* exemption).
 - **Caption field** - one text area per cut for director notes and dialogue (placeholder includes the project caption language). **Info** vs **Caption** list modes change layout only; **Export captions (.srt)** uses stored caption text only, timed from cut order and lengths.
 - **New project** - name, aspect/resolution preset, FPS, default cut length, default workflow template, caption language, and an optional folder path.
-- **Project Settings** (the ⚙ gear next to **Project:**, or right-click the project row) - just two settings: **Output folder** (a local folder for this project's results, organized by project / scene / cut; checked on Save; empty = the plugin's own storage; stored for the planned auto-organize, nothing is written there yet) and **Default template** (with **Use last**). Rename a project with right-click > **Rename Project…**.
+- **Project Settings** (the ⚙ gear next to **Project:**, or right-click the project row) - **Output folder** (a local folder for this project's results, organized by project / scene / cut; checked on Save; empty = the plugin's own storage; stored for the planned auto-organize, nothing is written there yet), **Default template** (with **Use last**), and the project **Image template** / **Video template** (see [Default templates and Image to Video](#default-templates-and-image-to-video)). Rename a project with right-click > **Rename Project…**.
 - **Auto Cut Split** - in the New Project dialog: 1. Copy the prompt and paste it into your LLM together with your story. 2. Paste the LLM's result into the box to split it into scenes and cuts (with captions and a reference name list) automatically. The preview shows e.g. `3 scenes, 12 cuts, 4 references will be created`; Create stays disabled while a line has an error.
 - **References** - project right-click menu > References…: Character / Place / Prop / Style / Other with category chips. **+ New** adds a name; **Generate** opens its workflow (your default template) in a ComfyUI tab; run it, then **Add last output** makes that image the reference's picture (the newest one is used). Rename / Delete as well. References stay out of the timeline and exports. Names from an Auto Cut Split `# References` section appear here automatically.
 - **Rename a cut** - right-click a cut > **Rename…** (a new cut is named "New cut" until you do; on-screen numbers come from position).
@@ -83,8 +83,8 @@ Turn a story into ready-to-render cuts (native projects). Use **AI Cut Split** w
 
 1. In the Shots toolbar click **Copy Cut Split Prompt**, paste it into any LLM and add your story after `STORY:`.
 2. The LLM answers with a JSON array: `[{"cut": 1, "duration": 3, "description": "..."}]` — `cut` a whole number, `duration` 0.5–3 seconds, `description` one short line (max 300 characters). Older lists with `content` / `ltx_prompt` still paste (read as `description`).
-3. Click **Paste Cut List**, paste the answer (code fences or extra text around the array are fine), pick the workflow (**Text to video** by default, or **Image to video**) and **Create cuts**. Invalid lists are refused with one message per problem, e.g. `Item 3 (cut 3): "duration" must be between 0.5 and 3 seconds (got 4).`
-4. Each new cut gets: name (first 80 characters), caption and prompt = `description`, length = `duration`, and its own copy of the LTX example workflow with `description` in the positive *CLIP Text Encode* and the frame count set from the duration (`frames = min(round(duration × fps / 8) × 8 + 1, 73)`, fps from the workflow's save node, 24 in the examples).
+3. Click **Paste Cut List**, paste the answer (code fences or extra text around the array are fine), pick the workflow (**Project Video template** by default, or the bundled LTX **Text to video** / **Image to video**) and **Create cuts**. AI Cut Split always uses the project Video template. Invalid lists are refused with one message per problem, e.g. `Item 3 (cut 3): "duration" must be between 0.5 and 3 seconds (got 4).`
+4. Each new cut gets: name (first 80 characters), caption and prompt = `description`, length = `duration`, and its own copy of the workflow with `description` in its prompt node (see [Prompt node rule](#default-templates-and-image-to-video)) and the frame count set from the duration (`frames = min(round(duration × fps / 8) × 8 + 1, 73)`, fps from the workflow's save node, 24 in the examples).
 5. Press **Queue** with no cut selected to render every cut in list order, one at a time through the Comfy SDK; each result is added as a new version, so the timeline fills in as it goes. Cut cards show **Waiting / Generating / Done / Failed**; press **Queue** again (it shows **Stop**) to cancel the cuts still waiting (the one generating finishes). It runs on the server, so the workflow tab does not need to be open. To render a single cut, select it and press **Queue** (or right-click > **Regen**). Nothing is queued when the cuts are created.
 
 ### AI Cut Split (local LLM)
@@ -119,6 +119,26 @@ The LTX-Video weights are **not included** in this repository. Download them you
 
 ### Settings (optional)
 Copy `gonggan_settings.default.json` to `gonggan_settings.json` to point `data_root` / `uid` at an external legacy project data folder (read-only import of older projects). Leave `data_root` empty to use native projects only.
+
+## Default templates and Image to Video
+
+Built-in templates ship as normal ComfyUI workflows in [`examples/workflows/`](examples/workflows/) and appear at the top of every **Template** dropdown (after `(none)`):
+
+| Template | File | Models |
+| --- | --- | --- |
+| **Image (default)** | `z_image_turbo_t2i.json` - Z-Image Turbo text to image, 1024×576, 8 steps, cfg 1, res_multistep / simple | `z_image_turbo_bf16.safetensors` (`models/diffusion_models/`), `qwen_3_4b.safetensors` (CLIP type `lumina2`, `models/text_encoders/`), `ae.safetensors` (`models/vae/`) |
+| **Video LTX (default)** | `ltxv_image_to_video.json` - LTX-Video image to video, up to 73 frames at 24 fps, 8 steps, cfg 1 | see the LTX table above |
+| **Video LTX text-to-video** | `ltxv_text_to_video.json` | see the LTX table above |
+
+The models are replaceable: pick your own saved workflow as a template, or open a cut and swap the loaders. Model files are not included.
+
+**Project Image / Video template.** New Project and Project Settings (⚙) have **Image template** (default `Image (default)`) and **Video template** (default `Video LTX (default)`), saved in the project settings. New cuts and Generate All use the Image template, Paste Cut List / AI Cut Split cuts use the Video template. A cut's own workflow always wins, and a linked **Default template** wins over the Image template for new cuts. If the chosen Video template is the image-to-video one, list cuts without a start image run the workflow as saved; pick **Video LTX text-to-video** for pure text-to-video lists.
+
+**Prompt node rule.** The cut's description is written into the node titled **Prompt** (exact title, case-insensitive). Without one, it goes into the *CLIP Text Encode* that feeds the sampler's `positive` input. With neither, Paste Cut List / AI Cut Split and Image to Video stop with `Prompt node not found. Rename the prompt node to Prompt.`; an Image template without one just runs with its saved prompt.
+
+**Start image rule.** Image to Video fills the node titled **Start Image**; without one, the workflow's only *Load Image* node. No title and several Load Image nodes (or none) stops with `Start image node not found. Rename the input node to Start Image.` Nothing is guessed.
+
+**Image to Video** (version row button next to **Regen**, or right-click a cut > **Image to Video**): takes the cut's **Best** image version (else the version open in the workflow tab, else the newest image), copies it to ComfyUI's `input/gonggan/` folder, fills the start image node, writes the cut description into the prompt node, sets the length from the cut duration, and runs the project's Video template through the Comfy SDK path with a new seed after you confirm. No tab is opened; the video is added as a new version of the same cut.
 
 ## Where data is stored
 Everything is written under the plugin folder (all gitignored): `projects/`, `edits/`, `versions/`, `workflows/`, `templates/`, `cache/`, `trash/`. Shot workflows are also saved through ComfyUI's workflow store under `user/default/workflows/gonggan/<project>/<cut>.json`. Deleting a project moves it to `trash/` first.

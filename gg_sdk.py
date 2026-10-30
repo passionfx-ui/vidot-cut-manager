@@ -310,19 +310,40 @@ def _native_api():
     return gg_native_api
 
 
-def native_plan(pid: str, cut_id: str, *, new_seed: bool, canvas: dict | None = None, convert: bool = False) -> dict:
-    """Resolve the cut's current saved workflow, set its seeds (new random ones for Regen, the saved ones for
-    Queue) and store it under cache/regen. Never queues; run_native_confirmed runs exactly this file."""
-    src = _native_api().native_cut_api_workflow(pid, cut_id, canvas, convert)
-    if new_seed:
-        wf, seeds = randomize_seeds(src["workflow"])
-    else:
-        wf, seeds = src["workflow"], workflow_seeds(src["workflow"])
+def _save_native_plan(pid: str, cut_id: str, wf: dict) -> str:
     name = f"native_{pid}_{cut_id}_{time.strftime('%Y%m%d-%H%M%S')}_{secrets.token_hex(3)}"
     REGEN_DIR.mkdir(parents=True, exist_ok=True)
     (REGEN_DIR / f"{name}.json").write_text(json.dumps(wf, ensure_ascii=False, indent=1), encoding="utf-8")
+    return name
+
+
+def native_plan(pid: str, cut_id: str, *, new_seed: bool, canvas: dict | None = None, convert: bool = False,
+                fill_start: bool = False) -> dict:
+    """Resolve the cut's current saved workflow, set its seeds (new random ones for Regen, the saved ones for
+    Queue) and store it under cache/regen. `fill_start` (Generate All) points a node titled "Start Image" at the
+    cut's Best / newest still image. Never queues; run_native_confirmed runs exactly this file."""
+    na = _native_api()
+    src = na.native_cut_api_workflow(pid, cut_id, canvas, convert)
+    if new_seed:
+        wf, seeds = randomize_seeds(src["workflow"])
+    else:
+        wf, seeds = copy.deepcopy(src["workflow"]), workflow_seeds(src["workflow"])
+    start = na.fill_titled_start_image(pid, cut_id, wf) if fill_start else None
+    name = _save_native_plan(pid, cut_id, wf)
     return {"pid": pid, "cut_id": cut_id, "plan": name, "source": src["source"], "new_seed": bool(new_seed),
-            "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf)}
+            "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf),
+            **({"start_version": start} if start else {})}
+
+
+def image_to_video_plan(pid: str, cut_id: str, selected_vid: str | None = None) -> dict:
+    """Image to Video dry run: the project's Video template with the cut's start image and description, new random
+    seeds, stored under cache/regen like a Regen plan (run it with run_native_confirmed). Never queues."""
+    info = _native_api().native_image_to_video_workflow(pid, cut_id, selected_vid)
+    wf, seeds = randomize_seeds(info["workflow"])
+    name = _save_native_plan(pid, cut_id, wf)
+    return {"pid": pid, "cut_id": cut_id, "plan": name, "source": "image_to_video", "new_seed": True,
+            "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf),
+            **{k: info[k] for k in ("template", "start_version", "start_node", "image", "prompt", "frames")}}
 
 
 def _run_native_worker(wf_file: Path, pid: str, cut_id: str) -> None:
@@ -418,7 +439,7 @@ def _generate_one(batch_id: str, pid: str, cut_id: str) -> dict:
     """One cut through the 0.9.114 native SDK path with its saved seeds: {"status", "error"?, "version"?}."""
     na = _native_api()
     try:
-        p = native_plan(pid, cut_id, new_seed=False, convert=True)
+        p = native_plan(pid, cut_id, new_seed=False, convert=True, fill_start=True)
     except na.NativeWorkflowError as ex:
         return {"status": "skipped" if ex.code == "empty" else "failed", "error": str(ex)}
     except (ValueError, OSError) as ex:

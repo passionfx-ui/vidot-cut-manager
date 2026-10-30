@@ -12,6 +12,7 @@ import {
   cutListSummary,
   createCutsConfirmMessage,
   cutListPayload,
+  cutListWorkflowOptions,
   OLLAMA_DEFAULT_URL,
   ollamaBaseUrl,
   ollamaModelsQuery,
@@ -183,7 +184,15 @@ describe("confirm + payload", () => {
       pid: "p", workflow: "t2v", cuts: [{ cut: 1, duration: 3, description: "A red fox runs through snow, tracking shot." }],
     });
     assert.equal(cutListPayload("p", cuts, "", "c1").after, "c1");
-    assert.equal(cutListPayload("p", cuts, "", "c1").workflow, "t2v");
+    assert.equal("workflow" in cutListPayload("p", cuts, "", "c1"), false, "no workflow = the project's Video template");
+  });
+
+  it("workflow choices start with the project's Video template (0.9.117)", () => {
+    const opts = cutListWorkflowOptions({ video_template: "builtin:video-ltx-t2v" });
+    assert.deepEqual(opts.map((o) => o.id), ["", "t2v", "i2v"]);
+    assert.equal(opts[0].label, "Project Video template (Video LTX text-to-video)");
+    assert.equal(cutListWorkflowOptions(null)[0].label, "Project Video template (Video LTX (default))");
+    assert.equal(cutListWorkflowOptions({ video_template: "my/ltx.json" })[0].label, "Project Video template (my/ltx.json)");
   });
 });
 

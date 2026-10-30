@@ -100,7 +100,7 @@ class GenerateAllBase(unittest.TestCase):
         self.pid = self.store.create_project("P")["id"]
         self.empty = next(iter(self.store.get_project(self.pid)["cuts"]))
         cuts = [{"cut": i, "duration": 2, "description": f"Shot {i}"} for i in (1, 2, 3)]
-        self.ids = na.native_add_cut_list(self.pid, cuts, after=self.empty)["cut_ids"]
+        self.ids = na.native_add_cut_list(self.pid, cuts, workflow="t2v", after=self.empty)["cut_ids"]
         self.regen_dir = self.root / "regen"
         self.events = []
         self._patches = [
@@ -165,13 +165,11 @@ class GenerateAllTests(GenerateAllBase):
         order = [self.ids[2], self.empty, self.ids[0], self.ids[1]]
         res = self.start(order)
         self.assertTrue(res["ok"])
-        self.assertEqual(self.ran, [self.ids[2], self.ids[0], self.ids[1]])
+        self.assertEqual(self.ran, order, "0.9.117: the empty cut runs the project Image template")
         b = gg_sdk.generate_all_status()
         self.assertEqual(b["status"], "done")
-        self.assertEqual([(it["cut_id"], it["status"]) for it in b["items"]],
-                         [(self.ids[2], "done"), (self.empty, "skipped"), (self.ids[0], "done"), (self.ids[1], "done")])
+        self.assertEqual([(it["cut_id"], it["status"]) for it in b["items"]], [(c, "done") for c in order])
         self.assertEqual(b["items"][0]["version"], f"v-{self.ids[2]}")
-        self.assertIn("no workflow", b["items"][1]["error"])
         generating = [next(it["cut_id"] for it in e["items"] if it["status"] == "generating")
                       for e in self.events if any(it["status"] == "generating" for it in e["items"])]
         self.assertEqual(list(dict.fromkeys(generating)), [self.ids[2], self.empty, self.ids[0], self.ids[1]])

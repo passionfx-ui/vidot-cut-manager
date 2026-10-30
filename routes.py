@@ -827,6 +827,27 @@ async def _native_regen(pid: str, cid: str, data: dict):
         return _err(400, str(ex))
 
 
+@routes.post("/gonggan/image-to-video")
+async def gg_image_to_video(request):
+    """Native only, dry run: {"pid", "cut_id", "selected_vid"?} -> {"plan"} = the project's Video template with the
+    cut's Best (else selected / newest) image as start image and its description as prompt. Queues nothing; run it
+    with POST /gonggan/regen {"dry_run": false, "confirm": true, "plan": ...}."""
+    data = await _json_body(request)
+    pid, cid, vid = data.get("pid"), data.get("cut_id"), data.get("selected_vid")
+    if not isinstance(pid, str) or not isinstance(cid, str) or not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid and cut_id required")
+    if vid is not None and not isinstance(vid, str):
+        return _err(400, "selected_vid must be a string")
+    try:
+        plan = await asyncio.to_thread(gg_sdk.image_to_video_plan, pid, cid, vid or None)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] image-to-video failed")
+        return _err(500, str(ex))
+    return web.json_response({"ok": True, "dry_run": True, "queued": False, "plan": plan})
+
+
 @routes.get("/gonggan/regen/status")
 async def gg_regen_status(request):
     return web.json_response({"ok": True, "job": gg_sdk.job_status()})
