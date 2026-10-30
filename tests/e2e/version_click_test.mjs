@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import puppeteer from "puppeteer-core";
+import { fillNewProjectModal } from "./new_project_helpers.mjs";
 import { shotWorkflowRelPathById } from "../../web/gg_shot_names.js";
 
 const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
@@ -232,11 +233,8 @@ async function createProjectViaUi(page, name, templateRef) {
     );
   });
   await clickCtxItem(page, "New Project…");
-  await page.waitForSelector(".gg-modal", { timeout: 10000 });
-  await page.click(".gg-modal-name", { clickCount: 3 });
-  await page.type(".gg-modal-name", name, { delay: 8 });
-  if (templateRef) await page.select(".gg-modal-tpl", templateRef).catch(() => {});
-  await page.click(".gg-modal .gg-primary");
+  await fillNewProjectModal(page, { name, templateRef });
+  await page.click(".gg-modal-create");
   await page.waitForFunction(
     (n) => {
       const sel = document.querySelector(".gg-root.gg-shots .gg-proj");

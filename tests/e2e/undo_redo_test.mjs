@@ -2,7 +2,7 @@
  * 0.9.79 Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y: Shots (cut reorder, scene group) and Timeline (move, trim, Reset)
  * histories, key scope (canvas and text inputs left alone), history cleared on project switch, and the
  * first-show Timeline height (half of ComfyUI's default bottom panel, fresh browser profile).
- * 0.9.81: Remove from Scene / Delete / Add Cut from the cut context menu, then Ctrl+Z / Ctrl+Y with the
+ * 0.9.81: Ungroup / Delete / Add Cut from the cut context menu, then Ctrl+Z / Ctrl+Y with the
  * pointer moved off the panel (last-clicked panel fallback); a canvas click hands Ctrl+Z back to ComfyUI.
  * ZZ-test- projects only. Blocks POST /prompt and /gonggan/regen; no other request is changed.
  */
@@ -88,8 +88,17 @@ async function selectProject(page, pid) {
   await sleep(1200);
 }
 
+/** Box of the first `sel` match, read in the page so a list re-render cannot leave a detached handle. */
+async function boxOf(page, sel) {
+  const h = await page.waitForFunction((s) => {
+    const r = document.querySelector(s)?.getBoundingClientRect();
+    return r && r.width > 0 && r.height > 0 ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
+  }, { timeout: 15000 }, sel);
+  return h.jsonValue();
+}
+
 async function hover(page, sel) {
-  const b = await (await page.waitForSelector(sel, { timeout: 15000 })).boundingBox();
+  const b = await boxOf(page, sel);
   await page.mouse.move(b.x + b.width / 2, b.y + Math.min(b.height / 2, 12), { steps: 3 });
   await sleep(150);
 }
@@ -148,7 +157,7 @@ async function clickCtxItem(page, label) {
 }
 
 async function rightClickCut(page, sel) {
-  const box = await (await page.waitForSelector(sel, { timeout: 15000 })).boundingBox();
+  const box = await boxOf(page, sel);
   await page.mouse.click(box.x + 12, box.y + 12, { button: "right" });
 }
 
@@ -245,8 +254,10 @@ async function main() {
         el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: i > 0, clientX: r.x + 12, clientY: r.y + r.height / 2 }));
       });
     });
-    await sleep(300);
-    await page.click(".gg-root.gg-shots .gg-sel-group");
+    await page.waitForFunction(() =>
+      document.querySelectorAll(".gg-root.gg-shots .gg-cut.gg-sel").length === 2 &&
+      !document.querySelector(".gg-root.gg-shots .gg-ir-scene")?.disabled, { timeout: 10000 });
+    await page.click(".gg-root.gg-shots .gg-ir-scene");
     await submitAskDialog(page);
     await waitFor(sceneCount, 1, "scene create");
     await hover(page, ".gg-root.gg-shots .gg-grp-wrap");
@@ -328,27 +339,27 @@ async function main() {
     if ((await trackState()) !== t2) throw new Error("Ctrl+Z over Shots must not touch the timeline");
     console.log("PASS  pointer over Shots wins over Timeline focus");
 
-    // ---- Shots: Remove from Scene via the cut context menu, then Ctrl+Z with the pointer off the panel
+    // ---- Shots: Ungroup via the cut context menu, then Ctrl+Z with the pointer off the panel
     // (the menu lives on document.body: once it closes Shots is neither hovered nor focused)
     await hover(page, ".gg-root.gg-shots .gg-grp-wrap");
     await redoY(page);
-    await waitFor(sceneCount, 1, "Ctrl+Y groups again before Remove from Scene");
+    await waitFor(sceneCount, 1, "Ctrl+Y groups again before Ungroup");
     const sceneSize = async () => ((await tlNow()).groups || [])[0]?.cut_ids?.length ?? 0;
     const size0 = await sceneSize();
     if (size0 < 2) throw new Error(`test setup: scene should have 2+ cuts, has ${size0}`);
     const tBeforeRemove = await trackState();
     await rightClickCut(page, ".gg-root.gg-shots .gg-grp-sec[data-group-id] .gg-cut");
-    await clickCtxItem(page, "Remove from Scene");
-    await waitFor(sceneSize, size0 - 1, "Remove from Scene (context menu)");
+    await clickCtxItem(page, "Ungroup");
+    await waitFor(sceneSize, size0 - 1, "Ungroup (context menu)");
     await hoverCanvasAndBlur(page);
     await undo(page);
-    await waitFor(sceneSize, size0, "Ctrl+Z right after Remove from Scene");
-    if ((await trackState()) !== tBeforeRemove) throw new Error("Ctrl+Z after Remove from Scene must not touch the timeline");
+    await waitFor(sceneSize, size0, "Ctrl+Z right after Ungroup");
+    if ((await trackState()) !== tBeforeRemove) throw new Error("Ctrl+Z after Ungroup must not touch the timeline");
     await redoY(page);
-    await waitFor(sceneSize, size0 - 1, "Ctrl+Y after Remove from Scene");
+    await waitFor(sceneSize, size0 - 1, "Ctrl+Y after Ungroup");
     await undo(page);
-    await waitFor(sceneSize, size0, "Ctrl+Z again after Remove from Scene");
-    console.log("PASS  Remove from Scene (context menu) -> Ctrl+Z / Ctrl+Y with the pointer over the canvas");
+    await waitFor(sceneSize, size0, "Ctrl+Z again after Ungroup");
+    console.log("PASS  Ungroup (context menu) -> Ctrl+Z / Ctrl+Y with the pointer over the canvas");
 
     // ---- Shots: Delete (soft) -> Ctrl+Z restores it in place; Ctrl+Y deletes again
     const trashLen = async () => {
