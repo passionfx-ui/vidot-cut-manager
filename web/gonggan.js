@@ -157,13 +157,19 @@ import {
   isCardFieldEditing,
 } from "./gg_card_edit_core.js";
 import {
+  CUT_NAME_MAX_LEN,
+  canInlineRenameCut,
+  inlineRenameKeyAction,
+  inlineRenameCommitName,
+  shouldDeferListPaint,
+} from "./gg_cut_rename_core.js";
+import {
   loadListMode,
   saveListMode,
   normalizeListMode,
   scrollTopToReveal,
   rowFullyHidden,
   shouldFollowPlayback,
-  shouldDeferRepaint,
   applyFieldOverrides,
   classifySaveFailure,
   isCaptionSaveRejected,
@@ -299,6 +305,8 @@ const shotsUi = {
   playCutId: "",
   composing: false,
   paintDeferred: false,
+  /** Open inline cut title field: { cutId, input } or null. */
+  inlineRename: null,
   cutWfKind: null,
   cutWfKindCutId: "",
 };
@@ -3539,8 +3547,15 @@ async function ungroupCuts(cutIds) {
 async function renameCut(cutId) {
   const c = cutById(cutId);
   if (!c || !state.pid) return;
-  const name = await askText({ title: "Cut name", label: "Name", value: c.name || "", okLabel: "Rename", maxLength: 80 });
+  const name = await askText({ title: "Cut name", label: "Name", value: c.name || "", okLabel: "Rename", maxLength: CUT_NAME_MAX_LEN });
   if (name === null || name === c.name) return;
+  await saveCutName(cutId, name);
+}
+
+/** Shared save for the F2 dialog and the inline title field: rename route, reload, Shots undo entry. */
+async function saveCutName(cutId, name) {
+  const c = cutById(cutId);
+  if (!c || !state.pid || name === c.name) return;
   const pid = state.pid;
   const from = c.name || "";
   try {
@@ -5920,7 +5935,7 @@ function mountShots(el) {
 
   const paint = () => {
     if (shotsUi.dragSession) return;
-    if (shouldDeferRepaint({ composing: shotsUi.composing })) {
+    if (shouldDeferListPaint({ composing: shotsUi.composing, inlineRenaming: !!shotsUi.inlineRename })) {
       shotsUi.paintDeferred = true;
       return;
     }
@@ -6129,6 +6144,62 @@ function mountShots(el) {
       }
     }, 0);
   };
+  const startInlineCutRename = (titleEl) => {
+    const head = titleEl.closest(".gg-cut-head");
+    const cutId = titleEl.closest(".gg-cut")?.dataset?.cutId || "";
+    if (shotsUi.inlineRename || !head || !canInlineRenameCut({ native: isNativeProject(), cutId })) return;
+    const c = cutById(cutId);
+    if (!c) return;
+    const pid = state.pid;
+    const current = c.name || "";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "gg-cut-title-input";
+    input.maxLength = CUT_NAME_MAX_LEN;
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.value = current;
+    input.title = "Enter to save, Esc to cancel";
+    input.setAttribute("aria-label", "Cut name");
+    input.dataset.editing = "1";
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      const name = commit && state.pid === pid ? inlineRenameCommitName(current, input.value) : null;
+      shotsUi.inlineRename = null;
+      if (name !== null) titleEl.textContent = name;
+      input.remove();
+      titleEl.hidden = false;
+      head.classList.remove("gg-renaming");
+      if (name !== null) void saveCutName(cutId, name);
+      repaintAfterCompose();
+    };
+    shotsUi.inlineRename = { cutId, input, finish };
+    for (const type of ["mousedown", "pointerdown", "click", "dblclick", "contextmenu"]) {
+      input.addEventListener(type, (e) => e.stopPropagation());
+    }
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      const action = inlineRenameKeyAction({ key: e.key, isComposing: e.isComposing || shotsUi.composing });
+      if (action === "none") return;
+      e.preventDefault();
+      finish(action === "commit");
+    });
+    input.addEventListener("blur", () => finish(true));
+    titleEl.hidden = true;
+    head.classList.add("gg-renaming");
+    titleEl.after(input);
+    input.focus({ preventScroll: true });
+    input.select();
+  };
+  const onShotsTitleDblClick = (e) => {
+    const title = e.target.closest?.(".gg-cut-title");
+    if (!title || !root.contains(title) || !isNativeProject()) return;
+    e.preventDefault();
+    e.stopPropagation();
+    startInlineCutRename(title);
+  };
   const onSel = () => { paintSelection(root); paintPanel(); fit(); };
   const onOpenTab = () => paintSelection(root);
   const onTemplate = () => paint();
@@ -6296,9 +6367,11 @@ function mountShots(el) {
   root.addEventListener("mouseleave", () => { root._ggHover = false; });
   root.addEventListener("mousedown", onShotsEmptyClick);
   root.addEventListener("contextmenu", onShotsPanelContextMenu);
+  root.addEventListener("dblclick", onShotsTitleDblClick);
   document.addEventListener("keydown", onShotsKey);
   window.addEventListener("keydown", onShotsSelectAllKey, true);
   return () => {
+    shotsUi.inlineRename?.finish(true);
     shotsUi.composing = false;
     shotsUi.paintDeferred = false;
     listSizeRo?.disconnect();
@@ -6309,6 +6382,7 @@ function mountShots(el) {
     clearInterval(timer);
     root.removeEventListener("mousedown", onShotsEmptyClick);
     root.removeEventListener("contextmenu", onShotsPanelContextMenu);
+    root.removeEventListener("dblclick", onShotsTitleDblClick);
     document.removeEventListener("keydown", onShotsKey);
     window.removeEventListener("keydown", onShotsSelectAllKey, true);
     closeCtxMenu();
