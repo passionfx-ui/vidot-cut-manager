@@ -72,6 +72,7 @@ def new_cut(
     c["sec"] = sec
     c["in"] = 0
     c["pick_version_id"] = None
+    c["display_version_id"] = None
     c["prompt"] = ""
     c["notes"] = ""
     c["caption"] = ""

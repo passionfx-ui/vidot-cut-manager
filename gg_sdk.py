@@ -323,11 +323,28 @@ def native_plan(pid: str, cut_id: str, *, new_seed: bool, canvas: dict | None = 
     Queue) and store it under cache/regen. `fill_start` (Generate All) points a node titled "Start Image" at the
     cut's Best / newest still image. Never queues; run_native_confirmed runs exactly this file."""
     na = _native_api()
+    store = na.native_store()
+    doc = store.get_project(pid)
+    if not doc:
+        raise ValueError("project not found")
     src = na.native_cut_api_workflow(pid, cut_id, canvas, convert)
+    wf = src["workflow"]
+    try:
+        from . import gg_ltx
+    except ImportError:
+        import gg_ltx  # type: ignore
+    sec = na.cut_generation_seconds(doc, cut_id)
+    err = gg_ltx.check_ltx_generation_duration(wf, sec)
+    if err:
+        raise ValueError(err)
+    wf = gg_ltx.patch_ltx_duration(wf, sec)
+    cut = (doc.get("cuts") or {}).get(cut_id)
+    if isinstance(cut, dict) and gg_ltx.workflow_has_ltx_length(wf):
+        wf = na._apply_cut_prompt_to_workflow(wf, cut, require=True, video=True)
     if new_seed:
-        wf, seeds = randomize_seeds(src["workflow"])
+        wf, seeds = randomize_seeds(wf)
     else:
-        wf, seeds = copy.deepcopy(src["workflow"]), workflow_seeds(src["workflow"])
+        wf, seeds = copy.deepcopy(wf), workflow_seeds(wf)
     start = na.fill_titled_start_image(pid, cut_id, wf) if fill_start else None
     name = _save_native_plan(pid, cut_id, wf)
     return {"pid": pid, "cut_id": cut_id, "plan": name, "source": src["source"], "new_seed": bool(new_seed),
@@ -445,7 +462,14 @@ def _generate_one(batch_id: str, pid: str, cut_id: str, *, new_seed: bool = Fals
     except na.NativeWorkflowError as ex:
         return {"status": "skipped" if ex.code == "empty" else "failed", "error": str(ex)}
     except (ValueError, OSError) as ex:
-        return {"status": "failed", "error": str(ex)}
+        msg = str(ex)
+        try:
+            from . import gg_ltx
+        except ImportError:
+            import gg_ltx  # type: ignore
+        if msg == gg_ltx.VIDEO_TOO_LONG_MSG or msg == na.WRITE_PROMPT_FIRST:
+            return {"status": "skipped", "error": msg}
+        return {"status": "failed", "error": msg}
     if not _claim_slot_for_batch(batch_id, pid, cut_id):
         return {"status": "cancelled"}
     _run_native_worker(REGEN_DIR / f"{p['plan']}.json", pid, cut_id)
