@@ -86,6 +86,28 @@ class SceneStackTests(unittest.TestCase):
         groups = {g["id"]: g["cut_ids"] for g in self.store.to_timeline(self.pid)["groups"]}
         self.assertEqual(groups["new1"], [cid])
 
+    def test_cut_dropped_into_empty_scene_then_undo(self):
+        """0.9.108 drag-and-drop: the UI posts the cut inside the empty scene; Undo posts the old groups."""
+        self._new_scene("new1", "Scene 2")
+        before = self._groups()
+        tl = native_save_groups(self.pid, [dict(before[0], cut_ids=[]), {"id": "new1", "name": "Scene 2", "cut_ids": [self.c1]}])
+        self.assertEqual([(g["id"], g["cut_ids"]) for g in tl["groups"]], [("new1", [self.c1])])
+        self.assertEqual(next(c for c in tl["cuts"] if c["id"] == self.c1)["group_id"], "new1")
+        tl = native_save_groups(self.pid, before)
+        self.assertEqual([(g["id"], g["cut_ids"]) for g in tl["groups"]], [(self.s1, [self.c1]), ("new1", [])])
+        self.assertEqual([c["id"] for c in tl["cuts"]], [self.c1, self.c2])
+
+    def test_new_cut_without_scene_or_after_goes_ungrouped_below_the_last_scene(self):
+        """What New cut sends with no cut selected (native): just the pid."""
+        self._new_scene("new1", "Scene 2")
+        native_save_groups(self.pid, [*self._groups()[:1], {"id": "new1", "name": "Scene 2", "cut_ids": [self.c2]}])
+        doc = self.store.add_cut(self.pid, scene_id=None, after=None)
+        cid = next(c for c in doc["cuts"] if c not in (self.c1, self.c2))
+        tl = self.store.to_timeline(self.pid)
+        self.assertEqual([c["id"] for c in tl["cuts"]], [self.c1, self.c2, cid])
+        self.assertEqual(next(c for c in tl["cuts"] if c["id"] == cid)["group_id"], "")
+        self.assertEqual([g["id"] for g in tl["groups"]], [self.s1, "new1"])
+
     def test_add_scene_without_cuts_is_shown(self):
         self.store.add_scene(self.pid, "Scene 2")
         names = [g["name"] for g in self.store.to_timeline(self.pid)["groups"]]

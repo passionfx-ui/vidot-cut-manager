@@ -142,6 +142,17 @@ describe("New scene (empty scene stack)", () => {
     assert.deepEqual(made.map((s) => s.collapsed), [false, false, false]);
   });
 
+  it("New scene lands after the LAST shown scene (not after the first in groups), just above Ungrouped", () => {
+    const cuts = ["a", "b", "c", "x"].map((id) => ({ id }));
+    const ids = (secs) => secs.map((s) => (s.type === "group" ? s.group.id : "U"));
+    // Scene g2 is listed first in groups but shown second (its cut comes later).
+    const groups = [{ id: "g2", name: "Scene B", cut_ids: ["c"] }, { id: "g1", name: "Scene A", cut_ids: ["a", "b"] }];
+    let g = withNewEmptyScene(groups, "n1").groups;
+    assert.deepEqual(ids(shotsSections(cuts, g)), ["g1", "g2", "n1", "U"]);
+    g = withNewEmptyScene(g, "n2").groups;
+    assert.deepEqual(ids(shotsSections(cuts, g)), ["g1", "g2", "n1", "n2", "U"]);
+  });
+
   it("withNewEmptyScene does not touch the input groups", () => {
     const groups = [{ id: "s1", name: "Scene 1", cut_ids: ["a"] }];
     const r = withNewEmptyScene(groups, "n");
