@@ -1,9 +1,8 @@
-"""0.9.115/0.9.116: Paste Cut List -> cuts with the bundled LTX workflow (description = prompt, frame count injected);
+"""0.9.115/0.9.116: cut list -> cuts with the bundled LTX workflow (description = prompt, frame count injected);
 0.9.116 strict [{cut, duration, description}] validation shared with the JS parser and AI Cut Split."""
 from __future__ import annotations
 
 import json
-import re
 import sys
 import tempfile
 import unittest
@@ -184,12 +183,6 @@ class ExtractTests(unittest.TestCase):
 
 
 class PromptTests(unittest.TestCase):
-    def test_same_prompt_as_js(self):
-        js = (REPO / "web" / "gg_cut_list_core.js").read_text(encoding="utf-8")
-        m = re.search(r"export const CUT_SPLIT_PROMPT = `(.*?)`;", js, re.S)
-        self.assertIsNotNone(m)
-        self.assertEqual(m.group(1), gg_ltx.CUT_SPLIT_PROMPT)
-
     def test_prompt_asks_for_the_simple_schema(self):
         p = gg_ltx.CUT_SPLIT_PROMPT
         for key in ('"cut"', '"duration"', '"description"'):

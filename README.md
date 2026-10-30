@@ -79,32 +79,22 @@ Then run `start_proxy.bat` (proxy on `127.0.0.1:8189`). Regenerate is a dry run 
 
 ## Script to cuts with LTX (local, open weights)
 
-Turn a story into ready-to-render cuts (native projects). Use **AI Cut Split** with a local Ollama model (below), or any chat LLM yourself with copy / paste:
+Turn a story into ready-to-render cuts (native projects) with **AI Cut Split** (below):
 
-1. In the Shots toolbar click **Copy Cut Split Prompt**, paste it into any LLM and add your story after `STORY:`.
-2. The LLM answers with a JSON array: `[{"cut": 1, "duration": 3, "description": "..."}]` — `cut` a whole number, `duration` 0.5–3 seconds, `description` one short line (max 300 characters). Older lists with `content` / `ltx_prompt` still paste (read as `description`).
-3. Click **Paste Cut List**, paste the answer (code fences or extra text around the array are fine), pick the workflow (**Project Video template** by default, or the bundled LTX **Text to video** / **Image to video**) and **Create cuts**. AI Cut Split always uses the project Video template. Invalid lists are refused with one message per problem, e.g. `Item 3 (cut 3): "duration" must be between 0.5 and 3 seconds (got 4).`
+1. In the Shots toolbar click **AI Cut Split**, write or paste the story and click **Split**.
+2. A local text model in ComfyUI answers with a JSON array: `[{"cut": 1, "duration": 3, "description": "..."}]` — `cut` a whole number, `duration` 0.5–3 seconds, `description` one short line (max 300 characters). Invalid answers are refused with one message per problem, e.g. `Item 3 (cut 3): "duration" must be between 0.5 and 3 seconds (got 4).`
+3. Confirm `Create N cuts?`. The cuts are added after the last cut and use the project **Video template**.
 4. Each new cut gets: name (first 80 characters), caption and prompt = `description`, length = `duration`, and its own copy of the workflow with `description` in its prompt node (see [Prompt node rule](#default-templates-and-image-to-video)) and the frame count set from the duration (`frames = min(round(duration × fps / 8) × 8 + 1, 73)`, fps from the workflow's save node, 24 in the examples).
 5. Select the cuts you want (use **All** in the cut list header, **Select all** in the list right-click menu, or Ctrl/Cmd+A), then press **Queue** to render them in list order, one at a time through the Comfy SDK; each result is added as a new version, so the timeline fills in as it goes. Cut cards show **Waiting / Generating / Done / Failed**; press **Queue** again (it shows **Stop**) to cancel the cuts still waiting (the one generating finishes). It runs on the server, so the workflow tab does not need to be open. With one cut selected, **Queue** renders just that cut (or right-click > **Regen**). **Queue** is disabled until at least one cut is selected. Nothing is queued when the cuts are created.
 
-### AI Cut Split (local LLM)
+### AI Cut Split (local text model in ComfyUI)
 
-**AI Cut Split** (Shots toolbar) sends your story with the same fixed prompt to a local [Ollama](https://ollama.com) server, checks the answer with the same rules as Paste Cut List, then asks `Create N cuts?`. The request goes through the plugin's own server route, so there are no CORS settings to change. ComfyUI's built-in LLM nodes are not used.
+**AI Cut Split** (Shots toolbar) runs ComfyUI's own **TextGenerate** node through the Comfy SDK path (plugin → `.venv-sdk` `sdk_runner.py` → comfy-api-proxy `:8189` → ComfyUI `:8188`), so no extra LLM server is needed. The graph is `CLIPLoader` (Qwen3-VL 4B) → `TextGenerate` (fixed cut split prompt + your story, greedy, no thinking, up to 2048 tokens) → `Preview Any`; the answer is read from ComfyUI's history and checked with the cut list rules. An invalid answer is retried once with its problems listed. After the split (success or failure) the plugin asks ComfyUI to unload models (`POST /free`), so the VRAM is free for video.
 
-1. Install Ollama from [ollama.com/download](https://ollama.com/download) and start it (it listens on `http://127.0.0.1:11434`).
-2. Pull a model for your GPU, e.g. `ollama pull qwen2.5:7b`:
+1. Put `qwen3vl_4b_int8_convrot.safetensors` in `models/text_encoders/` and start the Comfy SDK proxy (`start_proxy.bat`, see [Comfy SDK path](docs/DEVELOPMENT.md#comfy-sdk-path-local)).
+2. In Shots click **AI Cut Split**, write or paste the story and click **Split**. The first run loads the model, which can take a minute.
 
-| GPU VRAM | Recommended model |
-| --- | --- |
-| up to 8 GB | `qwen2.5:3b` |
-| 8–12 GB | `qwen2.5:7b` |
-| 16 GB or more | Gemma 4 (`gemma4`) or `qwen2.5:14b` |
-
-3. In Shots click **AI Cut Split**, write or paste the story, pick the model and click **Split**.
-
-**Keep LLM loaded** is off by default: the request uses `keep_alive: 0`, so Ollama unloads the model right after the split and the VRAM is free for LTX. Turn it on only if you will split several stories in a row (Ollama then keeps the model for its default time, 5 minutes).
-
-Another Ollama address: ComfyUI **Settings › Vidot Studio › AI Cut Split › Ollama URL**, or `"ollama_url"` in `gonggan_settings.json` (default `http://127.0.0.1:11434`). If Ollama is not running, the dialog says `Ollama not running at <url>`; use **Copy Cut Split Prompt** with any LLM and **Paste Cut List** instead (the dialog has a button for it, and an answer that fails the check can be fixed there).
+Another text model: `"cut_split_clip"` (file name) and `"cut_split_clip_type"` (CLIPLoader type, default `stable_diffusion`) in `gonggan_settings.json`. AI Cut Split waits while a Queue / Regen job or Generate All is running. Errors are shown in the dialog, e.g. `Comfy SDK proxy not reachable at http://127.0.0.1:8189. Start it with start_proxy.bat, then try again.` or `Text model … not found in ComfyUI (models/text_encoders).`
 
 Workflows: [`examples/workflows/ltxv_text_to_video.json`](examples/workflows/ltxv_text_to_video.json) and [`ltxv_image_to_video.json`](examples/workflows/ltxv_image_to_video.json) (ComfyUI's LTX-Video examples; image to video starts from the `Load Image` node, pick an image per cut).
 
@@ -132,9 +122,9 @@ Built-in templates ship as normal ComfyUI workflows in [`examples/workflows/`](e
 
 The models are replaceable: pick your own saved workflow as a template, or open a cut and swap the loaders. Model files are not included.
 
-**Project Image / Video template.** New Project and Project Settings (⚙) have **Image template** (default `Image (default)`) and **Video template** (default `Video LTX (default)`), saved in the project settings. New cuts and Queue on a selection use the Image template, Paste Cut List / AI Cut Split cuts use the Video template. A cut's own workflow always wins, and a linked **Default template** wins over the Image template for new cuts. If the chosen Video template is the image-to-video one, list cuts without a start image run the workflow as saved; pick **Video LTX text-to-video** for pure text-to-video lists.
+**Project Image / Video template.** New Project and Project Settings (⚙) have **Image template** (default `Image (default)`) and **Video template** (default `Video LTX (default)`), saved in the project settings. New cuts and Queue on a selection use the Image template, AI Cut Split cuts use the Video template. A cut's own workflow always wins, and a linked **Default template** wins over the Image template for new cuts. If the chosen Video template is the image-to-video one, list cuts without a start image run the workflow as saved; pick **Video LTX text-to-video** for pure text-to-video lists.
 
-**Prompt node rule.** The cut's description is written into the node titled **Prompt** (exact title, case-insensitive). Without one, it goes into the *CLIP Text Encode* that feeds the sampler's `positive` input. With neither, Paste Cut List / AI Cut Split and Image to Video stop with `Prompt node not found. Rename the prompt node to Prompt.`; an Image template without one just runs with its saved prompt.
+**Prompt node rule.** The cut's description is written into the node titled **Prompt** (exact title, case-insensitive). Without one, it goes into the *CLIP Text Encode* that feeds the sampler's `positive` input. With neither, AI Cut Split and Image to Video stop with `Prompt node not found. Rename the prompt node to Prompt.`; an Image template without one just runs with its saved prompt.
 
 **Start image rule.** Image to Video fills the node titled **Start Image**; without one, the workflow's only *Load Image* node. No title and several Load Image nodes (or none) stops with `Start image node not found. Rename the input node to Start Image.` Nothing is guessed.
 

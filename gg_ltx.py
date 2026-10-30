@@ -30,7 +30,7 @@ NAME_MAX_LEN = 80
 DESCRIPTION_MAX_LEN = 300
 DESCRIPTION_ALIASES = ("description", "content", "ltx_prompt")
 
-# Same text as CUT_SPLIT_PROMPT in web/gg_cut_list_core.js (a test keeps them equal).
+# AI Cut Split instructions; the story follows "STORY:" (gg_cut_split.build_prompt).
 CUT_SPLIT_PROMPT = """You are a film director and storyboard artist. Split the story below into cuts for short AI-generated video clips.
 
 Return ONLY a JSON array, with no other text and no markdown code fences:
