@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-gonggan-cut"
-version = "0.9.105"
+version = "0.9.107"
 description = "Shot list and rough-cut timeline inside ComfyUI"
 readme = "README.md"
 license = { text = "GPL-3.0-only" }
