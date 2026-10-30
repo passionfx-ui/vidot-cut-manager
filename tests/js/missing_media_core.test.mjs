@@ -62,8 +62,10 @@ describe("gonggan.js wiring", () => {
     assert.match(js, /panel\.innerHTML = cutPanelHtml\(c, labels\);\n\s*bindThumbFallbacks\(panel\);/);
   });
 
-  it("version strip draws the placeholder for a missing version", () => {
-    assert.match(fnBody("cutPanelHtml"), /v\.missing \? thumbHtml\(null, "gg-ver-img"\)/);
+  it("version thumbs (cut panel and version strip) draw the placeholder for a missing version", () => {
+    assert.match(fnBody("versionThumbParts"), /v\.missing \? thumbHtml\(null, "gg-ver-img"\)/);
+    assert.match(fnBody("cutPanelHtml"), /versionThumbParts\(c, v, tabOpen\)/);
+    assert.match(fnBody("versionStripHtml"), /versionThumbParts\(c, byId\.get\(r\.id\), tabOpen\)/);
   });
 
   it("promote uses versionMedia (missing version = no media)", () => {

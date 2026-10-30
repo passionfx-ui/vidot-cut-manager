@@ -328,7 +328,7 @@ async function createProjectViaUi(page, name, templateRef) {
 
 /**
  * Bottom stack of the Shots sidebar: icon row (New scene / New cut / Delete, 0.9.98; the old selection bar
- * is not rendered), status panel with Queue (0.9.97), full-width Timeline bar (0.9.87); fixed heights.
+ * is not rendered), version row (0.9.109), status panel with Queue (0.9.97), full-width Timeline bar (0.9.87); fixed heights.
  */
 async function iconRowState(page) {
   return page.evaluate(() => {
@@ -340,6 +340,8 @@ async function iconRowState(page) {
     const list = root.querySelector(".gg-grp-wrap").getBoundingClientRect();
     const tlBar = root.querySelector(":scope > .gg-timeline-toggle")?.getBoundingClientRect();
     const panel = root.querySelector(":scope > .gg-cutpanel")?.getBoundingClientRect();
+    const strip = root.querySelector(":scope > .gg-vstrip");
+    const stripR = strip && !strip.hidden ? strip.getBoundingClientRect() : null;
     const queueBtn = root.querySelector(":scope > .gg-cutpanel .gg-queue-btn");
     const dis = (s) => !!bar.querySelector(s)?.disabled;
     return {
@@ -358,6 +360,8 @@ async function iconRowState(page) {
       panelHeight: panel ? panel.height : null,
       barTop: r.top,
       barBottom: r.bottom,
+      stripTop: stripR ? stripR.top : null,
+      stripBottom: stripR ? stripR.bottom : null,
       panelTop: panel && panel.height > 0 ? panel.top : null,
       panelBottom: panel && panel.height > 0 ? panel.bottom : null,
       tlBarTop: tlBar ? tlBar.top : null,
@@ -656,8 +660,11 @@ async function main() {
     if (!s0?.visible) throw new Error(`icon row not shown: ${JSON.stringify(s0)}`);
     if (s0.selBarRendered) throw new Error("the old selection bar should not be rendered");
     if (s0.barTop < s0.listBottom - 1) throw new Error(`icon row not under the list: ${JSON.stringify(s0)}`);
-    if (s0.panelTop == null || Math.abs(s0.panelTop - s0.barBottom) > 1) {
-      throw new Error(`status panel not directly under the icon row: ${JSON.stringify(s0)}`);
+    if (s0.stripTop == null || Math.abs(s0.stripTop - s0.barBottom) > 1) {
+      throw new Error(`version row not directly under the icon row: ${JSON.stringify(s0)}`);
+    }
+    if (s0.panelTop == null || Math.abs(s0.panelTop - s0.stripBottom) > 1) {
+      throw new Error(`status panel not directly under the version row: ${JSON.stringify(s0)}`);
     }
     if (s0.tlBarTop == null || Math.abs(s0.tlBarTop - s0.panelBottom) > 1 || Math.abs(s0.rootBottom - s0.tlBarBottom) > 1 || !s0.tlBarFullWidth) {
       throw new Error(`Timeline bar not full width at the very bottom under the status panel: ${JSON.stringify(s0)}`);
