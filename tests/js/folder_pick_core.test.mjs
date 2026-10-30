@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import {
   driveLabel,
   folderAddressTarget,
   folderListError,
   folderListUrl,
+  folderNames,
   folderPickerPlaces,
   folderPickerView,
   folderPickTarget,
@@ -15,6 +19,8 @@ import {
   RELATIVE_PATH_ERROR,
   startPathCandidates,
 } from "../../web/gg_folder_pick_core.js";
+
+const GONGGAN_JS = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/gonggan.js"), "utf8");
 
 describe("folder picker address bar (0.9.101)", () => {
   it("normalizeFolderInput strips quotes, spaces and trailing slashes", () => {
@@ -171,5 +177,41 @@ describe("folder picker core (0.9.94)", () => {
     assert.equal(folderListError(405, null).routeMissing, true);
     assert.equal(folderListError(500, {}).message, "Could not list folders (HTTP 500)");
     assert.equal(folderListError(0, null).message, "Could not list folders");
+  });
+});
+
+describe("folder pickers list folders only (0.9.125)", () => {
+  it("folderNames keeps plain folder names only", () => {
+    assert.deepEqual(folderNames(["A", "", "  ", null, 3, { name: "x" }, "A", "B"], "D:\\Films"), ["A", "B"]);
+    assert.deepEqual(folderNames(["sub\\file.mp4", "a/b", "ok"], "D:\\Films"), ["ok"]);
+    assert.deepEqual(folderNames(["C:\\", "D:\\"], ""), ["C:\\", "D:\\"], "drive list keeps drive roots");
+    assert.deepEqual(folderNames(undefined, "D:\\"), []);
+  });
+
+  it("folderPickerView ignores file entries a listing might carry", () => {
+    const v = folderPickerView({ path: "D:\\Films", parent: "D:\\", folders: ["A"], files: ["clip.mp4", "notes.txt"], entries: [{ name: "x.png", type: "file" }] });
+    assert.deepEqual(v.items.map((it) => it.name), ["A"]);
+  });
+
+  it("every Browse… in New Project and Project Settings opens the one folder picker", () => {
+    const browseButtons = GONGGAN_JS.match(/class="gg-btn gg-modal-folder-browse"/g) || [];
+    const browseHandlers = GONGGAN_JS.match(/\.gg-modal-folder-browse"\)\?\.addEventListener\("click", \(\) => \{\s*openFolderPicker\(/g) || [];
+    assert.equal(browseButtons.length, 2);
+    assert.equal(browseHandlers.length, 2);
+    for (const name of ["openNewProjectModal", "openProjectSettingsModal"]) {
+      const s = GONGGAN_JS.slice(GONGGAN_JS.indexOf(`function ${name}(`));
+      const body = s.slice(0, s.indexOf("\n}\n"));
+      assert.match(body, /openFolderPicker\(/, name);
+      assert.ok(!/type="file"|webkitdirectory|showDirectoryPicker|showOpenFilePicker/.test(body), name);
+    }
+  });
+
+  it("the folder picker lists through GET /gonggan/folder/list only", () => {
+    const s = GONGGAN_JS.slice(GONGGAN_JS.indexOf("async function fetchFolderList("));
+    const body = s.slice(0, s.indexOf("\n}\n"));
+    assert.match(body, /api\.fetchApi\(folderListUrl\(path\)\)/);
+    assert.match(body, /folderPickerView\(data, lastUsed\)/);
+    assert.ok(!/webkitdirectory|showDirectoryPicker/.test(GONGGAN_JS));
+    assert.equal(folderListUrl("D:\\x"), "/gonggan/folder/list?path=D%3A%5Cx");
   });
 });

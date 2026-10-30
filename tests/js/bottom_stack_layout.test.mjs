@@ -89,6 +89,17 @@ describe("Shots icon row replaces the selection bar", () => {
     assert.equal(prop(ruleFor(".gg-shots .gg-iconrow .gg-version"), "margin-right"), "auto");
   });
 
+  it("icon buttons are about 20% larger than 0.9.109 (26x24 hit area, 16px icons) and fit the row", () => {
+    const btn = ruleFor(".gg-shots .gg-iconrow .gg-ir-btn");
+    const w = parseFloat(prop(btn, "width"));
+    const h = parseFloat(prop(btn, "height"));
+    assert.ok(w >= 30 && w <= 33, `width ${w}`);
+    assert.ok(h >= 28 && h <= 30, `height ${h}`);
+    assert.ok(h <= parseFloat(prop(ruleFor(".gg-shots .gg-iconrow"), "height")), "button fits the fixed row");
+    const icon = Number(js.match(/const ICON_SVG_ATTRS = 'width="(\d+)" height="(\d+)"/)?.[1]);
+    assert.ok(icon >= 19 && icon <= 20, `icon ${icon}`);
+  });
+
   it("clicking the icon row does not clear the selection first", () => {
     const s = js.indexOf("const onShotsEmptyClick");
     assert.match(js.slice(s, s + 400), /closest\("\.gg-iconrow"\)/);

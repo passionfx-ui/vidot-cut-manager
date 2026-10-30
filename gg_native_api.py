@@ -1,6 +1,7 @@
 """Native project HTTP helpers (testable without aiohttp)."""
 from __future__ import annotations
 
+import copy
 import threading
 import time
 from pathlib import Path
@@ -222,17 +223,22 @@ def native_save_edit(pid: str, order, clips) -> dict | None:
         e = clips.get(cid)
         if not isinstance(e, dict):
             continue
+        clear = "pick" in e and e["pick"] is None
         pick = e.get("pick") if "pick" in e else c.get("pick")
         valid = {v["id"]: v for v in c.get("versions_list") or []}
         if not (isinstance(pick, str) and pick in valid):
             pick = None
+        src_dur = c.get("src_dur")
         if pick:
             kind = None if valid[pick].get("missing") else valid[pick]["kind"]
+        elif clear and c.get("pick"):
+            newest = (c.get("versions_list") or [None])[0]
+            kind = None if not newest or newest.get("missing") else newest["kind"]
+            src_dur = newest.get("seconds") if kind == "video" else None
         else:
             kind = c["media"]["kind"] if c.get("media") else None
-        src_dur = c.get("src_dur")
         i, sec = clamp_clip(kind, e.get("in", c["in"]), e.get("sec", c["sec"]), src_dur)
-        out = {"in": i, "sec": sec, **({"pick": pick} if pick else {})}
+        out = {"in": i, "sec": sec, **({"pick": pick} if pick else {"pick": None} if clear else {})}
         if "start" in e:
             out["start"] = e["start"]
         out_clips[cid] = out
@@ -314,8 +320,8 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
 
 
 def native_add_cut_list(pid: str, cuts, workflow: str | None = None, after: str | None = None) -> dict:
-    """AI Cut Split: one cut per entry, each with a copy of the project's Video template (or the
-    bundled LTX example `workflow` "t2v" / "i2v") with the description in its prompt node and the LTX length set."""
+    """AI Cut Split / AI Make Cut: one cut per entry, each with a copy of the project's Image template with the
+    description in its prompt node. `workflow` is ignored (every cut starts as an image cut)."""
     try:
         from . import gg_ltx
     except ImportError:
@@ -325,14 +331,17 @@ def native_add_cut_list(pid: str, cuts, workflow: str | None = None, after: str 
     if not doc:
         raise ValueError("project not found")
     rows = gg_ltx.validate_cut_list(cuts)
-    if workflow:
-        label, base = workflow, gg_ltx.load_ltx_workflow(workflow)
-    else:
-        label, base = project_video_template(doc)
+    base = project_template_graph(doc, "image")
+    if not isinstance(base, dict):
+        raise ValueError("Image template not found. Pick another one in Project Settings.")
+    entries = []
     try:
-        entries = [{**r, "graph": gg_ltx.inject_ltx(base, r["prompt"], r["sec"])} for r in rows]
+        for r in rows:
+            g = copy.deepcopy(base)
+            gg_wfnodes.set_prompt(g, r["prompt"])
+            entries.append({**r, "graph": g})
     except gg_wfnodes.NodeNotFound as ex:
-        raise ValueError(f"Video template {label}: {ex}") from None
+        raise ValueError(f"Image template: {ex}") from None
     _doc, ids = store.add_cuts(pid, entries, after=after if isinstance(after, str) and after else None)
     return {"ok": True, "cut_ids": ids, "timeline": store.to_timeline(pid)}
 
@@ -504,6 +513,11 @@ def native_cut_source_workflow(pid: str, cut_id: str, kind: str | None = None) -
     def get_workflow(sha: str | None) -> dict | None:
         return _workflow_from_sha(store, pid, sha)
 
+    if req == "video" and not any((v.get("asset") or {}).get("kind") == "video" for v in versions):
+        wf = _video_tab_workflow(pid, cut_id, doc, cut)
+        if wf is not None:
+            return {"ok": True, "source": "template", "workflow": wf,
+                    "kind": "ui" if gg_template._is_ui_workflow(wf) else "api", "kind_used": "video", "fallback": None}
     tpl = native_template_info(pid).get("workflow")
     return resolve_native_cut_source(
         cut,
@@ -513,6 +527,37 @@ def native_cut_source_workflow(pid: str, cut_id: str, kind: str | None = None) -
         requested_kind=req,
         is_ui_workflow=gg_template._is_ui_workflow,
     )
+
+
+def _video_tab_workflow(pid: str, cut_id: str, doc: dict, cut: dict) -> dict | None:
+    """Video tab of a cut without video versions: a copy of the project's Video template with the cut's
+    description in its prompt node and its Best / selected image in the Start Image (Load Image) node."""
+    try:
+        _label, graph = project_video_template(doc)
+    except ValueError:
+        return None
+    g = copy.deepcopy(graph)
+    prompt = cut_prompt_text(cut)
+    if prompt:
+        try:
+            gg_wfnodes.set_prompt(g, prompt)
+        except gg_wfnodes.NodeNotFound:
+            pass
+    try:
+        ver, path = pick_start_version(pid, cut_id)
+        image = stage_start_image(path, ver["id"])
+        if gg_wfnodes.is_ui(g):
+            _nid, node = gg_wfnodes.find_start_image_node(g)
+            wv = node.get("widgets_values")
+            if isinstance(wv, list) and wv:
+                wv[0] = image
+            else:
+                node["widgets_values"] = [image, "image"]
+        else:
+            gg_wfnodes.set_start_image(g, image)
+    except (ValueError, OSError, ImportError):
+        pass
+    return g
 
 
 def native_version_workflow(pid: str, cut_id: str, vid: str) -> dict | None:
@@ -631,6 +676,7 @@ _STILL_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 INPUT_SUBFOLDER = "gonggan"
 NO_START_IMAGE = ("This cut has no still image version to start from (videos and animated images are skipped). "
                   "Generate or import an image first.")
+NOT_START_IMAGE = "The selected version is not a still image (or its file is missing). Select an image version."
 
 
 def is_still_image(path: Path | None) -> bool:
@@ -644,10 +690,12 @@ def is_still_version(ver: dict | None, path: Path | None) -> bool:
             and is_still_image(path))
 
 
-def pick_start_version(pid: str, cut_id: str, selected_vid: str | None = None) -> tuple[dict, Path]:
+def pick_start_version(pid: str, cut_id: str, selected_vid: str | None = None,
+                       start_vid: str | None = None) -> tuple[dict, Path]:
     """The version a video starts from: Best, else `selected_vid` (the one open in the version row), else the
     newest — the first of these that is a still image whose file exists (video and animated image versions
-    are skipped). ValueError when there is none."""
+    are skipped). `start_vid` (version row Make Video): exactly that version, which must be such an image.
+    ValueError when there is none."""
     store = native_store()
     doc = store.get_project(pid)
     cut = (doc.get("cuts") or {}).get(cut_id) if doc else None
@@ -655,6 +703,14 @@ def pick_start_version(pid: str, cut_id: str, selected_vid: str | None = None) -
         raise ValueError("cut not found")
     versions = store.list_versions(pid, cut_id)
     by_id = {v.get("id"): v for v in versions}
+    if start_vid:
+        ver = by_id.get(start_vid)
+        path = store.version_file(pid, ver) if ver else None
+        if not ver:
+            raise ValueError("The selected version is not in this cut.")
+        if not is_still_version(ver, path):
+            raise ValueError(NOT_START_IMAGE)
+        return ver, path
     order = [cut.get("pick_version_id"), selected_vid, *by_id]
     for vid in dict.fromkeys(x for x in order if isinstance(x, str) and x):
         ver = by_id.get(vid)
@@ -717,10 +773,12 @@ def _version_prompt(pid: str, ver: dict, path: Path) -> str:
     return ""
 
 
-def native_image_to_video_workflow(pid: str, cut_id: str, selected_vid: str | None = None) -> dict:
+def native_image_to_video_workflow(pid: str, cut_id: str, selected_vid: str | None = None,
+                                   start_vid: str | None = None) -> dict:
     """API prompt of the project's Video template for Image to Video: the start image node gets the cut's Best
-    (else selected / newest) still image, the prompt node the cut's description, the LTX length its duration.
-    Nothing is queued. ValueError with a user-facing message when something is missing."""
+    (else selected / newest) still image — or exactly `start_vid` (Make Video) — the prompt node the cut's
+    description, the LTX length its duration. Nothing is queued. ValueError with a user-facing message when
+    something is missing."""
     try:
         from . import gg_ltx
     except ImportError:
@@ -739,7 +797,7 @@ def native_image_to_video_workflow(pid: str, cut_id: str, selected_vid: str | No
         except ValueError as ex:
             raise ValueError(f"Video template {label} cannot run without its tab: {ex}") from None
     gg_wfnodes.find_start_image_node(graph)
-    ver, path = pick_start_version(pid, cut_id, selected_vid)
+    ver, path = pick_start_version(pid, cut_id, selected_vid, start_vid)
     prompt = cut_prompt_text(cut) or _version_prompt(pid, ver, path)
     if not prompt:
         raise ValueError("This cut has no description. Add a caption first.")

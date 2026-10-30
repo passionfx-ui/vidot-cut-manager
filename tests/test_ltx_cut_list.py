@@ -14,6 +14,7 @@ if str(REPO) not in sys.path:
 
 import gg_ltx
 import gg_native_api as na
+import gg_wfnodes
 from gg_project import LocalStore
 
 
@@ -216,8 +217,8 @@ class AddCutListTests(unittest.TestCase):
                          ("First shot", "First shot", 3.0, 3.0, "First shot"))
         self.assertEqual((c2["name"], c2["planned_sec"], c2["prompt"]), ("Second shot", 1.5, "Second shot"))
         wf = self.store.get_blob(self.pid, c2["workflow_sha"])
-        self.assertEqual(_node(wf, 6)["widgets_values"][0], "Second shot")
-        self.assertEqual(_node(wf, 95)["widgets_values"][2], 41, "0.9.117: project Video template (LTX i2v)")
+        self.assertEqual(gg_wfnodes.prompt_text(wf), "Second shot")
+        self.assertFalse(any("LTX" in str(n.get("type")) for n in wf["nodes"]), "0.9.125: project Image template")
         src = na.native_cut_source_workflow(self.pid, ids[0])
         self.assertEqual((src["source"], src["kind"]), ("stored", "ui"))
         self.assertEqual([c["id"] for c in res["timeline"]["cuts"]][-2:], ids)
@@ -228,7 +229,7 @@ class AddCutListTests(unittest.TestCase):
         doc = self.store.get_project(self.pid)
         self.assertIn(cid, doc["loose_order"])
         wf = self.store.get_blob(self.pid, doc["cuts"][cid]["workflow_sha"])
-        self.assertTrue(any(n["type"] == "LTXVImgToVideo" for n in wf["nodes"]))
+        self.assertFalse(any(n["type"] == "LTXVImgToVideo" for n in wf["nodes"]), "workflow is ignored: Image template")
 
     def test_invalid_list_adds_nothing(self):
         with self.assertRaises(ValueError) as cm:

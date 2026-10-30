@@ -829,17 +829,21 @@ async def _native_regen(pid: str, cid: str, data: dict):
 
 @routes.post("/gonggan/image-to-video")
 async def gg_image_to_video(request):
-    """Native only, dry run: {"pid", "cut_id", "selected_vid"?} -> {"plan"} = the project's Video template with the
-    cut's Best (else selected / newest) image as start image and its description as prompt. Queues nothing; run it
-    with POST /gonggan/regen {"dry_run": false, "confirm": true, "plan": ...}."""
+    """Native only, dry run: {"pid", "cut_id", "selected_vid"?, "start_vid"?} -> {"plan"} = the project's Video
+    template with the cut's Best (else selected / newest) image — or exactly `start_vid` (version row Make Video) —
+    as start image and its description as prompt. Queues nothing; run it with
+    POST /gonggan/regen {"dry_run": false, "confirm": true, "plan": ...}."""
     data = await _json_body(request)
     pid, cid, vid = data.get("pid"), data.get("cut_id"), data.get("selected_vid")
+    start = data.get("start_vid")
     if not isinstance(pid, str) or not isinstance(cid, str) or not gg_native_api.is_native_pid(pid):
         return _err(400, "native pid and cut_id required")
     if vid is not None and not isinstance(vid, str):
         return _err(400, "selected_vid must be a string")
+    if start is not None and not isinstance(start, str):
+        return _err(400, "start_vid must be a string")
     try:
-        plan = await asyncio.to_thread(gg_sdk.image_to_video_plan, pid, cid, vid or None)
+        plan = await asyncio.to_thread(gg_sdk.image_to_video_plan, pid, cid, vid or None, start or None)
     except ValueError as ex:
         return _err(400, str(ex))
     except Exception as ex:  # noqa: BLE001
@@ -883,21 +887,69 @@ async def gg_generate_all_status(request):
 # ---------------- AI Cut Split (TextGenerate in ComfyUI through the Comfy SDK) ----------------
 from . import gg_cut_split  # noqa: E402
 
-_CUT_SPLIT_STATUS = {"bad_request": 400, "busy": 409, "invalid": 422}
+_CUT_SPLIT_STATUS = {"bad_request": 400, "busy": 409, "disabled": 409, "missing_model": 409, "invalid": 422,
+                     "too_long": 422}
 
 
 @routes.post("/gonggan/ai-cut-split")
 async def gg_ai_cut_split(request):
-    """{"story"} -> {"cuts": [{cut, duration, description}], "model", "attempts", "seconds"}. Creates nothing."""
+    """{"story"} -> {"cuts": [{cut, duration, description}], "model", "attempts", "seconds"}. Creates nothing.
+    {"story", "background": true} -> 202 {"job"} at once; poll GET /gonggan/ai-cut-split/status?job=<id>."""
     data = await _json_body(request)
+    background = data.get("background") is True
     try:
+        if background:
+            job = await asyncio.to_thread(gg_cut_split.start_job, data.get("story"))
+            return web.json_response({"ok": True, "job": job}, status=202)
         res = await asyncio.to_thread(gg_cut_split.ai_cut_split, data.get("story"))
     except gg_cut_split.CutSplitError as ex:
-        return web.json_response({"ok": False, "code": ex.code, "message": str(ex)},
+        return web.json_response({"ok": False, "code": ex.code, "message": str(ex), **ex.extra},
                                  status=_CUT_SPLIT_STATUS.get(ex.code, 502))
     except Exception as ex:  # noqa: BLE001
         log.exception("[gonggan-cut] AI Cut Split failed")
-        return _err(500, f"AI Cut Split failed: {ex}")
+        return _err(500, f"AI Make Cut failed: {ex}")
+    return web.json_response({"ok": True, **res})
+
+
+@routes.get("/gonggan/ai-cut-split/status")
+async def gg_ai_cut_split_status(request):
+    """?job=<id> -> {"job"} of that background run (404 when it is gone, e.g. after a restart);
+    no id -> {"job": the last run or null}."""
+    job_id = request.query.get("job", "")
+    job = gg_cut_split.job_status(job_id or None)
+    if job_id and job is None:
+        return web.json_response({"ok": False, "code": "no_job",
+                                  "message": "This AI Make Cut run is gone (was ComfyUI restarted?). Click Split to "
+                                             "run it again."}, status=404)
+    return web.json_response({"ok": True, "job": job})
+
+
+@routes.get("/gonggan/cut-split/model")
+async def gg_cut_split_model(request):
+    """{"models": text_encoders (+ clip) files, "current": cut_split_clip setting, "default", "use_ai"}."""
+    res = await asyncio.to_thread(gg_cut_split.model_choices)
+    return web.json_response({"ok": True, **res})
+
+
+@routes.get("/gonggan/cut-split/precheck")
+async def gg_cut_split_precheck(request):
+    """{"use_ai", "model", "missing", "memory"}: checked before AI Cut Split runs (loads nothing)."""
+    res = await asyncio.to_thread(gg_cut_split.precheck)
+    return web.json_response({"ok": True, **res})
+
+
+@routes.post("/gonggan/cut-split/model")
+async def gg_cut_split_model_save(request):
+    """{"clip_name"?, "use_ai"?} -> writes cut_split_clip / cut_split_enabled in gonggan_settings.json;
+    returns the same body as GET."""
+    data = await _json_body(request)
+    try:
+        res = await asyncio.to_thread(gg_cut_split.save_settings, data.get("clip_name"), data.get("use_ai"))
+    except gg_cut_split.CutSplitError as ex:
+        return _err(_CUT_SPLIT_STATUS.get(ex.code, 500), str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] AI Cut Split model save failed")
+        return _err(500, f"Could not save the AI Make Cut model: {ex}")
     return web.json_response({"ok": True, **res})
 
 
