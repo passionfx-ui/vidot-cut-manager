@@ -5,6 +5,8 @@ import { versionRepState } from "./gg_cuts_core.js";
 export const SET_BEST_LABEL = "Set as Best";
 export const BEST_TIP = "Best (set by you)";
 export const SET_BEST_TIP = "Set as Best";
+export const IMPORT_LABEL = "Import";
+export const IMPORT_ACCEPT = "image/*,video/*";
 /** Back-to-newest arrow appears once the row is scrolled right past this many pixels. */
 export const NEWEST_BUTTON_MIN_SCROLL = 4;
 
@@ -67,6 +69,14 @@ export function versionStripRows(cut, probed) {
 export function versionStripMenuItems(row) {
   const best = !!row?.best;
   return [{ key: "best", label: SET_BEST_LABEL, disabled: best, title: best ? "Already Best" : "" }];
+}
+
+/** Import button at the left end of the row: native projects with a selected cut only. */
+export function importButtonState({ hasCut, native, busy } = {}) {
+  if (!native) return { disabled: true, title: "Import is not available for read-only (imported) projects" };
+  if (!hasCut) return { disabled: true, title: "Select a cut to import" };
+  if (busy) return { disabled: true, title: "Importing…" };
+  return { disabled: false, title: IMPORT_LABEL };
 }
 
 /** Show the left arrow (back to newest) only when the row is scrolled right. */
