@@ -673,7 +673,7 @@ function selectProject(pid) {
 }
 
 const NATIVE_READONLY_TIP = "Not available for read-only (imported) projects";
-const NATIVE_ONLY_TIP = "Native projects only";
+const NATIVE_ONLY_TIP = "Not available for read-only (imported) projects";
 
 function currentProject() {
   return state.projects.find((p) => p.id === state.pid) || null;
@@ -8052,7 +8052,7 @@ async function refreshExport() {
 
 function paintTimelineNativeLocks() {
   const nat = isNativeProject();
-  const tip = "Not available for native projects yet";
+  const tip = "Not available for this project yet";
   document.querySelectorAll(".gg-timeline .gg-export").forEach((btn) => {
     btn.disabled = nat;
     btn.title = nat ? tip : "Render the timeline to one mp4 (CPU, ffmpeg)";
@@ -8070,7 +8070,7 @@ async function startExport(preset, sound) {
   const tl = state.timeline;
   if (!tl || !tl.cuts.length) return;
   if (isNativeProject()) {
-    ggToast("Export", "Not available for native projects yet", "warn");
+    ggToast("Export", "Not available for this project yet", "warn");
     return;
   }
   clearTimeout(ed.saveTimer);
