@@ -254,6 +254,18 @@ def pick_last_output(history: dict, root: Path, now: float | None = None) -> tup
     if not items:
         return None, "No finished ComfyUI run yet. Run the workflow first."
     prompt_id, h = items[-1]
+    return _run_output(prompt_id, h, root, now)
+
+
+def pick_prompt_output(history: dict, prompt_id: str, root: Path, now: float | None = None) -> tuple[dict | None, str]:
+    """Output of one finished run (by prompt id); (None, reason) when it is not in history yet or has none."""
+    h = (history or {}).get(prompt_id)
+    if h is None:
+        return None, "That ComfyUI run is not in the history yet."
+    return _run_output(prompt_id, h, root, now)
+
+
+def _run_output(prompt_id: str, h, root: Path, now: float | None) -> tuple[dict | None, str]:
     h = h if isinstance(h, dict) else {}
     st = h.get("status") if isinstance(h.get("status"), dict) else {}
     if st.get("status_str") == "error":
@@ -285,6 +297,17 @@ def last_output_info() -> dict:
         return {"output": None, "reason": f"Could not read ComfyUI history: {ex}"}
     lo, reason = pick_last_output(hist, _output_root())
     return {"output": lo, "reason": reason}
+
+
+def prompt_output_info(prompt_id: str) -> dict:
+    """Like last_output_info, for one prompt id. `pending` = the run is not in /history yet."""
+    try:
+        from server import PromptServer
+        hist = PromptServer.instance.prompt_queue.get_history(prompt_id=prompt_id) or {}
+    except Exception as ex:  # noqa: BLE001
+        return {"output": None, "reason": f"Could not read ComfyUI history: {ex}", "pending": False}
+    lo, reason = pick_prompt_output(hist, prompt_id, _output_root())
+    return {"output": lo, "reason": reason, "pending": prompt_id not in hist}
 
 
 def last_output() -> dict | None:
