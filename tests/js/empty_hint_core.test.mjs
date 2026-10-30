@@ -1,12 +1,17 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { emptyListHint, NO_CUTS_HINT, NO_PROJECTS_HINT } from "../../web/gg_empty_hint_core.js";
+import { emptyListHint, NEW_PROJECT_BUTTON, NO_CUTS_HINT, NO_PROJECTS_HINT } from "../../web/gg_empty_hint_core.js";
 
 describe("empty list hint", () => {
-  it("0 projects once the list has loaded -> New Project hint", () => {
+  it("0 projects once the list has loaded -> short hint + New project button", () => {
     const h = emptyListHint({ projectsLoaded: true, projectCount: 0, timeline: null, native: false });
-    assert.equal(h.kind, "projects");
-    assert.equal(h.text, NO_PROJECTS_HINT);
+    assert.deepEqual(h, { kind: "projects", text: NO_PROJECTS_HINT, button: NEW_PROJECT_BUTTON });
+    assert.equal(NEW_PROJECT_BUTTON, "New project");
+    assert.ok(NO_PROJECTS_HINT.length <= 40, NO_PROJECTS_HINT);
+  });
+  it("the Add Cut hint has no button", () => {
+    const h = emptyListHint({ projectsLoaded: true, projectCount: 1, timeline: { cuts: [] }, native: true });
+    assert.equal(h.button, undefined);
   });
   it("no hint while the project list is still loading or failed to load", () => {
     assert.equal(emptyListHint({ projectsLoaded: false, projectCount: 0, timeline: null, native: false }), null);

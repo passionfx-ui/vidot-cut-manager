@@ -22,10 +22,11 @@ export function selectionBarView(s = {}) {
 
 /**
  * Icon row under the cut list (replaces the selection bar): always shown at the same fixed height.
+ * All three are off while no project is open.
  * @param {{ count?: number, hasProject?: boolean }} s  count: cuts that New scene / Delete would act on
  */
 export function iconRowView(s = {}) {
-  const n = Math.max(0, Number(s.count) || 0);
+  const n = s.hasProject ? Math.max(0, Number(s.count) || 0) : 0;
   return {
     className: "gg-iconrow",
     scene: { disabled: n === 0, title: "New scene" },

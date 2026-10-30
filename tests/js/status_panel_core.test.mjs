@@ -113,4 +113,9 @@ describe("iconRowView", () => {
     const v = iconRowView();
     assert.deepEqual([v.scene.disabled, v.cut.disabled, v.del.disabled], [true, true, true]);
   });
+
+  it("no project open: New scene / New cut / Delete all off, even with a stale selection count", () => {
+    const v = iconRowView({ count: 3, hasProject: false });
+    assert.deepEqual([v.scene.disabled, v.cut.disabled, v.del.disabled], [true, true, true]);
+  });
 });

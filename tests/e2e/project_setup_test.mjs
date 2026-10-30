@@ -49,6 +49,8 @@ function isBlockedPost(url, method) {
 
 /** Fake folder tree for GET /gonggan/folder/list while `folderMockOn` (the real route needs a ComfyUI restart). */
 let folderMockOn = false;
+/** GET /gonggan/projects answers an empty list while on (empty state without deleting real projects). */
+let projectsMockEmpty = false;
 const FOLDER_MOCK = {
   "": { path: "", parent: null, folders: ["C:\\", "D:\\"] },
   "C:\\": { path: "C:\\", parent: "", folders: ["Films", "Locked"] },
@@ -70,6 +72,10 @@ function attachRequestGuard(page) {
       blockedPromptAttempts += 1;
       console.error(`BLOCKED UNSAFE POST: ${method} ${url}`);
       req.abort("blockedbyclient");
+      return;
+    }
+    if (projectsMockEmpty && method === "GET" && /\/gonggan\/projects$/.test(new URL(url).pathname)) {
+      req.respond({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, projects: [] }) });
       return;
     }
     if (folderMockOn && method === "GET" && /\/gonggan\/folder\/list$/.test(new URL(url).pathname)) {
@@ -186,33 +192,45 @@ async function run() {
     await waitForComfy(page);
     await openShotsTab(page);
 
+    const NP = '.gg-modal[aria-label="New project"]';
+    const projectCount = async () => (await getJson(page, "/gonggan/projects")).data?.projects?.length ?? -1;
+    const countBefore = await projectCount();
     await openNewProjectModal(page);
-    const fields = await page.evaluate(() => ({
-      name: !!document.querySelector(".gg-modal-name"),
-      resolution: !!document.querySelector(".gg-modal-resolution"),
-      fps: !!document.querySelector(".gg-modal-fps"),
-      cutSec: !!document.querySelector(".gg-modal-cut-sec"),
-      captionLang: !!document.querySelector(".gg-modal-caption-lang"),
-      template: !!document.querySelector(".gg-modal-tpl"),
-      folder: !!document.querySelector(".gg-modal-folder"),
-    }));
-    if (!fields.name || !fields.resolution || !fields.fps || !fields.cutSec || !fields.captionLang || !fields.template || !fields.folder) {
-      throw new Error(`New project modal missing fields: ${JSON.stringify(fields)}`);
+    const np = await page.evaluate((sel) => {
+      const m = document.querySelector(sel);
+      const pos = (s) => m?.querySelector(s)?.getBoundingClientRect().top ?? -1;
+      return {
+        title: m?.querySelector(".gg-modal-title")?.textContent?.trim() || "",
+        fieldCount: m?.querySelectorAll(":scope > .gg-modal-field").length ?? 0,
+        labels: [...(m?.querySelectorAll(":scope > .gg-modal-field") || [])].map((f) =>
+          (f.querySelector(".gg-tpl-label")?.textContent || f.firstChild?.textContent || "").trim()),
+        browse: m?.querySelector(".gg-modal-folder-browse")?.textContent?.trim() || "",
+        combo: !!m?.querySelector(".gg-tpl-combo"),
+        location: m?.querySelector(".gg-modal-folder")?.value ?? null,
+        order: [".gg-modal-name", ".gg-modal-folder", ".gg-tpl-combo"].map(pos),
+        removed: [".gg-modal-resolution", ".gg-modal-fps", ".gg-modal-cut-sec", ".gg-modal-caption-lang", ".gg-split-text", ".gg-modal-tpl"]
+          .filter((s) => m?.querySelector(s)),
+        buttons: [...(m?.querySelectorAll(".gg-modal-actions button") || [])].map((b) => b.textContent?.trim()),
+      };
+    }, NP);
+    if (np.title !== "New Project" || np.fieldCount !== 3 || np.labels.join("|") !== "Project name|Location|Default template") {
+      throw new Error(`New Project window fields wrong: ${JSON.stringify(np)}`);
     }
-    console.log("PASS  project setup modal shows the setup fields incl. Project folder");
-    const order = await page.evaluate(() => {
-      const q = (s) => document.querySelector(`.gg-modal ${s}`);
-      const pos = (el) => (el ? el.getBoundingClientRect().top : -1);
-      return [".gg-modal-name", ".gg-modal-tpl", ".gg-split-text", ".gg-modal-resolution", ".gg-modal-folder"].map((s) => pos(q(s)));
-    });
-    const sorted = [...order].sort((a, b) => a - b);
-    if (order.some((v) => v < 0) || order.join() !== sorted.join()) {
-      throw new Error(`dialog order should be Name, Template, Auto Cut Split, format settings, folder: ${order}`);
+    if (np.browse !== "Browse…" || !np.combo || np.removed.length || np.buttons.join() !== "Cancel,Create") {
+      throw new Error(`New Project window controls wrong: ${JSON.stringify(np)}`);
     }
-    const noFolderDefault = await page.$eval(".gg-modal-folder", (el) => el.value);
-    if (noFolderDefault !== "") throw new Error("Project folder must default to empty (nothing on C:)");
-    console.log("PASS  dialog order: Name, Template, Auto Cut Split, settings, folder; folder default empty");
+    if (np.order.some((v) => v < 0) || np.order.join() !== [...np.order].sort((a, b) => a - b).join()) {
+      throw new Error(`order should be name, location, template: ${np.order}`);
+    }
+    if (np.location !== "") throw new Error(`fresh profile: Location should start empty, got "${np.location}"`);
+    console.log("PASS  New Project window: Project name, Location (Browse…), Default template only; Cancel / Create");
+
+    await page.type(".gg-modal-name", "ZZ-should-not-exist", { delay: 2 });
     await page.click(".gg-modal-cancel");
+    await sleep(500);
+    if (await page.$(NP)) throw new Error("Cancel should close the New Project window");
+    if ((await projectCount()) !== countBefore) throw new Error("Cancel must not create a project");
+    console.log("PASS  Cancel closes the window and creates nothing");
 
     if (!(await page.$(".gg-filter-redo"))) {
       console.log("SKIP  project setup redo filter label: option hidden (SHOW_REDO_FILTER = false)");
@@ -229,16 +247,22 @@ async function run() {
     }
 
     const name = `${TEST_PREFIX}-${runStamp}`;
+    const location = path.join(os.tmpdir(), `${TEST_PREFIX}-${runStamp}-loc`);
+    const expectedFolder = path.join(location, name);
     await openNewProjectModal(page);
-    await page.click(".gg-modal-name", { clickCount: 3 });
     await page.type(".gg-modal-name", name, { delay: 6 });
-    await page.select(".gg-modal-resolution", "9:16@720x1280");
-    await page.type(".gg-modal-folder", "N:\\ZZ-test-folder", { delay: 4 });
-    await page.select(".gg-modal-fps", "30");
-    await page.$eval(".gg-modal-cut-sec", (el) => {
-      el.value = "5";
-    });
-    await page.click(".gg-modal .gg-primary");
+    await page.click(".gg-modal-create");
+    const locErr = await (await page.waitForFunction(
+      () => document.querySelector(".gg-modal-folder-err")?.textContent?.trim(), { timeout: 5000 })).jsonValue();
+    if (locErr !== "Choose a location" || !(await page.$(NP))) throw new Error(`empty Location should block Create: "${locErr}"`);
+    if ((await projectCount()) !== countBefore) throw new Error("blocked Create must not create a project");
+    console.log("PASS  empty Location blocks Create with an inline message");
+
+    await page.type(".gg-modal-folder", location, { delay: 2 });
+    const hint = await page.$eval(".gg-np-path", (el) => el.textContent);
+    if (hint !== `Project folder: ${expectedFolder}`) throw new Error(`folder hint wrong: "${hint}"`);
+    console.log("PASS  hint shows the project folder <location>\\<name>");
+    await page.click(".gg-modal-create");
     await page.waitForFunction(
       (n) => {
         const sel = document.querySelector(".gg-root.gg-shots .gg-proj");
@@ -250,30 +274,28 @@ async function run() {
     );
     const pid = await page.$eval(".gg-root.gg-shots .gg-proj", (sel) => sel.value);
     if (pid) createdProjectIds.push(pid);
+    if (await page.$(NP)) throw new Error("Create should close the New Project window");
     console.log("PASS  project setup create via UI");
 
-    let pythonOk = false;
-    try {
-      const tl = await getJson(page, `/gonggan/timeline?pid=${encodeURIComponent(pid)}`);
-      const settings = tl.data?.project?.settings;
-      if (
-        settings &&
-        settings.fps === 30 &&
-        Number(settings.cut_seconds) === 5 &&
-        settings.width === 720 &&
-        settings.height === 1280
-      ) {
-        pythonOk = true;
-        console.log("PASS  project setup timeline settings (server)");
-        if (settings.project_folder === "N:\\ZZ-test-folder") console.log("PASS  project folder persisted (server)");
-        else console.log("SKIP  project folder not persisted: server not restarted for 0.9.33");
+    const createdSettings = (await getJson(page, `/gonggan/timeline?pid=${encodeURIComponent(pid)}`)).data?.project?.settings || {};
+    const pythonOk = createdSettings.project_folder === expectedFolder;
+    if (pythonOk) {
+      const entries = fs.readdirSync(expectedFolder);
+      if (entries.join() !== "assets" || !fs.statSync(path.join(expectedFolder, "assets")).isDirectory()) {
+        throw new Error(`project folder should hold exactly one subfolder "assets": ${entries}`);
       }
-    } catch (e) {
-      console.log(`SKIP python part (server not restarted): ${e.message}`);
+      console.log("PASS  project folder <location>\\<name> created with only assets; project_folder set (server)");
+    } else if (fs.existsSync(expectedFolder)) {
+      throw new Error(`folder created but project_folder not set: ${JSON.stringify(createdSettings)}`);
+    } else {
+      console.log("SKIP  project folder not created: restart ComfyUI for 0.9.99 (create route)");
     }
-    if (!pythonOk) {
-      console.log("SKIP python part (server not restarted)");
-    }
+
+    await openNewProjectModal(page);
+    const prefilled = await page.$eval(".gg-modal-folder", (el) => el.value);
+    if (prefilled !== location) throw new Error(`last-used location should be prefilled: "${prefilled}"`);
+    await page.click(".gg-modal-cancel");
+    console.log("PASS  next New Project prefills the last-used location");
 
     const head = await page.evaluate(() => {
       const h = document.querySelector(".gg-root.gg-shots .gg-head");
@@ -318,7 +340,7 @@ async function run() {
     if (settingsFields.browse !== "Browse…") throw new Error(`Browse… button missing: "${settingsFields.browse}"`);
     if (!/Empty = default/.test(settingsFields.folderHint)) throw new Error(`folder hint missing: "${settingsFields.folderHint}"`);
     if (settingsFields.buttons.join() !== "Cancel,Save") throw new Error(`buttons wrong: ${settingsFields.buttons}`);
-    if (pythonOk && settingsFields.folderValue !== "N:\\ZZ-test-folder") {
+    if (pythonOk && settingsFields.folderValue !== expectedFolder) {
       throw new Error(`Output folder should show the saved path: "${settingsFields.folderValue}"`);
     }
     console.log("PASS  gear opens Project Settings: Output folder + Default template only, Cancel / Save");
@@ -447,7 +469,8 @@ async function run() {
     } else {
       const s2 = (await getJson(page, `/gonggan/timeline?pid=${encodeURIComponent(pid)}`)).data?.project?.settings || {};
       if (s2.project_folder !== okFolder) throw new Error(`Output folder not saved: ${s2.project_folder}`);
-      if (s2.fps !== 30 || Number(s2.cut_seconds) !== 5 || s2.width !== 720 || s2.height !== 1280) {
+      const keep = ["fps", "cut_seconds", "width", "height", "aspect", "caption_lang"];
+      if (keep.some((k) => s2[k] !== createdSettings[k])) {
         throw new Error(`hidden settings changed by Save: ${JSON.stringify(s2)}`);
       }
       if (fs.existsSync(okFolder)) throw new Error("Save must not create the Output folder");
@@ -490,6 +513,39 @@ async function run() {
     );
     console.log("PASS  Rename Project… renames via the in-app prompt");
 
+    projectsMockEmpty = true;
+    await waitForComfy(page);
+    await openShotsTab(page);
+    await page.waitForSelector(".gg-root.gg-shots .gg-no-projects .gg-new-project-btn", { timeout: 20000 });
+    const empty = await page.evaluate(() => {
+      const r = document.querySelector(".gg-root.gg-shots");
+      const btn = r.querySelector(".gg-no-projects .gg-new-project-btn");
+      const box = btn.getBoundingClientRect();
+      return {
+        hint: r.querySelector(".gg-no-projects span")?.textContent?.trim() || "",
+        label: btn.textContent?.trim(),
+        visible: box.width > 0 && box.height > 0 && getComputedStyle(btn).visibility !== "hidden",
+        inList: !!btn.closest(".gg-grp-wrap"),
+        disabled: [".gg-ir-scene", ".gg-ir-cut", ".gg-ir-del", ".gg-queue-btn"].map((s) => r.querySelector(s)?.disabled ?? null),
+        queueTitle: r.querySelector(".gg-queue-btn")?.title || "",
+      };
+    });
+    if (empty.label !== "New project" || !empty.visible || !empty.inList || !empty.hint) {
+      throw new Error(`empty state New project button wrong: ${JSON.stringify(empty)}`);
+    }
+    if (empty.disabled.some((d) => d !== true)) throw new Error(`no project: icons + Queue should be disabled: ${JSON.stringify(empty)}`);
+    console.log(`PASS  0 projects: "${empty.hint}" + visible New project button in the cut list; New scene / New cut / Delete / Queue disabled ("${empty.queueTitle}")`);
+    await page.click(".gg-new-project-btn");
+    await page.waitForSelector(NP, { timeout: 5000 });
+    const sameWindow = await page.evaluate((sel) => ({
+      fields: document.querySelectorAll(`${sel} > .gg-modal-field`).length,
+      location: document.querySelector(`${sel} .gg-modal-folder`)?.value,
+    }), NP);
+    if (sameWindow.fields !== 3 || sameWindow.location !== location) throw new Error(`button should open the same window: ${JSON.stringify(sameWindow)}`);
+    await page.click(".gg-modal-cancel");
+    projectsMockEmpty = false;
+    console.log("PASS  New project button opens the same New Project window");
+
     if (blockedPromptAttempts > 0) {
       throw new Error(`unexpected blocked posts: ${blockedPromptAttempts}`);
     }
@@ -499,9 +555,11 @@ async function run() {
       await cleanupProjects(page);
     } catch (_) {}
     await browser.close();
-    try {
-      fs.rmSync(PERSISTENT_USER_DATA_DIR, { recursive: true, force: true });
-    } catch (_) {}
+    for (const dir of [PERSISTENT_USER_DATA_DIR, path.join(os.tmpdir(), `${TEST_PREFIX}-${runStamp}-loc`)]) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch (_) {}
+    }
   }
 }
 

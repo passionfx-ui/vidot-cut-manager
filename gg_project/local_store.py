@@ -20,8 +20,16 @@ from .entities import (
 )
 from .errors import ConflictError
 from .ids import is_uuid_id, now_iso, uuid7
-from .project_settings import merge_settings_patch, normalize_settings
-from .timeline import build_timeline, clip_start, reset_track, stored_track, timeline_order, track_order
+from .project_settings import PROJECT_ASSETS_DIR, merge_settings_patch, normalize_settings
+from .timeline import (
+    build_timeline,
+    clip_start,
+    reset_track,
+    stored_track,
+    timeline_order,
+    track_order,
+    version_asset_file,
+)
 from .workflow_hash import workflow_sha256
 
 NEW_CUT_NAME = "New cut"
@@ -869,15 +877,25 @@ class LocalStore:
             ext = src.suffix.lower()
             kind = _MEDIA_EXT.get(ext, "image")
             vid = uuid7()
-            rel_dir = Path("assets") / cut_id
-            dest_dir = self._project_dir(pid) / rel_dir
-            dest_dir.mkdir(parents=True, exist_ok=True)
             dest_name = f"{vid}{ext}"
-            dest = dest_dir / dest_name
-            shutil.copy2(src, dest)
+            folder = normalize_settings(doc.get("settings")).get("project_folder")
+            if folder:
+                dest = Path(folder) / PROJECT_ASSETS_DIR / dest_name
+                try:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dest)
+                except OSError as ex:
+                    raise ValueError(f"Cannot save to the project folder {folder}: {ex}") from None
+                asset_path = str(dest)
+            else:
+                rel_dir = Path(PROJECT_ASSETS_DIR) / cut_id
+                dest = self._project_dir(pid) / rel_dir / dest_name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                asset_path = str(rel_dir / dest_name).replace("\\", "/")
             digest = hashlib.sha256(dest.read_bytes()).hexdigest()
             asset = {
-                "path": str(rel_dir / dest_name).replace("\\", "/"),
+                "path": asset_path,
                 "kind": kind,
                 "sha256": digest,
                 "bytes": dest.stat().st_size,
@@ -1101,15 +1119,7 @@ class LocalStore:
                     except (OSError, ValueError):
                         continue
                     if isinstance(data, dict) and data.get("id") == version_id and not data.get("deleted_at"):
-                        asset = data.get("asset") or {}
-                        rel = asset.get("path")
-                        if not isinstance(rel, str):
-                            continue
-                        path = (self._project_dir(pid) / rel).resolve()
-                        try:
-                            path.relative_to(self._project_dir(pid).resolve())
-                        except ValueError:
-                            continue
-                        if path.is_file():
+                        path = version_asset_file(self._project_dir(pid), data.get("asset"))
+                        if path is not None:
                             return pid, path
         return None

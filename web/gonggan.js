@@ -73,7 +73,15 @@ import {
   REGEN_SKIP_MESSAGE,
 } from "./gg_native_regen_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
-import { parseImportList, summarizeImport, buildLlmPrompt, REFERENCE_CATEGORIES } from "./gg_import_core.js";
+import { REFERENCE_CATEGORIES } from "./gg_import_core.js";
+import {
+  folderNotCreated,
+  loadLastLocation,
+  newProjectRequest,
+  NO_FOLDER_ROUTE_HINT,
+  projectFolderPath,
+  saveLastLocation,
+} from "./gg_new_project_core.js";
 import {
   autosaveModifiedTabs,
   autosaveWorkflow,
@@ -185,11 +193,9 @@ import {
 import {
   loadLastTemplate,
   saveLastTemplate,
-  filterTemplatePaths,
   pickInitialTemplate,
   shortTemplateName,
   templateComboItems,
-  userTemplatePaths,
 } from "./gg_template_pick_core.js";
 import { comboFilter, comboActiveIndex, comboKey } from "./gg_combo_core.js";
 import {
@@ -234,14 +240,7 @@ import {
   zoomKeyAction,
 } from "./gg_zoombar_core.js";
 import {
-  RESOLUTION_PRESETS,
-  FPS_OPTIONS,
-  DEFAULT_PROJECT_SETTINGS,
-  presetKey,
   normalizeProjectSettings,
-  presetKeyForSettings,
-  readSettingsFromFormValues,
-  CAPTION_LANG_OPTIONS,
   projectSettingsModalPatch,
   folderCheckErrorText,
 } from "./gg_project_settings_core.js";
@@ -631,62 +630,6 @@ function projectCaptionLang() {
   return normalizeProjectSettings(state.timeline?.project?.settings).caption_lang;
 }
 
-function projectSetupFieldsHtml() {
-  const presetOpts = RESOLUTION_PRESETS.map((p) => {
-    const k = presetKey(p);
-    return `<option value="${esc(k)}">${esc(p.label)}</option>`;
-  }).join("");
-  const fpsOpts = FPS_OPTIONS.map((f) => `<option value="${f}">${f}</option>`).join("");
-  const langOpts = CAPTION_LANG_OPTIONS.map(
-    (lang) => `<option value="${esc(lang)}">${esc(lang)}</option>`,
-  ).join("");
-  return `
-      <label class="gg-modal-field">Aspect / resolution
-        <select class="gg-modal-resolution">${presetOpts}</select>
-      </label>
-      <label class="gg-modal-field">FPS
-        <select class="gg-modal-fps">${fpsOpts}</select>
-      </label>
-      <label class="gg-modal-field">Default cut length (sec)
-        <input type="number" class="gg-modal-cut-sec" min="1" max="60" step="0.1" value="${DEFAULT_PROJECT_SETTINGS.cut_seconds}" />
-      </label>
-      <label class="gg-modal-field">Caption language
-        <select class="gg-modal-caption-lang">${langOpts}</select>
-      </label>
-      <label class="gg-modal-field">Project folder (optional)
-        <input type="text" class="gg-modal-folder" maxlength="260" spellcheck="false" placeholder="e.g. N:\Projects\My Film" />
-      </label>`;
-}
-
-function applyProjectSetupToModal(wrap, settings) {
-  const s = normalizeProjectSettings(settings);
-  const resSel = wrap.querySelector(".gg-modal-resolution");
-  const fpsSel = wrap.querySelector(".gg-modal-fps");
-  const cutIn = wrap.querySelector(".gg-modal-cut-sec");
-  const langSel = wrap.querySelector(".gg-modal-caption-lang");
-  const folderIn = wrap.querySelector(".gg-modal-folder");
-  if (folderIn) folderIn.value = s.project_folder || "";
-  if (resSel) resSel.value = presetKeyForSettings(s);
-  if (fpsSel) fpsSel.value = String(s.fps);
-  if (cutIn) cutIn.value = String(s.cut_seconds);
-  if (langSel) langSel.value = s.caption_lang;
-}
-
-function readProjectSetupFromModal(wrap, base) {
-  const resSel = wrap.querySelector(".gg-modal-resolution");
-  const fpsSel = wrap.querySelector(".gg-modal-fps");
-  const cutIn = wrap.querySelector(".gg-modal-cut-sec");
-  const langSel = wrap.querySelector(".gg-modal-caption-lang");
-  return readSettingsFromFormValues(
-    resSel?.value,
-    fpsSel?.value,
-    cutIn?.value,
-    langSel?.value,
-    base,
-    wrap.querySelector(".gg-modal-folder")?.value ?? "",
-  );
-}
-
 function closeProjectModal() {
   closeFolderPicker();
   if (projectModalEl) {
@@ -700,22 +643,20 @@ function openNewProjectModal() {
   const wrap = document.createElement("div");
   wrap.className = "gg-modal-backdrop";
   wrap.innerHTML = `
-    <form class="gg-modal" role="dialog" aria-label="New project">
+    <form class="gg-modal gg-new-project-modal" role="dialog" aria-label="New project">
       <h3 class="gg-modal-title">New Project</h3>
-      <label class="gg-modal-field">Name <input type="text" class="gg-modal-name" required maxlength="120" /></label>
-      <label class="gg-modal-field">Template
-        <input type="search" class="gg-modal-tpl-filter" placeholder="Filter templates..." autocomplete="off" />
-        <span class="gg-modal-tpl-hint" aria-live="polite"></span>
-        <select class="gg-modal-tpl"><option value="">(none)</option></select>
+      <label class="gg-modal-field">Project name
+        <input type="text" class="gg-modal-name" required maxlength="120" autocomplete="off" />
       </label>
-      <div class="gg-modal-field gg-split">
-        <span>Auto Cut Split (optional)</span>
-        <span class="gg-split-hint">1. Copy the prompt and paste it into your LLM together with your story.<br>2. Paste the LLM's result here to split it into scenes and cuts automatically.</span>
-        <button type="button" class="gg-btn gg-split-copy">Copy prompt</button>
-        <textarea class="gg-split-text" rows="6" spellcheck="false" aria-label="Auto Cut Split result"></textarea>
-        <span class="gg-split-preview" aria-live="polite"></span>
-      </div>
-      ${projectSetupFieldsHtml()}
+      <label class="gg-modal-field">Location
+        <span class="gg-folder-row">
+          <input type="text" class="gg-modal-folder" maxlength="260" spellcheck="false" autocomplete="off" placeholder="e.g. D:\\Films" />
+          <button type="button" class="gg-btn gg-modal-folder-browse">Browse…</button>
+        </span>
+        <span class="gg-modal-hint gg-np-path"></span>
+        <span class="gg-modal-hint gg-split-err gg-modal-folder-err" aria-live="polite"></span>
+      </label>
+      ${templateFieldHtml()}
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
         <button type="submit" class="gg-btn gg-primary gg-modal-create">Create</button>
@@ -725,132 +666,102 @@ function openNewProjectModal() {
   projectModalEl = wrap;
   const form = wrap.querySelector("form");
   const nameIn = wrap.querySelector(".gg-modal-name");
-  const tplSel = wrap.querySelector(".gg-modal-tpl");
-  const tplFilter = wrap.querySelector(".gg-modal-tpl-filter");
-  const tplHint = wrap.querySelector(".gg-modal-tpl-hint");
-  const refreshModalTplOptions = (forceSelected) => {
-    const selected = typeof forceSelected === "string" ? forceSelected : tplSel.value;
-    const userTotal = userTemplatePaths(userWorkflowPaths, selected).length;
-    const filtered = filterTemplatePaths(userWorkflowPaths, tplFilter?.value || "", selected);
-    tplSel.innerHTML = `<option value="">(none)</option>${filtered
-      .map((p) => `<option value="${esc(p)}"${p === selected ? " selected" : ""}>${esc(p)}</option>`)
-      .join("")}`;
-    tplSel.value = selected;
-    if (tplHint) {
-      const q = (tplFilter?.value || "").trim();
-      if (q && userTotal) tplHint.textContent = `${filtered.length} of ${userTotal}`;
-      else if (!q && userTotal) tplHint.textContent = `${userTotal} templates`;
-      else tplHint.textContent = "";
-    }
-  };
-  tplFilter?.addEventListener("input", () => refreshModalTplOptions());
-  fetchUserWorkflowPaths().then(() => {
-    refreshModalTplOptions(pickInitialTemplate(userWorkflowPaths, loadLastTemplate(localStorage)));
-  });
-  const splitText = wrap.querySelector(".gg-split-text");
-  const splitPreview = wrap.querySelector(".gg-split-preview");
+  const locIn = wrap.querySelector(".gg-modal-folder");
+  const pathHint = wrap.querySelector(".gg-np-path");
+  const locErr = wrap.querySelector(".gg-modal-folder-err");
   const createBtn = wrap.querySelector(".gg-modal-create");
-  /** @type {ReturnType<typeof parseImportList> | null} */
-  let splitResult = null;
-  const refreshSplitPreview = () => {
-    const raw = splitText.value;
-    if (!raw.trim()) {
-      splitResult = null;
-      splitPreview.textContent = "";
-      splitPreview.classList.remove("gg-split-err");
-      createBtn.disabled = false;
-      return;
-    }
-    const sec = Number(wrap.querySelector(".gg-modal-cut-sec")?.value);
-    splitResult = parseImportList(raw, { defaultSec: Number.isFinite(sec) && sec > 0 ? sec : DEFAULT_PROJECT_SETTINGS.cut_seconds });
-    const errs = splitResult.errors || [];
-    if (errs.length) {
-      const shown = errs.slice(0, 3).map((e) => `Line ${e.line}: ${e.message}`);
-      if (errs.length > 3) shown.push(`+${errs.length - 3} more`);
-      splitPreview.textContent = shown.join("\n");
-      splitPreview.classList.add("gg-split-err");
-      createBtn.disabled = true;
-    } else {
-      splitPreview.textContent = summarizeImport(splitResult);
-      splitPreview.classList.remove("gg-split-err");
-      createBtn.disabled = false;
-    }
-  };
-  splitText.addEventListener("input", refreshSplitPreview);
-  wrap.querySelector(".gg-modal-cut-sec")?.addEventListener("input", refreshSplitPreview);
-  wrap.querySelector(".gg-split-copy")?.addEventListener("click", () => {
-    navigator.clipboard?.writeText(buildLlmPrompt())
-      .then(() => ggToast("Copied", "Prompt copied", "ok"))
-      .catch(() => ggToast("Copy failed", "Select the text and copy it manually.", "warn"));
+  let template = "";
+  let templateTouched = false;
+  const showTemplate = wireProjectTemplateField(wrap, {
+    get: () => template,
+    set: (ref) => { template = ref; templateTouched = true; },
   });
-  applyProjectSetupToModal(wrap, DEFAULT_PROJECT_SETTINGS);
+  fetchUserWorkflowPaths().then(() => {
+    if (templateTouched || !wrap.isConnected) return;
+    template = pickInitialTemplate(userWorkflowPaths, loadLastTemplate(localStorage));
+    showTemplate();
+  });
+  const syncPath = () => {
+    const p = projectFolderPath(locIn.value, nameIn.value);
+    pathHint.textContent = p ? `Project folder: ${p}` : "";
+    pathHint.title = p;
+  };
+  const showLocErr = (msg) => {
+    locErr.textContent = msg;
+    locIn.focus();
+  };
+  locIn.value = loadLastLocation(localStorage);
+  syncPath();
+  nameIn.addEventListener("input", syncPath);
+  locIn.addEventListener("input", () => { locErr.textContent = ""; syncPath(); });
+  wrap.querySelector(".gg-modal-folder-browse")?.addEventListener("click", () => {
+    openFolderPicker(locIn.value, (path) => {
+      if (!wrap.isConnected) return;
+      locIn.value = path;
+      locIn.dispatchEvent(new Event("input", { bubbles: true }));
+      locIn.focus();
+    });
+  });
   wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeProjectModal(); });
   wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", closeProjectModal);
-  // The project is created once per modal. If the split import is refused (server 400 ...), the modal stays open with the
-  // pasted text and the next Create only retries the import into that same project (no duplicate project).
-  let createdPid = "";
   let submitting = false;
-  const showSplitError = (msg) => {
-    splitPreview.textContent = msg;
-    splitPreview.classList.add("gg-split-err");
-  };
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (submitting) return;
-    const name = nameIn.value.trim();
-    if (!name) return;
-    const template_ref = tplSel.value || undefined;
-    const settings = readProjectSetupFromModal(wrap, DEFAULT_PROJECT_SETTINGS);
-    saveLastTemplate(localStorage, tplSel.value);
+    const req = newProjectRequest({ name: nameIn.value, location: locIn.value, template });
+    if (req.error) {
+      if (req.field === "location") showLocErr(req.error);
+      else nameIn.focus();
+      return;
+    }
+    const { name, location } = req.body;
     submitting = true;
     createBtn.disabled = true;
     try {
-      if (!createdPid) {
-        const d = await postJson("/gonggan/project/create", { name, template_ref, settings });
-        createdPid = d.project?.id || "";
-      }
-      let splitNote = "";
-      if (splitResult && !(splitResult.errors || []).length && createdPid) {
-        try {
-          await postJson("/gonggan/project/import", {
-            pid: createdPid,
-            scenes: splitResult.scenes,
-            loose: splitResult.loose,
-            references: splitResult.references,
-          });
-          splitNote = ` (${summarizeImport(splitResult).replace(" will be created", " created")})`;
-        } catch (err) {
-          const hint = (err.status === 404 || err.status === 405) ? "Restart ComfyUI to enable Auto Cut Split." : err.message;
-          showSplitError(`Auto Cut Split failed: ${hint}`);
-          ggToast("Auto Cut Split", `Project "${name}" was created, but the split failed: ${hint} Fix the text and press Create again.`, "warn");
-          await loadProjects();
-          return; // keep the modal open with the pasted text
-        }
-      }
+      const d = await postJson("/gonggan/project/create", req.body);
+      saveLastLocation(localStorage, location);
+      saveLastTemplate(localStorage, template);
       closeProjectModal();
       await loadProjects();
-      if (createdPid) selectProject(createdPid);
-      ggToast("Project", `Created "${name}"${splitNote}`, "ok");
+      if (d.project?.id) selectProject(d.project.id);
+      if (folderNotCreated(d.project)) ggToast("Project", `Created "${name}". ${NO_FOLDER_ROUTE_HINT}`, "warn");
+      else ggToast("Project", `Created "${name}" in ${d.project.folder}`, "ok");
     } catch (err) {
-      ggToast("Project", err.message, "warn");
+      if (err.status === 400) showLocErr(err.message);
+      else ggToast("Project", err.message, "warn");
     } finally {
       submitting = false;
-      if (wrap.isConnected) createBtn.disabled = !!(splitResult && (splitResult.errors || []).length);
+      if (wrap.isConnected) createBtn.disabled = false;
     }
   });
   nameIn.focus();
 }
 
+function templateFieldHtml() {
+  return `<div class="gg-modal-field" title="ComfyUI saved workflow used as this project's template">
+        <span class="gg-tpl-label">Default template</span>
+        <span class="gg-tpl-wrap">
+          <input type="text" class="gg-tpl-combo" role="combobox" aria-label="Default template" aria-autocomplete="list"
+            aria-expanded="false" aria-controls="gg-tpl-list" placeholder="(none)" autocomplete="off" spellcheck="false" />
+          <button type="button" class="gg-btn gg-tpl-use-last" hidden>Use last</button>
+        </span>
+        <ul class="gg-tpl-list" id="gg-tpl-list" role="listbox" aria-label="Templates" hidden></ul>
+      </div>`;
+}
+
 /**
- * Default template combobox of the Project Settings modal: typing filters the list, arrows + Enter or a click pick,
- * Escape closes. A pick links the template right away (no Save needed).
+ * Default template combobox (Project Settings, New Project): typing filters the list, arrows + Enter or a click pick,
+ * Escape closes. Without `field` a pick links the open project's template right away (no Save needed) and the
+ * Use last button is offered; with `field` the value lives in field.get / field.set.
+ * @param {{ get: () => string, set: (ref: string) => void } | undefined} field
+ * @returns {() => void} repaints the shown value
  */
-function wireProjectTemplateField(wrap) {
+function wireProjectTemplateField(wrap, field) {
   const input = wrap.querySelector(".gg-tpl-combo");
   const list = wrap.querySelector(".gg-tpl-list");
-  if (!input || !list) return;
+  if (!input || !list) return () => {};
   const ui = { open: false, active: -1, items: [] };
-  const current = () => projectTemplateRef || "";
+  const current = () => (field ? field.get() : projectTemplateRef) || "";
   const showValue = () => {
     input.value = current();
     input.title = current() || "(none)";
@@ -884,10 +795,11 @@ function wireProjectTemplateField(wrap) {
     if (revert) showValue();
   };
   const apply = async (ref) => {
-    if (ref !== current()) await setProjectTemplateRef(ref);
+    if (field) field.set(ref);
+    else if (ref !== current()) await setProjectTemplateRef(ref);
     if (!wrap.isConnected) return;
     showValue();
-    syncTplUseLastButton(wrap);
+    if (!field) syncTplUseLastButton(wrap);
   };
   const pick = (i) => {
     const it = ui.items[i];
@@ -925,12 +837,14 @@ function wireProjectTemplateField(wrap) {
     if (li) pick(Number(li.dataset.i));
   });
   showValue();
+  if (field) return showValue;
   fetchUserWorkflowPaths().then(() => { if (wrap.isConnected) syncTplUseLastButton(wrap); });
   syncTplUseLastButton(wrap);
   wrap.querySelector(".gg-tpl-use-last")?.addEventListener("click", (e) => {
     const ref = e.currentTarget?.dataset?.ref;
     if (ref) void apply(ref);
   });
+  return showValue;
 }
 
 let folderPickerEl = null;
@@ -1072,18 +986,10 @@ function openProjectSettingsModal() {
           <input type="text" class="gg-modal-folder" maxlength="260" spellcheck="false" autocomplete="off" placeholder="e.g. D:\\Films\\My Film" />
           <button type="button" class="gg-btn gg-modal-folder-browse">Browse…</button>
         </span>
-        <span class="gg-modal-hint">Where results are organized by project / scene / cut. Empty = default: the plugin's own projects folder (custom_nodes/comfyui-gonggan-cut/projects).</span>
+        <span class="gg-modal-hint">Generated outputs are saved in its assets folder. Empty = default: the plugin's own projects folder (custom_nodes/comfyui-gonggan-cut/projects).</span>
         <span class="gg-modal-hint gg-split-err gg-modal-folder-err" aria-live="polite"></span>
       </label>` : ""}
-      <div class="gg-modal-field" title="ComfyUI saved workflow used as this project's template">
-        <span class="gg-tpl-label">Default template</span>
-        <span class="gg-tpl-wrap">
-          <input type="text" class="gg-tpl-combo" role="combobox" aria-label="Default template" aria-autocomplete="list"
-            aria-expanded="false" aria-controls="gg-tpl-list" placeholder="(none)" autocomplete="off" spellcheck="false" />
-          <button type="button" class="gg-btn gg-tpl-use-last" hidden>Use last</button>
-        </span>
-        <ul class="gg-tpl-list" id="gg-tpl-list" role="listbox" aria-label="Templates" hidden></ul>
-      </div>
+      ${templateFieldHtml()}
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-modal-cancel">${nat ? "Cancel" : "Close"}</button>
         ${nat ? `<button type="submit" class="gg-btn gg-primary">Save</button>` : ""}
@@ -5071,14 +4977,15 @@ function updateSelectionBar(root) {
     setBtn(bar, ".gg-sel-ungroup", v.ungroup.disabled);
     setBtn(bar, ".gg-sel-x", v.clear.disabled);
   }
+  const hasProject = !!currentProject();
   const row = root.querySelector(".gg-iconrow");
   if (row) {
-    const r = iconRowView({ count: n, hasProject: !!state.pid });
+    const r = iconRowView({ count: n, hasProject });
     setBtn(row, ".gg-ir-scene", r.scene.disabled, r.scene.title);
     setBtn(row, ".gg-ir-cut", r.cut.disabled, r.cut.title);
     setBtn(row, ".gg-ir-del", r.del.disabled, r.del.title);
   }
-  const q = queueButtonState({ count: n, native: isNativeProject(), busy: !!sdk.busy });
+  const q = queueButtonState({ count: n, native: isNativeProject(), busy: !!sdk.busy, hasProject });
   const queueBtn = root.querySelector(".gg-queue-btn");
   if (queueBtn) {
     queueBtn.disabled = q.disabled;
@@ -5956,9 +5863,12 @@ function mountShots(el) {
     const viewFinal = shotsViewOf(SHOW_FINAL_LIST, shotsUi.view) === "final";
     const listCaption = normalizeListMode(shotsUi.listMode) === "caption";
     const hintInfo = emptyListHint({ projectsLoaded: state.projectsLoaded, projectCount: state.projects.length, timeline: tl, native: !!tl && isNativeProject() });
-    const emptyHint = hintInfo
-      ? `<div class="gg-dim gg-list-empty${hintInfo.kind === "projects" ? " gg-no-projects" : ""}">${esc(hintInfo.text)}</div>`
-      : "";
+    const emptyHint = !hintInfo
+      ? ""
+      : hintInfo.button
+        ? `<div class="gg-dim gg-list-empty gg-no-projects"><span>${esc(hintInfo.text)}</span>
+            <button type="button" class="gg-btn gg-primary gg-new-project-btn">${esc(hintInfo.button)}</button></div>`
+        : `<div class="gg-dim gg-list-empty">${esc(hintInfo.text)}</div>`;
     const listHtml = emptyHint || groupedListHtml(sections, {
       cutHtml: (c) => cutRowHtml(c, cutLabels),
       groupHue: groupColor,
@@ -6021,6 +5931,7 @@ function mountShots(el) {
       if (e.target.closest(".gg-proj") || e.target.closest(".gg-head")) openProjectContextMenu(e);
     });
     root.querySelector(".gg-proj-settings")?.addEventListener("click", () => openProjectSettingsModal());
+    root.querySelector(".gg-new-project-btn")?.addEventListener("click", () => openNewProjectModal());
     root.querySelector(".gg-cut-add")?.addEventListener("click", () => addLocalCut());
     root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); refreshProjectTemplateFlag(); });
     root.querySelectorAll(".gg-view-toggle .gg-btn").forEach((btn) => {
