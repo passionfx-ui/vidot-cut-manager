@@ -154,22 +154,35 @@ def project_folder_name(name: Any) -> str:
     return s
 
 
+def project_folder_path(location: Path, name: Any) -> Path:
+    """<location>/<project name>, or <location> itself when its last segment already is the project
+    folder name (case-insensitive on Windows); same rule as web/gg_new_project_core.js projectFolderPath."""
+    folder_name = project_folder_name(name)
+    last = location.name
+    if os.name == "nt":
+        last, folder_name = last.lower(), folder_name.lower()
+    return location if last and last == folder_name else location / project_folder_name(name)
+
+
 def make_project_folder(location: Any, name: Any, created: list[Path] | None = None) -> Path:
-    """Create <location>/<project name>/assets for a new project and return <location>/<project name>.
-    The project folder must be new or empty; raises ValueError with a user-facing message.
-    Folders this call created are appended to `created` (outermost first)."""
+    """Create <project folder>/assets for a new project and return the project folder
+    (see project_folder_path). A new <location>/<name> must be new or empty; a location that already is
+    the project folder may hold other files (only `assets` is added, nothing existing is changed).
+    Raises ValueError with a user-facing message. Folders this call created are appended to `created`
+    (outermost first)."""
     loc = _clamp_project_folder(location)
     if not loc:
         raise ValueError("Choose a location")
     res = check_output_folder(loc)
     if not res["ok"]:
         raise ValueError(res["message"])
-    folder = Path(loc).expanduser() / project_folder_name(name)
+    loc_path = Path(loc).expanduser()
+    folder = project_folder_path(loc_path, name)
     assets = folder / PROJECT_ASSETS_DIR
     if len(str(assets)) > 260:
         raise ValueError("The folder path is too long")
     try:
-        if folder.exists() and (not folder.is_dir() or any(folder.iterdir())):
+        if folder != loc_path and folder.exists() and (not folder.is_dir() or any(folder.iterdir())):
             raise ValueError(f'"{folder.name}" already exists in this location')
         missing = [p for p in (*reversed(assets.parents), assets) if not p.exists()]
         assets.mkdir(parents=True, exist_ok=True)

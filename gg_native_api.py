@@ -102,7 +102,7 @@ def create_native_project(
     location: str | None = None,
 ) -> dict:
     """With a location, the project folder <location>/<name> (only an `assets` subfolder) is created
-    first and becomes settings.project_folder."""
+    first and becomes settings.project_folder; a location already ending with the name is used as is."""
     name = (name or "").strip()
     if not name:
         raise ValueError("name required")
