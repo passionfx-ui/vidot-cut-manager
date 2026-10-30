@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
+from pathlib import Path
 
 from aiohttp import web
 from server import PromptServer
@@ -817,4 +819,39 @@ async def gg_capture_output(request):
     except Exception as ex:  # noqa: BLE001
         log.exception("[gonggan-cut] capture-output failed")
         return _err(500, str(ex))
+    return web.json_response(res)
+
+
+@routes.post("/gonggan/import-version")
+async def gg_import_version(request):
+    """Native only: multipart {pid, cut_id, file}; the uploaded file becomes a new version of the cut."""
+    fields: dict[str, str] = {}
+    tmp = None
+    try:
+        reader = await request.multipart()
+        async for part in reader:
+            if part.name == "file" and tmp is None:
+                ext = Path(part.filename or "").suffix.lower()
+                tmp_dir = gg_data.CACHE_DIR / "imports"
+                tmp_dir.mkdir(parents=True, exist_ok=True)
+                tmp = tmp_dir / f"{secrets.token_hex(8)}{ext}"
+                with open(tmp, "xb") as f:
+                    while chunk := await part.read_chunk(1 << 20):
+                        f.write(chunk)
+            elif part.name in ("pid", "cut_id"):
+                fields[part.name] = (await part.text()).strip()
+        pid, cid = fields.get("pid"), fields.get("cut_id")
+        if not pid or not cid or not gg_native_api.is_native_pid(pid):
+            return _err(400, "native pid and cut_id required")
+        if tmp is None:
+            return _err(400, "file required")
+        res = await asyncio.to_thread(gg_native_api.native_import_version, pid, cid, tmp)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] import-version failed")
+        return _err(500, str(ex))
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
     return web.json_response(res)

@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import {
   SET_BEST_LABEL,
   formatClipDuration,
+  importButtonState,
   needsDurationProbe,
   showNewestButton,
   stripScrollLeft,
@@ -120,6 +121,16 @@ describe("horizontal scroll", () => {
     assert.equal(wheelToScrollLeft(60, 10), 0);
     assert.equal(wheelToScrollLeft(0, 0), 0);
     assert.equal(wheelToScrollLeft(undefined, "x"), 0);
+  });
+});
+
+describe("importButtonState", () => {
+  it("is enabled only for a selected cut of a native project", () => {
+    assert.deepEqual(importButtonState({ hasCut: true, native: true }), { disabled: false, title: "Import" });
+    assert.equal(importButtonState({ hasCut: true, native: false }).disabled, true);
+    assert.match(importButtonState({ hasCut: true, native: false }).title, /read-only/);
+    assert.equal(importButtonState({ hasCut: false, native: true }).title, "Select a cut to import");
+    assert.equal(importButtonState({ hasCut: true, native: true, busy: true }).disabled, true);
   });
 });
 

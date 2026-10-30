@@ -883,6 +883,8 @@ class LocalStore:
             folder = normalize_settings(doc.get("settings")).get("project_folder")
             if folder:
                 dest = Path(folder) / PROJECT_ASSETS_DIR / dest_name
+                if dest.exists():
+                    raise ValueError(f"{dest} already exists")
                 try:
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(src, dest)
@@ -892,6 +894,8 @@ class LocalStore:
             else:
                 rel_dir = Path(PROJECT_ASSETS_DIR) / cut_id
                 dest = self._project_dir(pid) / rel_dir / dest_name
+                if dest.exists():
+                    raise ValueError(f"{dest} already exists")
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dest)
                 asset_path = str(rel_dir / dest_name).replace("\\", "/")
