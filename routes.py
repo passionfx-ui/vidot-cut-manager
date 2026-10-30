@@ -801,3 +801,20 @@ async def gg_send_output(request):
     except ValueError as ex:
         return _err(400, str(ex))
     return web.json_response(res, status=200 if res.get("ok") else 404)
+
+
+@routes.post("/gonggan/capture-output")
+async def gg_capture_output(request):
+    """Native only: the finished run `prompt_id` (queued from that cut) becomes a version of the cut."""
+    data = await _json_body(request)
+    pid, cid, prompt_id = data.get("pid"), data.get("cut_id"), data.get("prompt_id")
+    if not isinstance(pid, str) or not isinstance(cid, str) or not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid and cut_id required")
+    try:
+        res = await asyncio.to_thread(gg_native_api.native_capture_prompt_output, pid, cid, prompt_id)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] capture-output failed")
+        return _err(500, str(ex))
+    return web.json_response(res)

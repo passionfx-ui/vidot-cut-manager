@@ -1,6 +1,8 @@
 """Native project HTTP helpers (testable without aiohttp)."""
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -536,17 +538,60 @@ def native_send_last_output(pid: str, cut_id: str) -> dict:
     lo = info["output"]
     if not lo:
         return {"ok": False, "message": info["reason"]}
+    return {"ok": True, "version": _add_output_version(pid, cut_id, lo), "output": lo}
+
+
+def _add_output_version(pid: str, cut_id: str, lo: dict) -> dict:
     path = Path(lo["path"])
     meta = gg_wfstore.extract_png_meta(path) if path.suffix.lower() == ".png" else {}
     ui = meta.get("workflow") if isinstance(meta.get("workflow"), dict) else None
     api = meta.get("prompt") if isinstance(meta.get("prompt"), dict) else None
     workflow = ui or api
-    store = native_store()
-    ver = store.add_version(
+    return native_store().add_version(
         pid,
         cut_id,
         path,
         workflow=workflow,
         prompt_id=lo.get("prompt_id") if isinstance(lo.get("prompt_id"), str) else None,
     )
-    return {"ok": True, "version": ver, "output": lo}
+
+
+_CAPTURE_LOCK = threading.Lock()
+
+
+def native_capture_prompt_output(
+    pid: str, cut_id: str, prompt_id: str, wait_sec: float = 5.0, poll_sec: float = 0.25
+) -> dict:
+    """A finished run queued from a cut becomes a version of that cut (once per prompt id).
+
+    ComfyUI sends `execution_success` before the run is stored in /history, so a missing entry is
+    polled for up to `wait_sec`."""
+    try:
+        from . import gg_sdk
+    except ImportError:
+        import gg_sdk  # type: ignore
+
+    if not isinstance(prompt_id, str) or not prompt_id.strip() or len(prompt_id) > 200:
+        raise ValueError("prompt_id required")
+    store = native_store()
+    doc = store.get_project(pid)
+    if not doc or doc.get("deleted_at"):
+        raise ValueError("project not found")
+    cut = (doc.get("cuts") or {}).get(cut_id)
+    if not cut or cut.get("deleted_at"):
+        raise ValueError("cut not found")
+    deadline = time.monotonic() + max(0.0, wait_sec)
+    while True:
+        info = gg_sdk.prompt_output_info(prompt_id)
+        if not info.get("pending") or time.monotonic() >= deadline:
+            break
+        time.sleep(poll_sec)
+    lo = info["output"]
+    if not lo:
+        return {"ok": False, "message": info["reason"]}
+    with _CAPTURE_LOCK:
+        for ver in store.list_versions(pid, cut_id):
+            run = ver.get("run") if isinstance(ver.get("run"), dict) else {}
+            if run.get("prompt_id") == prompt_id:
+                return {"ok": True, "version": ver, "output": lo, "duplicate": True}
+        return {"ok": True, "version": _add_output_version(pid, cut_id, lo), "output": lo, "duplicate": False}
