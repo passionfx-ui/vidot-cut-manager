@@ -170,7 +170,7 @@ describe("confirm + payload", () => {
     assert.match(body, /Text to video/);
     assert.match(body, /A red fox runs/);
     assert.match(body, /Nothing is queued/);
-    assert.match(body, /Queue with no cut selected/);
+    assert.match(body, /Select the cuts and press Queue/);
   });
 
   it("lists at most 8 cuts", () => {
