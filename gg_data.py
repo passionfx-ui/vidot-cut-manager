@@ -1,4 +1,4 @@
-"""Read-only access to 공간쉐어 data (data/<uid>/_workspace.json + j*_*.{png,mp4} results).
+"""Read-only access to legacy imported project data (data/<uid>/_workspace.json + j*_*.{png,mp4} results).
 
 Never writes into the data root. Pure stdlib so it can be tested outside ComfyUI.
 """
@@ -50,8 +50,11 @@ def user_dir(settings: dict | None = None) -> Path:
     uid = str(s.get("uid") or "")
     if not UID_RE.fullmatch(uid):
         raise ValueError("invalid uid in settings")
-    root = Path(str(s.get("data_root") or "")).expanduser()
-    if not str(root) or not root.is_dir():
+    raw_root = str(s.get("data_root") or "").strip()
+    if not raw_root:
+        raise FileNotFoundError("data_root not set")
+    root = Path(raw_root).expanduser()
+    if not root.is_dir():
         raise FileNotFoundError(f"data_root not found: {root}")
     d = (root / uid).resolve()
     d.relative_to(root.resolve())
@@ -117,6 +120,8 @@ def _load_jobs(d: Path) -> dict:
 
 # ---- pack-owned versions (new takes from the SDK path or ComfyUI history) ----
 VERSIONS_DIR = PACK_DIR / "versions"          # versions/<pid>/<cut_id>/<vid>.<ext> + <vid>.json
+WORKFLOWS_DIR = PACK_DIR / "workflows"        # workflows/<pid>/<cut_id>/…
+TRASH_DIR = PACK_DIR / "trash"                # trash/<pid>/<stamp>/<cut_id>/ + manifest.json
 VER_ID_RE = re.compile(r"^v\d{10,14}_[a-f0-9]{6}$")
 
 
@@ -136,7 +141,8 @@ def _load_versions() -> dict:
             continue
         num = lambda v: v if isinstance(v, (int, float)) and not isinstance(v, bool) else None  # noqa: E731
         out[vid] = {
-            "id": vid, "kind": MEDIA_KINDS[ext], "ext": ext, "mtime": media.stat().st_mtime,
+            "id": vid, "kind": "video" if meta.get("animated") is True else MEDIA_KINDS[ext],
+            "animated": meta.get("animated") is True, "ext": ext, "mtime": media.stat().st_mtime,
             "cut_id": mf.parent.name, "project_id": mf.parent.parent.name,
             "width": num(meta.get("width")), "height": num(meta.get("height")), "seconds": num(meta.get("seconds")),
             "model": str(meta.get("model") or ""), "aspect": str(meta.get("aspect") or ""),
@@ -195,12 +201,17 @@ def clip_seconds(cut: dict, job: dict | None) -> float:
 def _media_view(job: dict | None) -> dict | None:
     if not job:
         return None
-    return {k: job.get(k) for k in ("id", "kind", "width", "height", "seconds", "model", "source")}
+    return {k: job.get(k) for k in ("id", "kind", "animated", "width", "height", "seconds", "model", "source")}
 
 
 def list_projects() -> dict:
     s = load_settings()
-    d = user_dir(s)
+    try:
+        d = user_dir(s)
+    except (FileNotFoundError, ValueError) as ex:
+        # No legacy imported data configured: native (pack-local) projects still work.
+        return {"ok": True, "uid": s.get("uid"), "active_project_id": None, "projects": [],
+                "legacy_unavailable": str(ex)}
     ws = _load_workspace(d)
     jobs = _all_media(d)
     by_cut = _jobs_by_cut(jobs)
@@ -232,6 +243,10 @@ def list_projects() -> dict:
 
 EDITS_DIR = PACK_DIR / "edits"                                # pack-local edit decisions (never the data root)
 PID_RE = re.compile(r"^[A-Za-z0-9_-]{2,64}$")
+GID_RE = re.compile(r"^[A-Za-z0-9_-]{2,64}$")
+LOCAL_CUT_ID_RE = re.compile(r"^L[A-Za-z0-9_-]{2,62}$")
+LOCAL_CUT_DEFAULT_SEC = 3.0
+SCENE_NAME_MAX = 40
 IMG_MIN, IMG_MAX = 0.5, 60.0
 VID_MIN = 0.2
 _dur_cache: dict = {}
@@ -245,6 +260,9 @@ def media_duration(job: dict | None) -> float | None:
     """Real duration of a video result (PyAV, fallback ffprobe). Cached by id + mtime."""
     if not job or job.get("kind") != "video":
         return None
+    if job.get("animated"):
+        s = job.get("seconds")
+        return float(s) if isinstance(s, (int, float)) and s > 0 else None
     key = (job["id"], job["mtime"])
     with _lock:
         if key in _dur_cache:
@@ -315,6 +333,153 @@ def load_edit(pid: str) -> dict | None:
         return None
 
 
+def _atomic_edit_write(pid: str, data: dict) -> None:
+    f = _edit_file(pid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(f)
+
+
+def _hidden_cut_ids(edit: dict | None) -> set:
+    raw = (edit or {}).get("hidden")
+    if not isinstance(raw, list):
+        return set()
+    return {x for x in raw if isinstance(x, str) and x}
+
+
+def _preserve_edit_fields(old: dict | None, data: dict) -> None:
+    """Keep hidden + local_cuts when rewriting order/clips (not groups — save_groups owns those)."""
+    old = old or {}
+    if isinstance(old.get("local_cuts"), list):
+        data["local_cuts"] = old["local_cuts"]
+    hidden = old.get("hidden")
+    if isinstance(hidden, list):
+        data["hidden"] = [x for x in hidden if isinstance(x, str) and x]
+
+
+def _is_local_cut_id(cut_id: str) -> bool:
+    return bool(LOCAL_CUT_ID_RE.fullmatch(cut_id or ""))
+
+
+def _trash_stamp() -> str:
+    import time
+    from datetime import datetime
+    return datetime.fromtimestamp(time.time()).strftime("%Y%m%d-%H%M%S")
+
+
+def _scene_id_of(cut: dict) -> str:
+    if not cut.get("scene"):
+        return ""
+    sid = cut.get("scene_id") or ""
+    return sid if isinstance(sid, str) and sid else f"L{cut.get('id', '')}"
+
+
+def default_groups_from_cuts(src_cuts: list) -> list:
+    """Initial scene groups from legacy imported cut.scene / cut.scene_id (consecutive runs)."""
+    groups: list = []
+    cur: dict | None = None
+    for c in src_cuts:
+        sid = _scene_id_of(c)
+        cid = c.get("id")
+        if not sid or not cid:
+            cur = None
+            continue
+        title = str(c.get("scene") or "").strip()[:SCENE_NAME_MAX] or "씬"
+        if cur and cur["id"] == sid:
+            cur["cut_ids"].append(cid)
+        else:
+            cur = {"id": sid, "name": title, "cut_ids": [cid], "collapsed": False}
+            groups.append(cur)
+    return groups
+
+
+def _sort_cut_ids(cut_ids: list, order: list) -> list:
+    rank = {cid: i for i, cid in enumerate(order)}
+    return sorted(cut_ids, key=lambda x: rank.get(x, 10**9))
+
+
+def _parse_groups(raw, valid_cut_ids: set, order: list) -> list | None:
+    if not isinstance(raw, list):
+        return None
+    seen: set = set()
+    out: list = []
+    for g in raw:
+        if not isinstance(g, dict):
+            continue
+        gid = str(g.get("id") or "").strip()
+        if not GID_RE.fullmatch(gid):
+            continue
+        name = str(g.get("name") or "").strip()[:SCENE_NAME_MAX] or "씬"
+        cut_ids = []
+        for cid in g.get("cut_ids") or []:
+            if isinstance(cid, str) and cid in valid_cut_ids and cid not in seen:
+                cut_ids.append(cid)
+                seen.add(cid)
+        if not cut_ids:
+            continue
+        out.append({
+            "id": gid,
+            "name": name,
+            "cut_ids": _sort_cut_ids(cut_ids, order),
+            "collapsed": bool(g.get("collapsed")),
+        })
+    return out
+
+
+def _local_cut_records(edit: dict | None) -> list:
+    raw = (edit or {}).get("local_cuts")
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for lc in raw:
+        if not isinstance(lc, dict):
+            continue
+        cid = lc.get("id")
+        if not isinstance(cid, str) or not LOCAL_CUT_ID_RE.fullmatch(cid):
+            continue
+        out.append(lc)
+    return out
+
+
+def _local_cut_as_workspace(lc: dict) -> dict:
+    return {
+        "id": lc["id"],
+        "name": str(lc.get("name") or "cut"),
+        "scene": "",
+        "scene_id": "",
+        "story": "",
+        "prompt": "",
+        "shot": "",
+        "tl_sec": LOCAL_CUT_DEFAULT_SEC,
+        "tl_in": 0.0,
+        "local": True,
+    }
+
+
+def project_cut_ids(proj: dict, edit: dict | None) -> set:
+    ids = {c.get("id") for c in (proj.get("cuts") or []) if c.get("id")}
+    for lc in _local_cut_records(edit):
+        ids.add(lc["id"])
+    return ids
+
+
+def effective_groups(pid: str, proj: dict | None, edit: dict | None, timeline_order: list) -> list:
+    src_cuts = (proj or {}).get("cuts") or []
+    valid = project_cut_ids(proj or {}, edit) - _hidden_cut_ids(edit)
+    if edit and isinstance(edit.get("groups"), list):
+        parsed = _parse_groups(edit["groups"], valid, timeline_order)
+        return parsed if parsed is not None else []
+    base = default_groups_from_cuts(src_cuts)
+    for g in base:
+        g["cut_ids"] = _sort_cut_ids(g["cut_ids"], timeline_order)
+    return base
+
+
+def groups_customized(edit: dict | None) -> bool:
+    return bool(edit and isinstance(edit.get("groups"), list))
+
+
 def _find_project(pid: str):
     d = user_dir()
     ws = _load_workspace(d)
@@ -329,10 +494,16 @@ def timeline(pid: str) -> dict | None:
     jobs = _all_media(d)
     by_cut = _jobs_by_cut(jobs)
     edit = load_edit(pid) or {}
+    hidden = _hidden_cut_ids(edit)
     clips_edit = edit.get("clips") if isinstance(edit.get("clips"), dict) else {}
-    src_cuts = proj.get("cuts") or []
+    src_cuts = list(proj.get("cuts") or [])
+    for lc in _local_cut_records(edit):
+        if lc["id"] not in hidden:
+            src_cuts.append(_local_cut_as_workspace(lc))
     base = []
     for i, c in enumerate(src_cuts):
+        if c.get("id") in hidden:
+            continue
         e = clips_edit.get(c.get("id")) if isinstance(clips_edit.get(c.get("id")), dict) else None
         pick = e.get("pick") if e and isinstance(e.get("pick"), str) else None
         job, n = _preview(c, by_cut, jobs, pick)
@@ -343,11 +514,12 @@ def timeline(pid: str) -> dict | None:
         if e and "sec" not in e:
             e = None if not pick else {"pick": pick}
         cur_in, cur_sec = (e.get("in", seed_in), e.get("sec", seed_sec)) if e else (seed_in, seed_sec)
-        vers = [{"id": v["id"], "kind": v["kind"], "source": v.get("source"), "model": v.get("model"),
-                 "created": v["mtime"]} for v in _versions_of(c, by_cut, jobs)]
+        vers = [{"id": v["id"], "kind": v["kind"], "animated": bool(v.get("animated")), "source": v.get("source"), "model": v.get("model"),
+                 "created": v["mtime"], "seconds": v.get("seconds"), "width": v.get("width"),
+                 "height": v.get("height")} for v in _versions_of(c, by_cut, jobs)]
         cur_in, cur_sec = clamp_clip(kind, cur_in, cur_sec, src_dur)
         base.append({
-            "index": i,                       # position in 공간쉐어 order
+            "index": i,                       # position in imported project order
             "id": c.get("id"),
             "name": c.get("name") or "",
             "scene": c.get("scene") or "",
@@ -368,20 +540,27 @@ def timeline(pid: str) -> dict | None:
             "prompt_aspect": (job or {}).get("aspect") or "",
         })
     by_id = {c["id"]: c for c in base}
-    order = [x for x in (edit.get("order") or []) if x in by_id]
+    order = [x for x in (edit.get("order") or []) if x in by_id and x not in hidden]
     seen = set(order)
-    order += [c["id"] for c in base if c["id"] not in seen]   # new cuts in 공간쉐어 go to the end
+    order += [c["id"] for c in base if c["id"] not in seen and c["id"] not in hidden]
+    groups = effective_groups(pid, proj, edit, order)
+    cut_to_group = {cid: g["id"] for g in groups for cid in g["cut_ids"]}
     cuts = []
     at = 0.0
     for pos, cid in enumerate(dict.fromkeys(order)):
         c = by_id[cid]
         c["pos"] = pos
         c["start"] = _round(at)
+        gid = cut_to_group.get(cid) or ""
+        g = next((x for x in groups if x["id"] == gid), None)
+        c["group_id"] = gid
+        c["group_name"] = g["name"] if g else ""
         at += c["sec"]
         cuts.append(c)
     return {"ok": True, "project": {"id": proj.get("id"), "name": proj.get("name") or "",
                                     "logline": proj.get("logline") or ""},
-            "cuts": cuts, "total_sec": _round(at),
+            "cuts": cuts, "groups": groups, "groups_customized": groups_customized(edit),
+            "total_sec": _round(at),
             "edited": bool(edit), "edit_updated_at": edit.get("updated_at")}
 
 
@@ -411,17 +590,325 @@ def save_edit(pid: str, order, clips) -> dict | None:
             src_dur = media_duration(_all_media(user_dir()).get(pick))
         i, sec = clamp_clip(kind, e.get("in", c["in"]), e.get("sec", c["sec"]), src_dur)
         out_clips[cid] = {"in": i, "sec": sec, **({"pick": pick} if pick else {})}
+    old = load_edit(pid) or {}
     data = {"version": 1, "pid": pid, "order": order, "clips": out_clips, "updated_at": time.time()}
-    f = _edit_file(pid)
-    f.parent.mkdir(parents=True, exist_ok=True)
-    tmp = f.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(f)
+    if isinstance(old.get("groups"), list):
+        data["groups"] = old["groups"]
+    _preserve_edit_fields(old, data)
+    _atomic_edit_write(pid, data)
     return timeline(pid)
 
 
+def save_groups(pid: str, groups) -> dict | None:
+    """Persist scene/cut groups in edits/edit_<pid>.json (does not change timeline order/trims)."""
+    import time
+    d, proj = _find_project(pid)
+    if not proj:
+        return None
+    edit_pre = load_edit(pid) or {}
+    valid = project_cut_ids(proj, edit_pre)
+    tl = timeline(pid)
+    if tl is None:
+        return None
+    order = [c["id"] for c in tl["cuts"]]
+    parsed = _parse_groups(groups, valid, order)
+    if parsed is None:
+        raise ValueError("groups must be a list")
+    old = load_edit(pid) or {}
+    clips = old.get("clips") if isinstance(old.get("clips"), dict) else {}
+    if not clips:
+        clips = {c["id"]: {"in": c["in"], "sec": c["sec"], **({"pick": c["pick"]} if c.get("pick") else {})}
+                 for c in tl["cuts"]}
+    ord_saved = old.get("order") if isinstance(old.get("order"), list) else order
+    ord_saved = [x for x in ord_saved if x in valid]
+    ord_saved += [cid for cid in order if cid not in ord_saved]
+    data = {
+        "version": 1, "pid": pid, "order": ord_saved, "clips": clips,
+        "groups": parsed, "updated_at": time.time(),
+    }
+    _preserve_edit_fields(old, data)
+    _atomic_edit_write(pid, data)
+    return timeline(pid)
+
+
+def add_local_cut(pid: str, group_id: str | None = None, after_cut_id: str | None = None) -> dict:
+    """Append a pack-local cut (stored in edits/local_cuts, merged into timeline)."""
+    import secrets
+    import time
+
+    d, proj = _find_project(pid)
+    if not proj:
+        raise ValueError("project not found")
+    edit = load_edit(pid) or {}
+    local = _local_cut_records(edit)
+    valid = project_cut_ids(proj, edit)
+    cut_id = f"L{int(time.time() * 1000)}_{secrets.token_hex(3)}"
+    while cut_id in valid:
+        cut_id = f"L{int(time.time() * 1000)}_{secrets.token_hex(3)}"
+    entry = {"id": cut_id, "name": "New cut", "created": time.time()}
+    if isinstance(group_id, str) and group_id.strip() and GID_RE.fullmatch(group_id.strip()):
+        entry["group_id"] = group_id.strip()
+    local.append(entry)
+
+    tl = timeline(pid)
+    if tl is None:
+        raise ValueError("project not found")
+    order = [c["id"] for c in tl["cuts"]]
+    if isinstance(after_cut_id, str) and after_cut_id in valid:
+        order.insert(order.index(after_cut_id) + 1, cut_id)
+    else:
+        order.append(cut_id)
+
+    groups = [dict(g) for g in (tl.get("groups") or [])]
+    gid = entry.get("group_id")
+    if gid:
+        found = False
+        for g in groups:
+            if g.get("id") == gid:
+                g["cut_ids"] = _sort_cut_ids([*(g.get("cut_ids") or []), cut_id], order)
+                found = True
+                break
+        if not found:
+            groups.append({"id": gid, "name": "씬", "cut_ids": [cut_id], "collapsed": False})
+
+    clips = dict(edit.get("clips")) if isinstance(edit.get("clips"), dict) else {}
+    clips[cut_id] = {"in": 0.0, "sec": LOCAL_CUT_DEFAULT_SEC}
+
+    data = {
+        "version": 1,
+        "pid": pid,
+        "order": order,
+        "clips": clips,
+        "local_cuts": local,
+        "updated_at": time.time(),
+    }
+    if groups:
+        data["groups"] = groups
+    elif isinstance(edit.get("groups"), list):
+        data["groups"] = edit["groups"]
+    _preserve_edit_fields(edit, data)
+    _atomic_edit_write(pid, data)
+    return entry
+
+
+def _move_local_cut_to_trash(pid: str, cut_id: str, stamp: str, local_record: dict | None) -> Path:
+    dest = TRASH_DIR / pid / stamp / cut_id
+    dest.mkdir(parents=True, exist_ok=True)
+    moved: list = []
+    wfd = WORKFLOWS_DIR / pid / cut_id
+    ver = VERSIONS_DIR / pid / cut_id
+    if wfd.is_dir():
+        shutil.move(str(wfd), str(dest / "workflows"))
+        moved.append("workflows")
+    if ver.is_dir():
+        shutil.move(str(ver), str(dest / "versions"))
+        moved.append("versions")
+    manifest = {
+        "pid": pid,
+        "cut_id": cut_id,
+        "stamp": stamp,
+        "local": True,
+        "moved": moved,
+        "local_cut": local_record,
+    }
+    (dest / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+    return dest
+
+
+def _find_trash_manifest(pid: str, cut_id: str) -> tuple[Path, dict] | None:
+    base = TRASH_DIR / pid
+    if not base.is_dir():
+        return None
+    hits: list = []
+    for stamp_dir in base.iterdir():
+        if not stamp_dir.is_dir():
+            continue
+        cut_dir = stamp_dir / cut_id
+        mf = cut_dir / "manifest.json"
+        if mf.is_file():
+            try:
+                data = json.loads(mf.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict):
+                hits.append((stamp_dir.name, cut_dir, data))
+    if not hits:
+        return None
+    hits.sort(key=lambda x: x[0], reverse=True)
+    _, cut_dir, data = hits[0]
+    return cut_dir, data
+
+
+def list_trash(pid: str) -> list:
+    if not PID_RE.fullmatch(pid or ""):
+        raise ValueError("invalid project id")
+    base = TRASH_DIR / pid
+    out: list = []
+    if not base.is_dir():
+        return out
+    for stamp_dir in sorted(base.iterdir(), reverse=True):
+        if not stamp_dir.is_dir():
+            continue
+        for cut_dir in stamp_dir.iterdir():
+            mf = cut_dir / "manifest.json"
+            if not mf.is_file():
+                continue
+            try:
+                data = json.loads(mf.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(data, dict):
+                data = dict(data)
+                data["path"] = str(cut_dir)
+                out.append(data)
+    return out
+
+
+def delete_cuts(pid: str, cut_ids: list) -> dict | None:
+    """Soft-delete cuts: hidden list + optional trash move for pack-local cuts."""
+    import time
+
+    d, proj = _find_project(pid)
+    if not proj:
+        return None
+    if not isinstance(cut_ids, list) or not cut_ids:
+        raise ValueError("cuts required")
+    edit = load_edit(pid) or {}
+    valid = project_cut_ids(proj, edit)
+    hidden = _hidden_cut_ids(edit)
+    targets = []
+    for cid in dict.fromkeys(cut_ids):
+        if not isinstance(cid, str) or cid not in valid:
+            raise ValueError(f"invalid cut id: {cid}")
+        if cid in hidden:
+            continue
+        targets.append(cid)
+    if not targets:
+        return timeline(pid)
+
+    stamp = _trash_stamp()
+    local_by_id = {lc["id"]: lc for lc in _local_cut_records(edit)}
+    local = [lc for lc in _local_cut_records(edit) if lc["id"] not in targets]
+    for cid in targets:
+        if _is_local_cut_id(cid):
+            _move_local_cut_to_trash(pid, cid, stamp, local_by_id.get(cid))
+
+    base_order = [x for x in (edit.get("order") if isinstance(edit.get("order"), list) else []) if isinstance(x, str)]
+    order = [x for x in base_order if x not in targets]
+    remaining = valid - hidden - set(targets)
+    seen = set(order)
+    for cid in remaining:
+        if cid not in seen:
+            order.append(cid)
+    hidden = sorted(hidden | set(targets))
+    clips = edit.get("clips") if isinstance(edit.get("clips"), dict) else {}
+    clips = {k: v for k, v in clips.items() if k not in targets}
+    groups_raw = edit.get("groups") if isinstance(edit.get("groups"), list) else None
+    if groups_raw is not None:
+        parsed = _parse_groups(groups_raw, valid - set(hidden), order)
+        groups_out = parsed if parsed is not None else []
+    else:
+        groups_out = None
+
+    data = {
+        "version": 1,
+        "pid": pid,
+        "order": order,
+        "clips": clips,
+        "hidden": hidden,
+        "local_cuts": local,
+        "updated_at": time.time(),
+    }
+    if groups_out is not None:
+        data["groups"] = groups_out
+    elif isinstance(edit.get("groups"), list):
+        data["groups"] = edit["groups"]
+    _atomic_edit_write(pid, data)
+    return timeline(pid)
+
+
+def restore_cuts(pid: str, cut_ids: list | None = None) -> dict | None:
+    """Restore soft-deleted cuts (move pack-local dirs back from trash, unhide)."""
+    import time
+
+    d, proj = _find_project(pid)
+    if not proj:
+        return None
+    edit = load_edit(pid) or {}
+    hidden = _hidden_cut_ids(edit)
+    if not hidden:
+        return timeline(pid)
+    if cut_ids is None:
+        targets = sorted(hidden)
+    else:
+        if not isinstance(cut_ids, list):
+            raise ValueError("cuts must be a list")
+        targets = []
+        for cid in dict.fromkeys(cut_ids):
+            if not isinstance(cid, str) or cid not in hidden:
+                raise ValueError(f"cut not hidden: {cid}")
+            targets.append(cid)
+
+    local = _local_cut_records(edit)
+    local_ids = {lc["id"] for lc in local}
+    order = edit.get("order") if isinstance(edit.get("order"), list) else []
+    order = [x for x in order if isinstance(x, str)]
+
+    for cid in targets:
+        hit = _find_trash_manifest(pid, cid)
+        if hit:
+            cut_dir, manifest = hit
+            wfd = cut_dir / "workflows"
+            ver = cut_dir / "versions"
+            dest_wf = WORKFLOWS_DIR / pid / cid
+            dest_ver = VERSIONS_DIR / pid / cid
+            dest_wf.parent.mkdir(parents=True, exist_ok=True)
+            dest_ver.parent.mkdir(parents=True, exist_ok=True)
+            if wfd.is_dir() and not dest_wf.exists():
+                shutil.move(str(wfd), str(dest_wf))
+            if ver.is_dir() and not dest_ver.exists():
+                shutil.move(str(ver), str(dest_ver))
+            lc = manifest.get("local_cut")
+            if isinstance(lc, dict) and lc.get("id") == cid and cid not in local_ids:
+                local.append(lc)
+                local_ids.add(cid)
+            try:
+                shutil.rmtree(cut_dir)
+            except OSError:
+                pass
+            stamp_parent = cut_dir.parent
+            if stamp_parent.is_dir() and not any(stamp_parent.iterdir()):
+                stamp_parent.rmdir()
+        hidden.discard(cid)
+        if cid not in order:
+            order.append(cid)
+
+    data = {
+        "version": 1,
+        "pid": pid,
+        "order": order,
+        "clips": edit.get("clips") if isinstance(edit.get("clips"), dict) else {},
+        "hidden": sorted(hidden),
+        "local_cuts": local,
+        "updated_at": time.time(),
+    }
+    _preserve_edit_fields(edit, data)
+    data["hidden"] = sorted(hidden)
+    data["local_cuts"] = local
+    if isinstance(edit.get("groups"), list):
+        data["groups"] = edit["groups"]
+    _atomic_edit_write(pid, data)
+    return timeline(pid)
+
+
+def new_group_id() -> str:
+    import secrets
+    import time
+    return f"s{int(time.time() * 1000)}_{secrets.token_hex(3)}"
+
+
 def reset_edit(pid: str) -> dict | None:
-    """Back to 공간쉐어 order/trims. The old edit is kept as edit_<pid>.reset-<ts>.json (reversible)."""
+    """Back to imported project order/trims. The old edit is kept as edit_<pid>.reset-<ts>.json (reversible)."""
     import time
     f = _edit_file(pid)
     if f.is_file():
@@ -430,7 +917,7 @@ def reset_edit(pid: str) -> dict | None:
 
 
 def media_path(job_id: str) -> Path | None:
-    """Resolve a result file by id: 공간쉐어 job ids under <data_root>/<uid>/, version ids under versions/."""
+    """Resolve a result file by id: legacy imported job ids under <data_root>/<uid>/, version ids under versions/."""
     if isinstance(job_id, str) and VER_ID_RE.fullmatch(job_id):
         v = _load_versions().get(job_id)
         if not v:
@@ -480,7 +967,10 @@ def poster_path(job_id: str) -> Path | None:
     if not exe:
         return None
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(".tmp.jpg")
+    import os
+    import secrets
+
+    tmp = out.with_name(f"{out.stem}.{os.getpid()}.{secrets.token_hex(4)}.tmp.jpg")
     with _poster_sem:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         subprocess.run(
@@ -489,13 +979,18 @@ def poster_path(job_id: str) -> Path | None:
             check=False, capture_output=True, timeout=30, creationflags=flags,
         )
     if tmp.is_file() and tmp.stat().st_size > 0:
-        tmp.replace(out)
-        return out
+        try:
+            tmp.replace(out)
+        except OSError:
+            pass
+        if out.is_file():
+            return out
     return None if is_video else src   # image fallback: the original file
 
 
 def add_version(pid: str, cut_id: str, src: Path, meta: dict) -> dict:
-    """Copy a finished file into versions/<pid>/<cut>/ and make it the cut's pick in the edit."""
+    """Copy a finished file into versions/<pid>/<cut>/. Best stays manual; with no pick the newest version is current."""
+    import os
     import secrets
     import time
     if not PID_RE.fullmatch(pid or "") or not PID_RE.fullmatch(cut_id or ""):
@@ -506,16 +1001,26 @@ def add_version(pid: str, cut_id: str, src: Path, meta: dict) -> dict:
     ext = src.suffix.lower()
     if ext not in MEDIA_KINDS:
         raise ValueError(f"unsupported media type {ext}")
+    try:
+        from .gg_project.media_anim import animation_info
+    except ImportError:
+        from gg_project.media_anim import animation_info  # type: ignore
+    meta = dict(meta)
+    anim = animation_info(src) if MEDIA_KINDS[ext] == "image" else None
+    if MEDIA_KINDS[ext] == "image" and (meta.get("animated") is True or anim):
+        meta.update({"animated": True, **{k: anim[k] for k in ("frames", "seconds") if anim and anim.get(k)}})
+    else:
+        meta.pop("animated", None)
     vid = f"v{int(time.time() * 1000)}_{secrets.token_hex(3)}"
     d = VERSIONS_DIR / pid / cut_id
     d.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, d / f"{vid}{ext}")
+    os.utime(d / f"{vid}{ext}")  # versions sort newest-first by mtime; copy2 keeps the source file's
     info = {"id": vid, "pid": pid, "cut_id": cut_id, "ext": ext, "created_at": time.time(), **meta}
     (d / f"{vid}.json").write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
-    # make it the cut's pick, keeping order/trims
-    edit = load_edit(pid) or {}
-    clips = {c["id"]: {"in": c["in"], "sec": c["sec"], **({"pick": c["pick"]} if c.get("pick") else {})}
-             for c in tl["cuts"]}
-    clips[cut_id]["pick"] = vid
-    save_edit(pid, edit.get("order") or [c["id"] for c in tl["cuts"]], clips)
+    try:
+        from . import gg_wfstore
+        gg_wfstore.maybe_save_for_new_version(pid, cut_id, vid, d / f"{vid}{ext}", meta)
+    except Exception:  # noqa: BLE001
+        pass
     return info

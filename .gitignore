@@ -6,3 +6,10 @@ cache/
 edits/
 .venv-sdk/
 versions/
+workflows/
+!examples/workflows/
+templates/
+trash/
+projects/
+tests/e2e/node_modules/
+tests/screens/

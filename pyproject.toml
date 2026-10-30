@@ -1,0 +1,18 @@
+[project]
+name = "vidot-cut-manager"
+version = "0.9.125"
+description = "Vidot Cut Manager: shot list and rough-cut timeline inside ComfyUI"
+readme = "README.md"
+license = { text = "GPL-3.0-only" }
+classifiers = ["License :: OSI Approved :: GNU General Public License v3 (GPLv3)"]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/passionfx-ui/vidot-cut-manager"
+
+[tool.comfy]
+# TODO: replace with your Comfy Registry publisher id before publishing
+PublisherId = "TODO-publisher"
+DisplayName = "Vidot Cut Manager"
+Icon = ""

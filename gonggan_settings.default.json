@@ -1,4 +1,7 @@
 {
-  "data_root": "C:\\Users\\msk\\Desktop\\gonggan-share-bot\\data",
-  "uid": "demo"
+  "data_root": "",
+  "uid": "demo",
+  "cut_split_clip": "qwen3vl_4b_int8_convrot.safetensors",
+  "cut_split_clip_type": "stable_diffusion",
+  "cut_split_enabled": true
 }
