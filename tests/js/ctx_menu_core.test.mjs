@@ -203,10 +203,10 @@ describe("sceneMenuItems", () => {
     assert.equal(byKey(items, "toggleCollapse").label, "Collapse");
     assert.equal(byKey(items, "addCut").disabled, false);
   });
-  it("collapsed shows Expand; empty scene disables Add Cut / Select cuts", () => {
+  it("collapsed shows Expand; empty scene (New scene) keeps Add Cut, disables Select cuts", () => {
     const items = sceneMenuItems({ collapsed: true, cutCount: 0 });
     assert.equal(byKey(items, "toggleCollapse").label, "Expand");
-    assert.equal(byKey(items, "addCut").disabled, true);
+    assert.equal(byKey(items, "addCut").disabled, false);
     assert.equal(byKey(items, "selectCuts").disabled, true);
   });
 });

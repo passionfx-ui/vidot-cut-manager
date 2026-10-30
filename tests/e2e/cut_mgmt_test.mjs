@@ -268,6 +268,15 @@ async function rightClickCut(page, index = 0) {
   await page.mouse.click(box.x + 12, box.y + 12, { button: "right" });
 }
 
+/** Cut menu Group on the first selected cut (the icon row New scene adds an empty scene since 0.9.104). */
+async function groupSelectedViaMenu(page) {
+  const sel = (await page.$(".gg-root.gg-shots .gg-cut.gg-sel")) || (await page.$(".gg-root.gg-shots .gg-cut.gg-on"));
+  if (!sel) throw new Error("no selected cut to group");
+  const box = await sel.boundingBox();
+  await page.mouse.click(box.x + 12, box.y + 12, { button: "right" });
+  await clickCtxItem(page, "Group");
+}
+
 async function cutIdOrder(page) {
   return page.$$eval(".gg-root.gg-shots .gg-cut", (els) => els.map((e) => e.dataset.cutId));
 }
@@ -486,7 +495,7 @@ async function main() {
     } finally {
       await page.keyboard.up("Control");
     }
-    await page.click(".gg-root.gg-shots .gg-ir-scene");
+    await groupSelectedViaMenu(page);
     await submitAskDialog(page);
     await sleep(800);
     const inScene = await page.$$eval(".gg-grp-sec[data-group-id] .gg-cut .gg-num", (els) => els.map((e) => e.textContent));
@@ -508,13 +517,13 @@ async function main() {
     });
     if (picked < 2) throw new Error("need two visible cuts for scene dialog test");
     await sleep(300);
-    await page.click(".gg-root.gg-shots .gg-ir-scene");
+    await groupSelectedViaMenu(page);
     await dismissAskDialog(page);
     await sleep(400);
     const scenesAfterEsc = await page.$$eval(".gg-root.gg-shots .gg-grp-sec[data-group-id]", (els) => els.length);
     if (scenesAfterEsc !== scenesBefore) throw new Error("Esc should cancel scene create");
 
-    await page.click(".gg-root.gg-shots .gg-ir-scene");
+    await groupSelectedViaMenu(page);
     const sceneName = `EnterScene ${runStamp}`;
     await submitAskDialog(page, { text: sceneName, useEnter: true });
     await sleep(600);
@@ -833,7 +842,7 @@ async function main() {
       throw new Error(`pair should stay adjacent after move (selected=${sel}): before ${tags(beforePair)} after ${tags(afterPair)}`);
     }
 
-    await page.click(".gg-root.gg-shots .gg-ir-scene");
+    await groupSelectedViaMenu(page);
     await submitAskDialog(page);
     await sleep(800);
     const orderBeforeScene = await cutIdOrder(page);
