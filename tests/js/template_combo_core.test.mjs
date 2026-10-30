@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { comboActiveIndex, comboFilter, comboKey } from "../../web/gg_combo_core.js";
+import { comboActiveIndex, comboFilter, comboKey, comboTypedValue } from "../../web/gg_combo_core.js";
 import { templateComboItems } from "../../web/gg_template_pick_core.js";
 
 const PATHS = ["zeta/Final.json", "alpha/draft.json", "gonggan/p/cut.json", "Beta.json"];
@@ -48,9 +48,29 @@ describe("comboActiveIndex", () => {
     assert.equal(comboActiveIndex(items, "not/listed.json", ""), 0);
   });
 
-  it("typed query highlights the first match so Enter picks it; nothing on no matches", () => {
-    assert.equal(comboActiveIndex(comboFilter(items, "zeta"), "Beta.json", "zeta"), 0);
+  it("typed query highlights only an exact label match (0.9.101), so Enter keeps a typed value", () => {
+    assert.equal(comboActiveIndex(comboFilter(items, "zeta"), "Beta.json", "zeta"), -1);
+    const exact = comboFilter(items, "ZETA/final.json");
+    assert.equal(comboActiveIndex(exact, "Beta.json", "ZETA/final.json"), 0);
+    assert.equal(items[comboActiveIndex(items, "", "alpha/draft.json")].value, "alpha/draft.json");
     assert.equal(comboActiveIndex([], "", "x"), -1);
+  });
+});
+
+describe("comboTypedValue (0.9.101)", () => {
+  const items = templateComboItems(PATHS, "");
+
+  it("a typed label maps to its value, (none) to empty", () => {
+    assert.equal(comboTypedValue(items, " Alpha/Draft.JSON "), "alpha/draft.json");
+    assert.equal(comboTypedValue(items, "(none)"), "");
+    assert.equal(comboTypedValue(items, "(None)"), "");
+    assert.equal(comboTypedValue(items, "   "), "");
+  });
+
+  it("other text is used as typed (trimmed)", () => {
+    assert.equal(comboTypedValue(items, "  my/own.json "), "my/own.json");
+    assert.equal(comboTypedValue(items, "zeta"), "zeta");
+    assert.equal(comboTypedValue(null, "x.json"), "x.json");
   });
 });
 
@@ -79,20 +99,24 @@ describe("comboKey", () => {
 
   it("Enter picks the highlighted item and closes", () => {
     const r = comboKey(open(2), "Enter");
-    assert.deepEqual(r, { open: false, active: 2, pick: 2, revert: false, handled: true });
+    assert.deepEqual(r, { open: false, active: 2, pick: 2, revert: false, commit: false, handled: true });
   });
 
-  it("Enter with no highlight (no matches) closes and reverts without picking", () => {
-    const r = comboKey(open(-1, 0), "Enter");
-    assert.equal(r.pick, -1);
-    assert.equal(r.open, false);
-    assert.equal(r.revert, true);
-    assert.equal(r.handled, true, "must not submit the form");
+  it("Enter with no highlight closes and commits the typed text (0.9.101)", () => {
+    for (const count of [0, 3]) {
+      const r = comboKey(open(-1, count), "Enter");
+      assert.equal(r.pick, -1);
+      assert.equal(r.open, false);
+      assert.equal(r.commit, true);
+      assert.equal(r.revert, false);
+      assert.equal(r.handled, true, "must not submit the form");
+    }
   });
 
-  it("Enter on a closed list is left to the form", () => {
+  it("Enter on a closed list commits the typed text and is left to the form", () => {
     const r = comboKey({ open: false, active: 1, count: 4 }, "Enter");
     assert.equal(r.handled, false);
+    assert.equal(r.commit, true);
     assert.equal(r.pick, -1);
   });
 
@@ -105,11 +129,12 @@ describe("comboKey", () => {
     assert.equal(comboKey({ open: false, active: -1, count: 4 }, "Escape").handled, false);
   });
 
-  it("Tab closes without blocking focus; other keys change nothing", () => {
+  it("Tab closes without blocking focus and keeps the typed text (leaving the field commits it); other keys change nothing", () => {
     const t = comboKey(open(1), "Tab");
     assert.equal(t.open, false);
     assert.equal(t.handled, false);
-    assert.equal(t.revert, true);
-    assert.deepEqual(comboKey(open(1), "a"), { open: true, active: 1, pick: -1, revert: false, handled: false });
+    assert.equal(t.revert, false);
+    assert.equal(t.commit, false);
+    assert.deepEqual(comboKey(open(1), "a"), { open: true, active: 1, pick: -1, revert: false, commit: false, handled: false });
   });
 });

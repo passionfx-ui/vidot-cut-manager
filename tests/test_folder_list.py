@@ -1,4 +1,5 @@
-"""GET /gonggan/folder/list helper (0.9.94): folder names only, drives for an empty path, relative paths rejected."""
+"""GET /gonggan/folder/list helper (0.9.94; 0.9.101 drives + quick folders, input normalization): folder names only,
+drives for an empty path, relative paths rejected."""
 from __future__ import annotations
 
 import os
@@ -30,8 +31,31 @@ class ListFoldersTests(unittest.TestCase):
     def test_lists_only_folder_names_sorted(self):
         res = fl.list_folders(str(self.root))
         self.assertEqual(res["folders"], ["Alpha", "beta", "gamma"])
-        self.assertEqual(set(res), {"ok", "path", "parent", "folders"})
+        self.assertEqual(set(res), {"ok", "path", "parent", "folders", "drives", "quick"})
         self.assertTrue(all(isinstance(n, str) for n in res["folders"]))
+
+    def test_drives_and_quick_folders_in_every_answer(self):
+        for res in (fl.list_folders(str(self.root)), fl.list_folders("")):
+            self.assertEqual(res["drives"], fl.list_drives())
+            self.assertEqual(res["quick"], fl.quick_folders())
+        quick = fl.quick_folders()
+        self.assertEqual(quick[0], {"name": "Home", "path": str(Path.home())})
+        self.assertTrue(set(q["name"] for q in quick) <= {"Home", "Desktop", "Documents"})
+        self.assertTrue(all(os.path.isdir(q["path"]) for q in quick))
+
+    def test_quick_folders_skip_missing_and_duplicates(self):
+        with mock.patch.object(fl.Path, "home", return_value=self.root), \
+                mock.patch.object(fl, "_known_folder", side_effect=[str(self.root), None]):
+            self.assertEqual(fl.quick_folders(), [{"name": "Home", "path": str(self.root)}])
+        (self.root / "Documents").mkdir()
+        with mock.patch.object(fl.Path, "home", return_value=self.root), \
+                mock.patch.object(fl, "_known_folder", return_value=None):
+            self.assertEqual([q["name"] for q in fl.quick_folders()], ["Home", "Documents"])
+
+    def test_quoted_and_trailing_slash_input(self):
+        for raw in (f'"{self.root / "beta"}"', f"'{self.root / 'beta'}'", f"{self.root / 'beta'}\\\\", f"{self.root / 'beta'}/",
+                    f'  "{self.root / "beta"}\\"\r\n'):
+            self.assertEqual(fl.list_folders(raw)["path"], str(self.root / "beta"), raw)
 
     def test_path_and_parent(self):
         res = fl.list_folders(f"  {self.root / 'beta'}  ")
@@ -78,6 +102,30 @@ class ListFoldersTests(unittest.TestCase):
             fl.list_folders(str(self.root / "nope"))
         with self.assertRaises(NotADirectoryError):
             fl.list_folders(str(self.root / "notes.txt"))
+
+
+class NormalizeFolderInputTests(unittest.TestCase):
+    def test_quotes_and_trailing_separators(self):
+        cases = {
+            '"D:\\Films\\My Film"': "D:\\Films\\My Film",
+            "'D:\\Films'": "D:\\Films",
+            "  D:\\Films\\\\  ": "D:\\Films",
+            "D:/Films/": "D:/Films",
+            '"D:\\Films\\"': "D:\\Films",
+            "\\\\srv\\share\\": "\\\\srv\\share",
+            "/home/a/": "/home/a",
+            "": "",
+            None: "",
+            '""': "",
+        }
+        for raw, want in cases.items():
+            self.assertEqual(fl.normalize_folder_input(raw), want, repr(raw))
+
+    def test_roots_are_kept(self):
+        for raw in ("C:\\", "C:", "C:/", "C:\\\\", '"C:\\"', "c:\\"):
+            self.assertEqual(fl.normalize_folder_input(raw), raw.strip('"')[:2] + "\\", raw)
+        self.assertEqual(fl.normalize_folder_input("/"), "/")
+        self.assertEqual(fl.normalize_folder_input("//"), "/")
 
 
 class FolderListResponseTests(unittest.TestCase):

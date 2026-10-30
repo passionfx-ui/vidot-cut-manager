@@ -1,6 +1,33 @@
-/** Pure helpers for the Output folder picker (Project Settings > Browse…). No DOM. */
+/** Pure helpers for the Browse… folder picker (New Project Location, Project Settings Output folder). No DOM. */
 
-export const DRIVES_TITLE = "Drives";
+export const RELATIVE_PATH_ERROR = "Use a full path, e.g. D:\\Films";
+
+/**
+ * Typed / pasted address: trims, drops surrounding quotes ("Copy as path") and trailing slashes / backslashes.
+ * A drive root stays "C:\" ("C:" and "C:/" become "C:\"), "/" stays "/".
+ */
+export function normalizeFolderInput(value) {
+  const s = String(value ?? "").trim().replace(/^["']+|["']+$/g, "").trim();
+  if (/^[a-zA-Z]:[\\/]*$/.test(s)) return `${s.slice(0, 2)}\\`;
+  if (/^\/+$/.test(s)) return "/";
+  return s.replace(/[\\/]+$/, "");
+}
+
+/**
+ * Where the address bar should go: `{ path }` ("" = drive list), or `{ error }` for a relative path.
+ * @returns {{ path: string, error: string }}
+ */
+export function folderAddressTarget(value) {
+  const path = normalizeFolderInput(value);
+  if (path && !isAbsoluteFolderPath(path)) return { path: "", error: RELATIVE_PATH_ERROR };
+  return { path, error: "" };
+}
+
+/** "C:\" -> "C:" for the drives list. */
+export function driveLabel(root) {
+  const s = String(root ?? "");
+  return /^[a-zA-Z]:[\\/]?$/.test(s) ? s.slice(0, 2).toUpperCase() : s;
+}
 
 /** @param {string} path "" = drive list */
 export function folderListUrl(path) {
@@ -42,7 +69,7 @@ export function parentFolderPath(path) {
  */
 export function startPathCandidates(value, max = 8) {
   const out = [];
-  let p = String(value ?? "").trim();
+  let p = normalizeFolderInput(value);
   if (isAbsoluteFolderPath(p)) {
     while (p && out.length < max && !out.includes(p)) {
       out.push(p);
@@ -54,18 +81,42 @@ export function startPathCandidates(value, max = 8) {
 }
 
 /**
- * @param {{ path?: string, parent?: string|null, folders?: string[] }|null|undefined} data GET /gonggan/folder/list body
+ * Left pane: quick folders from the server (Home, Desktop, Documents) plus "Last used" (when it is a full path
+ * not already listed), and the drives.
+ * @param {{ quick?: {name: string, path: string}[], drives?: string[] }|null|undefined} data
+ * @param {string} [lastUsed]
  */
-export function folderPickerView(data) {
+export function folderPickerPlaces(data, lastUsed) {
+  const quick = (Array.isArray(data?.quick) ? data.quick : [])
+    .filter((q) => q && typeof q.path === "string" && q.path)
+    .map((q) => ({ name: String(q.name || q.path), path: q.path }));
+  const last = normalizeFolderInput(lastUsed);
+  const key = (p) => normalizeFolderInput(p).toLowerCase();
+  if (isAbsoluteFolderPath(last) && !quick.some((q) => key(q.path) === last.toLowerCase())) {
+    quick.push({ name: "Last used", path: last });
+  }
+  const drives = (Array.isArray(data?.drives) ? data.drives : [])
+    .map((d) => String(d))
+    .filter(Boolean)
+    .map((d) => ({ name: driveLabel(d), path: d }));
+  return { quick, drives };
+}
+
+/**
+ * @param {{ path?: string, parent?: string|null, folders?: string[], quick?: object[], drives?: string[] }|null|undefined} data
+ *   GET /gonggan/folder/list body
+ * @param {string} [lastUsed] last-used location, listed under the quick folders
+ */
+export function folderPickerView(data, lastUsed) {
   const path = String(data?.path ?? "");
   const parent = data?.parent == null ? null : String(data.parent);
   const names = Array.isArray(data?.folders) ? data.folders.map((n) => String(n)) : [];
   return {
     path,
     parent,
-    title: path || DRIVES_TITLE,
     canUp: path !== "" && parent !== null,
     items: names.map((name) => ({ name, path: joinFolderPath(path, name) })),
+    ...folderPickerPlaces(data, lastUsed),
   };
 }
 
