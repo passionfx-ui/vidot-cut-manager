@@ -130,8 +130,8 @@ describe("gonggan.js wiring", () => {
     return js.slice(at, js.indexOf("\n}\n", at));
   };
 
-  it("the row sits directly above the icon row (the hidden selection bar is the only thing between)", () => {
-    assert.match(js, /<div class="gg-vstrip"[^>]*>\s*<div class="gg-vs-list"><\/div>\s*<button[^>]*class="gg-btn gg-vs-newest"[^>]*>‹<\/button>\s*<\/div>\s*\$\{SHOW_SEL_BAR \? `[\s\S]*?` : ""\}\s*\$\{iconRowHtml\(\)\}/);
+  it("the row sits directly below the icon row, above the status panel", () => {
+    assert.match(js, /\$\{iconRowHtml\(\)\}\s*<div class="gg-vstrip"[^>]*>\s*<div class="gg-vs-list"><\/div>\s*<button[^>]*class="gg-btn gg-vs-newest"[^>]*>‹<\/button>\s*<\/div>\s*<div class="gg-cutpanel">/);
     assert.match(js, /^const SHOW_SEL_BAR = false;$/m);
     assert.ok(!js.includes("gg-list-row") && !css.includes("gg-list-row"), "vertical strip layout removed");
   });

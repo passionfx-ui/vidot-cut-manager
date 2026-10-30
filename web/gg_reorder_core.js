@@ -262,6 +262,19 @@ export function sceneDropTarget(sections, wrapY) {
 }
 
 /**
+ * Empty scene under the pointer during a cut drag (its header or its empty body). An empty scene has
+ * no cut rows, so shotsDropTarget can never pick it; dropping here means moveToScene(…, groupId).
+ *
+ * @param {{ groupId: string, top: number, bottom: number }[]} sections empty scene sections (wrap-content coordinates)
+ * @param {number} wrapY
+ * @returns {{ groupId: string }|null}
+ */
+export function emptySceneDropTarget(sections, wrapY) {
+  const s = (sections || []).find((x) => x.groupId && wrapY >= x.top && wrapY < x.bottom);
+  return s ? { groupId: s.groupId } : null;
+}
+
+/**
  * Which Shots section to tint while dragging (groupId null = Ungrouped section), and whether
  * any moving cut would change scene on drop.
  *

@@ -1,4 +1,4 @@
-/** Version row above the Shots icon row: the selected cut's versions, newest on the left (no DOM). */
+/** Version row below the Shots icon row: the selected cut's versions, newest on the left (no DOM). */
 
 import { versionRepState } from "./gg_cuts_core.js";
 

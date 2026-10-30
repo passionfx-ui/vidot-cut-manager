@@ -109,6 +109,9 @@ import {
   shotWorkflowRelPathById,
   shouldSkipShotWorkflowReload,
   gongganExtraProjectId,
+  workflowPathKey,
+  isShotTabAtOwnedPath,
+  findWorkflowAtShotPath,
 } from "./gg_shot_names.js";
 import {
   shouldScheduleCutWorkflowLoad,
@@ -215,6 +218,7 @@ import {
   moveScene,
   sceneDropBeforeCut,
   sceneDropTarget,
+  emptySceneDropTarget,
   listOrder,
 } from "./gg_reorder_core.js";
 import {
@@ -1692,6 +1696,7 @@ function markWorkflowGongganOwned(wf, storagePath, meta) {
   const p = normalizeWorkflowPath(storagePath || wf.path || "").replace(/^workflows\//, "");
   if (p) {
     const key = p.toLowerCase();
+    wf.ggGongganOwnedPath = workflowPathKey(p);
     if (meta?.projectId && meta?.cutId) {
       const m = { projectId: String(meta.projectId), cutId: String(meta.cutId) };
       wf.ggGongganMeta = m;
@@ -1703,11 +1708,7 @@ function markWorkflowGongganOwned(wf, storagePath, meta) {
 }
 
 function isGongganOwnedWorkflow(wf) {
-  if (!wf) return false;
-  if (wf.ggGongganOwned) return true;
-  if (wf === ggOwnedShotWorkflow) return true;
-  const p = normalizeWorkflowPath(wf.path || "");
-  return p && isPathGongganOwned(p);
+  return isShotTabAtOwnedPath(wf, (key) => wf === ggOwnedShotWorkflow || isPathGongganOwned(key));
 }
 
 function isLegacyGongganShotTab(wf) {
@@ -1729,13 +1730,22 @@ function collectGongganShotTabs() {
     seen.add(w);
     out.push(w);
   };
+  if (ggOwnedShotWorkflow && !isGongganOwnedWorkflow(ggOwnedShotWorkflow)) releaseMovedShotTab(ggOwnedShotWorkflow);
   add(ggOwnedShotWorkflow);
   for (const w of ws.openWorkflows || []) {
-    if (w === ggOwnedShotWorkflow || isLegacyGongganShotTab(w)) add(w);
-    else if (w?.ggGongganOwned) add(w);
-    else if (w?.path && isPathGongganOwned(w.path)) add(w);
+    if (w?.ggGongganOwned && !isGongganOwnedWorkflow(w)) releaseMovedShotTab(w);
+    else if (isLegacyGongganShotTab(w) || isGongganOwnedWorkflow(w)) add(w);
   }
   return out;
+}
+
+/** A shot tab that ComfyUI Save / Rename moved to another file is the user's workflow now. */
+function releaseMovedShotTab(wf) {
+  delete wf.ggGongganOwned;
+  delete wf.ggGongganOwnedPath;
+  delete wf.ggGongganMeta;
+  delete wf.ggTabLabelCache;
+  if (ggOwnedShotWorkflow === wf) ggOwnedShotWorkflow = null;
 }
 
 async function pruneExtraGongganShotTabs(keep) {
@@ -1823,7 +1833,7 @@ function buildAutosaveDeps() {
 }
 
 function resolveWorkflowCutForWip(wf) {
-  if (!wf) return null;
+  if (!wf || !isGongganOwnedWorkflow(wf)) return null;
   let cutId = wf.ggGongganMeta?.cutId;
   let projectId = wf.ggGongganMeta?.projectId;
   if (!cutId && wf.path) {
@@ -2043,7 +2053,7 @@ async function resolveShotWorkflowStoragePath(relPath, opts = {}) {
 function isGongganShotTabOpenAndActive() {
   const ws = ggWorkflowStore();
   const wf = ggOwnedShotWorkflow;
-  if (!ws || !wf) return false;
+  if (!ws || !wf || !isGongganOwnedWorkflow(wf)) return false;
   if (!(ws.openWorkflows || []).includes(wf)) return false;
   return ws.isActive?.(wf) ?? false;
 }
@@ -2246,45 +2256,16 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   if (isLoadTokenStale(loadToken)) return false;
   const previous = ggOwnedShotWorkflow;
   const ws = ggWorkflowStore();
-  const normKey = normalizeWorkflowPath(loadName).toLowerCase();
-  let existingAtPath =
-    adoptGongganShotWorkflow(loadName) ||
-    ws?.getWorkflowByPath?.(loadName) ||
-    ws?.getWorkflowByPath?.(`workflows/${loadName}`);
-  if (!existingAtPath && ws?.openWorkflows) {
-    existingAtPath =
-      ws.openWorkflows.find((w) => {
-        const p = normalizeWorkflowPath(String(w.path || "").replace(/^workflows\//, "")).toLowerCase();
-        return p === normKey;
-      }) ?? null;
-  }
-  if (existingAtPath && (ws?.openWorkflows || []).includes(existingAtPath)) {
-    ggOwnedShotWorkflow = existingAtPath;
-    if (typeof ws.setActiveWorkflow === "function") {
-      try {
-        ws.setActiveWorkflow(existingAtPath);
-      } catch (e) {
-        console.warn("[gonggan] focus existing shot tab failed", e);
-      }
-    }
-  } else if (
-    ggOwnedShotWorkflow &&
-    (ws?.openWorkflows || []).includes(ggOwnedShotWorkflow) &&
-    typeof ws.setActiveWorkflow === "function"
-  ) {
-    try {
-      ws.setActiveWorkflow(ggOwnedShotWorkflow);
-    } catch (e) {
-      console.warn("[gonggan] focus shot tab failed", e);
-    }
-  }
+  adoptGongganShotWorkflow(loadName);
+  // The tab object, not the path: ComfyUI reuses a same-path tab for a path string only while it is active.
+  const existingAtPath = findWorkflowAtShotPath(ws, loadName);
   ensureWorkflowManagerActive();
   if (isLoadTokenStale(loadToken)) return false;
   const tabCountBefore = (ws?.openWorkflows || []).length;
   try {
     if (isUiWorkflowGraph(workflow)) {
       if (typeof app.loadGraphData !== "function") return false;
-      await app.loadGraphData(workflow, true, true, loadName, { deferWarnings: true });
+      await app.loadGraphData(workflow, true, true, existingAtPath || loadName, { deferWarnings: true });
     } else if (typeof app.loadApiJson === "function") {
       await app.loadApiJson(workflow, loadName, { deferWarnings: true });
     } else if (typeof app.loadGraphData === "function") {
@@ -2839,7 +2820,7 @@ async function addLocalCut() {
     return;
   }
   const cuts = state.timeline ? state.timeline.cuts : [];
-  const { after, group } = addCutTarget({ timelineCuts: cuts, activeCutId: state.cutId });
+  const { after, group } = addCutTarget({ timelineCuts: cuts, activeCutId: state.cutId, looseWhenNone: isNativeProject() });
   const body = { pid: state.pid };
   if (group) body.group = group;
   if (after) body.after = after;
@@ -4203,6 +4184,21 @@ function collectShotRowRects(wrap) {
   return rows;
 }
 
+/** Scene sections with no cut rows (New scene), in wrap-content coordinates. */
+function collectEmptySceneRects(wrap) {
+  const wrapRect = wrap.getBoundingClientRect();
+  return [...wrap.querySelectorAll(".gg-grp-sec[data-group-id]")]
+    .filter((s) => !s.querySelector(".gg-cut"))
+    .map((s) => {
+      const r = s.getBoundingClientRect();
+      return {
+        groupId: s.dataset.groupId,
+        top: r.top - wrapRect.top + wrap.scrollTop,
+        bottom: r.bottom - wrapRect.top + wrap.scrollTop,
+      };
+    });
+}
+
 function bindShotsReorder(root) {
   if (!isNativeProject()) return;
   const wrap = root.querySelector(".gg-grp-wrap");
@@ -4281,9 +4277,15 @@ function bindShotsReorder(root) {
         const rows = collectShotRowRects(wrap);
         const wr = wrap.getBoundingClientRect();
         const wrapY = clientYToWrapY(lastClientY, wr.top, wrap.scrollTop);
-        drop = shotsDropTarget(order, rows, wrapY);
-        indicator.hidden = false;
-        indicator.style.top = `${drop.lineY}px`;
+        const empty = emptySceneDropTarget(collectEmptySceneRects(wrap), wrapY);
+        if (empty) {
+          drop = { toIndex: 0, toGroupId: empty.groupId, lineY: 0, emptyScene: true };
+          indicator.hidden = true;
+        } else {
+          drop = shotsDropTarget(order, rows, wrapY);
+          indicator.hidden = false;
+          indicator.style.top = `${drop.lineY}px`;
+        }
         const hi = dropHighlight(tl.groups || [], movingIds(), drop.toGroupId);
         const sec = hi.groupId
           ? wrap.querySelector(`.gg-grp-sec[data-group-id="${CSS.escape(hi.groupId)}"]`)
@@ -4353,14 +4355,16 @@ function bindShotsReorder(root) {
         if (!tl) return;
         const order0 = tl.cuts.map((c) => c.id);
         const ids = movingIds();
-        const r = moveCuts(order0, groupsClone(), ids, { toIndex: dropRestIndex(order0, ids, drop.toIndex), toGroupId: drop.toGroupId });
+        const r = drop.emptyScene
+          ? moveToScene(order0, groupsClone(), ids, drop.toGroupId)
+          : moveCuts(order0, groupsClone(), ids, { toIndex: dropRestIndex(order0, ids, drop.toIndex), toGroupId: drop.toGroupId });
         const order = listOrder(r.order, r.groups);
         const same =
           order.length === order0.length &&
           order.every((id, i) => id === order0[i]) &&
           JSON.stringify(r.groups) === JSON.stringify(tl.groups || []);
         if (same) return;
-        await commitShotsReorder(order, r.groups);
+        await commitShotsReorder(order, r.groups, { moveCount: ids.length });
       };
       shotsUi.dragSession = { cancel };
       window.addEventListener("pointermove", move);
@@ -5599,7 +5603,7 @@ api.addEventListener("gonggan.regen", (e) => {
 
 function ownedShotTabOpen() {
   const ws = ggWorkflowStore();
-  return !!ggOwnedShotWorkflow && (ws?.openWorkflows || []).includes(ggOwnedShotWorkflow);
+  return isGongganOwnedWorkflow(ggOwnedShotWorkflow) && (ws?.openWorkflows || []).includes(ggOwnedShotWorkflow);
 }
 
 /** One version thumbnail (cut panel and version row): Best / latest / open-in-canvas classes, tip, image or no-media placeholder. */
@@ -5721,7 +5725,7 @@ function probeStripDurations(c) {
   runStripProbe();
 }
 
-/** Version row above the icon row: the selected cut's versions, newest on the left. */
+/** Version row below the icon row: the selected cut's versions, newest on the left. */
 function versionStripHtml(c) {
   if (!c) return '<div class="gg-vs-empty gg-dim">Select a cut to see its versions</div>';
   const rows = versionStripRows(c, stripProbe.dur);
@@ -5767,15 +5771,15 @@ const ICON_FOLDER = `<svg ${ICON_SVG_ATTRS}><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a
 const ICON_NEW_PAGE = `<svg ${ICON_SVG_ATTRS}><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M12 12v6M9 15h6"/></svg>`;
 const ICON_TRASH = `<svg ${ICON_SVG_ATTRS}><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg>`;
 
-/** Lower-left icon row of the Shots sidebar (fixed height): New scene, New cut, Delete; version on the right. */
+/** Lower-left icon row of the Shots sidebar (fixed height, above the version row): plugin version on the left; New scene, New cut, Delete on the right. */
 function iconRowHtml() {
   const btn = (cls, tip, icon) =>
     `<button type="button" class="gg-btn gg-ir-btn ${cls}" title="${tip}" aria-label="${tip}" disabled>${icon}</button>`;
   return `<div class="gg-iconrow">
+        <span class="gg-version" title="Shots plugin version — if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>
         ${btn("gg-ir-scene", "New scene", ICON_FOLDER)}
         ${btn("gg-ir-cut", "New cut", ICON_NEW_PAGE)}
         ${btn("gg-ir-del", "Delete", ICON_TRASH)}
-        <span class="gg-version" title="Shots plugin version — if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>
       </div>`;
 }
 
@@ -5787,14 +5791,14 @@ async function confirmDeleteSelectedCuts() {
   await deleteSelectedCuts();
 }
 
-/** Status panel body: selection info on top, Queue + queue status + batch counter in a row below. */
+/** Status panel body: selection info on top, queue status + batch counter + Queue (right-aligned) in a row below. */
 function statusPanelShellHtml() {
   return `
         <div class="gg-sp-info"></div>
         <div class="gg-sp-actions">
-          <button type="button" class="gg-btn gg-primary gg-queue-btn" disabled title="${esc(QUEUE_EMPTY_TIP)}">Queue</button>
           <span class="gg-render-badge gg-render-global" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
           <span class="gg-batch-prog" hidden></span>
+          <button type="button" class="gg-btn gg-primary gg-queue-btn" disabled title="${esc(QUEUE_EMPTY_TIP)}">Queue</button>
         </div>`;
 }
 
@@ -6226,10 +6230,6 @@ function mountShots(el) {
       </div>
       <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${listHtml}</div>
       <div class="gg-final-wrap"${viewFinal ? "" : " hidden"}>${viewFinal && tl ? finalCutListHtml(tl) : ""}</div>
-      <div class="gg-vstrip" role="group" aria-label="Versions"${tl && !viewFinal ? "" : " hidden"}>
-        <div class="gg-vs-list"></div>
-        <button type="button" class="gg-btn gg-vs-newest" hidden title="Back to newest" aria-label="Back to newest">‹</button>
-      </div>
       ${SHOW_SEL_BAR ? `<div class="gg-selbar">
         <span class="gg-sel-label"><span class="gg-sel-count">0</span> selected</span>
         <button type="button" class="gg-btn gg-sel-group" disabled>Group</button>
@@ -6237,6 +6237,10 @@ function mountShots(el) {
         <button type="button" class="gg-btn gg-sel-x" disabled title="Clear selection">×</button>
       </div>` : ""}
       ${iconRowHtml()}
+      <div class="gg-vstrip" role="group" aria-label="Versions"${tl && !viewFinal ? "" : " hidden"}>
+        <div class="gg-vs-list"></div>
+        <button type="button" class="gg-btn gg-vs-newest" hidden title="Back to newest" aria-label="Back to newest">‹</button>
+      </div>
       <div class="gg-cutpanel">${!SHOW_CUT_PANEL && SHOW_STATUS_PANEL ? statusPanelShellHtml() : ""}</div>
       <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>`;
     const projSel = root.querySelector(".gg-proj");

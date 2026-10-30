@@ -171,3 +171,45 @@ export function shouldSkipShotWorkflowReload(opts) {
   if (!projectId || projectId !== lastProjectId) return false;
   return graphExtraMatchesShot(graphExtra, projectId, cutId);
 }
+
+/** Case-insensitive workflow-store key of a path, without a leading "workflows/". */
+export function workflowPathKey(p) {
+  return String(p ?? "")
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/^workflows\//i, "")
+    .toLowerCase();
+}
+
+/**
+ * A shot tab belongs to Gonggan only while it is at the path Gonggan gave it (`ggGongganOwnedPath`).
+ * ComfyUI Save on a never-saved tab and Rename move that same tab object to the user's file name;
+ * from then on it is the user's file, even though it still carries the cut's meta and `extra.gonggan`.
+ * A tab without a recorded path counts when `isPathOwned(key)` says its path is a Gonggan shot path.
+ * @param {{ path?: string, ggGongganOwnedPath?: string } | null | undefined} wf
+ * @param {(key: string) => boolean} [isPathOwned]
+ */
+export function isShotTabAtOwnedPath(wf, isPathOwned) {
+  const key = workflowPathKey(wf?.path);
+  if (!key) return false;
+  if (wf.ggGongganOwnedPath) return key === wf.ggGongganOwnedPath;
+  return typeof isPathOwned === "function" && !!isPathOwned(key);
+}
+
+/**
+ * The workflow-store entry at a cut's stable shot path (open, background or closed-but-known), or null.
+ * Pass it to `app.loadGraphData` as the workflow: with a bare path string ComfyUI reuses a same-path
+ * tab only when that tab is active, and otherwise opens a new "<cut> (2).json" tab.
+ * @param {{ getWorkflowByPath?: (p: string) => object | null, openWorkflows?: object[] } | null | undefined} store
+ * @param {string} loadName  path without "workflows/", e.g. "gonggan/<pid>/<cut>.json"
+ */
+export function findWorkflowAtShotPath(store, loadName) {
+  const key = workflowPathKey(loadName);
+  if (!store || !key) return null;
+  const rel = String(loadName).replace(/^\/+/, "").replace(/^workflows\//i, "");
+  for (const p of [`workflows/${rel}`, rel]) {
+    const w = typeof store.getWorkflowByPath === "function" ? store.getWorkflowByPath(p) : null;
+    if (w && workflowPathKey(w.path) === key) return w;
+  }
+  return (store.openWorkflows || []).find((w) => workflowPathKey(w?.path) === key) ?? null;
+}
