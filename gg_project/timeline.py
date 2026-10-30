@@ -186,6 +186,17 @@ def _version_job(root: Path, pid: str, ver: dict[str, Any]) -> dict[str, Any] | 
     }
 
 
+def current_version(cut: dict[str, Any], versions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The cut's current version record (newest first list): its pick, else the newest. Chosen whether or
+    not its file still exists, so a missing file shows as no media instead of silently another version."""
+    pick = cut.get("pick_version_id")
+    if isinstance(pick, str):
+        hit = next((v for v in versions if v.get("id") == pick), None)
+        if hit:
+            return hit
+    return versions[0] if versions else None
+
+
 def _media_view(job: dict[str, Any] | None) -> dict[str, Any] | None:
     if not job:
         return None
@@ -258,14 +269,10 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
         if not cut:
             continue
         versions = _load_versions(root, pid, cid)
-        jobs = [_version_job(root, pid, v) for v in versions]
-        jobs = [j for j in jobs if j]
+        jobs = {v["id"]: _version_job(root, pid, v) for v in versions}
+        cur = current_version(cut, versions)
+        job = jobs.get(cur["id"]) if cur else None
         pick = cut.get("pick_version_id")
-        job = None
-        if isinstance(pick, str):
-            job = next((j for j in jobs if j["id"] == pick), None)
-        if not job and jobs:
-            job = jobs[0]
         src_dur = media_duration(job) if job else None
         sec = float(cut.get("sec") if isinstance(cut.get("sec"), (int, float)) else 3.0)
         tl_in = float(cut.get("in") or 0.0)
@@ -282,10 +289,11 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
                 "kind": (v.get("asset") or {}).get("kind") or "image",
                 "source": "native",
                 "model": None,
-                "created": _version_job(root, pid, v)["mtime"] if _version_job(root, pid, v) else 0,
+                "created": jobs[v["id"]]["mtime"] if jobs[v["id"]] else 0,
                 "seconds": None,
                 "width": None,
                 "height": None,
+                "missing": jobs[v["id"]] is None,
             }
             for v in versions
         ]
@@ -311,7 +319,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "media": media,
             "versions": len(versions),
             "versions_list": vers_list,
-            "pick": pick if job and pick == job["id"] else None,
+            "pick": pick if cur and pick == cur["id"] else None,
             "prompt_aspect": "",
             "planned_sec": cut.get("planned_sec") if isinstance(cut.get("planned_sec"), (int, float)) else None,
             "end_card": bool(cut.get("end_card")),
