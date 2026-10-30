@@ -176,7 +176,7 @@ async function openShotsTab(page) {
     return false;
   });
   if (!opened) {
-    const btn = await page.waitForSelector('[aria-label="Shots list"]', { timeout: 15000 });
+    const btn = await page.waitForSelector('[aria-label="Vidot Studio – Cut Manager"]', { timeout: 15000 });
     await btn.click();
   }
   await page.waitForSelector(".gg-root.gg-shots", { timeout: 60000 });
