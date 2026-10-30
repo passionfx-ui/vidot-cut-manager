@@ -70,7 +70,9 @@ import {
   regenKnownNodeCount,
   isRegenEmptyCut,
   nativeRegenQueueCheck,
-  REGEN_SKIP_MESSAGE,
+  sdkRegenErrorMessage,
+  sdkPlanSummary,
+  sdkJobToast,
 } from "./gg_native_regen_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import { REFERENCE_CATEGORIES } from "./gg_import_core.js";
@@ -204,6 +206,8 @@ import {
   importButtonState,
   IMPORT_LABEL,
   IMPORT_ACCEPT,
+  regenButtonState,
+  REGEN_LABEL,
 } from "./gg_version_strip_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { batchProgressView, createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
@@ -5222,6 +5226,7 @@ async function postJson(route, body) {
   if (!res.ok || data.ok === false) {
     const err = new Error(data.message || data.error || `HTTP ${res.status}`);
     err.status = res.status;
+    err.code = data.code;
     throw err;
   }
   return data;
@@ -5348,47 +5353,60 @@ function nativeRegenCheck(cutId, token) {
   });
 }
 
+/** Dry run of a native SDK job; a UI-only workflow falls back to the API prompt of that cut's open shot tab. */
+async function planNativeSdkJob(pid, cutId, mode) {
+  const body = { pid, cut_id: cutId, mode, dry_run: true };
+  try {
+    return (await postJson("/gonggan/regen", body)).plan;
+  } catch (e) {
+    if (e.code !== "ui_only" || !nativeRegenCheck(cutId, wfLoadToken).ok) throw e;
+    const p = await app.graphToPrompt();
+    return (await postJson("/gonggan/regen", { ...body, api_workflow: p.output })).plan;
+  }
+}
+
 /**
- * Native Regen: open the cut's current workflow through the normal cut-open path (the same cut already
- * open is queued as is), confirm, then queue it like ComfyUI's Queue button so the prompt is tied to the cut.
+ * Native Regen (new random seeds) / Queue (saved seeds): run the cut's current saved workflow through the
+ * Comfy SDK path without opening a tab. The server adds the finished output as a new version of the cut.
  */
-async function regenNativeCut(cutId) {
+async function sdkGenerateNativeCut(cutId, { newSeed }) {
   const cut = cutById(cutId);
   if (!cut || !state.timeline || sdk.busy) return;
   const title = shotTitle(cut);
+  const pid = state.pid;
   sdk.busy = "regen";
+  sdk.msg = `Preparing ${title}…`;
   bus.dispatchEvent(new Event("sdk"));
   try {
-    selectCut(cutId);
-    const token = wfLoadToken;
-    await waitCutLoadsSettled();
-    let check = nativeRegenCheck(cutId, token);
-    if (check.ok) {
-      if (!(await askConfirm({ message: regenConfirmMessage(title) }))) {
-        sdk.msg = "Not queued (cancelled).";
-        return;
-      }
-      check = nativeRegenCheck(cutId, token);
-    }
-    if (!check.ok) {
-      sdk.msg = REGEN_SKIP_MESSAGE[check.reason];
-      ggToast("Regen", `${title} — ${sdk.msg}`, "warn");
+    const plan = await planNativeSdkJob(pid, cutId, newSeed ? "regen" : "queue");
+    sdk.msg = `${title}: ${sdkPlanSummary(plan)}`;
+    bus.dispatchEvent(new Event("sdk"));
+    const message = newSeed ? regenConfirmMessage(title) : batchRenderConfirmMessage([title]);
+    if (!(await askConfirm({ message }))) {
+      sdk.msg = "Not queued (cancelled).";
       return;
     }
-    const before = ggLastRegisteredPrompt;
-    await app.queuePrompt(0, 1);
-    const reg = ggLastRegisteredPrompt;
-    if (reg && reg !== before && reg.cutId === cutId && reg.projectId === state.pid) {
-      sdk.msg = `Queued: ${title}`;
-      ggToast("Queued", title, "ok");
-    }
+    await postJson("/gonggan/regen", { pid, cut_id: cutId, dry_run: false, confirm: true, plan: plan.plan });
+    sdk.msg = `Queued through Comfy SDK: ${title}`;
+    ggToast("Queued", `${title} (Comfy SDK)`, "ok");
   } catch (e) {
-    sdk.msg = "Regen failed: " + (e?.message || e);
-    ggToast("Regen", sdk.msg, "warn");
+    sdk.msg = `${newSeed ? "Regen" : "Queue"} failed: ${sdkRegenErrorMessage(e?.message || e)}`;
+    ggToast(newSeed ? "Regen" : "Queue", `${title} — ${sdkRegenErrorMessage(e?.message || e)}`, "warn");
   } finally {
     sdk.busy = "";
     bus.dispatchEvent(new Event("sdk"));
   }
+}
+
+function regenNativeCut(cutId) {
+  return sdkGenerateNativeCut(cutId, { newSeed: true });
+}
+
+/** Status panel Queue: one selected native cut goes through the Comfy SDK; otherwise the batch queue. */
+function queueButtonClick() {
+  const ids = cutSelIds();
+  if (isNativeProject() && ids.length === 1) return sdkGenerateNativeCut(ids[0], { newSeed: false });
+  return queueSelectedCuts();
 }
 
 const batchRenderUi = { running: false };
@@ -5597,9 +5615,13 @@ async function captureFinishedPrompt(promptId) {
 
 api.addEventListener("gonggan.regen", (e) => {
   const j = e.detail || {};
-  if (j.status === "done") { sdk.msg = `New version from SDK job ${j.sdk_job_id || ""}`; loadTimeline(); }
+  const shown = !j.native || state.pid === j.pid;
+  if (j.status === "done") { sdk.msg = `New version from SDK job ${j.sdk_job_id || ""}`; if (shown) loadTimeline(); }
   else if (j.status === "error") sdk.msg = "SDK job failed: " + (j.error || "");
   else if (j.status === "running") sdk.msg = "SDK job running…";
+  const cut = shown && j.native ? cutById(j.cut_id) : null;
+  const t = sdkJobToast(j, cut ? shotTitle(cut) : "");
+  if (t) ggToast(t.summary, t.detail, t.kind);
   bus.dispatchEvent(new Event("sdk"));
 });
 
@@ -5775,10 +5797,12 @@ async function importVersionFiles(pid, cutId, files) {
 
 function versionImportButtonHtml(c) {
   const s = importButtonState({ hasCut: !!c, native: isNativeProject(), busy: stripImportBusy });
-  return `<button type="button" class="gg-btn gg-vs-import" title="${esc(s.title)}"${s.disabled ? " disabled" : ""}>${esc(IMPORT_LABEL)}</button>`;
+  const r = regenButtonState({ hasCut: !!c, native: isNativeProject(), busy: !!sdk.busy });
+  return `<button type="button" class="gg-btn gg-vs-import" title="${esc(s.title)}"${s.disabled ? " disabled" : ""}>${esc(IMPORT_LABEL)}</button>` +
+    `<button type="button" class="gg-btn gg-vs-regen" title="${esc(r.title)}" aria-label="${esc(r.title)}"${r.disabled ? " disabled" : ""}>${esc(REGEN_LABEL)}</button>`;
 }
 
-/** Version row below the icon row: Import first, then the selected cut's versions, newest on the left. */
+/** Version row below the icon row: Import and Regen first, then the selected cut's versions, newest on the left. */
 function versionStripHtml(c) {
   const importBtn = versionImportButtonHtml(c);
   if (!c) return importBtn + '<div class="gg-vs-empty gg-dim">Select a cut to see its versions</div>';
@@ -5942,6 +5966,10 @@ function mountShots(el) {
     list.querySelector(".gg-vs-import")?.addEventListener("click", (e) => {
       e.stopPropagation();
       pickVersionImportFiles(cutId);
+    });
+    list.querySelector(".gg-vs-regen")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void regenNativeCut(cutId);
     });
     if (!c) return;
     bindThumbFallbacks(list);
@@ -6361,7 +6389,7 @@ function mountShots(el) {
       isNativeProject() ? void addEmptyScene() : createSceneGroup(cutSelIds()));
     root.querySelector(".gg-ir-cut")?.addEventListener("click", () => addLocalCut());
     root.querySelector(".gg-ir-del")?.addEventListener("click", () => void confirmDeleteSelectedCuts());
-    root.querySelector(".gg-queue-btn")?.addEventListener("click", () => void queueSelectedCuts());
+    root.querySelector(".gg-queue-btn")?.addEventListener("click", () => void queueButtonClick());
     const vsList = root.querySelector(".gg-vs-list");
     vsList?.addEventListener("scroll", () => {
       stripScroll.left = vsList.scrollLeft;
