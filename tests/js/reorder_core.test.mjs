@@ -12,6 +12,7 @@ import {
   sceneDropBeforeCut,
   sceneBlocks,
   sceneDropTarget,
+  emptySceneDropTarget,
   listOrder,
 } from "../../web/gg_reorder_core.js";
 import { computeCutLabels, moveCuts } from "../../web/gg_cuts_core.js";
@@ -409,6 +410,65 @@ describe("listOrder (Ungrouped always last, like the native store)", () => {
     const mem = new Map([["a", "g1"], ["b", "g1"], ["c", "g2"]]);
     const labels = computeCutLabels({ cuts: ord.map((id) => ({ id, group_id: mem.get(id) || "" })) });
     assert.deepEqual(ord.map((id) => labels.get(id).label), ["1-1", "1-2", "2-1", "3-1"]);
+  });
+});
+
+describe("cut drop into an empty scene (0.9.108)", () => {
+  const secs = [
+    { groupId: "e1", top: 200, bottom: 236 },
+    { groupId: "e2", top: 242, bottom: 278 },
+  ];
+  it("emptySceneDropTarget: header and empty body hit, gaps and other sections miss", () => {
+    assert.deepEqual(emptySceneDropTarget(secs, 200), { groupId: "e1" });
+    assert.deepEqual(emptySceneDropTarget(secs, 230), { groupId: "e1" });
+    assert.deepEqual(emptySceneDropTarget(secs, 250), { groupId: "e2" });
+    assert.equal(emptySceneDropTarget(secs, 236), null);
+    assert.equal(emptySceneDropTarget(secs, 239), null);
+    assert.equal(emptySceneDropTarget(secs, 100), null);
+    assert.equal(emptySceneDropTarget([], 210), null);
+    assert.equal(emptySceneDropTarget(undefined, 210), null);
+  });
+
+  // Scene A [a, b], Scene B [c], then New scene "e1" (empty), Ungrouped [x].
+  const grps = [
+    { id: "gA", cut_ids: ["a", "b"] },
+    { id: "gB", cut_ids: ["c"] },
+    { id: "e1", cut_ids: [] },
+  ];
+  const ord = ["a", "b", "c", "x"];
+
+  it("moves a scene cut into the empty scene, laid out after Scene B and before Ungrouped", () => {
+    const r = moveToScene(ord, grps, ["b"], "e1");
+    assert.ok(r.changed);
+    assert.deepEqual(r.groups.map((g) => [g.id, g.cut_ids]), [["gA", ["a"]], ["gB", ["c"]], ["e1", ["b"]]]);
+    assert.deepEqual(listOrder(r.order, r.groups), ["a", "c", "b", "x"]);
+  });
+
+  it("moves an Ungrouped cut and a multi-selection into the empty scene, keeping their order", () => {
+    const one = moveToScene(ord, grps, ["x"], "e1");
+    assert.deepEqual(one.groups.find((g) => g.id === "e1").cut_ids, ["x"]);
+    assert.deepEqual(listOrder(one.order, one.groups), ["a", "b", "c", "x"]);
+    const two = moveToScene(ord, grps, ["c", "a"], "e1");
+    assert.deepEqual(two.groups.find((g) => g.id === "e1").cut_ids, ["a", "c"]);
+    assert.deepEqual(listOrder(two.order, two.groups), ["b", "a", "c", "x"]);
+  });
+
+  it("an empty scene listed between scenes receives the cut at its own place", () => {
+    const g = [{ id: "gA", cut_ids: ["a", "b"] }, { id: "e1", cut_ids: [] }, { id: "gB", cut_ids: ["c"] }];
+    const r = moveToScene(ord, g, ["x"], "e1");
+    assert.deepEqual(listOrder(r.order, r.groups), ["a", "b", "x", "c"]);
+  });
+
+  it("undo snapshot taken before the drop brings the empty scene back", () => {
+    const before = snapshotOrderGroups({ cuts: ord.map((id) => ({ id })), groups: grps });
+    const r = moveToScene(ord, grps, ["b"], "e1");
+    assert.notDeepEqual(r.groups, before.groups);
+    assert.deepEqual(before.groups.find((g) => g.id === "e1").cut_ids, []);
+    assert.deepEqual(before.order, ord);
+  });
+
+  it("dropHighlight tints the empty scene as a cross-scene drop", () => {
+    assert.deepEqual(dropHighlight(grps, ["b"], "e1"), { groupId: "e1", crossScene: true });
   });
 });
 
