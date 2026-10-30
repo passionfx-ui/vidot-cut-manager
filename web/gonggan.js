@@ -197,8 +197,9 @@ import {
   shortTemplateName,
   templateComboItems,
 } from "./gg_template_pick_core.js";
-import { comboFilter, comboActiveIndex, comboKey } from "./gg_combo_core.js";
+import { comboFilter, comboActiveIndex, comboKey, comboTypedValue } from "./gg_combo_core.js";
 import {
+  folderAddressTarget,
   folderListUrl,
   folderListError,
   folderPickerView,
@@ -676,8 +677,9 @@ function openNewProjectModal() {
     get: () => template,
     set: (ref) => { template = ref; templateTouched = true; },
   });
+  const tplIn = wrap.querySelector(".gg-tpl-combo");
   fetchUserWorkflowPaths().then(() => {
-    if (templateTouched || !wrap.isConnected) return;
+    if (templateTouched || !wrap.isConnected || (tplIn && tplIn.value !== template)) return;
     template = pickInitialTemplate(userWorkflowPaths, loadLastTemplate(localStorage));
     showTemplate();
   });
@@ -741,8 +743,11 @@ function templateFieldHtml() {
   return `<div class="gg-modal-field" title="ComfyUI saved workflow used as this project's template">
         <span class="gg-tpl-label">Default template</span>
         <span class="gg-tpl-wrap">
-          <input type="text" class="gg-tpl-combo" role="combobox" aria-label="Default template" aria-autocomplete="list"
-            aria-expanded="false" aria-controls="gg-tpl-list" placeholder="(none)" autocomplete="off" spellcheck="false" />
+          <span class="gg-tpl-box">
+            <input type="text" class="gg-tpl-combo" role="combobox" aria-label="Default template" aria-autocomplete="list"
+              aria-expanded="false" aria-controls="gg-tpl-list" placeholder="(none)" autocomplete="off" spellcheck="false" />
+            <button type="button" class="gg-tpl-toggle" tabindex="-1" aria-label="Show templates" title="Show templates">▼</button>
+          </span>
           <button type="button" class="gg-btn gg-tpl-use-last" hidden>Use last</button>
         </span>
         <ul class="gg-tpl-list" id="gg-tpl-list" role="listbox" aria-label="Templates" hidden></ul>
@@ -750,9 +755,10 @@ function templateFieldHtml() {
 }
 
 /**
- * Default template combobox (Project Settings, New Project): typing filters the list, arrows + Enter or a click pick,
- * Escape closes. Without `field` a pick links the open project's template right away (no Save needed) and the
- * Use last button is offered; with `field` the value lives in field.get / field.set.
+ * Default template editable combobox (Project Settings, New Project): ▼ or a click shows the list, typing filters it,
+ * arrows + Enter or a click pick; typed text becomes the value on Enter or when the field loses focus; Escape reverts.
+ * Without `field` a pick links the open project's template right away (no Save needed) and the Use last button is
+ * offered; with `field` the value lives in field.get / field.set.
  * @param {{ get: () => string, set: (ref: string) => void } | undefined} field
  * @returns {() => void} repaints the shown value
  */
@@ -808,11 +814,29 @@ function wireProjectTemplateField(wrap, field) {
     input.value = it.value;
     void apply(it.value);
   };
+  const commitTyped = () => {
+    const ref = comboTypedValue(templateComboItems(userWorkflowPaths, current()), input.value);
+    if (ref === current()) showValue();
+    else void apply(ref);
+  };
+  const showAll = () => {
+    openList("");
+    fetchUserWorkflowPaths().then(() => { if (ui.open && wrap.isConnected) openList(input.value === current() ? "" : input.value); });
+  };
   input.addEventListener("click", () => {
     if (ui.open) return;
     input.select();
-    openList("");
-    fetchUserWorkflowPaths().then(() => { if (ui.open && wrap.isConnected) openList(input.value === current() ? "" : input.value); });
+    showAll();
+  });
+  const toggle = wrap.querySelector(".gg-tpl-toggle");
+  toggle?.addEventListener("mousedown", (e) => e.preventDefault());
+  toggle?.addEventListener("click", () => {
+    if (ui.open) {
+      close(false);
+      return;
+    }
+    input.focus();
+    showAll();
   });
   input.addEventListener("input", () => openList(input.value));
   input.addEventListener("keydown", (e) => {
@@ -823,14 +847,19 @@ function wireProjectTemplateField(wrap, field) {
       e.stopPropagation();
     }
     if (r.pick >= 0) pick(r.pick);
-    else if (!r.open) { if (wasOpen) close(r.revert); }
-    else if (!wasOpen) openList(input.value === current() ? "" : input.value);
+    else if (!r.open) {
+      if (wasOpen) close(r.revert);
+      if (r.commit) commitTyped();
+    } else if (!wasOpen) openList(input.value === current() ? "" : input.value);
     else {
       ui.active = r.active;
       render();
     }
   });
-  input.addEventListener("blur", () => { if (ui.open) close(true); });
+  input.addEventListener("blur", () => {
+    if (ui.open) close(false);
+    commitTyped();
+  });
   list.addEventListener("mousedown", (e) => e.preventDefault());
   list.addEventListener("click", (e) => {
     const li = e.target.closest?.(".gg-combo-opt");
@@ -856,7 +885,7 @@ function closeFolderPicker() {
   }
 }
 
-async function fetchFolderList(path) {
+async function fetchFolderList(path, lastUsed) {
   let res;
   let data = {};
   try {
@@ -866,12 +895,17 @@ async function fetchFolderList(path) {
     return { ok: false, ...folderListError(0, null) };
   }
   if (!res.ok || data.ok === false) return { ok: false, ...folderListError(res.status, data) };
-  return { ok: true, view: folderPickerView(data) };
+  return { ok: true, view: folderPickerView(data, lastUsed) };
 }
 
-/** In-app folder picker (folders only). Opens at `startValue` (or its nearest existing parent, else the drive list). */
+/**
+ * In-app folder picker (folders only, server filesystem). Address bar (type or paste a path; Enter / Go / paste
+ * opens it), quick folders + drives on the left, subfolders on the right. Opens at `startValue` (or its nearest
+ * existing parent, else the drive list).
+ */
 function openFolderPicker(startValue, onSelect) {
   closeFolderPicker();
+  const lastUsed = loadLastLocation(localStorage);
   const wrap = document.createElement("div");
   wrap.className = "gg-modal-backdrop";
   wrap.innerHTML = `
@@ -879,10 +913,15 @@ function openFolderPicker(startValue, onSelect) {
       <h3 class="gg-modal-title">Choose Folder</h3>
       <div class="gg-fp-bar">
         <button type="button" class="gg-btn gg-fp-up" title="Up one level">Up</button>
-        <span class="gg-fp-path">Loading…</span>
+        <input type="text" class="gg-fp-addr" aria-label="Folder path" placeholder="Type or paste a folder path"
+          spellcheck="false" autocomplete="off" />
+        <button type="button" class="gg-btn gg-fp-go" title="Go to this path">Go</button>
       </div>
-      <ul class="gg-fp-list" role="listbox" aria-label="Folders" tabindex="0"></ul>
       <span class="gg-modal-hint gg-split-err gg-fp-err" aria-live="polite"></span>
+      <div class="gg-fp-panes">
+        <ul class="gg-fp-side" aria-label="Places"></ul>
+        <ul class="gg-fp-list" role="listbox" aria-label="Folders" tabindex="0"></ul>
+      </div>
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-fp-cancel">Cancel</button>
         <button type="button" class="gg-btn gg-primary gg-fp-select" disabled>Select</button>
@@ -891,7 +930,8 @@ function openFolderPicker(startValue, onSelect) {
   document.body.appendChild(wrap);
   folderPickerEl = wrap;
   const listEl = wrap.querySelector(".gg-fp-list");
-  const pathEl = wrap.querySelector(".gg-fp-path");
+  const sideEl = wrap.querySelector(".gg-fp-side");
+  const addrIn = wrap.querySelector(".gg-fp-addr");
   const upBtn = wrap.querySelector(".gg-fp-up");
   const selBtn = wrap.querySelector(".gg-fp-select");
   const errEl = wrap.querySelector(".gg-fp-err");
@@ -903,8 +943,16 @@ function openFolderPicker(startValue, onSelect) {
     selBtn.disabled = !folderPickTarget(view, sel);
   };
   const paint = () => {
-    pathEl.textContent = view ? view.title : "";
-    pathEl.title = view?.path || "";
+    addrIn.value = view?.path || "";
+    addrIn.title = view?.path || "";
+    const place = (p, cls) => `<li class="gg-fp-place ${cls}" data-path="${esc(p.path)}" title="${esc(p.path)}">${esc(p.name)}</li>`;
+    sideEl.innerHTML = !view
+      ? ""
+      : [
+        ...view.quick.map((p) => place(p, "gg-fp-quick")),
+        view.drives.length ? `<li class="gg-fp-side-head">Drives</li>` : "",
+        ...view.drives.map((p) => place(p, "gg-fp-drive")),
+      ].join("");
     listEl.innerHTML = !view
       ? ""
       : view.items.length
@@ -927,7 +975,7 @@ function openFolderPicker(startValue, onSelect) {
     errEl.textContent = "";
     let fail = null;
     for (const p of paths) {
-      const r = await fetchFolderList(p);
+      const r = await fetchFolderList(p, lastUsed);
       if (my !== seq || !wrap.isConnected) return;
       if (r.ok) {
         view = r.view;
@@ -939,9 +987,38 @@ function openFolderPicker(startValue, onSelect) {
       if (r.routeMissing) break;
     }
     errEl.textContent = fail?.message || "";
-    if (!view) pathEl.textContent = "";
     syncButtons();
   };
+  const go = () => {
+    const t = folderAddressTarget(addrIn.value);
+    if (t.error) {
+      errEl.textContent = t.error;
+      return;
+    }
+    void load([t.path]);
+  };
+  addrIn.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    e.stopPropagation();
+    go();
+  });
+  addrIn.addEventListener("input", (e) => {
+    errEl.textContent = "";
+    if (e.inputType === "insertFromPaste") go();
+  });
+  let selectOnUp = false;
+  addrIn.addEventListener("mousedown", () => { selectOnUp = document.activeElement !== addrIn; });
+  addrIn.addEventListener("mouseup", (e) => {
+    if (selectOnUp) e.preventDefault();
+    selectOnUp = false;
+  });
+  addrIn.addEventListener("focus", () => addrIn.select());
+  wrap.querySelector(".gg-fp-go").addEventListener("click", go);
+  sideEl.addEventListener("click", (e) => {
+    const li = e.target.closest?.(".gg-fp-place");
+    if (li) void load([li.dataset.path]);
+  });
   listEl.addEventListener("click", (e) => {
     const li = e.target.closest?.(".gg-fp-item");
     if (li) markSel(Number(li.dataset.i));
