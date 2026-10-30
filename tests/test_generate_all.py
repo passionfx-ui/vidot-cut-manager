@@ -99,6 +99,7 @@ class GenerateAllBase(unittest.TestCase):
         na.set_native_store(self.store)
         self.pid = self.store.create_project("P")["id"]
         self.empty = next(iter(self.store.get_project(self.pid)["cuts"]))
+        self.store.update_cut(self.pid, self.empty, {"notes": "Draft placeholder scene"})
         cuts = [{"cut": i, "duration": 2, "description": f"Shot {i}"} for i in (1, 2, 3)]
         with mock.patch.object(na, "project_template_graph", return_value=gg_ltx.load_ltx_workflow("t2v")):
             self.ids = na.native_add_cut_list(self.pid, cuts, after=self.empty)["cut_ids"]
@@ -154,7 +155,7 @@ class NativeConvertTests(GenerateAllBase):
         self.assertEqual(cm.exception.code, "ui_only")
         res = na.native_cut_api_workflow(self.pid, self.ids[0], convert=True)
         self.assertEqual(res["source"], "converted")
-        self.assertEqual(res["workflow"]["6"]["inputs"]["text"], "Shot 1")
+        self.assertEqual(res["workflow"]["6"]["inputs"]["text"], "Shot 1 Dialogue: Shot 1")
 
     def test_queue_plan_with_convert(self):
         plan = gg_sdk.native_plan(self.pid, self.ids[1], new_seed=False, convert=True)
@@ -183,7 +184,7 @@ class GenerateAllTests(GenerateAllBase):
         texts = []
         for f in sorted(self.regen_dir.glob("native_*.json"), key=lambda p: p.stat().st_mtime_ns):
             texts.append(json.loads(f.read_text(encoding="utf-8"))["6"]["inputs"]["text"])
-        self.assertEqual(sorted(texts), ["Shot 1", "Shot 2", "Shot 3"])
+        self.assertEqual(sorted(texts), ["Shot 1 Dialogue: Shot 1", "Shot 2 Dialogue: Shot 2", "Shot 3 Dialogue: Shot 3"])
 
     def test_failure_does_not_stop_the_rest(self):
         self.start(self.ids, fail_cut=self.ids[1])
@@ -230,6 +231,23 @@ class GenerateAllTests(GenerateAllBase):
         b = gg_sdk.generate_all_status()
         self.assertEqual([it["status"] for it in b["items"]], ["done", "failed"])
         self.assertIn("cut not found", b["items"][1]["error"])
+
+    def test_skips_cut_when_timeline_too_long_for_ltx(self):
+        cid = self.ids[0]
+        na.native_save_edit(self.pid, [cid], {cid: {"in": 0, "sec": 11.0}})
+        self.start([cid])
+        b = gg_sdk.generate_all_status()
+        self.assertEqual(b["items"][0]["status"], "skipped")
+        self.assertEqual(b["items"][0]["error"], gg_ltx.VIDEO_TOO_LONG_MSG)
+        self.assertEqual(self.ran, [])
+
+    def test_skips_draft_cut_with_no_prompt_or_info(self):
+        cid = na.native_add_cut(self.pid, None, self.ids[-1])["cut"]["id"]
+        self.start([cid])
+        b = gg_sdk.generate_all_status()
+        self.assertEqual(b["items"][0]["status"], "skipped")
+        self.assertEqual(b["items"][0]["error"], na.WRITE_PROMPT_FIRST)
+        self.assertEqual(self.ran, [])
 
     def test_new_seed_flag_on_generate_all(self):
         calls = []

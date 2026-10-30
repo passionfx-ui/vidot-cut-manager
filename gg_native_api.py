@@ -10,17 +10,19 @@ from typing import Any
 try:
     from .gg_data import PACK_DIR, clamp_clip
     from .gg_project import LocalStore
+    from .gg_project.local_store import NEW_CUT_NAME
     from .gg_project.timeline import timeline_order
     from .gg_project.ids import is_uuid_id
-    from .gg_project.project_settings import TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings
+    from .gg_project.project_settings import TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings, project_mp4_export_dir
     from .gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids
     from .gg_project.media_anim import animation_info
 except ImportError:  # unittest / plain script
     from gg_data import PACK_DIR, clamp_clip  # type: ignore
     from gg_project import LocalStore  # type: ignore
+    from gg_project.local_store import NEW_CUT_NAME  # type: ignore
     from gg_project.timeline import timeline_order  # type: ignore
     from gg_project.ids import is_uuid_id  # type: ignore
-    from gg_project.project_settings import TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings  # type: ignore
+    from gg_project.project_settings import TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings, project_mp4_export_dir  # type: ignore
     from gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids  # type: ignore
     from gg_project.media_anim import animation_info  # type: ignore
 
@@ -215,7 +217,7 @@ def _is_video_ver(v: dict) -> bool:
 
 
 def native_export_timeline(pid: str) -> tuple[dict, Path] | None:
-    """Timeline for MP4 export plus the output folder (<project folder>/04_Export).
+    """Timeline for MP4 export plus the output folder (`03_Edit` when present, else `edit`).
     Per cut, in timeline order: Best version, else the newest video, else the newest image (still for the clip length)."""
     store = native_store()
     doc = store.get_project(pid)
@@ -239,7 +241,7 @@ def native_export_timeline(pid: str) -> tuple[dict, Path] | None:
         c["media"] = {"id": best["id"], "kind": kind}
     folder = normalize_settings(doc.get("settings")).get("project_folder")
     base = Path(folder) if folder else store._project_dir(pid)
-    return tl, base / "04_Export"
+    return tl, project_mp4_export_dir(base)
 
 
 def native_save_edit(pid: str, order, clips) -> dict | None:
@@ -257,12 +259,19 @@ def native_save_edit(pid: str, order, clips) -> dict | None:
             continue
         clear = "pick" in e and e["pick"] is None
         pick = e.get("pick") if "pick" in e else c.get("pick")
+        display = e.get("display") if "display" in e else c.get("display")
         valid = {v["id"]: v for v in c.get("versions_list") or []}
         if not (isinstance(pick, str) and pick in valid):
             pick = None
+        if not (isinstance(display, str) and display in valid):
+            display = None
         src_dur = c.get("src_dur")
-        if pick:
-            kind = None if valid[pick].get("missing") else valid[pick]["kind"]
+        ref = display or pick
+        if ref and ref in valid:
+            ver = valid[ref]
+            kind = None if ver.get("missing") else ver["kind"]
+            if kind == "video":
+                src_dur = ver.get("seconds")
         elif clear and c.get("pick"):
             newest = (c.get("versions_list") or [None])[0]
             kind = None if not newest or newest.get("missing") else newest["kind"]
@@ -271,6 +280,8 @@ def native_save_edit(pid: str, order, clips) -> dict | None:
             kind = c["media"]["kind"] if c.get("media") else None
         i, sec = clamp_clip(kind, e.get("in", c["in"]), e.get("sec", c["sec"]), src_dur)
         out = {"in": i, "sec": sec, **({"pick": pick} if pick else {"pick": None} if clear else {})}
+        if "display" in e:
+            out["display"] = display
         if "start" in e:
             out["start"] = e["start"]
         out_clips[cid] = out
@@ -569,7 +580,7 @@ def _video_tab_workflow(pid: str, cut_id: str, doc: dict, cut: dict) -> dict | N
     except ValueError:
         return None
     g = copy.deepcopy(graph)
-    prompt = cut_prompt_text(cut)
+    prompt = cut_video_prompt_text(cut)
     if prompt:
         try:
             gg_wfnodes.set_prompt(g, prompt)
@@ -660,10 +671,15 @@ def native_cut_api_workflow(pid: str, cut_id: str, canvas: dict | None = None, c
         wf, source = project_template_graph(store.get_project(pid), "image"), "template"
         if not wf:
             raise NativeWorkflowError("empty", "This cut has no workflow yet. Not queued.")
-    if source == "template":
-        wf = _with_cut_prompt(wf, cut)
-        if gg_template._is_api_workflow(wf):
-            return {"workflow": wf, "source": "template"}
+    if not versions:
+        try:
+            from . import gg_ltx
+        except ImportError:
+            import gg_ltx  # type: ignore
+        ltx = isinstance(wf, dict) and gg_ltx.workflow_has_ltx_length(wf)
+        wf = _apply_cut_prompt_to_workflow(wf, cut, require=True, video=ltx)
+    if isinstance(wf, dict) and gg_template._is_api_workflow(wf):
+        return {"workflow": wf, "source": source}
     if convert and isinstance(wf, dict) and gg_template._is_ui_workflow(wf):
         try:
             return {"workflow": _ui_to_api(wf), "source": "template" if source == "template" else "converted"}
@@ -680,26 +696,91 @@ def _ui_to_api(graph: dict) -> dict:
     return gg_wfconvert.ui_to_api(graph)
 
 
+WRITE_PROMPT_FIRST = "Write a prompt for this cut first."
+
+
+def cut_info_text(cut: dict) -> str:
+    """Title + Info notes for generation when Prompt is empty."""
+    parts: list[str] = []
+    name = cut.get("name")
+    if isinstance(name, str):
+        n = " ".join(name.split()).strip()
+        if n and n != NEW_CUT_NAME:
+            parts.append(n)
+    notes = cut.get("notes")
+    if isinstance(notes, str):
+        t = " ".join(notes.split()).strip()
+        if t:
+            parts.append(t)
+    if not parts:
+        return ""
+    return parts[0] if len(parts) == 1 else f"{parts[0]}. {parts[1]}"
+
+
 def cut_prompt_text(cut: dict) -> str:
-    """The cut's description: its prompt (AI Cut Split), else its caption."""
-    for key in ("prompt", "caption"):
-        v = cut.get(key)
-        if isinstance(v, str) and v.strip():
-            return " ".join(v.split())
+    """Workflow prompt text: cut Prompt field, else title + Info notes."""
+    v = cut.get("prompt")
+    if isinstance(v, str) and v.strip():
+        return " ".join(v.split())
+    return cut_info_text(cut)
+
+
+def cut_caption_text(cut: dict) -> str:
+    """Normalized Caption field (timeline subtitles / dialogue)."""
+    v = cut.get("caption")
+    if isinstance(v, str) and v.strip():
+        return " ".join(v.split())
     return ""
 
 
-def _with_cut_prompt(graph: dict, cut: dict) -> dict:
-    """Copy of a template graph with the cut's description in its prompt node (unchanged when either is missing)."""
-    import copy
+def cut_video_prompt_text(cut: dict) -> str:
+    """Video/LTX injected prompt: Prompt (or Info fallback) plus Dialogue caption when set."""
+    base = cut_prompt_text(cut)
+    if not base:
+        return ""
+    cap = cut_caption_text(cut)
+    if not cap:
+        return base
+    return f"{base} Dialogue: {cap}"
 
+
+def cut_generation_seconds(doc: dict, cut_id: str) -> float:
+    """Effective seconds for LTX generation: timeline trim, else cut sec, else planned_sec."""
+    try:
+        from . import gg_ltx
+    except ImportError:
+        import gg_ltx  # type: ignore
+    cuts = doc.get("cuts") if isinstance(doc, dict) else None
+    cut = cuts.get(cut_id) if isinstance(cuts, dict) else None
+    if not isinstance(cut, dict):
+        return gg_ltx.DURATION_MAX
+    tl = doc.get("timeline")
+    if isinstance(tl, dict) and isinstance(tl.get("clips"), dict):
+        entry = tl["clips"].get(cut_id)
+        if isinstance(entry, dict) and isinstance(entry.get("sec"), (int, float)):
+            return round(float(entry["sec"]), 2)
+    sec = cut.get("sec")
+    if isinstance(sec, (int, float)):
+        return round(float(sec), 2)
+    planned = cut.get("planned_sec")
+    if isinstance(planned, (int, float)):
+        return round(float(planned), 2)
+    return gg_ltx.DURATION_MAX
+
+
+def _apply_cut_prompt_to_workflow(graph: dict, cut: dict, *, require: bool, video: bool = False) -> dict:
+    """Set the cut's Prompt (or Info fallback) on the workflow prompt node; video adds Dialogue caption."""
+    text = cut_video_prompt_text(cut) if video else cut_prompt_text(cut)
+    if not text:
+        if require:
+            raise ValueError(WRITE_PROMPT_FIRST)
+        return graph
     g = copy.deepcopy(graph)
-    text = cut_prompt_text(cut)
-    if text:
-        try:
-            gg_wfnodes.set_prompt(g, text)
-        except gg_wfnodes.NodeNotFound:
-            pass
+    try:
+        gg_wfnodes.set_prompt(g, text)
+    except gg_wfnodes.NodeNotFound as ex:
+        if require:
+            raise ValueError(f"Image template: {ex}") from ex
     return g
 
 
@@ -830,11 +911,15 @@ def native_image_to_video_workflow(pid: str, cut_id: str, selected_vid: str | No
             raise ValueError(f"Video template {label} cannot run without its tab: {ex}") from None
     gg_wfnodes.find_start_image_node(graph)
     ver, path = pick_start_version(pid, cut_id, selected_vid, start_vid)
-    prompt = cut_prompt_text(cut) or _version_prompt(pid, ver, path)
+    prompt = cut_video_prompt_text(cut) or _version_prompt(pid, ver, path)
     if not prompt:
         raise ValueError("This cut has no description. Add a caption first.")
-    sec = cut.get("planned_sec") or cut.get("sec") or gg_ltx.DURATION_MAX
+    sec = cut_generation_seconds(doc, cut_id)
+    err = gg_ltx.check_ltx_generation_duration(graph, sec)
+    if err:
+        raise ValueError(err)
     wf = gg_ltx.inject_ltx(graph, prompt, float(sec))
+    wf = gg_ltx.patch_ltx_duration(wf, float(sec))
     image = stage_start_image(path, ver["id"])
     node = gg_wfnodes.set_start_image(wf, image)
     return {"workflow": wf, "template": label, "start_version": ver["id"], "start_node": node, "image": image,

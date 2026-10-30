@@ -12,6 +12,7 @@ REPO = Path(__file__).resolve().parents[1]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+import gg_cut_split
 import gg_ltx
 import gg_native_api as na
 import gg_wfnodes
@@ -44,6 +45,17 @@ class FramesTests(unittest.TestCase):
 
     def test_frames_never_below_9(self):
         self.assertEqual(gg_ltx.frames_for_duration(0.1, 24), 9)
+
+    def test_generation_frames_not_capped_at_3s(self):
+        self.assertEqual(gg_ltx.frames_for_duration(10, 24, max_frames=None), 241)
+        self.assertEqual(gg_ltx.frames_for_duration(10, 24, max_frames=None) % 8, 1)
+
+    def test_ltx_generation_duration_guard(self):
+        g = gg_ltx.load_ltx_workflow("t2v")
+        self.assertIsNone(gg_ltx.check_ltx_generation_duration(g, 10))
+        self.assertEqual(gg_ltx.check_ltx_generation_duration(g, 10.5), gg_ltx.VIDEO_TOO_LONG_MSG)
+        patched = gg_ltx.patch_ltx_duration(g, 2)
+        self.assertEqual(_node(patched, 70)["widgets_values"][2], 49)
 
     def test_clamp_duration(self):
         self.assertEqual(gg_ltx.clamp_duration(10), 3.0)
@@ -107,18 +119,48 @@ class ValidateTests(unittest.TestCase):
     def test_sorted_by_cut_and_renumbered(self):
         rows = gg_ltx.validate_cut_list([_cut(5, 3, "B"), _cut(2, 0.5, "A")])
         self.assertEqual([(r["cut"], r["description"], r["duration"]) for r in rows], [(1, "A", 0.5), (2, "B", 3.0)])
-        self.assertEqual(gg_ltx.public_cuts(rows), [{"cut": 1, "duration": 0.5, "description": "A"},
-                                                    {"cut": 2, "duration": 3.0, "description": "B"}])
+        self.assertEqual(gg_ltx.public_cuts(rows), [{"cut": 1, "duration": 0.5, "title": "A", "description": "A",
+                                                    "caption": "A"},
+                                                    {"cut": 2, "duration": 3.0, "title": "B", "description": "B",
+                                                     "caption": "B"}])
 
     def test_description_is_name_caption_and_prompt(self):
         rows = gg_ltx.validate_cut_list([_cut(1, 2, "  line one\nline two " + "x" * 100 + "  ")])
         r = rows[0]
-        self.assertEqual(r["prompt"], r["caption"])
+        self.assertEqual(r["prompt"], r["description"])
         self.assertEqual(r["caption"], r["description"])
         self.assertNotIn("\n", r["description"])
         self.assertTrue(r["description"].startswith("line one line two x"))
-        self.assertEqual(r["name"], r["description"][:80])
+        self.assertEqual(r["name"], gg_ltx.normalize_cut_title(r["description"]))
+        self.assertEqual(r["title"], r["name"])
         self.assertEqual(r["sec"], 2.0)
+
+    def test_title_and_caption_separate(self):
+        rows = gg_ltx.validate_cut_list([{
+            "cut": 1, "duration": 2,
+            "title": "Fox close-up",
+            "description": "Close-up, the fox sniffs the air",
+            "caption": "Fox: Hello",
+        }])
+        r = rows[0]
+        self.assertEqual(r["name"], "Fox")
+        self.assertEqual(r["caption"], "Fox: Hello")
+        self.assertEqual(r["prompt"], "Close-up, the fox sniffs the air")
+        pub = gg_ltx.public_cuts(rows)[0]
+        self.assertEqual(pub["title"], "Fox")
+        self.assertEqual(pub["caption"], "Fox: Hello")
+
+    def test_normalize_cut_title(self):
+        self.assertEqual(gg_ltx.normalize_cut_title("wide shot rainy walk home."), "Rainy Walk Home")
+        self.assertEqual(gg_ltx.normalize_cut_title("Cat Under the Bench"), "Cat Under The Bench")
+        self.assertLessEqual(len(gg_ltx.normalize_cut_title("one two three four five six seven")), 40)
+
+    def test_notes_field_on_rows(self):
+        rows = gg_ltx.validate_cut_list([{
+            "cut": 1, "duration": 2, "description": "Wide shot of a fox",
+            "title": "Fox Field", "notes": "Morning mist over the field.",
+        }])
+        self.assertEqual(rows[0]["notes"], "Morning mist over the field.")
 
     def test_content_and_ltx_prompt_are_aliases(self):
         rows = gg_ltx.validate_cut_list([
@@ -184,13 +226,13 @@ class ExtractTests(unittest.TestCase):
 
 
 class PromptTests(unittest.TestCase):
-    def test_prompt_asks_for_the_simple_schema(self):
+    def test_prompt_asks_for_title_description_and_caption(self):
         p = gg_ltx.CUT_SPLIT_PROMPT
-        for key in ('"cut"', '"duration"', '"description"'):
+        for key in ('"cut"', '"duration"', '"title"', '"description"', '"caption"'):
             self.assertIn(key, p)
         self.assertNotIn("ltx_prompt", p)
         self.assertIn("never more than 3", p)
-        self.assertTrue(p.rstrip().endswith("STORY:"))
+        self.assertIn("STORY", gg_cut_split.build_prompt("x"))
 
 
 class AddCutListTests(unittest.TestCase):
@@ -214,8 +256,8 @@ class AddCutListTests(unittest.TestCase):
         self.assertEqual(order, [self.first, *ids])
         c1, c2 = (doc["cuts"][i] for i in ids)
         self.assertEqual((c1["name"], c1["caption"], c1["planned_sec"], c1["sec"], c1["prompt"]),
-                         ("First shot", "First shot", 3.0, 3.0, "First shot"))
-        self.assertEqual((c2["name"], c2["planned_sec"], c2["prompt"]), ("Second shot", 1.5, "Second shot"))
+                         ("First Shot", "First shot", 3.0, 3.0, "First shot"))
+        self.assertEqual((c2["name"], c2["planned_sec"], c2["prompt"]), ("Second Shot", 1.5, "Second shot"))
         wf = self.store.get_blob(self.pid, c2["workflow_sha"])
         self.assertEqual(gg_wfnodes.prompt_text(wf), "Second shot")
         self.assertFalse(any("LTX" in str(n.get("type")) for n in wf["nodes"]), "0.9.125: project Image template")

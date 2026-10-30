@@ -73,6 +73,9 @@ class CutSplitTestBase(unittest.TestCase):
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
+        if gg_cut_split._run_lock.locked():
+            gg_cut_split._run_lock.release()
+        self.addCleanup(lambda: gg_cut_split._run_lock.release() if gg_cut_split._run_lock.locked() else None)
 
     def split(self, fake, story="A fox in the snow."):
         with mock.patch.object(gg_sdk, "run_api_workflow", fake.run), \
@@ -95,7 +98,7 @@ class WorkflowTests(CutSplitTestBase):
         self.assertEqual(wf["2"]["class_type"], "TextGenerate")
         gen = wf["2"]["inputs"]
         self.assertEqual(gen["clip"], ["1", 0])
-        self.assertEqual(gen["prompt"], gg_ltx.CUT_SPLIT_PROMPT + "A fox in the snow.")
+        self.assertEqual(gen["prompt"], gg_cut_split.build_prompt("A fox in the snow."))
         self.assertEqual(gen["max_length"], 1536)
         self.assertEqual(gen["sampling_mode"], "off")
         self.assertIs(gen["thinking"], False)
@@ -131,12 +134,25 @@ class WorkflowTests(CutSplitTestBase):
 
 
 class AnswerTests(CutSplitTestBase):
+    def test_presplit_skips_text_model(self):
+        story = """Cut 1: Snow field
+A fox crosses the field.
+Fox: Where is home?
+"""
+        fake = FakeComfy()
+        res = self.split(fake, story)
+        self.assertEqual((fake.runs, res.get("presplit"), len(res["cuts"])), (0, True, 1))
+        self.assertEqual(res["cuts"][0]["caption"], "Fox: Where is home?")
+        self.assertEqual(res["attempts"], 0)
+
     def test_valid_answer_returns_cuts_in_order_and_reads_history(self):
         fake = FakeComfy()
         res = self.split(fake)
         self.assertEqual(res["cuts"], [
-            {"cut": 1, "duration": 3.0, "description": CUTS[1]["description"]},
-            {"cut": 2, "duration": 2.5, "description": CUTS[0]["description"]},
+            {"cut": 1, "duration": 3.0, "title": gg_ltx.normalize_cut_title(CUTS[1]["description"]),
+             "description": CUTS[1]["description"], "caption": CUTS[1]["description"]},
+            {"cut": 2, "duration": 2.5, "title": gg_ltx.normalize_cut_title(CUTS[0]["description"]),
+             "description": CUTS[0]["description"], "caption": CUTS[0]["description"]},
         ])
         self.assertEqual(res["attempts"], 1)
         self.assertEqual(res["model"], gg_cut_split.DEFAULT_CLIP)
@@ -152,7 +168,7 @@ class AnswerTests(CutSplitTestBase):
         res = self.split(fake)
         self.assertEqual((fake.runs, res["attempts"], len(res["cuts"])), (2, 2, 2))
         retry_prompt = fake.workflows[1]["2"]["inputs"]["prompt"]
-        self.assertTrue(retry_prompt.startswith(gg_ltx.CUT_SPLIT_PROMPT + "A fox in the snow."))
+        self.assertTrue(retry_prompt.startswith(gg_cut_split.build_prompt("A fox in the snow.")))
         self.assertIn('"duration" must be between 0.5 and 3 seconds (got 5)', retry_prompt)
         self.assertNotEqual(retry_prompt, fake.workflows[0]["2"]["inputs"]["prompt"])
 

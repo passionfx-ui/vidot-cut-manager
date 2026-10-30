@@ -76,7 +76,7 @@ class TimelineIndependentTests(unittest.TestCase):
         self.assertEqual(self._row(tl, self.c2)["sec"], 4.5)
         self.assertEqual(tl["total_sec"], 15.5)
 
-    def test_timeline_edit_never_touches_cut_list(self):
+    def test_timeline_edit_syncs_cut_sec_not_cut_list_order(self):
         before = self._cut_list_state()
         numbers = [c["number"] for c in self._tl()["cuts"]]
         track = [self.c5, self.c3, self.c1, self.c4, self.c2]
@@ -87,14 +87,18 @@ class TimelineIndependentTests(unittest.TestCase):
             self.c4: {"in": 0, "sec": 3.0, "start": 9},
             self.c2: {"in": 0, "sec": 5.0, "start": 12},
         })
-        self.assertEqual(self._cut_list_state(), before)
+        after = self._cut_list_state()
+        self.assertEqual(after["scenes"], before["scenes"])
+        self.assertEqual(after["loose"], before["loose"])
+        self.assertEqual(after["own"][self.c3][0], 1.5)
+        self.assertEqual(after["own"][self.c2][0], 5.0)
         self.assertEqual([c["id"] for c in tl["cuts"]], self.cut_list)
         self.assertEqual([c["number"] for c in tl["cuts"]], numbers)
         self.assertEqual(tl["track_order"], track)
         self.assertEqual(self._doc()["timeline"]["order"], track)
         self.assertEqual(self._row(tl, self.c3)["start"], 4.0)
         self.assertEqual(self._row(tl, self.c3)["sec"], 1.5)
-        self.assertEqual(self._row(tl, self.c3)["tl_sec"], 3.0)  # the cut's own length is unchanged
+        self.assertEqual(self._row(tl, self.c3)["tl_sec"], 1.5)
         self.assertEqual(tl["total_sec"], 17.0)
 
     def test_clip_entry_holds_only_trim_and_start(self):
@@ -160,7 +164,11 @@ class TimelineIndependentTests(unittest.TestCase):
         })
         before = self._cut_list_state()
         tl = na.native_reset_timeline(self.pid)
-        self.assertEqual(self._cut_list_state(), before)
+        after = self._cut_list_state()
+        self.assertEqual(after["scenes"], before["scenes"])
+        self.assertEqual(after["loose"], before["loose"])
+        self.assertEqual(after["own"][self.c1][0], 2.0)
+        self.assertEqual(after["own"][self.c2][0], 3.0)
         self.assertEqual(tl["track_order"], self.cut_list)
         self.assertEqual([self._row(tl, c)["in"] for c in self.cut_list], [0.0] * 5)
         self.assertEqual([self._row(tl, c)["sec"] for c in self.cut_list], [2.0, 3.0, 3.0, 3.0, 3.0])

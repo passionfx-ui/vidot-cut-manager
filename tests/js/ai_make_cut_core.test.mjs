@@ -251,7 +251,8 @@ describe("AI Make Cut dialog wiring (gonggan.js)", () => {
   const body = fn.slice(0, fn.indexOf("\n}\n"));
 
   it("starts a background run (10 minute request limit) and polls its status", () => {
-    assert.match(body, /postJson\("\/gonggan\/ai-cut-split", \{ story: story\.value, background: true \}, \{ timeoutMs: AI_MAKE_CUT_WAIT_MS \}\)/);
+    assert.match(body, /postJson\("\/gonggan\/ai-cut-split", \{\s*story: story\.value,\s*captions: captionsSel\.value,\s*background: true,/);
+    assert.match(body, /AI_MAKE_CUT_CAPTIONS_KEY/);
     assert.match(body, /getJson\(`\/gonggan\/ai-cut-split\/status\?job=\$\{encodeURIComponent\(id\)\}`\)/);
     assert.match(body, /onProgress: \(j\) => \{[\s\S]*?aiMakeCutProgressText\(j\)/);
     assert.match(body, /err\.textContent = aiMakeCutErrorText\(e\)/);
