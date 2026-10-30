@@ -59,7 +59,8 @@ describe("Shots icon row replaces the selection bar", () => {
   });
 
   it("buttons reuse the existing actions; Delete goes through the in-app confirm", () => {
-    assert.match(js, /\.gg-ir-scene"\)\?\.addEventListener\("click", \(\) => createSceneGroup\(cutSelIds\(\)\)\)/);
+    // New scene: an empty scene on native projects, grouping the selection on imported ones (unchanged).
+    assert.match(js, /\.gg-ir-scene"\)\?\.addEventListener\("click", \(\) =>\s*isNativeProject\(\) \? void addEmptyScene\(\) : createSceneGroup\(cutSelIds\(\)\)\)/);
     assert.match(js, /\.gg-ir-cut"\)\?\.addEventListener\("click", \(\) => addLocalCut\(\)\)/);
     assert.match(js, /\.gg-ir-del"\)\?\.addEventListener\("click", \(\) => void confirmDeleteSelectedCuts\(\)\)/);
     const s = js.indexOf("async function confirmDeleteSelectedCuts()");

@@ -622,7 +622,7 @@ async function main() {
     await waitForDomCutCountSync(page);
   });
 
-  await runScenario("04", "Multi-select and New scene (icon row)", async () => {
+  await runScenario("04", "Multi-select and Group (cut menu)", async () => {
     while ((await countCuts(page)) < 4) {
       await rightClickEmptyShots(page);
       await clickCtxItem(page, "Add Cut");
@@ -639,7 +639,10 @@ async function main() {
     );
     const nSel = await selectionCount(page);
     if (nSel < 2) throw new Error(`expected 2+ selected cuts (count=${nSel})`);
-    await page.click(".gg-root.gg-shots .gg-ir-scene");
+    // The icon row New scene adds an empty scene since 0.9.104; grouping the selection is the cut menu Group.
+    const selBox = await (await page.$(".gg-root.gg-shots .gg-cut.gg-sel")).boundingBox();
+    await page.mouse.click(selBox.x + 12, selBox.y + 12, { button: "right" });
+    await clickCtxItem(page, "Group");
     await submitAskDialog(page);
     await sleep(1000);
     const scenes = await page.$$eval(".gg-root.gg-shots .gg-grp-sec[data-group-id]", (els) => els.length);
@@ -660,7 +663,8 @@ async function main() {
       throw new Error(`Timeline bar not full width at the very bottom under the status panel: ${JSON.stringify(s0)}`);
     }
     if (s0.queueInBar || s0.queueInHead || !s0.queueInPanel) throw new Error(`Queue should be in the status panel only: ${JSON.stringify(s0)}`);
-    if (s0.count === 0 && (!s0.queueDisabled || !s0.sceneDisabled || !s0.delDisabled)) throw new Error(`0 selected must disable actions: ${JSON.stringify(s0)}`);
+    if (s0.count === 0 && (!s0.queueDisabled || !s0.delDisabled)) throw new Error(`0 selected must disable actions: ${JSON.stringify(s0)}`);
+    if (s0.sceneDisabled) throw new Error(`New scene (empty scene) should stay enabled on a native project: ${JSON.stringify(s0)}`);
     if (s0.cutDisabled) throw new Error(`New cut should stay enabled with a project open: ${JSON.stringify(s0)}`);
     if (s0.barClass !== "gg-iconrow") throw new Error(`icon row class: "${s0.barClass}"`);
     await clickCut(page, 0);

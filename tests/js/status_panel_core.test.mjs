@@ -117,5 +117,17 @@ describe("iconRowView", () => {
   it("no project open: New scene / New cut / Delete all off, even with a stale selection count", () => {
     const v = iconRowView({ count: 3, hasProject: false });
     assert.deepEqual([v.scene.disabled, v.cut.disabled, v.del.disabled], [true, true, true]);
+    assert.equal(iconRowView({ count: 0, hasProject: false, native: true }).scene.disabled, true);
+  });
+
+  it("native project: New scene (empty scene) is on with nothing selected; Delete still needs a selection", () => {
+    const v = iconRowView({ count: 0, hasProject: true, native: true });
+    assert.deepEqual([v.scene.disabled, v.cut.disabled, v.del.disabled], [false, false, true]);
+    assert.equal(iconRowView({ count: 2, hasProject: true, native: true }).scene.disabled, false);
+  });
+
+  it("imported project: New scene still needs a selection (unchanged)", () => {
+    assert.equal(iconRowView({ count: 0, hasProject: true, native: false }).scene.disabled, true);
+    assert.equal(iconRowView({ count: 1, hasProject: true, native: false }).scene.disabled, false);
   });
 });

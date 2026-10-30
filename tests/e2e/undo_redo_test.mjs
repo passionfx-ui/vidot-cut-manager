@@ -255,9 +255,9 @@ async function main() {
       });
     });
     await page.waitForFunction(() =>
-      document.querySelectorAll(".gg-root.gg-shots .gg-cut.gg-sel").length === 2 &&
-      !document.querySelector(".gg-root.gg-shots .gg-ir-scene")?.disabled, { timeout: 10000 });
-    await page.click(".gg-root.gg-shots .gg-ir-scene");
+      document.querySelectorAll(".gg-root.gg-shots .gg-cut.gg-sel").length === 2, { timeout: 10000 });
+    await rightClickCut(page, ".gg-root.gg-shots .gg-cut.gg-sel");
+    await clickCtxItem(page, "Group");
     await submitAskDialog(page);
     await waitFor(sceneCount, 1, "scene create");
     await hover(page, ".gg-root.gg-shots .gg-grp-wrap");

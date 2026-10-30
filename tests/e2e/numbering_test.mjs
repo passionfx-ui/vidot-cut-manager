@@ -188,8 +188,13 @@ async function selectCuts(page, indices) {
   }
 }
 
+/** Cut menu Group on the first selected cut (the icon row New scene adds an empty scene since 0.9.104). */
 async function groupSelected(page) {
-  await page.click(".gg-root.gg-shots .gg-ir-scene");
+  const sel = (await page.$(".gg-root.gg-shots .gg-cut.gg-sel")) || (await page.$(".gg-root.gg-shots .gg-cut.gg-on"));
+  if (!sel) throw new Error("no selected cut to group");
+  const box = await sel.boundingBox();
+  await page.mouse.click(box.x + 12, box.y + 12, { button: "right" });
+  await clickCtxItem(page, "Group");
   await submitAskDialog(page);
   await sleep(800);
 }

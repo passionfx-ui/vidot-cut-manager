@@ -113,11 +113,11 @@ export function timelineClipMenuItems(ctx = {}) {
   return [{ key: "open", label: "Open cut" }, a.regen, a.send, a.redo, a.rename, applyOrder, a.del];
 }
 
-/** @param {{ collapsed?: boolean, cutCount?: number }} ctx */
+/** @param {{ collapsed?: boolean, cutCount?: number }} ctx  Add Cut on an empty scene adds the cut into it. */
 export function sceneMenuItems(ctx = {}) {
   const empty = !((ctx.cutCount || 0) > 0);
   return [
-    { key: "addCut", label: "Add Cut", disabled: empty },
+    { key: "addCut", label: "Add Cut", disabled: false },
     { key: "selectCuts", label: "Select cuts", disabled: empty },
     { key: "toggleCollapse", label: ctx.collapsed ? "Expand" : "Collapse" },
     { key: "rename", label: "Rename" },

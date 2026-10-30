@@ -177,7 +177,17 @@ import {
   autoHeightPx,
 } from "./gg_story_core.js";
 import { buildSrt, srtFileName, effectiveCaption, captionEditChanged, captionFieldPlaceholder, captionAtTime } from "./gg_caption_core.js";
-import { rowContentKind, cutRowShellHtml, captionRowContentHtml, groupedListHtml, shotsSections } from "./gg_group_list_core.js";
+import {
+  rowContentKind,
+  cutRowShellHtml,
+  captionRowContentHtml,
+  groupedListHtml,
+  shotsSections,
+  nextSceneName,
+  newSceneGroupId,
+  withNewEmptyScene,
+  stripCutsFromGroups,
+} from "./gg_group_list_core.js";
 import { decideVideoSync } from "./gg_playback_core.js";
 import { noMediaText, noMediaThumbClass, versionMedia } from "./gg_missing_media_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
@@ -3448,7 +3458,7 @@ function openSceneContextMenu(e, groupId) {
     e.clientX,
     e.clientY,
     attachMenuActions(sceneMenuItems({ collapsed: !!g.collapsed, cutCount: ids.length }), {
-      addCut: () => addCutAfter(last),
+      addCut: () => (last ? addCutAfter(last) : addCutToScene(groupId)),
       selectCuts: () => selectCutRange(first, last),
       toggleCollapse: () => toggleGroupCollapsed(groupId),
       rename: () => renameSceneGroup(groupId),
@@ -3504,12 +3514,6 @@ async function persistGroups(groups) {
   bus.dispatchEvent(new Event("timeline"));
 }
 
-function stripCutsFromGroups(groups, cutIds) {
-  const drop = new Set(cutIds);
-  groups.forEach((g) => { g.cut_ids = (g.cut_ids || []).filter((id) => !drop.has(id)); });
-  return groups.filter((g) => (g.cut_ids || []).length);
-}
-
 function orderCutIds(ids) {
   const cuts = state.timeline ? state.timeline.cuts : [];
   const rank = new Map(cuts.map((c, i) => [c.id, i]));
@@ -3523,17 +3527,68 @@ async function createSceneGroup(cutIds) {
   const title = await askText({
     title: "Scene name",
     label: "Name",
-    value: "Scene " + ((state.timeline?.groups?.length || 0) + 1),
+    value: isNativeProject() ? nextSceneName(state.timeline?.groups) : "Scene " + ((state.timeline?.groups?.length || 0) + 1),
     okLabel: "Create scene",
     maxLength: SCENE_NAME_MAX_LEN,
   });
   if (title === null) return;
   let groups = stripCutsFromGroups(groupsClone(), ids);
-  groups.push({ id: "s" + Date.now(), name: title, cut_ids: ids, collapsed: false });
+  groups.push({ id: newSceneGroupId(), name: title, cut_ids: ids, collapsed: false });
   state.cutSel.clear();
   cutSelAnchor = "";
   recordShotsUndo();
   await persistGroups(groups);
+}
+
+/**
+ * Icon row New scene on a native project: one more empty scene at the end of the scenes (above
+ * Ungrouped) on every click. Runs on the Shots undo/redo chain so fast clicks each build on the
+ * previous save instead of all cloning the same groups.
+ */
+function addEmptyScene() {
+  const run = shotsStepChain.then(() => addEmptySceneNow());
+  shotsStepChain = run.catch(() => false);
+  return run;
+}
+
+async function addEmptySceneNow() {
+  const tl = state.timeline;
+  if (!tl || !state.pid || !isNativeProject()) return false;
+  const { groups, scene } = withNewEmptyScene(groupsClone(), newSceneGroupId());
+  recordShotsUndo();
+  try {
+    await persistGroups(groups);
+  } catch (e) {
+    ggToast("Scene", e.message, "warn");
+    return false;
+  }
+  document
+    .querySelector(`.gg-shots .gg-grp-sec[data-group-id="${CSS.escape(scene.id)}"]`)
+    ?.scrollIntoView({ block: "nearest" });
+  return true;
+}
+
+/** Scene menu Add Cut on an empty scene: the new cut goes into that scene. */
+async function addCutToScene(groupId) {
+  if (!state.pid) return;
+  const body = { pid: state.pid, group: groupId };
+  const before = snapshotOrderGroups(state.timeline);
+  try {
+    const d = await postJson("/gonggan/cut/add", body);
+    if (d.timeline) {
+      adoptMutationTimeline(d.timeline, body.pid);
+      bus.dispatchEvent(new Event("timeline"));
+    } else await loadTimeline();
+    recordCutAdded(body.pid, d.cut?.id, before);
+    if (d.cut?.id) {
+      wfLastLoadedCutId = "";
+      wfLastLoadedProjectId = "";
+      selectCut(d.cut.id);
+    }
+    ggToast("Cut", d.template_copied ? `Added ${d.cut.name}` : `${d.cut.name} — no template`, d.template_copied ? "ok" : "warn");
+  } catch (e) {
+    ggToast("Cut", e.message, "warn");
+  }
 }
 
 async function ungroupCuts(cutIds) {
@@ -5072,7 +5127,7 @@ function updateSelectionBar(root) {
   const hasProject = !!currentProject();
   const row = root.querySelector(".gg-iconrow");
   if (row) {
-    const r = iconRowView({ count: n, hasProject });
+    const r = iconRowView({ count: n, hasProject, native: isNativeProject() });
     setBtn(row, ".gg-ir-scene", r.scene.disabled, r.scene.title);
     setBtn(row, ".gg-ir-cut", r.cut.disabled, r.cut.title);
     setBtn(row, ".gg-ir-del", r.del.disabled, r.del.title);
@@ -6069,7 +6124,8 @@ function mountShots(el) {
     root.querySelector(".gg-scene-add")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-group")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-ungroup")?.addEventListener("click", () => ungroupCuts(cutSelIds()));
-    root.querySelector(".gg-ir-scene")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
+    root.querySelector(".gg-ir-scene")?.addEventListener("click", () =>
+      isNativeProject() ? void addEmptyScene() : createSceneGroup(cutSelIds()));
     root.querySelector(".gg-ir-cut")?.addEventListener("click", () => addLocalCut());
     root.querySelector(".gg-ir-del")?.addEventListener("click", () => void confirmDeleteSelectedCuts());
     root.querySelector(".gg-queue-btn")?.addEventListener("click", () => void queueSelectedCuts());
