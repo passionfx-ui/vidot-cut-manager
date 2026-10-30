@@ -220,7 +220,7 @@ async function openShotsTab(page) {
     st.activeSidebarTabId = "gg-shots";
     return true;
   });
-  if (!opened) await (await page.waitForSelector('[aria-label="Vidot Studio – Cut Manager"]', { timeout: 15000 })).click();
+  if (!opened) await (await page.waitForSelector('[aria-label="Vidot Cut Manager"]', { timeout: 15000 })).click();
   await page.waitForSelector(".gg-root.gg-shots", { timeout: 60000 });
 }
 

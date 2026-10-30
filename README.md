@@ -1,6 +1,6 @@
-# Vidot Studio – Cut Manager
+# Vidot Cut Manager
 
-**Vidot Studio – Cut Manager: a ComfyUI plugin that turns a story into cuts and manages every take per cut.**
+**Vidot Cut Manager: a ComfyUI plugin that turns a story into cuts and manages every take per cut.**
 
 Repository: https://github.com/passionfx-ui/vidot-cut-manager
 

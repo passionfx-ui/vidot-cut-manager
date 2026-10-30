@@ -8581,7 +8581,7 @@ app.registerExtension({
       id: SHOTS_TAB,
       icon: "pi pi-images",
       title: "Shots",
-      tooltip: "Vidot Studio – Cut Manager",
+      tooltip: "Vidot Cut Manager",
       type: "custom",
       render: (el) => mountShots(el),
     });
