@@ -209,6 +209,20 @@
   font-weight: 600;
 }
 .gg-shots .gg-cut-head .gg-num { font-size: inherit; }
+.gg-shots .gg-cut-head.gg-renaming { display: flex; align-items: center; gap: 4px; }
+.gg-shots .gg-cut-head.gg-renaming .gg-num { flex: 0 0 auto; }
+.gg-shots .gg-cut-title-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 20px;
+  padding: 0 4px;
+  font: inherit;
+  color: var(--gg-fg);
+  background: var(--gg-bg);
+  border: 1px solid var(--gg-acc, #f2b84b);
+  border-radius: 3px;
+  outline: none;
+}
 .gg-shots .gg-cut-header .gg-drag-handle,
 .gg-shots .gg-cut-header .gg-stage-row,
 .gg-shots .gg-cut-header-badges { align-self: center; }
