@@ -314,13 +314,13 @@ async function main() {
     if (!m0.barShown || m0.barClass !== "gg-iconrow" || m0.selBarRendered) {
       throw new Error(`0 selected: icon row shown, large selection bar not rendered: ${JSON.stringify(m0)}`);
     }
-    if (m0.tips.join("|") !== "New scene|New cut|Delete" || !m0.sceneDisabled || m0.cutDisabled || !m0.delDisabled) {
-      throw new Error(`0 selected: icon tooltips / New scene + Delete off, New cut on: ${JSON.stringify(m0)}`);
+    if (m0.tips.join("|") !== "New scene|New cut|Delete" || m0.sceneDisabled || m0.cutDisabled || !m0.delDisabled) {
+      throw new Error(`0 selected: icon tooltips / Delete off, New scene + New cut on: ${JSON.stringify(m0)}`);
     }
     if (m0.info !== "No cut selected" || m0.queueText !== "Queue" || !m0.queueDisabled || m0.queueInHead) {
       throw new Error(`0 selected: status panel / Queue: ${JSON.stringify(m0)}`);
     }
-    console.log(`PASS  0 selected: icon row shown (New scene/Delete off), no selection bar, status panel "No cut selected" + Queue off; list h=${m0.listHeight} scrollTop=${m0.scrollTop}`);
+    console.log(`PASS  0 selected: icon row shown (Delete off, New scene on), no selection bar, status panel "No cut selected" + Queue off; list h=${m0.listHeight} scrollTop=${m0.scrollTop}`);
 
     await clickAt(page, rows.full[1]);
     const m1 = await measure(page);
@@ -346,16 +346,21 @@ async function main() {
     if (mDel.cutCount !== CUT_COUNT || mDel.info !== "2 cuts selected") throw new Error(`Delete cancel changed data/selection: ${JSON.stringify(mDel)}`);
     console.log('PASS  Delete icon: in-app confirm "Delete 2 cuts?", Cancel keeps all cuts and the selection');
 
-    // New scene -> scene name prompt -> Cancel: no scene created.
+    // New scene -> one empty scene right away (no prompt), selection kept; Ctrl+Z removes it again.
     const sceneCount = () => page.$$eval(".gg-root.gg-shots .gg-grp-sec[data-group-id]", (els) => els.length);
     const scenes0 = await sceneCount();
     await clickAt(page, await center(".gg-root.gg-shots .gg-ir-scene"));
-    const askTitle = await page.$eval(".gg-ask-backdrop .gg-modal-title", (el) => el.textContent.trim()).catch(() => "");
-    if (askTitle !== "Scene name") throw new Error(`New scene prompt: "${askTitle}"`);
-    await clickAt(page, await center(".gg-ask-backdrop .gg-ask-cancel"));
-    const scenes = await sceneCount();
-    if (scenes !== scenes0) throw new Error(`New scene cancelled but scenes ${scenes0} -> ${scenes}`);
-    console.log("PASS  New scene icon: scene name prompt, Cancel creates nothing");
+    if (await page.$(".gg-ask-backdrop")) throw new Error("New scene should not ask for a name");
+    await page.waitForFunction((n) => document.querySelectorAll(".gg-root.gg-shots .gg-grp-sec[data-group-id]").length === n + 1, { timeout: 10000 }, scenes0)
+      .catch(async () => { throw new Error(`New scene: scenes ${scenes0} -> ${await sceneCount()}`); });
+    await page.mouse.move(rows.full[0].x, rows.full[0].y);
+    await page.keyboard.down("Control");
+    await page.keyboard.press("KeyZ");
+    await page.keyboard.up("Control");
+    await page.waitForFunction((n) => document.querySelectorAll(".gg-root.gg-shots .gg-grp-sec[data-group-id]").length === n, { timeout: 10000 }, scenes0)
+      .catch(async () => { throw new Error(`Ctrl+Z after New scene: scenes ${await sceneCount()} (want ${scenes0})`); });
+    await sleep(400);
+    console.log("PASS  New scene icon: adds an empty scene with no prompt, Ctrl+Z removes it");
 
     const m3pre = await measure(page);
     await clickAt(page, await center(".gg-root.gg-shots .gg-meta-text"));

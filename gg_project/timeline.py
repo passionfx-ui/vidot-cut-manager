@@ -250,7 +250,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(scene, dict) or scene.get("deleted_at"):
             continue
         cut_ids = [cid for cid in (scene.get("cut_order") or []) if cid in active]
-        if not cut_ids:
+        if not cut_ids and not scene.get("keep_empty"):
             continue
         groups.append({
             "id": scene["id"],
@@ -259,7 +259,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "collapsed": bool(scene.get("collapsed")),
         })
     cut_to_group = {cid: g["id"] for g in groups for cid in g["cut_ids"]}
-    scene_index_by_id = {g["id"]: idx for idx, g in enumerate(groups, start=1)}
+    scene_index_by_id = {g["id"]: idx for idx, g in enumerate((g for g in groups if g["cut_ids"]), start=1)}
     stored = stored_track(project)
     stored_clips = stored.get("clips") if stored and isinstance(stored.get("clips"), dict) else {}
     wanted: dict[str, float | None] = {}

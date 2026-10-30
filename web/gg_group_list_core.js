@@ -23,8 +23,56 @@ export function captionRowContentHtml({ thumb = "", text, placeholder, title, na
 }
 
 /**
+ * Default name for a new scene: `Scene N` with the lowest N ≥ 1 that no scene uses yet (case-insensitive).
+ * @param {{ name?: string }[]} groups
+ */
+export function nextSceneName(groups) {
+  const used = new Set((groups || []).map((g) => String(g?.name ?? "").trim().toLowerCase()));
+  let n = 1;
+  while (used.has(`scene ${n}`)) n += 1;
+  return `Scene ${n}`;
+}
+
+let sceneIdSeq = 0;
+
+/** Scene group id that stays unique within one page even for several clicks in the same millisecond. */
+export function newSceneGroupId(now = Date.now()) {
+  sceneIdSeq = (sceneIdSeq + 1) % 1296;
+  return `s${now.toString(36)}${sceneIdSeq.toString(36).padStart(2, "0")}`;
+}
+
+/**
+ * Groups with one more empty scene appended at the end (shown last, just above Ungrouped).
+ * @param {{ id: string, name?: string, cut_ids?: string[] }[]} groups
+ * @param {string} id
+ * @returns {{ groups: object[], scene: { id: string, name: string, cut_ids: string[], collapsed: boolean } }}
+ */
+export function withNewEmptyScene(groups, id) {
+  const out = (groups || []).map((g) => ({ ...g, cut_ids: [...(g.cut_ids || [])] }));
+  const scene = { id, name: nextSceneName(out), cut_ids: [], collapsed: false };
+  out.push(scene);
+  return { groups: out, scene };
+}
+
+/**
+ * Take cuts out of their scenes (in place). A scene that loses its last cut here is dropped; a scene
+ * that was already empty (made with New scene) stays.
+ * @param {{ cut_ids?: string[] }[]} groups
+ * @param {string[]} cutIds
+ */
+export function stripCutsFromGroups(groups, cutIds) {
+  const drop = new Set(cutIds);
+  return (groups || []).filter((g) => {
+    const before = g.cut_ids || [];
+    g.cut_ids = before.filter((id) => !drop.has(id));
+    return g.cut_ids.length || !before.length;
+  });
+}
+
+/**
  * Shots list sections: scenes in order of their first cut, then one Ungrouped section with every cut
- * that is in no scene (wherever those cuts sit in the cut order). Empty scenes are left out.
+ * that is in no scene (wherever those cuts sit in the cut order). An empty scene goes right after the
+ * lowest-shown scene listed before it in `groups` (so a new one appended to `groups` is the last scene).
  * @param {{ id: string }[]} cuts cut list order
  * @param {{ id: string, cut_ids?: string[] }[]} groups
  * @returns {{ type: "group"|"ungrouped", group: any, cuts: any[] }[]}
@@ -32,13 +80,24 @@ export function captionRowContentHtml({ thumb = "", text, placeholder, title, na
 export function shotsSections(cuts, groups) {
   const byId = new Map((cuts || []).map((c, i) => [c.id, { c, i }]));
   const inGrp = new Set();
-  const secs = (groups || []).map((g) => {
+  const seen = new Set();
+  const all = [];
+  for (const g of groups || []) {
+    if (!g || seen.has(g.id)) continue;
+    seen.add(g.id);
     const ids = [...new Set(g.cut_ids || [])].filter((id) => byId.has(id) && !inGrp.has(id));
     ids.forEach((id) => inGrp.add(id));
     ids.sort((a, b) => byId.get(a).i - byId.get(b).i);
-    return { type: "group", group: g, cuts: ids.map((id) => byId.get(id).c) };
-  }).filter((s) => s.cuts.length);
+    // A group whose ids are all unknown / taken is stale, not an empty scene.
+    if (ids.length || !(g.cut_ids || []).length) all.push({ type: "group", group: g, cuts: ids.map((id) => byId.get(id).c) });
+  }
+  const secs = all.filter((s) => s.cuts.length);
   secs.sort((a, b) => byId.get(a.cuts[0].id).i - byId.get(b.cuts[0].id).i);
+  all.forEach((s, k) => {
+    if (s.cuts.length) return;
+    const at = Math.max(-1, ...all.slice(0, k).map((p) => secs.indexOf(p))) + 1;
+    secs.splice(at, 0, s);
+  });
   const loose = (cuts || []).filter((c) => !inGrp.has(c.id));
   if (loose.length) secs.push({ type: "ungrouped", group: null, cuts: loose });
   return secs;

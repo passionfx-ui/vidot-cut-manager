@@ -401,6 +401,8 @@ class LocalStore:
                 c["scene_id"] = scene["id"]
                 bump_entity(c)
                 scene["cut_order"].append(cid)
+            if not scene["cut_order"]:
+                scene["keep_empty"] = True
             self._keep_track_order(doc, before)
             self._bump_project(doc)
             bump_entity(scene)
@@ -1034,6 +1036,7 @@ class LocalStore:
             active = self._active_cut_ids(doc)
             before = track_order(doc)
             order = timeline_order(doc)
+            old_scenes = {s["id"]: s for s in self._active_scenes(doc)}
             seen_gids: set[str] = set()
             assigned: set[str] = set()
             parsed: list[dict] = []
@@ -1050,7 +1053,10 @@ class LocalStore:
                     if isinstance(cid, str) and cid in active and cid not in assigned:
                         cut_ids.append(cid)
                         assigned.add(cid)
-                if not cut_ids:
+                old = old_scenes.get(gid)
+                # An empty group is kept only when the user made it empty (New scene) or it was such a
+                # scene already; an existing scene whose last cut moved out is dropped as before.
+                if not cut_ids and old is not None and not old.get("keep_empty"):
                     continue
                 rank = {cid: i for i, cid in enumerate(order)}
                 cut_ids.sort(key=lambda x: rank.get(x, 10**9))
@@ -1060,7 +1066,6 @@ class LocalStore:
                     "cut_ids": cut_ids,
                     "collapsed": bool(g.get("collapsed")),
                 })
-            old_scenes = {s["id"]: s for s in self._active_scenes(doc)}
             new_scenes: list[dict] = []
             cuts_map = self._cuts_map(doc)
             for g in parsed:
@@ -1070,6 +1075,8 @@ class LocalStore:
                 else:
                     scene = new_scene(g["name"])
                     scene["id"] = g["id"]
+                    if not g["cut_ids"]:
+                        scene["keep_empty"] = True
                 scene["name"] = g["name"]
                 scene["collapsed"] = g["collapsed"]
                 scene["cut_order"] = list(g["cut_ids"])

@@ -22,14 +22,16 @@ export function selectionBarView(s = {}) {
 
 /**
  * Icon row under the cut list (replaces the selection bar): always shown at the same fixed height.
- * All three are off while no project is open.
- * @param {{ count?: number, hasProject?: boolean }} s  count: cuts that New scene / Delete would act on
+ * All three are off while no project is open. On a native project New scene always adds an empty
+ * scene, so it needs no selection; on an imported project it groups the selected cuts.
+ * @param {{ count?: number, hasProject?: boolean, native?: boolean }} s
+ *   count: cuts that Delete (and New scene on imported projects) would act on
  */
 export function iconRowView(s = {}) {
   const n = s.hasProject ? Math.max(0, Number(s.count) || 0) : 0;
   return {
     className: "gg-iconrow",
-    scene: { disabled: n === 0, title: "New scene" },
+    scene: { disabled: s.hasProject && s.native ? false : n === 0, title: "New scene" },
     cut: { disabled: !s.hasProject, title: "New cut" },
     del: { disabled: n === 0, title: "Delete" },
   };
