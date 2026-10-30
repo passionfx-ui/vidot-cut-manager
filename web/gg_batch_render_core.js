@@ -53,11 +53,49 @@ export function queueDeleteBody(promptIds) {
   return { delete: [...new Set((Array.isArray(promptIds) ? promptIds : []).filter((id) => id != null && id !== "").map(String))] };
 }
 
-/** Status panel Queue button state (also Queue selected / Re-queue in the cut menu); off while no project is open. */
-export function queueButtonState({ count = 0, native = false, busy = false, hasProject = true } = {}) {
-  if (!hasProject) return { disabled: true, title: QUEUE_NO_PROJECT_TIP };
+/**
+ * Status panel Queue button state (also Queue selected / Re-queue in the cut menu); off while no project is open.
+ * With nothing selected in a native project, Queue starts generate-all over `allCount` cuts; while that batch runs,
+ * Queue shows Stop (same project only).
+ */
+export function queueButtonState({
+  count = 0,
+  native = false,
+  busy = false,
+  hasProject = true,
+  allCount = 0,
+  allRunning = false,
+  batch = null,
+  projectId = "",
+} = {}) {
+  const queue = { label: "Queue", mode: "queue" };
+  if (!hasProject) return { ...queue, disabled: true, title: QUEUE_NO_PROJECT_TIP };
+  if (allRunning && batch) {
+    const mine = batch.pid === projectId;
+    const stopping = !!batch.stop;
+    if (mine) {
+      return {
+        label: "Stop",
+        mode: "stop",
+        disabled: stopping,
+        title: stopping
+          ? "Stopping after the cut that is generating now"
+          : "Stop: cancel the cuts still waiting (the one generating now finishes)",
+      };
+    }
+    return { ...queue, disabled: true, title: "Generate-all batch is running for another project" };
+  }
+  if (!(count > 0) && native && allCount > 0) {
+    if (busy) return { ...queue, disabled: true, title: QUEUE_BUSY_TIP };
+    return {
+      ...queue,
+      disabled: false,
+      mode: "all",
+      title: `Nothing selected: generate all ${cuts(allCount)} one by one (Comfy SDK)`,
+    };
+  }
   const title = !(count > 0) ? QUEUE_EMPTY_TIP : !native ? QUEUE_NATIVE_TIP : busy ? QUEUE_BUSY_TIP : `Queue ${cuts(count)} to ComfyUI`;
-  return { disabled: !(count > 0) || !native || !!busy, title };
+  return { ...queue, disabled: !(count > 0) || !native || !!busy, title };
 }
 
 /**

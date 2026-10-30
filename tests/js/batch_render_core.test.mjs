@@ -52,18 +52,18 @@ describe("queueDeleteBody", () => {
 
 describe("queueButtonState", () => {
   it("disabled with nothing selected, imported project, or busy (in that order)", () => {
-    assert.deepEqual(queueButtonState({ count: 0, native: true }), { disabled: true, title: QUEUE_EMPTY_TIP });
-    assert.deepEqual(queueButtonState({ count: 2, native: false, busy: true }), { disabled: true, title: QUEUE_NATIVE_TIP });
-    assert.deepEqual(queueButtonState({ count: 2, native: true, busy: true }), { disabled: true, title: QUEUE_BUSY_TIP });
+    assert.deepEqual(queueButtonState({ count: 0, native: true }), { label: "Queue", mode: "queue", disabled: true, title: QUEUE_EMPTY_TIP });
+    assert.deepEqual(queueButtonState({ count: 2, native: false, busy: true }), { label: "Queue", mode: "queue", disabled: true, title: QUEUE_NATIVE_TIP });
+    assert.deepEqual(queueButtonState({ count: 2, native: true, busy: true }), { label: "Queue", mode: "queue", disabled: true, title: QUEUE_BUSY_TIP });
     assert.equal(queueButtonState().disabled, true);
     assert.equal(QUEUE_EMPTY_TIP, "Select cuts to queue");
   });
   it("enabled for 1+ cuts in a native project", () => {
-    assert.deepEqual(queueButtonState({ count: 1, native: true }), { disabled: false, title: "Queue 1 cut to ComfyUI" });
+    assert.deepEqual(queueButtonState({ count: 1, native: true }), { label: "Queue", mode: "queue", disabled: false, title: "Queue 1 cut to ComfyUI" });
     assert.equal(queueButtonState({ count: 3, native: true }).title, "Queue 3 cuts to ComfyUI");
   });
   it("disabled with no project open", () => {
-    assert.deepEqual(queueButtonState({ count: 2, native: true, hasProject: false }), { disabled: true, title: QUEUE_NO_PROJECT_TIP });
+    assert.deepEqual(queueButtonState({ count: 2, native: true, hasProject: false }), { label: "Queue", mode: "queue", disabled: true, title: QUEUE_NO_PROJECT_TIP });
     assert.equal(QUEUE_NO_PROJECT_TIP, "No project open");
   });
 });

@@ -1,10 +1,11 @@
-"""Script to cuts with LTX-Video: bundled example workflows, prompt / frame-count injection, cut list validation (no I/O
-besides reading the bundled examples)."""
+"""Script to cuts with LTX-Video: bundled example workflows, prompt / frame-count injection, the cut split prompt and
+cut list validation (no I/O besides reading the bundled examples)."""
 from __future__ import annotations
 
 import copy
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +22,30 @@ DEFAULT_FPS = 24.0
 MAX_FRAMES = 73
 MAX_CUTS = 200
 NAME_MAX_LEN = 80
-CONTENT_MAX_LEN = 4000
-PROMPT_MAX_LEN = 8000
+DESCRIPTION_MAX_LEN = 300
+DESCRIPTION_ALIASES = ("description", "content", "ltx_prompt")
+
+# Same text as CUT_SPLIT_PROMPT in web/gg_cut_list_core.js (a test keeps them equal).
+CUT_SPLIT_PROMPT = """You are a film director and storyboard artist. Split the story below into cuts for short AI-generated video clips.
+
+Return ONLY a JSON array, with no other text and no markdown code fences:
+[
+  {"cut": 1, "duration": 3, "description": "one short line describing the shot"}
+]
+
+Fields:
+- "cut": whole number, 1, 2, 3 ... in story order.
+- "duration": seconds, a number from 0.5 to 3 (never more than 3).
+- "description": one short line in English, under 200 characters: who or what, the action, the place, the shot size and the camera move. It is used directly as the video prompt and as the cut name.
+
+Guidance:
+- One action per cut, at most 3 seconds. Split longer actions into several cuts.
+- Every description must stand alone: name the characters and the place again each time (no "he", no "same room").
+- No dialogue, no on-screen text, no cut numbers inside description.
+- Valid JSON only: double quotes, no trailing commas, no comments.
+
+STORY:
+"""
 
 _SAVE_FPS_NODES = ("SaveAnimatedWEBP", "SaveAnimatedPNG", "SaveWEBM", "CreateVideo", "VHS_VideoCombine")
 _LENGTH_NODES = ("EmptyLTXVLatentVideo", "LTXVImgToVideo")
@@ -151,35 +174,143 @@ def inject_ltx(graph: dict, prompt: str, duration: float) -> dict:
     return g
 
 
-def validate_cut_list(entries: Any) -> list[dict]:
-    """[{cut, duration, content, ltx_prompt}] -> [{name, caption, sec, prompt}] in `cut` order (stable)."""
-    if not isinstance(entries, list) or not entries:
-        raise ValueError("cuts must be a non-empty list")
-    if len(entries) > MAX_CUTS:
-        raise ValueError(f"at most {MAX_CUTS} cuts per list")
-    rows = []
-    for i, e in enumerate(entries):
-        where = f"cut {i + 1}"
-        if not isinstance(e, dict):
-            raise ValueError(f"{where}: must be an object")
-        content = e.get("content")
-        prompt = e.get("ltx_prompt")
-        if not isinstance(content, str) or not content.strip():
-            raise ValueError(f"{where}: content is required")
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise ValueError(f"{where}: ltx_prompt is required")
-        content, prompt = content.strip(), prompt.strip()
-        if len(content) > CONTENT_MAX_LEN:
-            raise ValueError(f"{where}: content must be at most {CONTENT_MAX_LEN} characters")
-        if len(prompt) > PROMPT_MAX_LEN:
-            raise ValueError(f"{where}: ltx_prompt must be at most {PROMPT_MAX_LEN} characters")
+class CutListError(ValueError):
+    """Invalid cut list; `errors` holds one message per problem ("Item 2 (cut 2): ...")."""
+
+    def __init__(self, errors: list[str]):
+        super().__init__("\n".join(errors))
+        self.errors = errors
+
+
+def _show(v: Any) -> str:
+    if isinstance(v, bool) or v is None:
+        return json.dumps(v)
+    if isinstance(v, (int, float)):
+        return f"{v:g}" if math.isfinite(v) else str(v)
+    s = json.dumps(v, ensure_ascii=False)
+    return s if len(s) <= 40 else s[:37] + "..."
+
+
+def _is_number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def extract_json_array(text: str) -> str | None:
+    """Text of the first top-level JSON array in `text` (code fences and surrounding prose ignored), else None."""
+    s = re.sub(r"```[a-zA-Z]*\s*", "", str(text or ""))
+    start = s.find("[")
+    while start >= 0:
+        depth, in_str, i = 0, False, start
+        while i < len(s):
+            ch = s[i]
+            if in_str:
+                if ch == "\\":
+                    i += 1
+                elif ch == '"':
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            elif ch in "[{":
+                depth += 1
+            elif ch in "]}":
+                depth -= 1
+                if depth == 0:
+                    cand = s[start:i + 1]
+                    if ch == "]" and re.match(r"^\[\s*(\{|\])", cand):
+                        return cand
+                    break
+            i += 1
+        start = s.find("[", start + 1)
+    return None
+
+
+def extract_cut_items(text: str) -> Any:
+    """The cut array of an LLM answer: a bare array, an object wrapping one ({"cuts": [...]}), or the first
+    array inside prose / code fences. Raises CutListError when there is none."""
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        raw = extract_json_array(text)
+        if raw is None:
+            raise CutListError(['No JSON array found. Expected [{"cut", "duration", "description"}, ...].']) from None
         try:
-            sec = clamp_duration(e.get("duration"))
+            data = json.loads(raw)
         except ValueError as ex:
-            raise ValueError(f"{where}: {ex}") from None
+            raise CutListError([f"Not valid JSON: {ex}"]) from None
+    if isinstance(data, dict):
+        lists = [v for v in data.values() if isinstance(v, list)]
+        if isinstance(data.get("cuts"), list):
+            data = data["cuts"]
+        elif len(lists) == 1:
+            data = lists[0]
+        elif "description" in data or "content" in data:
+            data = [data]
+    if not isinstance(data, list):
+        raise CutListError(['Expected a JSON array of cuts: [{"cut", "duration", "description"}, ...].'])
+    return data
+
+
+def validate_cut_list(entries: Any) -> list[dict]:
+    """Strict check of [{cut, duration, description}] ("content" / "ltx_prompt" accepted as aliases of
+    description). Returns rows in `cut` order, renumbered 1..N:
+    {cut, duration, description, name, caption, sec, prompt}. Raises CutListError listing every problem."""
+    if not isinstance(entries, list):
+        raise CutListError(['The cut list must be a JSON array: [{"cut", "duration", "description"}, ...].'])
+    if not entries:
+        raise CutListError(["The cut list is empty."])
+    if len(entries) > MAX_CUTS:
+        raise CutListError([f"At most {MAX_CUTS} cuts per list (got {len(entries)})."])
+    errors: list[str] = []
+    rows = []
+    seen: dict[float, int] = {}
+    for i, e in enumerate(entries):
+        where = f"Item {i + 1}"
+        if not isinstance(e, dict):
+            errors.append(f'{where}: must be an object like {{"cut": 1, "duration": 2, "description": "..."}}.')
+            continue
+        bad = len(errors)
         num = e.get("cut")
-        order = float(num) if isinstance(num, (int, float)) and not isinstance(num, bool) and math.isfinite(num) else float(i + 1)
-        name = " ".join(content.split())[:NAME_MAX_LEN].strip()
-        rows.append({"order": order, "index": i, "name": name, "caption": content, "sec": sec, "prompt": prompt})
-    rows.sort(key=lambda r: (r["order"], r["index"]))
-    return [{k: r[k] for k in ("name", "caption", "sec", "prompt")} for r in rows]
+        if num is None:
+            errors.append(f'{where}: "cut" is missing.')
+        elif not _is_number(num) or num < 1 or float(num) != int(num):
+            errors.append(f'{where}: "cut" must be a whole number from 1 (got {_show(num)}).')
+        else:
+            where = f"{where} (cut {int(num)})"
+            if num in seen:
+                errors.append(f'{where}: "cut" {int(num)} is used twice (also item {seen[num] + 1}).')
+            else:
+                seen[num] = i
+        sec = e.get("duration")
+        if sec is None:
+            errors.append(f'{where}: "duration" is missing.')
+        elif not _is_number(sec):
+            errors.append(f'{where}: "duration" must be a number of seconds (got {_show(sec)}).')
+        elif not DURATION_MIN <= sec <= DURATION_MAX:
+            errors.append(f'{where}: "duration" must be between {DURATION_MIN:g} and {DURATION_MAX:g} seconds '
+                          f'(got {_show(sec)}).')
+        key = next((k for k in DESCRIPTION_ALIASES if e.get(k) is not None), "description")
+        desc = e.get(key)
+        if isinstance(desc, str):
+            desc = " ".join(desc.split())
+        if desc is None or desc == "":
+            errors.append(f'{where}: "description" is missing.')
+        elif not isinstance(desc, str):
+            errors.append(f'{where}: "{key}" must be text (got {_show(desc)}).')
+        elif len(desc) > DESCRIPTION_MAX_LEN:
+            errors.append(f'{where}: "{key}" is too long ({len(desc)} characters, max {DESCRIPTION_MAX_LEN}).')
+        if len(errors) == bad:
+            rows.append({"order": float(num), "sec": round(float(sec), 2), "description": desc})
+    if errors:
+        raise CutListError(errors)
+    rows.sort(key=lambda r: r["order"])
+    out = []
+    for n, r in enumerate(rows, 1):
+        d = r["description"]
+        out.append({"cut": n, "duration": r["sec"], "description": d, "name": d[:NAME_MAX_LEN].strip(),
+                    "caption": d, "sec": r["sec"], "prompt": d})
+    return out
+
+
+def public_cuts(rows: list[dict]) -> list[dict]:
+    """Validated rows in the paste/API schema [{cut, duration, description}]."""
+    return [{"cut": r["cut"], "duration": r["duration"], "description": r["description"]} for r in rows]

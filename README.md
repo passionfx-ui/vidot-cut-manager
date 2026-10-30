@@ -79,13 +79,32 @@ Then run `start_proxy.bat` (proxy on `127.0.0.1:8189`). Regenerate is a dry run 
 
 ## Script to cuts with LTX (local, open weights)
 
-Turn a story into ready-to-render cuts (native projects). No LLM is built in and nothing goes over the network: you use any chat LLM yourself.
+Turn a story into ready-to-render cuts (native projects). Use **AI Cut Split** with a local Ollama model (below), or any chat LLM yourself with copy / paste:
 
 1. In the Shots toolbar click **Copy Cut Split Prompt**, paste it into any LLM and add your story after `STORY:`.
-2. The LLM answers with a JSON array: `[{"cut": 1, "duration": 3, "content": "...", "ltx_prompt": "..."}]` (durations up to 3 s).
-3. Click **Paste Cut List**, paste the answer (code fences or extra text around the array are fine), pick the workflow (**Text to video** by default, or **Image to video**) and **Create cuts**.
-4. Each new cut gets: name and caption = `content`, length = `duration`, prompt = `ltx_prompt`, and its own copy of the LTX example workflow with `ltx_prompt` in the positive *CLIP Text Encode* and the frame count set from the duration (`frames = min(round(duration × fps / 8) × 8 + 1, 73)`, fps from the workflow's save node, 24 in the examples).
-5. Select a cut and press **Queue** (or right-click > **Regen**) to render it locally. Nothing is queued when the cuts are created.
+2. The LLM answers with a JSON array: `[{"cut": 1, "duration": 3, "description": "..."}]` — `cut` a whole number, `duration` 0.5–3 seconds, `description` one short line (max 300 characters). Older lists with `content` / `ltx_prompt` still paste (read as `description`).
+3. Click **Paste Cut List**, paste the answer (code fences or extra text around the array are fine), pick the workflow (**Text to video** by default, or **Image to video**) and **Create cuts**. Invalid lists are refused with one message per problem, e.g. `Item 3 (cut 3): "duration" must be between 0.5 and 3 seconds (got 4).`
+4. Each new cut gets: name (first 80 characters), caption and prompt = `description`, length = `duration`, and its own copy of the LTX example workflow with `description` in the positive *CLIP Text Encode* and the frame count set from the duration (`frames = min(round(duration × fps / 8) × 8 + 1, 73)`, fps from the workflow's save node, 24 in the examples).
+5. Press **Queue** with no cut selected to render every cut in list order, one at a time through the Comfy SDK; each result is added as a new version, so the timeline fills in as it goes. Cut cards show **Waiting / Generating / Done / Failed**; press **Queue** again (it shows **Stop**) to cancel the cuts still waiting (the one generating finishes). It runs on the server, so the workflow tab does not need to be open. To render a single cut, select it and press **Queue** (or right-click > **Regen**). Nothing is queued when the cuts are created.
+
+### AI Cut Split (local LLM)
+
+**AI Cut Split** (Shots toolbar) sends your story with the same fixed prompt to a local [Ollama](https://ollama.com) server, checks the answer with the same rules as Paste Cut List, then asks `Create N cuts?`. The request goes through the plugin's own server route, so there are no CORS settings to change. ComfyUI's built-in LLM nodes are not used.
+
+1. Install Ollama from [ollama.com/download](https://ollama.com/download) and start it (it listens on `http://127.0.0.1:11434`).
+2. Pull a model for your GPU, e.g. `ollama pull qwen2.5:7b`:
+
+| GPU VRAM | Recommended model |
+| --- | --- |
+| up to 8 GB | `qwen2.5:3b` |
+| 8–12 GB | `qwen2.5:7b` |
+| 16 GB or more | Gemma 4 (`gemma4`) or `qwen2.5:14b` |
+
+3. In Shots click **AI Cut Split**, write or paste the story, pick the model and click **Split**.
+
+**Keep LLM loaded** is off by default: the request uses `keep_alive: 0`, so Ollama unloads the model right after the split and the VRAM is free for LTX. Turn it on only if you will split several stories in a row (Ollama then keeps the model for its default time, 5 minutes).
+
+Another Ollama address: ComfyUI **Settings › Vidot Studio › AI Cut Split › Ollama URL**, or `"ollama_url"` in `gonggan_settings.json` (default `http://127.0.0.1:11434`). If Ollama is not running, the dialog says `Ollama not running at <url>`; use **Copy Cut Split Prompt** with any LLM and **Paste Cut List** instead (the dialog has a button for it, and an answer that fails the check can be fixed there).
 
 Workflows: [`examples/workflows/ltxv_text_to_video.json`](examples/workflows/ltxv_text_to_video.json) and [`ltxv_image_to_video.json`](examples/workflows/ltxv_image_to_video.json) (ComfyUI's LTX-Video examples; image to video starts from the `Load Image` node, pick an image per cut).
 
