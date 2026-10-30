@@ -81,13 +81,15 @@ export function sanitizeWorkflowIdSegment(id) {
 
 /**
  * Stable shot tab copy path keyed by project and cut ids (one file per cut).
- * @param {{ projectId: string, cutId: string }} opts
- * @returns {string} e.g. gonggan/<projectId>/<cutId>.json
+ * The video workflow of a cut is a separate file so switching image/video never overwrites the other.
+ * @param {{ projectId: string, cutId: string, kind?: string }} opts
+ * @returns {string} e.g. gonggan/<projectId>/<cutId>.json (video: <cutId>.video.json)
  */
 export function shotWorkflowRelPathById(opts) {
-  const { projectId, cutId } = opts || {};
+  const { projectId, cutId, kind } = opts || {};
   const folder = assertSafePathSegment(sanitizeWorkflowIdSegment(projectId), "project id");
-  const file = assertSafePathSegment(`${sanitizeWorkflowIdSegment(cutId)}.json`, "cut file");
+  const ext = kind === "video" ? ".video.json" : ".json";
+  const file = assertSafePathSegment(`${sanitizeWorkflowIdSegment(cutId)}${ext}`, "cut file");
   return `${GONGGAN_PREFIX}/${folder}/${file}`;
 }
 

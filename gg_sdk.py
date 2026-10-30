@@ -335,10 +335,12 @@ def native_plan(pid: str, cut_id: str, *, new_seed: bool, canvas: dict | None = 
             **({"start_version": start} if start else {})}
 
 
-def image_to_video_plan(pid: str, cut_id: str, selected_vid: str | None = None) -> dict:
-    """Image to Video dry run: the project's Video template with the cut's start image and description, new random
-    seeds, stored under cache/regen like a Regen plan (run it with run_native_confirmed). Never queues."""
-    info = _native_api().native_image_to_video_workflow(pid, cut_id, selected_vid)
+def image_to_video_plan(pid: str, cut_id: str, selected_vid: str | None = None,
+                        start_vid: str | None = None) -> dict:
+    """Image to Video dry run: the project's Video template with the cut's start image (exactly `start_vid` when
+    given) and description, new random seeds, stored under cache/regen like a Regen plan (run it with
+    run_native_confirmed). Never queues."""
+    info = _native_api().native_image_to_video_workflow(pid, cut_id, selected_vid, start_vid)
     wf, seeds = randomize_seeds(info["workflow"])
     name = _save_native_plan(pid, cut_id, wf)
     return {"pid": pid, "cut_id": cut_id, "plan": name, "source": "image_to_video", "new_seed": True,

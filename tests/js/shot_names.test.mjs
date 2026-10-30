@@ -196,4 +196,12 @@ describe("shotWorkflowRelPathById", () => {
     assert.match(seg, /^[A-Za-z0-9_-]+$/);
     assert.equal(shotWorkflowRelPathById({ projectId: raw, cutId: "ok" }), `gonggan/${seg}/ok.json`);
   });
+
+  it("0.9.125: image and video workflows of a cut are separate files", () => {
+    const img = shotWorkflowRelPathById({ projectId: pid, cutId, kind: "image" });
+    const vid = shotWorkflowRelPathById({ projectId: pid, cutId, kind: "video" });
+    assert.equal(img, `gonggan/${pid}/${cutId}.json`);
+    assert.equal(vid, `gonggan/${pid}/${cutId}.video.json`);
+    assert.equal(shotWorkflowRelPathById({ projectId: pid, cutId, kind: null }), img);
+  });
 });

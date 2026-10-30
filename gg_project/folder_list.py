@@ -85,6 +85,12 @@ def _is_hidden(entry: os.DirEntry) -> bool:
     return entry.name.startswith(".")
 
 
+def _is_folder(entry: os.DirEntry) -> bool:
+    """A folder the picker may list: the scandir type says folder and a real stat agrees (links followed),
+    so files, links to files and broken links never show."""
+    return entry.is_dir() and not entry.is_file() and os.path.isdir(entry.path)
+
+
 def list_folders(path: Any) -> dict[str, Any]:
     """Empty path = drive list (parent None). Otherwise the visible subfolder names of an absolute folder path,
     plus its parent ("" at a drive root = back to the drive list). Every answer also carries `drives` and `quick`.
@@ -106,7 +112,7 @@ def list_folders(path: Any) -> dict[str, Any]:
     with os.scandir(folder) as it:
         for entry in it:
             try:
-                if entry.is_dir() and not _is_hidden(entry):
+                if _is_folder(entry) and not _is_hidden(entry):
                     names.append(entry.name)
             except OSError:
                 continue

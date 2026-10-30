@@ -1,4 +1,4 @@
-/** AI Cut Split: cut list parser / checks and the create-cuts request (pure, no DOM). */
+/** AI Make Cut (internally "cut split"): cut list parser / checks, the create-cuts request and the run / poll loop (pure, no DOM). */
 
 import { DEFAULT_VIDEO_TEMPLATE, templateLabel } from "./gg_template_pick_core.js";
 
@@ -172,4 +172,98 @@ export function aiCutSplitStatusText(parsed, { model = "", attempts = 1 } = {}) 
   const retries = Math.max(0, (Number(attempts) || 1) - 1);
   return [cutListSummary(parsed), model, retries ? `${retries} ${retries === 1 ? "retry" : "retries"}` : ""]
     .filter(Boolean).join(" · ");
+}
+
+/** Visible name of the feature (internal routes / files / settings keep "cut split"). */
+export const AI_MAKE_CUT_LABEL = "AI Make Cut";
+/** How long the dialog waits for one run (a run takes about 1–4 minutes). */
+export const AI_MAKE_CUT_WAIT_MS = 10 * 60 * 1000;
+export const AI_MAKE_CUT_POLL_MS = 1500;
+/** Status polls may fail this long in a row (busy ComfyUI) before the dialog gives up. */
+export const AI_MAKE_CUT_POLL_ERROR_MS = 60 * 1000;
+export const STORY_TOO_LONG_MESSAGE = "Story too long for one split, try a shorter part.";
+export const AI_MAKE_CUT_TIMEOUT_TEXT =
+  "No result after 10 minutes. It may still be running in ComfyUI: close this and open AI Make Cut again later to get the result.";
+export const AI_MAKE_CUT_LOST_TEXT = "Lost contact with ComfyUI while waiting for AI Make Cut. Check that ComfyUI is running, then open AI Make Cut again.";
+
+/** 75 -> "1:15". */
+export function formatElapsed(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** Status line while a background run is going (job from POST / GET /gonggan/ai-cut-split[/status]). */
+export function aiMakeCutProgressText(job) {
+  const attempt = Number(job?.attempt) || 1;
+  const max = Number(job?.max_attempts) || 2;
+  const retry = attempt > 1 ? ` · retry ${attempt - 1} of ${Math.max(1, max - 1)} (the first answer was not a valid cut list)` : "";
+  return `Making cuts… ${formatElapsed(job?.seconds)}${retry}. This usually takes 1–4 minutes (loading the text model is the slow part).`;
+}
+
+/** Text for a failed run or request. @param {{ code?: string, status?: number, name?: string, message?: string }|null|undefined} err */
+export function aiMakeCutErrorText(err) {
+  if (err?.code === "too_long") return STORY_TOO_LONG_MESSAGE;
+  if (err?.name === "AbortError") return AI_MAKE_CUT_TIMEOUT_TEXT;
+  if (err?.status === 404 && !err?.code) return "Restart ComfyUI to use AI Make Cut (new server route).";
+  return err?.message || "AI Make Cut failed.";
+}
+
+/** A finished run that the dialog should offer again: done, has cuts, and its cuts were not created yet. */
+export function aiMakeCutResumable(job, usedId) {
+  return !!job && job.state === "done" && Array.isArray(job.cuts) && job.cuts.length > 0 && !!job.id && job.id !== usedId;
+}
+
+/**
+ * Starts (or resumes) one background AI Make Cut run and waits for it by polling its status, so no single request
+ * has to stay open for the whole run. Resolves { kind: "done", job } (job.cuts = the answer), { kind: "timeout", job }
+ * after `waitMs`, or { kind: "closed", job } once `isActive()` is false; the server keeps the result either way.
+ * Throws the start request's error, or an Error with `code` / `data` when the run failed.
+ * An older server answers the start request with the cuts directly; that counts as done.
+ * @param {{ start?: () => Promise<any>, poll: (id: string) => Promise<any>, job?: any, onProgress?: (job: any) => void,
+ *   sleep?: (ms: number) => Promise<void>, now?: () => number, waitMs?: number, pollMs?: number, pollErrorMs?: number,
+ *   isActive?: () => boolean }} o
+ */
+export async function runAiMakeCutJob(o) {
+  const sleep = o.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const now = o.now || (() => Date.now());
+  const isActive = o.isActive || (() => true);
+  const onProgress = o.onProgress || (() => {});
+  const waitMs = o.waitMs ?? AI_MAKE_CUT_WAIT_MS;
+  const pollMs = o.pollMs ?? AI_MAKE_CUT_POLL_MS;
+  const pollErrorMs = o.pollErrorMs ?? AI_MAKE_CUT_POLL_ERROR_MS;
+  let job = o.job || null;
+  if (!job) {
+    const d = await o.start();
+    if (Array.isArray(d?.cuts)) return { kind: "done", job: { id: "", state: "done", cuts: d.cuts, model: d.model, attempts: d.attempts } };
+    job = d?.job;
+    if (!job?.id) throw new Error("ComfyUI did not start AI Make Cut. Restart ComfyUI, then try again.");
+  }
+  const t0 = now();
+  let lastOk = t0;
+  for (;;) {
+    if (job.state === "done") return { kind: "done", job };
+    if (job.state === "error") {
+      const err = new Error(job.message || "AI Make Cut failed.");
+      err.code = job.code;
+      err.data = job;
+      throw err;
+    }
+    onProgress(job);
+    if (!isActive()) return { kind: "closed", job };
+    if (now() - t0 >= waitMs) return { kind: "timeout", job };
+    await sleep(pollMs);
+    if (!isActive()) return { kind: "closed", job };
+    try {
+      const d = await o.poll(job.id);
+      if (d?.job) job = d.job;
+      lastOk = now();
+    } catch (e) {
+      if (e?.status === 404) throw e;
+      if (now() - lastOk >= pollErrorMs) {
+        const err = new Error(AI_MAKE_CUT_LOST_TEXT);
+        err.code = "lost";
+        throw err;
+      }
+    }
+  }
 }

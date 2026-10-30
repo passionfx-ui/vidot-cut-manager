@@ -100,7 +100,8 @@ class GenerateAllBase(unittest.TestCase):
         self.pid = self.store.create_project("P")["id"]
         self.empty = next(iter(self.store.get_project(self.pid)["cuts"]))
         cuts = [{"cut": i, "duration": 2, "description": f"Shot {i}"} for i in (1, 2, 3)]
-        self.ids = na.native_add_cut_list(self.pid, cuts, workflow="t2v", after=self.empty)["cut_ids"]
+        with mock.patch.object(na, "project_template_graph", return_value=gg_ltx.load_ltx_workflow("t2v")):
+            self.ids = na.native_add_cut_list(self.pid, cuts, after=self.empty)["cut_ids"]
         self.regen_dir = self.root / "regen"
         self.events = []
         self._patches = [

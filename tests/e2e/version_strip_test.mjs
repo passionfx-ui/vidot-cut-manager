@@ -4,7 +4,8 @@
  * - selected cut's versions, newest on the left; scrolls sideways (also with the mouse wheel);
  *   a left arrow appears when scrolled and goes back to the newest
  * - thumbnail click = existing version click (opens that version's workflow, Best unchanged)
- * - star and right-click "Set as Best" use the existing pick (POST /gonggan/edit); Best marked; else latest is current
+ * - header Best (on the selected thumbnail) and right-click "Set as Best" use the existing pick (POST /gonggan/edit);
+ *   Best = highlighted border, no icons on thumbnails; else latest is current
  * - video length label bottom-right (0:06), missing file = no-media placeholder, cut without versions
  * Uses its own ZZ-test- project (POST /gonggan/project/create, deleted at the end); versions are synthetic
  * gradient PNGs added by seed_demo_thumbs.py. Only this project's timeline / one version workflow are mocked.
@@ -185,7 +186,9 @@ async function stripState(page) {
             best: w.classList.contains("gg-rep"),
             latest: w.classList.contains("gg-implicit"),
             open: w.classList.contains("gg-ver-open"),
-            star: w.querySelector(".gg-vs-star")?.textContent || "",
+            bestBorder: w.classList.contains("gg-vs-best"),
+            sel: w.classList.contains("gg-vs-sel"),
+            icons: w.querySelectorAll("button, .gg-vs-star").length,
             dur: w.querySelector(".gg-vs-dur:not([hidden])")?.textContent || "",
             empty: !!w.querySelector(".gg-thumb-empty"),
           },
@@ -347,13 +350,13 @@ async function main() {
     }
     if (geo.queueRightGap < 0 || geo.queueRightGap > 16 || geo.queueLeft < 40) throw new Error(`Queue not right-aligned: ${JSON.stringify(geo)}`);
     if (Math.abs(geo.stripLeft - geo.rootLeft) > 2 || Math.abs(geo.stripWidth - geo.rootWidth) > 2) throw new Error(`row not full width: ${JSON.stringify(geo)}`);
-    if (geo.stripHeight > 90) throw new Error(`row too tall: ${geo.stripHeight}`);
+    if (geo.stripHeight > 110) throw new Error(`row too tall: ${geo.stripHeight}`);
     if (!geo.sameLine || !geo.leftToRight) throw new Error(`thumbnails not in one horizontal line without overlap: ${JSON.stringify(geo)}`);
     let st = await stripState(page);
     if (JSON.stringify(st.ids) !== JSON.stringify(serverVers)) throw new Error(`order differs from server (newest first = left): ${JSON.stringify(st.ids)}`);
     const created_ = tl.cuts.find((c) => c.id === cutA).versions_list.map((v) => v.created);
     if (created_.some((t, i) => i && t > created_[i - 1])) throw new Error(`server list not newest first: ${created_}`);
-    if (!st.items[serverVers[0]].latest || Object.values(st.items).some((x) => x.best || x.star === "★")) {
+    if (!st.items[serverVers[0]].latest || Object.values(st.items).some((x) => x.best || x.bestBorder || x.icons)) {
       throw new Error(`expected newest = current, no Best: ${JSON.stringify(st.items)}`);
     }
     console.log(`PASS  layout: borderless icon row (icons right-aligned), ${Math.round(geo.stripWidth)}x${Math.round(geo.stripHeight)} row directly below it, Queue right-aligned; ${SEED_COUNT} versions newest on the left; latest current, no Best`);
@@ -407,18 +410,19 @@ async function main() {
     if (Object.values(st.items).some((x) => x.best)) throw new Error("thumbnail click set a Best");
     console.log("PASS  click: opens that version's workflow (marked open), no-workflow version shows the existing toast, no pick change");
 
-    // 4. star = Set as Best (existing pick)
+    // 4. header Best = toggles Best on the selected thumbnail (existing pick)
     const vStar = serverVers[3];
-    await page.hover(`${STRIP} .gg-ver-wrap[data-vid="${vStar}"] > .gg-ver`);
-    await page.click(`${STRIP} .gg-ver-wrap[data-vid="${vStar}"] .gg-vs-star`);
-    await waitStrip(page, (s, v) => document.querySelector(`${s} .gg-ver-wrap[data-vid="${v}"]`)?.classList.contains("gg-rep"), vStar, "star did not set Best");
+    await page.click(`${STRIP} .gg-ver-wrap[data-vid="${vStar}"] > .gg-ver`);
+    await waitStrip(page, (s, v) => document.querySelector(`${s} .gg-ver-wrap[data-vid="${v}"]`)?.classList.contains("gg-vs-sel"), vStar, "click did not select the thumbnail");
+    await page.click(`${STRIP} .gg-vs-head .gg-vs-best-btn`);
+    await waitStrip(page, (s, v) => document.querySelector(`${s} .gg-ver-wrap[data-vid="${v}"]`)?.classList.contains("gg-rep"), vStar, "Best did not set Best");
     await waitServerPick(page, pid, cutA, vStar);
     st = await stripState(page);
-    if (st.items[vStar].star !== "★" || st.items[serverVers[0]].latest || Object.entries(st.items).some(([id, x]) => id !== vStar && x.best)) {
-      throw new Error(`Best marks wrong after star: ${JSON.stringify(st.items)}`);
+    if (!st.items[vStar].bestBorder || st.items[serverVers[0]].latest || Object.entries(st.items).some(([id, x]) => id !== vStar && x.best)) {
+      throw new Error(`Best marks wrong after Best: ${JSON.stringify(st.items)}`);
     }
-    if (!editPosts.some((b) => b?.clips?.[cutA]?.pick === vStar)) throw new Error("star did not go through POST /gonggan/edit pick");
-    console.log("PASS  star: Best set via the existing pick (POST /gonggan/edit), filled star + outline, latest no longer implicit");
+    if (!editPosts.some((b) => b?.clips?.[cutA]?.pick === vStar)) throw new Error("Best did not go through POST /gonggan/edit pick");
+    console.log("PASS  Best: set on the selected thumbnail via the existing pick (POST /gonggan/edit), highlighted border, latest no longer implicit");
 
     // 5. right-click Set as Best; disabled on the Best one
     const vMenu = serverVers[5];
@@ -430,7 +434,7 @@ async function main() {
     if ((await ctxItemDisabled(page, "Set as Best")) !== true) throw new Error("Set as Best should be disabled on the Best");
     await page.keyboard.press("Escape");
     st = await stripState(page);
-    if (st.items[vStar].best || st.items[vStar].star === "★") throw new Error("old Best still marked");
+    if (st.items[vStar].best || st.items[vStar].bestBorder) throw new Error("old Best still marked");
     console.log("PASS  right-click: Set as Best moves the Best; disabled on the Best thumbnail");
 
     // 6. another cut: no versions; back: starts at the newest
