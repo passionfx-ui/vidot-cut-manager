@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
 import { submitAskDialog } from "./ask_text_helpers.mjs";
 import { waitForDomCutCountSync } from "./dom_sync_helpers.mjs";
+import { fillNewProjectModal } from "./new_project_helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -145,10 +146,8 @@ async function createProjectViaUi(page, name) {
     );
   });
   await clickCtxItem(page, "New Project…");
-  await page.waitForSelector(".gg-modal", { timeout: 10000 });
-  await page.click(".gg-modal-name", { clickCount: 3 });
-  await page.type(".gg-modal-name", name, { delay: 8 });
-  await page.click(".gg-modal .gg-primary");
+  await fillNewProjectModal(page, { name });
+  await page.click(".gg-modal-create");
   await page.waitForFunction(
     (n) => {
       const sel = document.querySelector(".gg-root.gg-shots .gg-proj");
@@ -190,7 +189,7 @@ async function selectCuts(page, indices) {
 }
 
 async function groupSelected(page) {
-  await page.click(".gg-root.gg-shots .gg-sel-group");
+  await page.click(".gg-root.gg-shots .gg-ir-scene");
   await submitAskDialog(page);
   await sleep(800);
 }

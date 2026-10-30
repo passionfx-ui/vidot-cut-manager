@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
 import { submitAskDialog, dismissAskDialog } from "./ask_text_helpers.mjs";
 import { waitForDomCutCountSync } from "./dom_sync_helpers.mjs";
+import { fillNewProjectModal, NEW_PROJECT_MODAL } from "./new_project_helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -298,10 +299,8 @@ async function createProjectViaUi(page, name) {
     );
   });
   await clickCtxItem(page, "New Project…");
-  await page.waitForSelector(".gg-modal", { timeout: 10000 });
-  await page.click(".gg-modal-name", { clickCount: 3 });
-  await page.type(".gg-modal-name", name, { delay: 8 });
-  await page.click(".gg-modal .gg-primary");
+  await fillNewProjectModal(page, { name });
+  await page.click(".gg-modal-create");
   await page.waitForFunction(
     (n) => {
       const sel = document.querySelector(".gg-root.gg-shots .gg-proj");
@@ -487,7 +486,7 @@ async function main() {
     } finally {
       await page.keyboard.up("Control");
     }
-    await page.click(".gg-root.gg-shots .gg-sel-group");
+    await page.click(".gg-root.gg-shots .gg-ir-scene");
     await submitAskDialog(page);
     await sleep(800);
     const inScene = await page.$$eval(".gg-grp-sec[data-group-id] .gg-cut .gg-num", (els) => els.map((e) => e.textContent));
@@ -509,13 +508,13 @@ async function main() {
     });
     if (picked < 2) throw new Error("need two visible cuts for scene dialog test");
     await sleep(300);
-    await page.click(".gg-root.gg-shots .gg-sel-group");
+    await page.click(".gg-root.gg-shots .gg-ir-scene");
     await dismissAskDialog(page);
     await sleep(400);
     const scenesAfterEsc = await page.$$eval(".gg-root.gg-shots .gg-grp-sec[data-group-id]", (els) => els.length);
     if (scenesAfterEsc !== scenesBefore) throw new Error("Esc should cancel scene create");
 
-    await page.click(".gg-root.gg-shots .gg-sel-group");
+    await page.click(".gg-root.gg-shots .gg-ir-scene");
     const sceneName = `EnterScene ${runStamp}`;
     await submitAskDialog(page, { text: sceneName, useEnter: true });
     await sleep(600);
@@ -551,7 +550,7 @@ async function main() {
     if (!hidden) throw new Error("warning should hide for end card");
   });
 
-  await runScenario("06", "Caption view: same scene groups as Info, field-only rows, cut drag, caption persists", async () => {
+  await runScenario("06", "Caption view: same scene groups as Info, thumbnail + caption rows, cut drag, caption persists", async () => {
     const note = `note-${runStamp}`;
     await setListMode(page, "info");
     const infoShape = await listShape(page);
@@ -563,9 +562,12 @@ async function main() {
       }
       if (capShape.heads.some((h) => !h.endsWith(":1"))) throw new Error(`scene header not shown once: ${capShape.heads}`);
       const extra = await page.$$eval(".gg-root.gg-shots .gg-cut", (els) =>
-        els.filter((li) => li.children.length !== 1 || !li.firstElementChild.classList.contains("gg-caption-text")).length
+        els.filter((li) => {
+          const kids = [...li.children];
+          return kids.length !== 2 || !kids[0].classList.contains("gg-cut-thumb-col") || !kids[1].classList.contains("gg-caption-text");
+        }).length
       );
-      if (extra) throw new Error(`${extra} Caption row(s) show more than the caption field`);
+      if (extra) throw new Error(`${extra} Caption row(s) are not thumbnail + caption field`);
       const before = await cutIdOrder(page);
       await dragCut(page, 0, 2);
       const after = await cutIdOrder(page);
@@ -831,7 +833,7 @@ async function main() {
       throw new Error(`pair should stay adjacent after move (selected=${sel}): before ${tags(beforePair)} after ${tags(afterPair)}`);
     }
 
-    await page.click(".gg-root.gg-shots .gg-sel-group");
+    await page.click(".gg-root.gg-shots .gg-ir-scene");
     await submitAskDialog(page);
     await sleep(800);
     const orderBeforeScene = await cutIdOrder(page);
@@ -923,14 +925,14 @@ async function main() {
     }
   });
 
-  await runScenario("13", "New project remembers last template + filter preselect", async () => {
+  await runScenario("13", "New project remembers last template + combobox filter", async () => {
     const wfPaths = await fetchWorkflowPaths(page);
-    const jsonPaths = wfPaths.filter((p) => p.toLowerCase().endsWith(".json"));
-    if (!jsonPaths.length) {
+    const userPaths = wfPaths.filter((p) => p.toLowerCase().endsWith(".json") && !/^gonggan\//i.test(p));
+    if (!userPaths.length) {
       console.log("NOTE: no userdata workflows — skipping template remember assertions");
       return;
     }
-    const templateRef = jsonPaths[0];
+    const templateRef = userPaths[0];
     await page.evaluate((ref) => {
       localStorage.setItem("gonggan-cut.lastTemplate", ref);
     }, templateRef);
@@ -941,42 +943,42 @@ async function main() {
       );
     });
     await clickCtxItem(page, "New Project…");
-    await page.waitForSelector(".gg-modal-tpl-filter", { timeout: 10000 });
-    const gongganOpts = await page.$$eval(".gg-modal-tpl option", (els) =>
-      els.map((o) => o.value).filter((v) => /^gonggan\//i.test(v))
+    await page.waitForSelector(`${NEW_PROJECT_MODAL} .gg-tpl-combo`, { timeout: 10000 });
+    await page.waitForFunction(
+      (ref) => document.querySelector(".gg-tpl-combo")?.value === ref,
+      { timeout: 20000 },
+      templateRef
+    ).catch(async () => {
+      const got = await page.$eval(".gg-tpl-combo", (el) => el.value);
+      throw new Error(`expected modal preselect ${templateRef}, got ${got || "(none)"}`);
+    });
+
+    await page.click(".gg-tpl-combo");
+    await page.waitForFunction(
+      () => !document.querySelector(".gg-tpl-list")?.hidden && document.querySelectorAll(".gg-tpl-list .gg-combo-opt").length > 1,
+      { timeout: 20000 }
     );
+    const allTitles = await page.$$eval(".gg-tpl-list .gg-combo-opt", (els) => els.map((li) => li.title));
+    const gongganOpts = allTitles.filter((t) => /^gonggan\//i.test(t));
     if (gongganOpts.length) {
       throw new Error(`modal template list must not include gonggan/ workflows: ${gongganOpts.join(", ")}`);
     }
-    await page.waitForFunction(
-      (ref) => {
-        const sel = document.querySelector(".gg-modal-tpl");
-        return sel && Array.from(sel.options).some((o) => o.value === ref);
-      },
-      { timeout: 20000 },
-      templateRef
-    );
-    const preselected = await page.$eval(".gg-modal-tpl", (sel) => sel.value);
-    if (preselected !== templateRef) {
-      throw new Error(`expected modal preselect ${templateRef}, got ${preselected || "(none)"}`);
-    }
 
     const needle = templateRef.slice(0, Math.min(8, templateRef.length)).toLowerCase();
-    await page.click(".gg-modal-tpl-filter", { clickCount: 3 });
-    await page.type(".gg-modal-tpl-filter", needle, { delay: 5 });
+    await page.type(".gg-tpl-combo", needle, { delay: 5 });
     await sleep(200);
-    const optionCount = await page.$$eval(".gg-modal-tpl option", (els) => els.length);
-    const total = jsonPaths.length;
-    if (optionCount >= total + 1) {
-      throw new Error(`filter should narrow options (got ${optionCount}, total workflows ~${total})`);
+    const filtered = await page.$$eval(".gg-tpl-list .gg-combo-opt", (els) => els.map((li) => li.title));
+    if (filtered.length >= allTitles.length) {
+      throw new Error(`filter should narrow options (got ${filtered.length} of ${allTitles.length})`);
     }
-    const stillSelected = await page.$eval(".gg-modal-tpl", (sel) => sel.value);
-    if (stillSelected !== templateRef) throw new Error("filtered list should keep selected template");
+    if (!filtered.includes(templateRef)) throw new Error(`filtered list should still offer ${templateRef}`);
+    await page.keyboard.press("Escape");
+    const stillSelected = await page.$eval(".gg-tpl-combo", (el) => el.value);
+    if (stillSelected !== templateRef) throw new Error("Escape after filtering should keep the selected template");
 
     const projName = `${TEST_PREFIX} tpl ${runStamp}`;
-    await page.click(".gg-modal-name", { clickCount: 3 });
-    await page.type(".gg-modal-name", projName, { delay: 8 });
-    await page.click(".gg-modal .gg-primary");
+    await fillNewProjectModal(page, { name: projName });
+    await page.click(".gg-modal-create");
     await page.waitForFunction(
       (n) => {
         const sel = document.querySelector(".gg-root.gg-shots .gg-proj");

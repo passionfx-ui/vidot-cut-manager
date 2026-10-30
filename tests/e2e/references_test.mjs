@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
+import { fillNewProjectModal } from "./new_project_helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
@@ -250,8 +251,7 @@ async function run() {
     // project
     await openNewProjectModal(page);
     const name = `${TEST_PREFIX}-${runStamp}`;
-    await page.click(".gg-modal-name", { clickCount: 3 });
-    await page.type(".gg-modal-name", name, { delay: 6 });
+    await fillNewProjectModal(page, { name });
     await page.click(".gg-modal-create");
     await page.waitForFunction(
       (n) => {
