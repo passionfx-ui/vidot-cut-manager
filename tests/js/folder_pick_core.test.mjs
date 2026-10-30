@@ -1,16 +1,86 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  DRIVES_TITLE,
+  driveLabel,
+  folderAddressTarget,
   folderListError,
   folderListUrl,
+  folderPickerPlaces,
   folderPickerView,
   folderPickTarget,
   isAbsoluteFolderPath,
   joinFolderPath,
+  normalizeFolderInput,
   parentFolderPath,
+  RELATIVE_PATH_ERROR,
   startPathCandidates,
 } from "../../web/gg_folder_pick_core.js";
+
+describe("folder picker address bar (0.9.101)", () => {
+  it("normalizeFolderInput strips quotes, spaces and trailing slashes", () => {
+    const cases = {
+      '"D:\\Films\\My Film"': "D:\\Films\\My Film",
+      "'D:\\Films'": "D:\\Films",
+      "  D:\\Films\\\\  ": "D:\\Films",
+      '"D:\\Films\\"': "D:\\Films",
+      "D:/Films/": "D:/Films",
+      "\\\\srv\\share\\": "\\\\srv\\share",
+      "/home/a/": "/home/a",
+      " \"D:\\Films\"\r\n": "D:\\Films",
+      '""': "",
+      "": "",
+    };
+    for (const [raw, want] of Object.entries(cases)) assert.equal(normalizeFolderInput(raw), want, JSON.stringify(raw));
+    assert.equal(normalizeFolderInput(undefined), "");
+    assert.equal(normalizeFolderInput(null), "");
+  });
+
+  it("normalizeFolderInput keeps drive roots and /", () => {
+    for (const raw of ["C:\\", "C:", "C:/", "C:\\\\", '"C:\\"', " C:\\ "]) assert.equal(normalizeFolderInput(raw), "C:\\", raw);
+    assert.equal(normalizeFolderInput("d:"), "d:\\");
+    assert.equal(normalizeFolderInput("/"), "/");
+    assert.equal(normalizeFolderInput("///"), "/");
+  });
+
+  it("folderAddressTarget: normalized full path, empty = drives, relative = inline error", () => {
+    assert.deepEqual(folderAddressTarget('"D:\\Films\\"'), { path: "D:\\Films", error: "" });
+    assert.deepEqual(folderAddressTarget("C:"), { path: "C:\\", error: "" });
+    assert.deepEqual(folderAddressTarget("  "), { path: "", error: "" });
+    for (const bad of ["Films", "Films\\A", ".\\x", "..", "C:Films"]) {
+      assert.deepEqual(folderAddressTarget(bad), { path: "", error: RELATIVE_PATH_ERROR }, bad);
+    }
+    assert.ok(RELATIVE_PATH_ERROR.length < 40);
+  });
+
+  it("driveLabel", () => {
+    assert.equal(driveLabel("C:\\"), "C:");
+    assert.equal(driveLabel("n:\\"), "N:");
+    assert.equal(driveLabel("D:"), "D:");
+    assert.equal(driveLabel("/"), "/");
+  });
+
+  it("folderPickerPlaces: quick folders, Last used (full path, not a duplicate), drives", () => {
+    const data = {
+      quick: [{ name: "Home", path: "C:\\Users\\a" }, { name: "Desktop", path: "C:\\Users\\a\\Desktop" }, { name: "x" }],
+      drives: ["C:\\", "D:\\", "N:\\"],
+    };
+    const p = folderPickerPlaces(data, "D:\\Films\\");
+    assert.deepEqual(p.quick, [
+      { name: "Home", path: "C:\\Users\\a" },
+      { name: "Desktop", path: "C:\\Users\\a\\Desktop" },
+      { name: "Last used", path: "D:\\Films" },
+    ]);
+    assert.deepEqual(p.drives, [
+      { name: "C:", path: "C:\\" },
+      { name: "D:", path: "D:\\" },
+      { name: "N:", path: "N:\\" },
+    ]);
+    assert.equal(folderPickerPlaces(data, "c:\\users\\A\\desktop").quick.length, 2, "same as Desktop");
+    assert.equal(folderPickerPlaces(data, "relative").quick.length, 2);
+    assert.equal(folderPickerPlaces(data, "").quick.length, 2);
+    assert.deepEqual(folderPickerPlaces(null, ""), { quick: [], drives: [] });
+  });
+});
 
 describe("folder picker core (0.9.94)", () => {
   it("folderListUrl encodes the path; empty = drive list", () => {
@@ -48,13 +118,16 @@ describe("folder picker core (0.9.94)", () => {
     assert.deepEqual(startPathCandidates("  /srv/out "), ["/srv/out", "/srv", "/", ""]);
     assert.deepEqual(startPathCandidates(""), [""]);
     assert.deepEqual(startPathCandidates("relative\\folder"), [""]);
+    assert.deepEqual(startPathCandidates('"D:\\Films\\"'), ["D:\\Films", "D:\\", ""]);
     assert.equal(startPathCandidates("C:\\a\\b\\c\\d\\e\\f", 3).length, 4);
   });
 
   it("folderPickerView for a folder", () => {
-    const v = folderPickerView({ ok: true, path: "D:\\Films", parent: "D:\\", folders: ["A", "B c"] });
-    assert.equal(v.title, "D:\\Films");
+    const v = folderPickerView({ ok: true, path: "D:\\Films", parent: "D:\\", folders: ["A", "B c"], drives: ["C:\\"], quick: [] }, "E:\\Out");
+    assert.equal(v.path, "D:\\Films");
     assert.equal(v.canUp, true);
+    assert.deepEqual(v.drives, [{ name: "C:", path: "C:\\" }]);
+    assert.deepEqual(v.quick, [{ name: "Last used", path: "E:\\Out" }]);
     assert.equal(v.parent, "D:\\");
     assert.deepEqual(v.items, [
       { name: "A", path: "D:\\Films\\A" },
@@ -69,9 +142,10 @@ describe("folder picker core (0.9.94)", () => {
     assert.equal(root.items[0].path, "C:\\Users");
     const drives = folderPickerView({ path: "", parent: null, folders: ["C:\\", "D:\\"] });
     assert.equal(drives.canUp, false);
-    assert.equal(drives.title, DRIVES_TITLE);
+    assert.equal(drives.path, "");
     assert.deepEqual(drives.items.map((it) => it.path), ["C:\\", "D:\\"]);
     assert.deepEqual(folderPickerView(null).items, []);
+    assert.deepEqual(folderPickerView(null).drives, []);
   });
 
   it("folderPickTarget: highlighted folder, else the open folder, nothing on the drive list", () => {

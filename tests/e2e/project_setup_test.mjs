@@ -51,17 +51,20 @@ function isBlockedPost(url, method) {
 let folderMockOn = false;
 /** GET /gonggan/projects answers an empty list while on (empty state without deleting real projects). */
 let projectsMockEmpty = false;
+const FOLDER_PLACES = { drives: ["C:\\", "D:\\"], quick: [{ name: "Home", path: "C:\\Users\\me" }] };
 const FOLDER_MOCK = {
   "": { path: "", parent: null, folders: ["C:\\", "D:\\"] },
   "C:\\": { path: "C:\\", parent: "", folders: ["Films", "Locked"] },
   "C:\\Films": { path: "C:\\Films", parent: "C:\\", folders: ["A", "B"] },
+  "C:\\Users\\me": { path: "C:\\Users\\me", parent: "C:\\Users", folders: ["Desktop"] },
+  "D:\\": { path: "D:\\", parent: "", folders: ["Renders"] },
 };
 
 function folderMockResponse(url) {
   const p = new URL(url).searchParams.get("path") || "";
   if (p === "C:\\Locked") return { status: 403, body: { ok: false, message: "Permission denied: this folder cannot be opened" } };
   const hit = FOLDER_MOCK[p];
-  return hit ? { status: 200, body: { ok: true, ...hit } } : { status: 404, body: { ok: false, message: "Folder not found" } };
+  return hit ? { status: 200, body: { ok: true, ...FOLDER_PLACES, ...hit } } : { status: 404, body: { ok: false, message: "Folder not found" } };
 }
 
 function attachRequestGuard(page) {
@@ -225,6 +228,29 @@ async function run() {
     if (np.location !== "") throw new Error(`fresh profile: Location should start empty, got "${np.location}"`);
     console.log("PASS  New Project window: Project name, Location (Browse…), Default template only; Cancel / Create");
 
+    const toggle = await page.$eval(`${NP} .gg-tpl-toggle`, (el) => {
+      const r = el.getBoundingClientRect();
+      return { text: el.textContent?.trim(), visible: r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden" };
+    });
+    if (toggle.text !== "▼" || !toggle.visible) throw new Error(`Default template ▼ button should be visible: ${JSON.stringify(toggle)}`);
+    const listHidden = () => page.$eval(`${NP} .gg-tpl-list`, (el) => el.hidden);
+    await page.click(`${NP} .gg-tpl-toggle`);
+    await page.waitForFunction((sel) => !document.querySelector(`${sel} .gg-tpl-list`)?.hidden, { timeout: 5000 }, NP);
+    const firstNpOpt = await page.$eval(`${NP} .gg-tpl-list li`, (el) => el.textContent);
+    await page.click(`${NP} .gg-tpl-toggle`);
+    if (firstNpOpt !== "(none)" || !(await listHidden())) throw new Error(`▼ should open the list ((none) first) and close it again: "${firstNpOpt}"`);
+    const typedRef = "zz-typed/own-template.json";
+    await page.click(`${NP} .gg-tpl-combo`, { clickCount: 3 });
+    await page.type(`${NP} .gg-tpl-combo`, typedRef, { delay: 2 });
+    await page.keyboard.press("Enter");
+    const typed = await page.evaluate((sel) => ({
+      value: document.querySelector(`${sel} .gg-tpl-combo`)?.value,
+      hidden: document.querySelector(`${sel} .gg-tpl-list`)?.hidden,
+      modal: !!document.querySelector(sel),
+    }), NP);
+    if (typed.value !== typedRef || !typed.hidden || !typed.modal) throw new Error(`a typed template should be kept on Enter: ${JSON.stringify(typed)}`);
+    console.log("PASS  Default template: ▼ button visible, opens/closes the list; a typed value is kept on Enter");
+
     await page.type(".gg-modal-name", "ZZ-should-not-exist", { delay: 2 });
     await page.click(".gg-modal-cancel");
     await sleep(500);
@@ -369,7 +395,7 @@ async function run() {
       const err = m?.querySelector(".gg-fp-err")?.textContent?.trim();
       const items = m?.querySelectorAll(".gg-fp-list li").length || 0;
       if (!err && !items) return null;
-      return { err, items, title: m.querySelector(".gg-fp-path")?.textContent, up: m.querySelector(".gg-fp-up")?.disabled };
+      return { err, items, title: m.querySelector(".gg-fp-addr")?.value || "(drives)", up: m.querySelector(".gg-fp-up")?.disabled };
     }, { timeout: 10000 })).jsonValue();
     if (picker.err && /Restart ComfyUI/.test(picker.err)) {
       console.log("SKIP  folder list route not loaded yet (restart ComfyUI for 0.9.94); picker shows the restart hint");
@@ -392,15 +418,30 @@ async function run() {
       const m = document.querySelector(sel);
       if (!m) return null;
       return {
-        title: m.querySelector(".gg-fp-path")?.textContent || "",
+        title: m.querySelector(".gg-fp-addr")?.value || "",
         rows: [...m.querySelectorAll(".gg-fp-item")].map((li) => li.textContent),
+        places: [...m.querySelectorAll(".gg-fp-side li")].map((li) => li.textContent),
         err: m.querySelector(".gg-fp-err")?.textContent || "",
         up: !m.querySelector(".gg-fp-up")?.disabled,
         select: !m.querySelector(".gg-fp-select")?.disabled,
       };
     }, FP);
+    /** Address bar shows `want` and the right pane has loaded (rows or "No folders"). */
     const waitTitle = (t) => page.waitForFunction(
-      (sel, want) => document.querySelector(`${sel} .gg-fp-path`)?.textContent === want, { timeout: 5000 }, FP, t);
+      (sel, want) => {
+        const m = document.querySelector(sel);
+        return m?.querySelector(".gg-fp-addr")?.value === want && m.querySelector(".gg-fp-list li");
+      }, { timeout: 5000 }, FP, t);
+    const setAddr = (v, inputType) => page.$eval(`${FP} .gg-fp-addr`, (el, val, type) => {
+      el.value = val;
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: type }));
+    }, v, inputType);
+    const clickPlace = async (name) => {
+      for (const li of await page.$$(`${FP} .gg-fp-place`)) {
+        if ((await li.evaluate((el) => el.textContent)) === name) return li.click();
+      }
+      throw new Error(`no place "${name}"`);
+    };
     const dbl = async (name) => {
       const items = await page.$$(`${FP} .gg-fp-item`);
       for (const li of items) {
@@ -410,9 +451,35 @@ async function run() {
     };
     await page.$eval(".gg-modal-folder", (el) => { el.value = "Q:\\Missing\\Out"; });
     await page.click(".gg-modal-folder-browse");
-    await waitTitle("Drives");
+    await waitTitle("");
     let st = await fpState();
     if (st.rows.join() !== "C:\\,D:\\" || st.up || st.select) throw new Error(`picker should fall back to the drive list: ${JSON.stringify(st)}`);
+    const wantPlaces = ["Home", ...(location ? ["Last used"] : []), "Drives", "C:", "D:"];
+    if (st.places.join() !== wantPlaces.join()) throw new Error(`left pane should list quick folders + drives: ${st.places}`);
+    await clickPlace("D:");
+    await waitTitle("D:\\");
+    await clickPlace("Home");
+    await waitTitle("C:\\Users\\me");
+    st = await fpState();
+    if (st.rows.join() !== "Desktop") throw new Error(`Home should open its folder: ${JSON.stringify(st)}`);
+    await setAddr("  \"C:\\Films\\\\\"  ");
+    await page.focus(`${FP} .gg-fp-addr`);
+    await page.keyboard.press("Enter");
+    await waitTitle("C:\\Films");
+    await setAddr("\"C:\\\"", "insertFromPaste");
+    await waitTitle("C:\\");
+    await setAddr("Q:\\Nope");
+    await page.click(`${FP} .gg-fp-go`);
+    await page.waitForFunction((sel) => document.querySelector(`${sel} .gg-fp-err`)?.textContent, { timeout: 5000 }, FP);
+    st = await fpState();
+    if (st.err !== "Folder not found" || st.rows.join() !== "Films,Locked") throw new Error(`bad path should show an inline error and stay put: ${JSON.stringify(st)}`);
+    await setAddr("relative\\folder");
+    await page.click(`${FP} .gg-fp-go`);
+    st = await fpState();
+    if (!/full path/.test(st.err)) throw new Error(`relative path should show an inline error: ${JSON.stringify(st)}`);
+    console.log("PASS  folder picker address bar (Enter / Go / paste, quotes + trailing slash stripped, inline errors) and left pane (quick folders, drives)");
+    await page.click(`${FP} .gg-fp-up`);
+    await waitTitle("");
     await dbl("C:\\");
     await waitTitle("C:\\");
     await dbl("Locked");
