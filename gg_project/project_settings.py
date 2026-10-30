@@ -151,6 +151,37 @@ def check_output_folder(value: Any) -> dict[str, Any]:
 
 
 PROJECT_ASSETS_DIR = "assets"
+PROJECT_ASSETS_IMAGES = "images"
+PROJECT_ASSETS_VIDEOS = "videos"
+_MEDIA_IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
+_MEDIA_VIDEO_EXTS = frozenset({".mp4", ".webm"})
+
+
+def project_assets_type_subdir(ext: str) -> str:
+    """Subfolder under `assets/` for plugin project outputs (images or videos)."""
+    return PROJECT_ASSETS_VIDEOS if str(ext or "").lower() in _MEDIA_VIDEO_EXTS else PROJECT_ASSETS_IMAGES
+
+
+def ensure_project_assets_dir(project_folder: Path, ext: str) -> Path:
+    """Directory for a new asset file; creates `assets/images` or `assets/videos` lazily."""
+    dest = Path(project_folder) / PROJECT_ASSETS_DIR / project_assets_type_subdir(ext)
+    dest.mkdir(parents=True, exist_ok=True)
+    return dest
+
+
+def is_external_project_asset_media(path: Path) -> bool:
+    """True when `path` is a media file directly in `assets/` or in `assets/images|videos/`."""
+    ext = path.suffix.lower()
+    if ext not in _MEDIA_IMAGE_EXTS | _MEDIA_VIDEO_EXTS:
+        return False
+    parent = path.parent
+    if parent.name == PROJECT_ASSETS_DIR:
+        return True
+    if parent.name in (PROJECT_ASSETS_IMAGES, PROJECT_ASSETS_VIDEOS):
+        return parent.parent.name == PROJECT_ASSETS_DIR
+    return False
+
+
 _RESERVED_NAMES = frozenset(
     {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 )
