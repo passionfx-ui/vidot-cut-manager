@@ -38,12 +38,21 @@ export function projectFolderName(name) {
   return s;
 }
 
-/** The folder a new project gets: <location>/<project name>; "" until both are filled in. */
+/**
+ * The folder a new project gets: <location>/<project name>, or <location> itself when its last
+ * segment already is the project folder name (case-insensitive for Windows paths); "" until both
+ * are filled in. Same rule as gg_project/project_settings.py project_folder_path.
+ */
 export function projectFolderPath(location, name) {
   const loc = clampPath(location);
   if (!loc || !String(name ?? "").trim()) return "";
+  const windows = loc.includes("\\") || /^[a-z]:/i.test(loc);
   const sep = loc.includes("/") && !loc.includes("\\") ? "/" : "\\";
-  return `${loc.replace(/[\\/]+$/, "")}${sep}${projectFolderName(name)}`;
+  const base = loc.replace(/[\\/]+$/, "");
+  const folder = projectFolderName(name);
+  const last = base.split(windows ? /[\\/]/ : "/").pop() || "";
+  const same = windows ? last.toLowerCase() === folder.toLowerCase() : last === folder;
+  return same ? base : `${base}${sep}${folder}`;
 }
 
 /**

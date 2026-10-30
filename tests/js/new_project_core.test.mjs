@@ -65,6 +65,20 @@ describe("New Project: project folder path", () => {
     assert.equal(projectFolderPath("", "A"), "");
     assert.equal(projectFolderPath("D:\\Films", "  "), "");
   });
+  it("a location that already ends with the project name is used as is (no doubled folder)", () => {
+    const loc = "N:\\Work\\2026_Contest_KINFA_PreventionSong";
+    assert.equal(projectFolderPath(loc, "2026_Contest_KINFA_PreventionSong"), loc);
+    assert.equal(projectFolderPath(`${loc}\\\\`, "2026_Contest_KINFA_PreventionSong"), loc);
+    assert.equal(projectFolderPath("D:\\Films\\my film/", "My Film"), "D:\\Films\\my film");
+    assert.equal(projectFolderPath("D:/Films/Night_ Walk", "Night: Walk"), "D:/Films/Night_ Walk");
+    assert.equal(projectFolderPath("/home/me/films/A/", "A"), "/home/me/films/A");
+  });
+  it("only the whole last segment counts; POSIX paths compare case-sensitively", () => {
+    assert.equal(projectFolderPath("D:\\Films\\My Film 2", "My Film"), "D:\\Films\\My Film 2\\My Film");
+    assert.equal(projectFolderPath("D:\\My Film\\Out", "My Film"), "D:\\My Film\\Out\\My Film");
+    assert.equal(projectFolderPath("/home/me/a", "A"), "/home/me/a/A");
+    assert.equal(projectFolderPath("C:\\", "C"), "C:\\C");
+  });
 });
 
 describe("New Project: request", () => {
