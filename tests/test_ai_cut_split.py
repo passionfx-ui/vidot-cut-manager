@@ -96,7 +96,7 @@ class WorkflowTests(CutSplitTestBase):
         gen = wf["2"]["inputs"]
         self.assertEqual(gen["clip"], ["1", 0])
         self.assertEqual(gen["prompt"], gg_ltx.CUT_SPLIT_PROMPT + "A fox in the snow.")
-        self.assertEqual(gen["max_length"], 2048)
+        self.assertEqual(gen["max_length"], 768)
         self.assertEqual(gen["sampling_mode"], "off")
         self.assertIs(gen["thinking"], False)
         self.assertEqual(wf["3"], {"class_type": "PreviewAny", "inputs": {"source": ["2", 0]}})
