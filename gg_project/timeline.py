@@ -10,7 +10,7 @@ except ImportError:  # unittest / plain script
     from gg_data import clamp_clip, media_duration  # type: ignore
 
 from .entities import is_reference
-from .project_settings import PROJECT_ASSETS_DIR, normalize_settings
+from .project_settings import PROJECT_ASSETS_DIR, is_external_project_asset_media, normalize_settings
 
 _IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _VID_EXT = {".mp4", ".webm"}
@@ -149,7 +149,7 @@ def version_asset_file(project_dir: Path, asset: Any) -> Path | None:
         return None
     p = Path(rel)
     if p.drive or p.root:
-        if not p.is_absolute() or p.parent.name != PROJECT_ASSETS_DIR or p.suffix.lower() not in _IMG_EXT | _VID_EXT:
+        if not p.is_absolute() or not is_external_project_asset_media(p):
             return None
         path = p
     else:

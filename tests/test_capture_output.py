@@ -97,7 +97,7 @@ class CaptureNewProjectTests(unittest.TestCase):
         self.assertFalse(res["duplicate"])
         ver = res["version"]
         saved = Path(ver["asset"]["path"])
-        self.assertEqual(saved.parent, self.folder / "assets")
+        self.assertEqual(saved.parent, self.folder / "assets" / "images")
         self.assertTrue(saved.is_file())
         self.assertEqual(ver["run"]["prompt_id"], "p1")
         self.assertTrue(self.out.is_file())
@@ -129,7 +129,7 @@ class CaptureNewProjectTests(unittest.TestCase):
         self.assertTrue(again["duplicate"])
         self.assertEqual(again["version"]["id"], first["version"]["id"])
         self.assertEqual(len(self.store.list_versions(self.pid, self.cut)), 1)
-        self.assertEqual(len(list((self.folder / "assets").iterdir())), 1)
+        self.assertEqual(len(list((self.folder / "assets" / "images").iterdir())), 1)
 
     def test_failed_run_adds_nothing(self):
         with self._info({"output": None, "reason": "The last ComfyUI run failed", "pending": False}):
