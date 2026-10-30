@@ -5,14 +5,18 @@ import { normalizeListMode } from "./gg_story_core.js";
 const escHtml = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-/** Per-cut row content for a list mode: "info" (card) or "caption" (caption field only). */
+/** Per-cut row content for a list mode: "info" (card), "prompt", or "caption". */
 export function rowContentKind(mode) {
-  return normalizeListMode(mode) === "caption" ? "caption" : "info";
+  const m = normalizeListMode(mode);
+  if (m === "caption") return "caption";
+  if (m === "prompt") return "prompt";
+  return "info";
 }
 
 /** One cut row: the same `li.gg-cut` shell in both views, so selection, drag and menus bind the same way. */
 export function cutRowShellHtml({ id, kind, selected, content }) {
-  const cls = `gg-cut${kind === "caption" ? " gg-cut-caption" : ""}${selected ? " gg-sel" : ""}`;
+  const extra = kind === "caption" ? " gg-cut-caption" : kind === "prompt" ? " gg-cut-prompt" : "";
+  const cls = `gg-cut${extra}${selected ? " gg-sel" : ""}`;
   return `<li class="${cls}" data-cut-id="${escHtml(id)}">${content}</li>`;
 }
 
@@ -20,6 +24,12 @@ export function cutRowShellHtml({ id, kind, selected, content }) {
 export function captionRowContentHtml({ thumb = "", text, placeholder, title, native }) {
   const ro = native ? " readonly" : " disabled";
   return `<div class="gg-cut-thumb-col">${thumb}</div><textarea class="gg-caption-text" rows="3" placeholder="${escHtml(placeholder)}"${ro} title="${escHtml(title)}">${escHtml(text)}</textarea>`;
+}
+
+/** Prompt list view: same interaction as Caption, saves to cut.prompt. */
+export function promptRowContentHtml({ thumb = "", text, placeholder, title, native }) {
+  const ro = native ? " readonly" : " disabled";
+  return `<div class="gg-cut-thumb-col">${thumb}</div><textarea class="gg-prompt-text" rows="3" placeholder="${escHtml(placeholder)}"${ro} title="${escHtml(title)}">${escHtml(text)}</textarea>`;
 }
 
 /**

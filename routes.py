@@ -82,7 +82,7 @@ async def gg_project_rename(request):
     data = await _json_body(request)
     pid, name = data.get("pid"), data.get("name")
     if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid required")
+        return _err(400, "pid required")
     if not isinstance(name, str) or not name.strip():
         return _err(400, "name required")
     try:
@@ -99,7 +99,7 @@ async def gg_project_delete(request):
     data = await _json_body(request)
     pid = data.get("pid")
     if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid required")
+        return _err(400, "pid required")
     try:
         res = await asyncio.to_thread(gg_native_api.delete_native_project, pid)
     except FileNotFoundError:
@@ -112,7 +112,7 @@ async def gg_project_restore(request):
     data = await _json_body(request)
     pid = data.get("pid")
     if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid required")
+        return _err(400, "pid required")
     try:
         res = await asyncio.to_thread(gg_native_api.restore_native_project, pid)
     except FileNotFoundError:
@@ -254,7 +254,7 @@ async def gg_cut_reorder(request):
     data = await _json_body(request)
     pid = data.get("pid")
     if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid required")
+        return _err(400, "pid required")
     try:
         tl = await asyncio.to_thread(gg_native_api.native_reorder_cuts, pid, data.get("order"))
     except ValueError as ex:
@@ -272,7 +272,7 @@ async def gg_timeline_apply_order(request):
     data = await _json_body(request)
     pid = data.get("pid")
     if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid required")
+        return _err(400, "pid required")
     try:
         tl = await asyncio.to_thread(gg_native_api.native_apply_track_order, pid)
     except ValueError as ex:
@@ -500,7 +500,7 @@ async def gg_cut_update(request):
     if not isinstance(pid, str) or not pid:
         return _err(400, "pid required")
     if not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid required")
+        return _err(400, "pid required")
     cut_id = data.get("cut_id")
     fields = data.get("fields")
     if not isinstance(cut_id, str) or not cut_id:
@@ -535,7 +535,7 @@ async def gg_project_update(request):
     if not isinstance(pid, str) or not pid:
         return _err(400, "pid required")
     if not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid required")
+        return _err(400, "pid required")
     fields = data.get("fields")
     if not isinstance(fields, dict) or not fields:
         return _err(400, "fields required")
@@ -583,7 +583,7 @@ async def gg_project_import(request):
     if not isinstance(pid, str) or not pid:
         return _err(400, "pid required")
     if not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid required")
+        return _err(400, "pid required")
     try:
         res = await asyncio.to_thread(gg_native_api.native_import_structure, pid, data)
     except FileNotFoundError:
@@ -603,7 +603,7 @@ async def gg_cut_add_list(request):
     if not isinstance(pid, str) or not pid:
         return _err(400, "pid required")
     if not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid required")
+        return _err(400, "pid required")
     after = data.get("after")
     workflow = data.get("workflow")
     if after is not None and not isinstance(after, str):
@@ -629,7 +629,7 @@ async def gg_reference_add(request):
     if not isinstance(pid, str) or not pid:
         return _err(400, "pid required")
     if not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid required")
+        return _err(400, "pid required")
     try:
         res = await asyncio.to_thread(gg_native_api.native_add_reference, pid, data.get("name"), data.get("category"))
     except FileNotFoundError:
@@ -652,7 +652,7 @@ async def gg_cut_rename(request):
     if not isinstance(pid, str) or not pid:
         return _err(400, "pid required")
     if not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid required")
+        return _err(400, "pid required")
     if not isinstance(cut_id, str) or not cut_id:
         return _err(400, "cut_id required")
     try:
@@ -852,7 +852,7 @@ async def gg_image_to_video(request):
     pid, cid, vid = data.get("pid"), data.get("cut_id"), data.get("selected_vid")
     start = data.get("start_vid")
     if not isinstance(pid, str) or not isinstance(cid, str) or not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid and cut_id required")
+        return _err(400, "pid and cut_id required")
     if vid is not None and not isinstance(vid, str):
         return _err(400, "selected_vid must be a string")
     if start is not None and not isinstance(start, str):
@@ -878,7 +878,7 @@ async def gg_generate_all(request):
     data = await _json_body(request)
     pid = data.get("pid")
     if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid required")
+        return _err(400, "pid required")
     if data.get("confirm") is not True:
         return _err(400, "confirm required")
     try:
@@ -996,7 +996,7 @@ async def gg_capture_output(request):
     data = await _json_body(request)
     pid, cid, prompt_id = data.get("pid"), data.get("cut_id"), data.get("prompt_id")
     if not isinstance(pid, str) or not isinstance(cid, str) or not gg_native_api.is_native_pid(pid):
-        return _err(400, "native pid and cut_id required")
+        return _err(400, "pid and cut_id required")
     try:
         res = await asyncio.to_thread(gg_native_api.native_capture_prompt_output, pid, cid, prompt_id)
     except ValueError as ex:
@@ -1027,7 +1027,7 @@ async def gg_import_version(request):
                 fields[part.name] = (await part.text()).strip()
         pid, cid = fields.get("pid"), fields.get("cut_id")
         if not pid or not cid or not gg_native_api.is_native_pid(pid):
-            return _err(400, "native pid and cut_id required")
+            return _err(400, "pid and cut_id required")
         if tmp is None:
             return _err(400, "file required")
         res = await asyncio.to_thread(gg_native_api.native_import_version, pid, cid, tmp)

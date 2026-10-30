@@ -2,10 +2,11 @@
 
 export const LIST_MODE_KEY = "gg.listMode";
 
-const FIELD_KEYS = ["caption", "planned_sec", "end_card", "needs_redo"];
+const FIELD_KEYS = ["caption", "prompt", "planned_sec", "end_card", "needs_redo"];
 
 export function normalizeListMode(v) {
   if (v === "caption" || v === "story") return "caption";
+  if (v === "prompt") return "prompt";
   return "info";
 }
 
@@ -113,7 +114,7 @@ export function isCaptionSaveRejected(status, message) {
 export function isSilentFieldSave(fields) {
   const keys = Object.keys(fields || {});
   if (!keys.length) return true;
-  return keys.every((k) => k === "notes" || k === "caption");
+  return keys.every((k) => k === "notes" || k === "caption" || k === "prompt");
 }
 
 /** Clamp textarea content height (px) between min and max; safe for bad inputs. */

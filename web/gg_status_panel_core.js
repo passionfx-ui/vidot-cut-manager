@@ -1,6 +1,6 @@
 /** Shots selection bar and status panel (bottom of the sidebar): view models only, no DOM. */
 
-import { formatCutHeaderLengths, formatCutVersionStatus } from "./gg_cuts_core.js";
+import { formatCutHeaderLengths, formatCutVersionStatus, formatCutInfoLengthField } from "./gg_cuts_core.js";
 import { idleStateView, renderBadgeView } from "./gg_render_status_core.js";
 
 /**
@@ -61,6 +61,7 @@ export function statusPanelView(s = {}) {
     status = { mode: hasMedia ? "done" : "idle", text: idle.text, title: idle.title };
   }
   const len = formatCutHeaderLengths(cut);
+  const infoLen = formatCutInfoLengthField(cut);
   const ver = formatCutVersionStatus(cut);
   return {
     kind: "cut",
@@ -69,6 +70,7 @@ export function statusPanelView(s = {}) {
     name,
     status,
     length: { text: `Length ${len.text}`, title: len.title },
+    infoLength: infoLen,
     version: { text: ver.text || "No versions yet", title: ver.title },
   };
 }

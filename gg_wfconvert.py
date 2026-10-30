@@ -22,6 +22,7 @@ _KNOWN: dict[str, list[tuple[str, Any, int]]] = {
     "ConditioningZeroOut": [],
     "ModelSamplingAuraFlow": [("shift", 1.73, 0)],
     "EmptySD3LatentImage": [("width", 1024, 0), ("height", 1024, 0), ("batch_size", 1, 0)],
+    "EmptyFlux2LatentImage": [("width", 1024, 0), ("height", 1024, 0), ("batch_size", 1, 0)],
     "KSampler": [("seed", 0, 1), ("steps", 20, 0), ("cfg", 8.0, 0), ("sampler_name", None, 0), ("scheduler", None, 0),
                  ("denoise", 1.0, 0)],
     "VAEDecode": [],

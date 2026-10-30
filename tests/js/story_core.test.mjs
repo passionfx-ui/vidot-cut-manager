@@ -32,9 +32,10 @@ describe("rowFullyHidden", () => {
 });
 
 describe("normalizeListMode", () => {
-  it("accepts caption and legacy story", () => {
+  it("accepts caption, prompt, and legacy story", () => {
     assert.equal(normalizeListMode("caption"), "caption");
     assert.equal(normalizeListMode("story"), "caption");
+    assert.equal(normalizeListMode("prompt"), "prompt");
   });
   it("maps unknown to info", () => {
     assert.equal(normalizeListMode("x"), "info");

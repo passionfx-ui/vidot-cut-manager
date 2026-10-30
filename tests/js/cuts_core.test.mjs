@@ -29,6 +29,8 @@ import {
   formatMinSecDot,
   versionIndexFromList,
   formatCutHeaderLengths,
+  formatCutListLength,
+  formatCutInfoLengthField,
   cutBaseSec,
   cutOriginalSec,
   cutTimelineSec,
@@ -145,6 +147,19 @@ describe("cut header lengths", () => {
     assert.equal(r.text, "4.0s");
     assert.equal(r.title, "Original length 4.0s");
     assert.equal(formatCutHeaderLengths({ sec: 2.3 }).text, "2.3s");
+  });
+  it("list length uses timeline sec when drift from planned", () => {
+    const d = formatCutListLength({ sec: 2.5, planned_sec: 3, media: { id: "v", kind: "video", seconds: 5 } });
+    assert.equal(d.drift, true);
+    assert.equal(d.text, "2.5s");
+    const same = formatCutListLength({ sec: 3, planned_sec: 3, media: { id: "v", kind: "video", seconds: 5 } });
+    assert.equal(same.drift, false);
+    assert.equal(same.text, "5.0s");
+  });
+  it("info length field flags drift for planned seconds", () => {
+    const f = formatCutInfoLengthField({ sec: 2, planned_sec: 3 });
+    assert.equal(f.drift, true);
+    assert.equal(f.text, "3");
   });
   it("video: original is the media length, not the trimmed clip", () => {
     const c = { tl_sec: 3, sec: 1.5, media: { id: "v1", kind: "video", seconds: 5.04 } };

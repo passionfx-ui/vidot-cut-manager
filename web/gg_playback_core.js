@@ -62,6 +62,52 @@ export function decideVideoSync(p) {
 }
 
 /**
+ * Invalidate in-flight `HTMLMediaElement.play()` promises (timeline transport `play` object).
+ *
+ * @param {{ gen?: number, on?: boolean }} playState
+ * @returns {number}
+ */
+export function bumpPlaybackGen(playState) {
+  playState.gen = (playState.gen | 0) + 1;
+  return playState.gen;
+}
+
+/**
+ * If playback was stopped/paused while `play()` was pending, keep the element paused.
+ *
+ * @param {{ pause?: () => void }|null|undefined} media
+ * @param {number} gen generation captured before `play()`
+ * @param {{ gen?: number, on?: boolean }} playState
+ */
+export function guardResolvedPlay(media, gen, playState) {
+  if (!media) return;
+  if (playState.gen === gen && playState.on) return;
+  try {
+    media.pause?.();
+  } catch (_) {}
+}
+
+/**
+ * Start playback only when the generation still matches; guard the async resolve.
+ *
+ * @param {{ play?: () => Promise<void>|void, pause?: () => void }|null|undefined} media
+ * @param {number} gen
+ * @param {{ gen?: number, on?: boolean }} playState
+ */
+export function scheduleVideoPlay(media, gen, playState) {
+  if (!media || !playState.on || playState.gen !== gen) return;
+  let p;
+  try {
+    p = media.play?.();
+  } catch (_) {
+    return;
+  }
+  if (p && typeof p.then === "function") {
+    p.then(() => guardResolvedPlay(media, gen, playState)).catch(() => {});
+  }
+}
+
+/**
  * Pause every timeline viewer / track video and audio element (does not remove sources).
  *
  * @param {{ vid?: HTMLVideoElement, next?: HTMLVideoElement, box?: ParentNode }|null} viewer

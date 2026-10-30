@@ -117,6 +117,44 @@ export function formatCutHeaderLengths(cut) {
 }
 
 /**
+ * Cut list row duration: timeline length when it differs from planned, else the original length.
+ * @param {object} cut
+ * @returns {{ text: string, title: string, drift: boolean }}
+ */
+export function formatCutListLength(cut) {
+  const drift = cutLengthDrift(cut);
+  const sec = drift ? cutGenerationSec(cut) : cutOriginalSec(cut);
+  const text = formatSecShort(sec);
+  if (!drift) {
+    return { text, title: `Length ${text}`, drift: false };
+  }
+  const planned = cut?.planned_sec;
+  const plannedLabel = planned != null && Number.isFinite(planned) ? formatSecShort(Number(planned)) : "—";
+  return {
+    text,
+    title: `Timeline ${text} · planned ${plannedLabel}`,
+    drift: true,
+  };
+}
+
+/**
+ * Status / info panel Length (sec) readout: shows planned seconds; drift when timeline length differs.
+ * @param {object} cut
+ * @returns {{ text: string, title: string, drift: boolean }}
+ */
+export function formatCutInfoLengthField(cut) {
+  const drift = cutLengthDrift(cut);
+  const planned = cut?.planned_sec;
+  const hasPlanned = planned != null && Number.isFinite(planned);
+  const text = hasPlanned ? String(planned) : "";
+  const placeholder = hasPlanned ? "" : plannedLenInputPlaceholder(cut);
+  const title = drift
+    ? `Planned ${hasPlanned ? text : placeholder} s · timeline ${formatSecShort(cutGenerationSec(cut))}`
+    : "Planned length (seconds). Read-only.";
+  return { text, placeholder, title, drift };
+}
+
+/**
  * Current version for the cut card status line: `Best vN` (manual pick) or `Latest vN` (no pick), plus
  * the media kind / size.
  * @param {object} cut

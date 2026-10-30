@@ -18,7 +18,7 @@ _USER_WF_SUB = Path("default") / "workflows"
 EXAMPLES_DIR = PACK_DIR / "examples" / "workflows"
 BUILTIN_PREFIX = "builtin:"
 BUILTIN_TEMPLATES = (
-    {"ref": "builtin:image", "label": "Image (default)", "kind": "image", "file": "z_image_turbo_t2i.json"},
+    {"ref": "builtin:image", "label": "Image (default)", "kind": "image", "file": "flux3_image_klein_t2i.json"},
     {"ref": "builtin:video-ltx", "label": "Video LTX (default)", "kind": "video", "file": "ltxv_image_to_video.json"},
     {"ref": "builtin:video-ltx-t2v", "label": "Video LTX text-to-video", "kind": "video",
      "file": "ltxv_text_to_video.json"},

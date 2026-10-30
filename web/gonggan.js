@@ -15,7 +15,6 @@ import {
   computeCutLabels,
   cutDisplayLabel,
   computeEffectiveSec,
-  cutLengthDrift,
   lengthWarning,
   moveCuts,
   shotsDropTarget,
@@ -32,6 +31,9 @@ import {
   formatMinSecDot,
   versionIndexFromList,
   formatCutHeaderLengths,
+  formatCutListLength,
+  formatCutInfoLengthField,
+  cutGenerationPromptText,
   formatCutVersionStatus,
   versionRepState,
   plannedLenInputPlaceholder,
@@ -202,6 +204,7 @@ import {
   rowContentKind,
   cutRowShellHtml,
   captionRowContentHtml,
+  promptRowContentHtml,
   groupedListHtml,
   shotsSections,
   nextSceneName,
@@ -209,7 +212,13 @@ import {
   withNewEmptyScene,
   stripCutsFromGroups,
 } from "./gg_group_list_core.js";
-import { decideVideoSync, pauseAllTimelineMedia } from "./gg_playback_core.js";
+import {
+  bumpPlaybackGen,
+  decideVideoSync,
+  guardResolvedPlay,
+  pauseAllTimelineMedia,
+  scheduleVideoPlay,
+} from "./gg_playback_core.js";
 import { noMediaText, noMediaThumbClass, playsAsVideo, versionMedia } from "./gg_missing_media_core.js";
 import {
   needsDurationProbe,
@@ -3833,6 +3842,7 @@ function openCutContextMenu(e, cutId) {
     queuedCount: ids.filter((id) => renderStatus.queuedPromptIds(state.pid, id).length).length,
     failedCount: failedIds.length,
     hasImage: cutHasStartImage(c),
+    hasVersion: !!(c?.versions_list || []).length,
     hasListCuts: visible.length > 0,
     aiMakeCut: AI_CUT_SPLIT_VISIBLE,
     useAi: cutSplitUseAiOn,
@@ -3847,6 +3857,12 @@ function openCutContextMenu(e, cutId) {
         selectAll: () => selectAllListCuts(),
         importVer: () => pickVersionImportFiles(cutId),
         i2v: () => imageToVideoCut(cutId),
+        setBest: () => {
+          const cut = cutById(cutId);
+          if (!cut) return;
+          const vid = stripSelectedVersionId(cut);
+          if (vid) setPick(cutId, vid);
+        },
         queueSel: () => void queueButtonClick(),
         removeQueue: () => removeCutsFromQueue(ids),
         requeue: () => queueSelectedCuts(failedIds),
@@ -5187,14 +5203,14 @@ function bindCutPanelFields(panel, c) {
       navigator.clipboard?.writeText(fname).then(() => ggToast("Copied", fname, "ok")).catch(() => {});
     });
   }
-  const planned = c.planned_sec;
   if (lenIn) {
-    lenIn.value = planned != null && Number.isFinite(planned) ? String(planned) : "";
+    const infoLen = formatCutInfoLengthField(c);
+    lenIn.value = infoLen.text;
     lenIn.readOnly = true;
     lenIn.tabIndex = -1;
-    lenIn.placeholder = plannedLenInputPlaceholder(c);
-    lenIn.title = "Planned length (seconds). Read-only.";
-    lenIn.classList.toggle("gg-len-drift", cutLengthDrift(c));
+    lenIn.placeholder = infoLen.placeholder || "";
+    lenIn.title = infoLen.title;
+    lenIn.classList.toggle("gg-len-drift", infoLen.drift);
   }
   if (endChk) {
     endChk.checked = !!c.end_card;
@@ -5230,9 +5246,10 @@ function refreshCutRowBadges(cutId) {
     if (num) num.textContent = head.cutLabel;
     const len = li.querySelector(".gg-cut-len");
     if (len) {
-      const liInfo = formatCutHeaderLengths(c);
+      const liInfo = formatCutListLength(c);
       len.textContent = liInfo.text;
       len.title = liInfo.title;
+      len.classList.toggle("gg-len-drift", liInfo.drift);
     }
     const warn = lengthWarning(c);
     let wEl = li.querySelector(".gg-warn3");
@@ -5271,8 +5288,22 @@ function refreshCutRowBadges(cutId) {
 
 function cutRowHtml(c, labels) {
   const kind = rowContentKind(shotsUi.listMode);
-  const content = kind === "caption" ? captionRowContent(c) : infoRowContent(c, labels);
+  let content;
+  if (kind === "caption") content = captionRowContent(c);
+  else if (kind === "prompt") content = promptRowContent(c);
+  else content = infoRowContent(c, labels);
   return cutRowShellHtml({ id: c.id, kind, selected: state.cutSel.has(c.id), content });
+}
+
+function promptRowContent(c) {
+  const nat = isNativeProject();
+  return promptRowContentHtml({
+    thumb: cutThumbHtml(c),
+    text: cutGenerationPromptText(c),
+    placeholder: "Prompt for Generate…",
+    title: nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP,
+    native: nat,
+  });
 }
 
 function captionRowContent(c) {
@@ -5296,7 +5327,7 @@ function infoRowContent(c, labels) {
   const canUp = nat && canMoveUp(timelineOrder, [c.id]);
   const canDown = nat && canMoveDown(timelineOrder, [c.id]);
   const warn = lengthWarning(c);
-  const lenInfo = formatCutHeaderLengths(c);
+  const lenInfo = formatCutListLength(c);
   const verInfo = formatCutVersionStatus(c);
   const head = cutHeaderParts(c, state.timeline, labels);
   const idle = idleStateView(!!c.media?.id);
@@ -5324,7 +5355,7 @@ function infoRowContent(c, labels) {
           <span class="gg-cut-state"><span class="gg-render-badge" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span><span class="gg-rs-pos"></span></span><span class="gg-cut-idle" title="${esc(idle.title)}">${esc(idle.text)}</span></span>
           <span class="gg-cut-cur" title="${esc(verInfo.title)}">${esc(verInfo.text || "—")}</span>
           <span class="gg-cut-ver" title="${esc(verInfo.title)}">${esc(verInfo.detail)}</span>
-          <span class="gg-cut-len" title="${esc(lenInfo.title)}">${esc(lenInfo.text)}</span>
+          <span class="gg-cut-len${lenInfo.drift ? " gg-len-drift" : ""}" title="${esc(lenInfo.title)}">${esc(lenInfo.text)}</span>
         </div>
       </div>
       ${nat ? `<div class="gg-move-col">
@@ -6414,10 +6445,10 @@ function cutPanelHtml(c, labels) {
       <button type="button" class="gg-btn gg-promote${on ? " gg-on" : ""}" ${on ? "disabled" : ""} title="${on ? "Timeline representative version" : "Set as timeline representative"}">${on ? "Rep" : "Set rep"}</button>
     </div>`;
   }).join("");
-  const planned = c.planned_sec;
-  const lenDrift = c && cutLengthDrift(c) ? " gg-len-drift" : "";
-  const lenVal = planned != null && Number.isFinite(planned) ? String(planned) : "";
-  const lenPh = lenVal ? "" : plannedLenInputPlaceholder(c);
+  const lenDrift = c && formatCutInfoLengthField(c);
+  const lenVal = lenDrift?.text || "";
+  const lenPh = lenDrift?.placeholder || "";
+  const lenDriftCls = lenDrift?.drift ? " gg-len-drift" : "";
   const vIdx = rep ? versionIndexFromList(c.versions_list, rep) : 1;
   const fname = fileBaseName(c, { scene_index: c.scene_index }, vIdx);
   const metaDisabled = nat ? "" : " disabled";
@@ -6444,7 +6475,7 @@ function cutPanelHtml(c, labels) {
       <div class="gg-cut-fields">
         <div class="gg-cut-meta-row">
           <label class="gg-field-len"${metaTip}>Length (sec)
-            <input type="number" class="gg-len-input${lenDrift}" min="0.5" max="600" step="0.1" value="${esc(lenVal)}"${lenPh ? ` placeholder="${esc(lenPh)}"` : ""} title="Planned length (seconds). Read-only." readonly tabindex="-1" />
+            <input type="number" class="gg-len-input${lenDriftCls}" min="0.5" max="600" step="0.1" value="${esc(lenVal)}"${lenPh ? ` placeholder="${esc(lenPh)}"` : ""} title="Planned length (seconds). Read-only." readonly tabindex="-1" />
           </label>
           <label class="gg-field-end"${metaTip}><input type="checkbox" class="gg-endcard-chk"${c.end_card ? " checked" : ""}${metaDisabled} /> End card</label>
           <label class="gg-field-redo"${metaTip}><input type="checkbox" class="gg-redo-chk"${c.needs_redo ? " checked" : ""}${metaDisabled} /> Needs redo</label>
@@ -6453,12 +6484,6 @@ function cutPanelHtml(c, labels) {
           <span class="gg-fname" title="Suggested export base name (read-only)">${esc(fname)}</span>
           <button type="button" class="gg-btn gg-fname-copy"${nat ? "" : ` disabled title="${esc(NATIVE_READONLY_TIP)}"`}>Copy</button>
         </div>
-        <label class="gg-field-prompt">Prompt
-          <textarea class="gg-cut-prompt-display" rows="2" readonly tabindex="-1" title="Image/video generation prompt">${esc(c.prompt || "")}</textarea>
-        </label>
-        <label class="gg-field-cap">Caption
-          <textarea class="gg-cut-caption-display" rows="2" readonly tabindex="-1" title="Dialogue and narration for this cut">${esc(c.caption || "")}</textarea>
-        </label>
       </div>
       <div class="gg-vers">${vers || '<span class="gg-dim">no versions yet</span>'}</div>
     </div>
@@ -6613,7 +6638,7 @@ function statusPanelHtml() {
   return `
     <div class="gg-sp-title" title="${esc(v.title)}"><span class="gg-num">${esc(v.label)}</span> <span class="gg-sp-name">${esc(v.name)}</span></div>
     <div class="gg-sp-status"><span class="gg-sp-chip gg-sp-${esc(v.status.mode)}" title="${esc(v.status.title)}"><span class="gg-sp-dot"></span>${esc(v.status.text)}</span></div>
-    <div class="gg-sp-meta"><span class="gg-sp-len" title="${esc(v.length.title)}">${esc(v.length.text)}</span><span class="gg-sp-ver" title="${esc(v.version.title)}">${esc(v.version.text)}</span></div>`;
+    <div class="gg-sp-meta"><span class="gg-sp-len${v.infoLength?.drift ? " gg-len-drift" : ""}" title="${esc(v.infoLength?.title || v.length.title)}">${esc(v.infoLength?.text ? `Length (sec) ${v.infoLength.text}` : v.length.text)}</span><span class="gg-sp-ver" title="${esc(v.version.title)}">${esc(v.version.text)}</span></div>`;
 }
 
 const ICON_SVG_ATTRS = 'width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
@@ -6818,16 +6843,23 @@ function mountShots(el) {
     });
     if (c) bindCutPanelFields(panel, c);
   };
-  const FIELD_TEXT_SEL = ".gg-caption-text";
+  const FIELD_TEXT_SEL = ".gg-caption-text, .gg-prompt-text";
+
+  function fieldTextKind(el) {
+    if (el?.classList?.contains("gg-prompt-text")) return "prompt";
+    if (el?.classList?.contains("gg-caption-text")) return "caption";
+    return "";
+  }
 
   function captureFieldTextFocus() {
     const el = document.activeElement;
     if (!el || !root.contains(el)) return null;
-    if (!el.classList.contains("gg-caption-text")) return null;
+    const field = fieldTextKind(el);
+    if (!field) return null;
     const li = el.closest(".gg-cut");
     return {
       cutId: li?.dataset?.cutId || "",
-      field: "caption",
+      field,
       value: el.value,
       selectionStart: el.selectionStart,
       selectionEnd: el.selectionEnd,
@@ -6837,14 +6869,20 @@ function mountShots(el) {
   }
 
   function restoreFieldTextFocus(cap) {
-    if (!cap?.cutId) return;
-    const ta = root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cap.cutId)}"] .gg-caption-text`);
+    if (!cap?.cutId || !cap.field) return;
+    const sel = cap.field === "prompt" ? ".gg-prompt-text" : ".gg-caption-text";
+    const ta = root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cap.cutId)}"] ${sel}`);
     if (!ta) return;
     ta.value = cap.value;
     const c = cutByIdTimeline(cap.cutId);
-    if (c && captionEditChanged(c, cap.value)) {
-      c.caption = cap.value;
-      scheduleCutFieldSave(cap.cutId, { caption: cap.value });
+    if (c) {
+      if (cap.field === "caption" && captionEditChanged(c, cap.value)) {
+        c.caption = cap.value;
+        scheduleCutFieldSave(cap.cutId, { caption: cap.value });
+      } else if (cap.field === "prompt" && String(c.prompt || "") !== cap.value) {
+        c.prompt = cap.value;
+        scheduleCutFieldSave(cap.cutId, { prompt: cap.value });
+      }
     }
     const nat = isNativeProject() && !ta.disabled;
     if (cap.editing && nat) {
@@ -6998,10 +7036,16 @@ function mountShots(el) {
       });
       ta.addEventListener("input", () => {
         const c = cutByIdTimeline(id);
-        if (c) c.caption = ta.value;
-        scheduleCutFieldSave(id, { caption: ta.value });
+        const kind = fieldTextKind(ta);
+        if (c && kind === "caption") {
+          c.caption = ta.value;
+          scheduleCutFieldSave(id, { caption: ta.value });
+          paintViewerCaption();
+        } else if (c && kind === "prompt") {
+          c.prompt = ta.value;
+          scheduleCutFieldSave(id, { prompt: ta.value });
+        }
         autoSizeFieldTextarea(ta);
-        paintViewerCaption();
       });
     });
     refreshFieldTextUnsavedClasses();
@@ -7065,7 +7109,9 @@ function mountShots(el) {
     const sections = shotsSections(cuts, groups);
     const cutLabels = computeCutLabels(tl || { cuts: [] });
     const viewFinal = shotsViewOf(SHOW_FINAL_LIST, shotsUi.view) === "final";
-    const listCaption = normalizeListMode(shotsUi.listMode) === "caption";
+    const listMode = normalizeListMode(shotsUi.listMode);
+    const listCaption = listMode === "caption";
+    const listPrompt = listMode === "prompt";
     const hintInfo = emptyListHint({ projectsLoaded: state.projectsLoaded, projectCount: state.projects.length, timeline: tl, native: !!tl && isNativeProject() });
     const emptyHint = !hintInfo
       ? ""
@@ -7081,7 +7127,7 @@ function mountShots(el) {
         return `${best}/${total}`;
       },
     });
-    root.className = `gg-root gg-shots${listCaption ? " gg-list-caption" : ""}${CUT_PANEL_ROOT_CLASS}`;
+    root.className = `gg-root gg-shots${listCaption ? " gg-list-caption" : ""}${listPrompt ? " gg-list-prompt" : ""}${CUT_PANEL_ROOT_CLASS}`;
     root.innerHTML = `
       <div class="gg-head">
         <span class="gg-sdk-slot"></span>
@@ -7109,8 +7155,9 @@ function mountShots(el) {
           <button type="button" class="gg-btn gg-view-final${viewFinal ? " gg-on" : ""}" data-view="final">Final cut list</button>
         </div>` : ""}
         <div class="gg-list-toggle"${viewFinal ? " hidden" : ""}>
-          <button type="button" class="gg-btn${listCaption ? "" : " gg-on"}" data-mode="info" title="Show cut details">Info</button>
-          <button type="button" class="gg-btn${listCaption ? " gg-on" : ""}" data-mode="caption" title="Edit dialogue / captions per cut">Caption</button>
+          <button type="button" class="gg-btn${listMode === "info" ? " gg-on" : ""}" data-mode="info" title="Show cut details">Info</button>
+          <button type="button" class="gg-btn${listPrompt ? " gg-on" : ""}" data-mode="prompt" title="Edit prompts per cut">Prompt</button>
+          <button type="button" class="gg-btn${listCaption ? " gg-on" : ""}" data-mode="caption" title="Edit dialogue per cut">Caption</button>
         </div>
         ${SHOW_REDO_FILTER ? `<label class="gg-filter-redo" title="Show only cuts marked for redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Show redo cuts only</label>` : ""}
         ${AI_CUT_SPLIT_VISIBLE && tl && isNativeProject() ? `<div class="gg-cutlist-btns">${aiSplitButtonHtml()}</div>` : ""}
@@ -7555,7 +7602,7 @@ const ed = {
   saving: false,
   dragging: false,
 };
-const play = { on: false, t: 0, idx: -1, raf: 0, last: 0 };
+const play = { on: false, t: 0, idx: -1, raf: 0, last: 0, gen: 0 };
 
 const IMG_MIN = 0.5, IMG_MAX = 60, VID_MIN = 0.2;
 const r2 = (x) => Math.round(x * 100 + 1e-6) / 100;
@@ -7789,12 +7836,14 @@ function showFrame(force) {
           vid._ggSeekAt = performance.now();
         }
         if (sync.pause) vid.pause();
-        if (sync.play) vid.play().catch(() => {});
+        if (sync.play) scheduleVideoPlay(vid, play.gen, play);
       } else if (!vid._ggWait) {
         // One wait listener per src; cleared on error/emptied/abort (wireViewerMedia).
         vid._ggWait = true;
+        const metaGen = play.gen;
         const onMeta = () => {
           vid._ggWait = false;
+          guardResolvedPlay(vid, metaGen, play);
           showFrame();
         };
         vid.addEventListener("loadedmetadata", onMeta, { once: true });
@@ -7884,7 +7933,7 @@ function tick(now) {
   const total = totalSec();
   if (play.t >= total) { play.t = total; stopPlay(); showFrame(); return; }
   showFrame();
-  play.raf = requestAnimationFrame(tick);
+  if (play.on) play.raf = requestAnimationFrame(tick);
 }
 
 function leaveExportView() {
@@ -7901,6 +7950,7 @@ function startPlay() {
   if (!cutsNow().length) return;
   leaveExportView();
   if (play.t >= totalSec() - 0.05) play.t = 0;
+  bumpPlaybackGen(play);
   play.on = true;
   play.last = performance.now();
   showFrame(true);
@@ -7908,6 +7958,7 @@ function startPlay() {
 }
 
 function stopPlay() {
+  bumpPlaybackGen(play);
   play.on = false;
   if (play.raf) cancelAnimationFrame(play.raf);
   play.raf = 0;
@@ -7920,6 +7971,7 @@ function togglePlay() { play.on ? stopPlay() : startPlay(); }
 
 function seek(t) {
   leaveExportView();
+  if (play.on) stopPlay();
   play.t = Math.max(0, Math.min(totalSec(), t));
   play.last = performance.now();
   showFrame();
@@ -7980,6 +8032,8 @@ function bindTrim(root) {
         if (snapped) marker.style.left = hit * ed.px + "px";
         const badge = el.querySelector(".gg-clip-dur");
         if (badge) badge.textContent = `${c.sec.toFixed(1)}s`;
+        refreshCutRowBadges(c.id);
+        if (state.cutId === c.id) paintStatusPanel(document.querySelector(".gg-shots .gg-cutpanel"));
         const inb = el.querySelector(".gg-clip-in");
         if (inb) inb.textContent = isVid && c.in > 0 ? `in ${c.in.toFixed(1)}` : "";
         const tip = root.querySelector(".gg-tip");

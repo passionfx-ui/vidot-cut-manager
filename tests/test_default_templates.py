@@ -70,23 +70,21 @@ class BuiltinListTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             gg_template.read_workflow_ref("builtin:nope")
 
-    def test_image_default_is_z_image_turbo(self):
+    def test_image_default_is_flux3_klein(self):
         g = gg_template.read_workflow_ref("builtin:image")
         by_type = {n["type"]: n for n in g["nodes"]}
-        self.assertEqual(by_type["UNETLoader"]["widgets_values"][0], "z_image_turbo_bf16.safetensors")
-        self.assertEqual(by_type["CLIPLoader"]["widgets_values"][:2], ["qwen_3_4b.safetensors", "lumina2"])
-        self.assertEqual(by_type["VAELoader"]["widgets_values"], ["ae.safetensors"])
-        self.assertEqual(by_type["ModelSamplingAuraFlow"]["widgets_values"], [3])
-        self.assertEqual(by_type["EmptySD3LatentImage"]["widgets_values"][:2], [1024, 576])
-        self.assertEqual(by_type["KSampler"]["widgets_values"][2:6], [8, 1, "res_multistep", "simple"])
+        self.assertEqual(by_type["UNETLoader"]["widgets_values"][0], "flux3_image_klein_sd_int8_convrot.safetensors")
+        self.assertEqual(by_type["CLIPLoader"]["widgets_values"][:2], ["qwen3vl_4b_int8_convrot.safetensors", "flux3"])
+        self.assertEqual(by_type["VAELoader"]["widgets_values"], ["flux2-vae.safetensors"])
+        self.assertEqual(by_type["EmptyFlux2LatentImage"]["widgets_values"][:2], [1024, 576])
+        self.assertEqual(by_type["KSampler"]["widgets_values"][2:6], [20, 1, "euler", "simple"])
         self.assertIn("SaveImage", by_type)
         nid, prompt = wn.find_prompt_node(g)
         self.assertEqual((prompt["type"], prompt["title"]), ("CLIPTextEncode", "Prompt"))
         api = gg_wfconvert.ui_to_api(g, mappings={})
         self.assertEqual(api["8"]["inputs"]["positive"], [nid, 0])
         self.assertEqual({k: api["8"]["inputs"][k] for k in ("steps", "cfg", "sampler_name", "scheduler", "denoise")},
-                         {"steps": 8, "cfg": 1, "sampler_name": "res_multistep", "scheduler": "simple", "denoise": 1})
-        self.assertEqual(api["4"]["inputs"], {"shift": 3, "model": ["1", 0]})
+                         {"steps": 20, "cfg": 1, "sampler_name": "euler", "scheduler": "simple", "denoise": 1})
         self.assertEqual(api["7"]["inputs"], {"width": 1024, "height": 576, "batch_size": 1})
 
     def test_video_default_is_ltx_i2v(self):

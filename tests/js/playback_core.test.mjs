@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { decideVideoSync, pauseAllTimelineMedia } from "../../web/gg_playback_core.js";
+import {
+  bumpPlaybackGen,
+  decideVideoSync,
+  guardResolvedPlay,
+  pauseAllTimelineMedia,
+  scheduleVideoPlay,
+} from "../../web/gg_playback_core.js";
 
 const base = {
   want: 1,
@@ -135,5 +141,60 @@ describe("pauseAllTimelineMedia", () => {
     };
     pauseAllTimelineMedia(null, scope);
     assert.equal(track.paused, true);
+  });
+});
+
+describe("timeline playback generation", () => {
+  it("bumpPlaybackGen increments playState.gen", () => {
+    const state = { gen: 0, on: true };
+    assert.equal(bumpPlaybackGen(state), 1);
+    assert.equal(state.gen, 1);
+    assert.equal(bumpPlaybackGen(state), 2);
+  });
+
+  it("guardResolvedPlay pauses when transport stopped", () => {
+    let paused = false;
+    const vid = { pause() { paused = true; } };
+    guardResolvedPlay(vid, 1, { gen: 1, on: false });
+    assert.equal(paused, true);
+  });
+
+  it("guardResolvedPlay leaves playing when generation matches", () => {
+    let paused = false;
+    const vid = { pause() { paused = true; } };
+    guardResolvedPlay(vid, 3, { gen: 3, on: true });
+    assert.equal(paused, false);
+  });
+
+  it("guardResolvedPlay pauses when generation advanced", () => {
+    let paused = false;
+    const vid = { pause() { paused = true; } };
+    guardResolvedPlay(vid, 2, { gen: 5, on: true });
+    assert.equal(paused, true);
+  });
+
+  it("scheduleVideoPlay skips when not playing", () => {
+    let called = false;
+    const vid = { play() { called = true; } };
+    scheduleVideoPlay(vid, 0, { gen: 0, on: false });
+    assert.equal(called, false);
+  });
+
+  it("scheduleVideoPlay guards a resolving play promise", async () => {
+    let paused = false;
+    const vid = {
+      play() {
+        return Promise.resolve().then(() => {});
+      },
+      pause() {
+        paused = true;
+      },
+    };
+    const state = { gen: 1, on: true };
+    scheduleVideoPlay(vid, 1, state);
+    state.on = false;
+    state.gen = 2;
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(paused, true);
   });
 });
