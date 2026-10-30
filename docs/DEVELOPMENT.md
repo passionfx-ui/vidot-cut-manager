@@ -110,6 +110,7 @@ Routes (in addition to existing `/gonggan/*`):
 - `POST /gonggan/project/rename` `{pid, name}`
 - `POST /gonggan/folder/check` `{path}` — Output folder check (empty, existing writable folder, or creatable under a writable parent; creates nothing); 400 `{ok:false, message}` otherwise
 - `POST /gonggan/project/delete` `{pid}` · `POST /gonggan/project/restore` `{pid}`
+- `POST /gonggan/import-version` multipart `{pid, cut_id, file}` (0.9.112) — copies the file into the project's `assets` under a new version id name (never overwrites, original untouched) and adds it as the cut's newest version; version row **Import** button
 - `GET /gonggan/projects` — share projects plus native (`native: true|false`)
 
 ## Work stages & progress (0.7.0)
