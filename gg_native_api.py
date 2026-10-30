@@ -10,12 +10,14 @@ try:
     from .gg_project.timeline import timeline_order
     from .gg_project.ids import is_uuid_id
     from .gg_project.project_settings import make_project_folder
+    from .gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids
 except ImportError:  # unittest / plain script
     from gg_data import PACK_DIR, clamp_clip  # type: ignore
     from gg_project import LocalStore  # type: ignore
     from gg_project.timeline import timeline_order  # type: ignore
     from gg_project.ids import is_uuid_id  # type: ignore
     from gg_project.project_settings import make_project_folder  # type: ignore
+    from gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids  # type: ignore
 
 try:
     from . import gg_template
@@ -45,8 +47,12 @@ def set_native_store(store: LocalStore) -> None:
     _STORE = store
 
 
+def hidden_projects_path() -> Path:
+    return native_store().projects_dir / HIDDEN_FILE_NAME
+
+
 def merge_projects_list(share_payload: dict) -> dict:
-    """Append native projects; mark share items native:false."""
+    """Append native projects; mark share items native:false; omit ids in hidden_projects.json."""
     out = dict(share_payload)
     projects = []
     for p in share_payload.get("projects") or []:
@@ -71,7 +77,10 @@ def merge_projects_list(share_payload: dict) -> dict:
             "native": True,
         })
     native_rows.sort(key=lambda r: (r.get("name") or "").lower())
-    out["projects"] = native_rows + projects
+    hidden = load_hidden_ids(hidden_projects_path())
+    out["projects"] = filter_hidden(native_rows + projects, hidden)
+    if out.get("active_project_id") in hidden:
+        out["active_project_id"] = None
     return out
 
 
@@ -155,7 +164,10 @@ def native_save_edit(pid: str, order, clips) -> dict | None:
         valid = {v["id"]: v for v in c.get("versions_list") or []}
         if not (isinstance(pick, str) and pick in valid):
             pick = None
-        kind = valid[pick]["kind"] if pick else (c["media"]["kind"] if c.get("media") else None)
+        if pick:
+            kind = None if valid[pick].get("missing") else valid[pick]["kind"]
+        else:
+            kind = c["media"]["kind"] if c.get("media") else None
         src_dur = c.get("src_dur")
         i, sec = clamp_clip(kind, e.get("in", c["in"]), e.get("sec", c["sec"]), src_dur)
         out = {"in": i, "sec": sec, **({"pick": pick} if pick else {})}
