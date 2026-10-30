@@ -863,7 +863,8 @@ async def gg_generate_all(request):
     if data.get("confirm") is not True:
         return _err(400, "confirm required")
     try:
-        res = await asyncio.to_thread(gg_sdk.start_generate_all, pid, data.get("cut_ids"))
+        res = await asyncio.to_thread(gg_sdk.start_generate_all, pid, data.get("cut_ids"),
+                                      new_seed=data.get("random_seed") is True)
     except ValueError as ex:
         return _err(400, str(ex))
     return web.json_response(res, status=200 if res.get("ok") else 409)
