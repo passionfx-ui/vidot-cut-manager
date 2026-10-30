@@ -38,7 +38,9 @@ def _png(path: Path) -> Path:
 
 
 def _animated_webp(path: Path) -> Path:
-    path.write_bytes(b"RIFF" + b"\x20\x00\x00\x00" + b"WEBPVP8X" + b"\x0a\x00\x00\x00" + b"\x02" + b"\x00" * 16)
+    frame = b"ANMF" + struct.pack("<I", 16) + b"\x00" * 12 + (40).to_bytes(3, "little") + b"\x00"
+    body = b"VP8X" + struct.pack("<I", 10) + b"\x02" + b"\x00" * 9 + frame * 2
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body) + 4) + b"WEBP" + body)
     return path
 
 
@@ -298,7 +300,7 @@ class ImageToVideoTests(ProjectDefaultsBase):
         self.assertEqual(na.pick_start_version(self.pid, self.cut, mid["id"])[0]["id"], old["id"], "Best wins")
 
     def test_no_image_version(self):
-        with self.assertRaisesRegex(ValueError, "no image version"):
+        with self.assertRaisesRegex(ValueError, "no still image version"):
             gg_sdk.image_to_video_plan(self.pid, self.cut)
 
     def test_start_image_node_rule_errors(self):

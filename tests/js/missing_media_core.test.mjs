@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { noMediaText, noMediaThumbClass, versionMedia } from "../../web/gg_missing_media_core.js";
+import { isAnimatedImage, noMediaText, noMediaThumbClass, playsAsVideo, versionMedia } from "../../web/gg_missing_media_core.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const js = readFileSync(join(__dirname, "../../web/gonggan.js"), "utf8");
@@ -16,8 +16,31 @@ const fnBody = (name) => {
 describe("versionMedia (0.9.102)", () => {
   it("maps a version row to clip media", () => {
     const v = { id: "v1", kind: "video", width: 640, height: 360, seconds: 2, model: "m", source: "native", created: 5 };
-    assert.deepEqual(versionMedia(v), { id: "v1", kind: "video", width: 640, height: 360, seconds: 2, model: "m", source: "native" });
+    assert.deepEqual(versionMedia(v), { id: "v1", kind: "video", animated: false, width: 640, height: 360, seconds: 2, model: "m", source: "native" });
     assert.deepEqual(versionMedia({ ...v, missing: false }), versionMedia(v));
+    assert.equal(versionMedia({ ...v, animated: true }).animated, true);
+  });
+});
+
+describe("animated images (0.9.119)", () => {
+  it("animated = kind video drawn as an image; only real videos play in <video>", () => {
+    const anim = { id: "a", kind: "video", animated: true };
+    assert.equal(isAnimatedImage(anim), true);
+    assert.equal(playsAsVideo(anim), false);
+    assert.equal(playsAsVideo({ id: "v", kind: "video" }), true);
+    assert.equal(isAnimatedImage({ id: "v", kind: "video" }), false);
+    assert.equal(playsAsVideo({ id: "i", kind: "image", animated: true }), false);
+    assert.equal(isAnimatedImage({ id: "i", kind: "image", animated: true }), false);
+    assert.equal(playsAsVideo(null), false);
+  });
+
+  it("gonggan.js: thumb, viewer frame and preload use playsAsVideo (animated media goes to <img>)", () => {
+    assert.match(fnBody("thumbHtml"), /if \(playsAsVideo\(media\)\) \{/);
+    const show = fnBody("showFrame");
+    assert.match(show, /if \(playsAsVideo\(c\.media\)\) \{\n\s*img\.hidden = true; blank\.hidden = true; vid\.hidden = false;/);
+    assert.match(show, /if \(c && playsAsVideo\(c\.media\)\) \{\n\s*vid\.muted/);
+    assert.match(fnBody("preloadNext"), /if \(playsAsVideo\(c\.media\)\) \{/);
+    assert.match(js, /c\.media && c\.media\.kind === "video" \? '<span class="gg-badge">▶<\/span>'/, "still gets the video badge");
   });
 
   it("is no media for a missing file or no row", () => {

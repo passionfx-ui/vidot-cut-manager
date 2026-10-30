@@ -199,7 +199,7 @@ import {
   stripCutsFromGroups,
 } from "./gg_group_list_core.js";
 import { decideVideoSync } from "./gg_playback_core.js";
-import { noMediaText, noMediaThumbClass, versionMedia } from "./gg_missing_media_core.js";
+import { noMediaText, noMediaThumbClass, playsAsVideo, versionMedia } from "./gg_missing_media_core.js";
 import {
   needsDurationProbe,
   formatClipDuration,
@@ -424,7 +424,7 @@ const fmt = (t) => {
 function thumbHtml(media, cls) {
   if (!media) return `<div class="${cls} gg-thumb-empty">no media</div>`;
   const url = esc(mediaUrl(media.id));
-  if (media.kind === "video") {
+  if (playsAsVideo(media)) {
     // poster from the pack cache; the video itself loads only on hover (preload=none)
     return `<video class="${cls} gg-thumb-vid" draggable="false" src="${url}" poster="${esc(posterUrl(media.id))}" muted playsinline preload="none"></video>`;
   }
@@ -7434,7 +7434,7 @@ function showFrame(force) {
     }
     const dispNum = cutDisplayLabel(c, computeCutLabels(state.timeline));
     label.textContent = c.group_name ? `Scene · ${c.group_name} — ${dispNum}. ${c.name}` : `${dispNum}. ${c.name}`;
-    if (c.media && c.media.kind === "video") {
+    if (playsAsVideo(c.media)) {
       img.hidden = true; blank.hidden = true; vid.hidden = false;
       const url = mediaUrl(c.media.id);
       if (vid.dataset.src !== url) { vid.dataset.src = url; vid.src = url; vid._ggSeekAt = 0; }
@@ -7448,7 +7448,7 @@ function showFrame(force) {
     }
     preloadNext(i + 1);
   }
-  if (c && c.media && c.media.kind === "video") {
+  if (c && playsAsVideo(c.media)) {
     vid.muted = !ed.sound;
     const want = c.in + local;
     try {
@@ -7488,7 +7488,7 @@ function preloadNext(i) {
   const c = trackClips()[i];
   if (!viewer || !c || !c.media) return;
   const url = mediaUrl(c.media.id);
-  if (c.media.kind === "video") {
+  if (playsAsVideo(c.media)) {
     if (viewer.next.dataset.src !== url) {
       viewer.next.dataset.src = url;
       viewer.next._ggWait = false;
