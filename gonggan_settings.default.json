@@ -1,5 +1,6 @@
 {
   "data_root": "",
   "uid": "demo",
-  "ollama_url": "http://127.0.0.1:11434"
+  "cut_split_clip": "qwen3vl_4b_int8_convrot.safetensors",
+  "cut_split_clip_type": "stable_diffusion"
 }

@@ -344,13 +344,9 @@
 .gg-shots .gg-list-toggle .gg-btn.gg-on { background: var(--gg-acc); color: #1a1a1a; }
 .gg-shots .gg-cutlist-btns { display: flex; gap: 2px; margin-left: auto; }
 .gg-shots .gg-cutlist-btns .gg-btn { font-size: 10px; padding: 2px 6px; white-space: nowrap; }
-.gg-modal.gg-cutlist-modal { max-width: 560px; width: min(560px, calc(100vw - 32px)); box-sizing: border-box; }
-.gg-cutlist-modal .gg-cutlist-text { width: 100%; box-sizing: border-box; resize: vertical; min-height: 160px; font: 11px/1.4 ui-monospace, Consolas, monospace; padding: 6px; border-radius: 4px; border: 1px solid var(--gg-line, #353a44); background: #1b1d22; color: inherit; }
-.gg-cutlist-modal .gg-cutlist-err, .gg-aisplit-modal .gg-aisplit-err { white-space: pre-line; }
+.gg-aisplit-modal .gg-aisplit-err { white-space: pre-line; }
 .gg-modal.gg-aisplit-modal { max-width: 560px; width: min(560px, calc(100vw - 32px)); box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; }
 .gg-aisplit-modal .gg-aisplit-story { width: 100%; box-sizing: border-box; resize: vertical; min-height: 150px; font-family: inherit; font-size: 12px; line-height: 1.45; padding: 6px; border-radius: 4px; border: 1px solid var(--gg-line, #353a44); background: #1b1d22; color: inherit; }
-.gg-aisplit-modal .gg-aisplit-model { width: 100%; box-sizing: border-box; }
-.gg-aisplit-modal .gg-aisplit-keep { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
 .gg-shots .gg-cut { align-items: flex-start; }
 .gg-shots .gg-caption-text {
   width: 100%;

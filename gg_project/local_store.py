@@ -495,7 +495,7 @@ class LocalStore:
         entries: list[dict[str, Any]],
         after: str | None = None,
     ) -> tuple[dict[str, Any], list[str]]:
-        """Paste Cut List: new cuts in list order after `after` (in its scene, else loose at the end), one save.
+        """AI Cut Split: new cuts in list order after `after` (in its scene, else loose at the end), one save.
 
         entries: [{name, caption, sec, prompt, graph}]; `graph` becomes the cut's own workflow."""
         if not isinstance(entries, list) or not entries:

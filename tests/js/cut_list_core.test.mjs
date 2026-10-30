@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import * as core from "../../web/gg_cut_list_core.js";
 import {
-  CUT_SPLIT_PROMPT,
-  LTX_WORKFLOWS,
   DESCRIPTION_MAX_LEN,
   extractJsonArray,
   extractCutItems,
@@ -12,36 +12,13 @@ import {
   cutListSummary,
   createCutsConfirmMessage,
   cutListPayload,
-  cutListWorkflowOptions,
-  OLLAMA_DEFAULT_URL,
-  ollamaBaseUrl,
-  ollamaModelsQuery,
-  pickDefaultModel,
-  aiCutSplitPayload,
-  ollamaUnavailableText,
+  cutListWorkflow,
+  aiCutSplitStatusText,
 } from "../../web/gg_cut_list_core.js";
 import { splitConfirmMessage } from "../../web/gg_confirm_core.js";
 
 const item = (cut, duration, description = "A red fox runs through snow, tracking shot.") => ({ cut, duration, description });
 const json = (arr) => JSON.stringify(arr, null, 2);
-
-describe("Cut Split prompt", () => {
-  it("asks for the JSON array with cut, duration, description and ends with STORY:", () => {
-    assert.match(CUT_SPLIT_PROMPT, /Return ONLY a JSON array/);
-    for (const k of ['"cut"', '"duration"', '"description"']) assert.ok(CUT_SPLIT_PROMPT.includes(k), k);
-    assert.ok(!CUT_SPLIT_PROMPT.includes("ltx_prompt"));
-    assert.match(CUT_SPLIT_PROMPT, /never more than 3/);
-    assert.match(CUT_SPLIT_PROMPT, /One action per cut/);
-    assert.match(CUT_SPLIT_PROMPT, /in English/);
-    assert.match(CUT_SPLIT_PROMPT, /video prompt and as the cut name/);
-    assert.ok(CUT_SPLIT_PROMPT.trimEnd().endsWith("STORY:"));
-  });
-
-  it("offers text to video first (default)", () => {
-    assert.equal(LTX_WORKFLOWS[0].id, "t2v");
-    assert.ok(LTX_WORKFLOWS.some((w) => w.id === "i2v"));
-  });
-});
 
 describe("extractJsonArray / extractCutItems", () => {
   it("returns a bare array", () => {
@@ -68,7 +45,7 @@ describe("extractJsonArray / extractCutItems", () => {
     assert.equal(extractJsonArray(""), null);
   });
 
-  it("unwraps {cuts: [...]}, a single other list, or one cut object (Ollama format json)", () => {
+  it("unwraps {cuts: [...]}, a single other list, or one cut object", () => {
     const arr = [item(1, 2)];
     assert.deepEqual(extractCutItems(JSON.stringify({ cuts: arr })).items, arr);
     assert.deepEqual(extractCutItems(JSON.stringify({ shots: arr, title: "t" })).items, arr);
@@ -144,7 +121,7 @@ describe("parseCutList", () => {
   });
 
   it("fails on empty input, no array, bad JSON, empty array", () => {
-    assert.match(parseCutList("").errors[0], /Paste the JSON/);
+    assert.deepEqual(parseCutList("").errors, ["The answer is empty."]);
     assert.match(parseCutList("hello").errors[0], /No JSON array/);
     assert.match(parseCutList('[{"cut": 1,}]').errors[0], /Not valid JSON/);
     assert.match(parseCutList("[]").errors[0], /empty/);
@@ -187,41 +164,38 @@ describe("confirm + payload", () => {
     assert.equal("workflow" in cutListPayload("p", cuts, "", "c1"), false, "no workflow = the project's Video template");
   });
 
-  it("workflow choices start with the project's Video template (0.9.117)", () => {
-    const opts = cutListWorkflowOptions({ video_template: "builtin:video-ltx-t2v" });
-    assert.deepEqual(opts.map((o) => o.id), ["", "t2v", "i2v"]);
-    assert.equal(opts[0].label, "Project Video template (Video LTX text-to-video)");
-    assert.equal(cutListWorkflowOptions(null)[0].label, "Project Video template (Video LTX (default))");
-    assert.equal(cutListWorkflowOptions({ video_template: "my/ltx.json" })[0].label, "Project Video template (my/ltx.json)");
+  it("new cuts use the project's Video template (0.9.117)", () => {
+    assert.deepEqual(cutListWorkflow({ video_template: "builtin:video-ltx-t2v" }),
+      { id: "", label: "Project Video template (Video LTX text-to-video)" });
+    assert.equal(cutListWorkflow(null).label, "Project Video template (Video LTX (default))");
+    assert.equal(cutListWorkflow({ video_template: "my/ltx.json" }).label, "Project Video template (my/ltx.json)");
   });
 });
 
-describe("AI Cut Split helpers", () => {
-  it("base URL: trimmed, no trailing slash, blank = server default", () => {
-    assert.equal(ollamaBaseUrl(" http://box:11434/ "), "http://box:11434");
-    assert.equal(ollamaBaseUrl(undefined), "");
-    assert.equal(ollamaModelsQuery(""), "");
-    assert.equal(ollamaModelsQuery("http://box:1/"), "?base_url=http%3A%2F%2Fbox%3A1");
+describe("AI Cut Split (0.9.122: TextGenerate through the Comfy SDK)", () => {
+  it("status line: summary, model, retries only when there were any", () => {
+    const parsed = parseCutList(json([item(1, 2), item(2, 3)]));
+    assert.equal(aiCutSplitStatusText(parsed, { model: "qwen3vl_4b_int8_convrot.safetensors", attempts: 1 }),
+      "2 cuts · 5 s total · qwen3vl_4b_int8_convrot.safetensors");
+    assert.equal(aiCutSplitStatusText(parsed, { model: "m", attempts: 2 }), "2 cuts · 5 s total · m · 1 retry");
+    assert.equal(aiCutSplitStatusText(parsed, { attempts: 3 }), "2 cuts · 5 s total · 2 retries");
+    assert.equal(aiCutSplitStatusText(parsed), "2 cuts · 5 s total");
   });
 
-  it("request: keep_loaded false by default, base_url only when set", () => {
-    assert.deepEqual(aiCutSplitPayload({ story: "S", model: "qwen2.5:7b" }), { story: "S", model: "qwen2.5:7b", keep_loaded: false });
-    assert.deepEqual(aiCutSplitPayload({ story: "S", model: "m", keepLoaded: true, baseUrl: "http://x:1/" }),
-      { story: "S", model: "m", keep_loaded: true, base_url: "http://x:1" });
+  it("no Ollama, copy prompt or paste helpers are left", () => {
+    for (const name of ["CUT_SPLIT_PROMPT", "LTX_WORKFLOWS", "cutListWorkflowOptions", "OLLAMA_DEFAULT_URL", "ollamaBaseUrl",
+      "ollamaModelsQuery", "pickDefaultModel", "aiCutSplitPayload", "ollamaUnavailableText"]) {
+      assert.equal(name in core, false, name);
+    }
   });
 
-  it("default model: last used, else qwen2.5, else first", () => {
-    assert.equal(pickDefaultModel(["llama3:8b", "qwen2.5:7b"], "llama3:8b"), "llama3:8b");
-    assert.equal(pickDefaultModel(["llama3:8b", "qwen2.5:7b"], "gone"), "qwen2.5:7b");
-    assert.equal(pickDefaultModel(["llama3:8b"], ""), "llama3:8b");
-    assert.equal(pickDefaultModel([], ""), "");
-  });
-
-  it("unreachable text names the URL and the Paste Cut List backup", () => {
-    const t = ollamaUnavailableText({ code: "unreachable", url: "" });
-    assert.match(t, new RegExp(`^Ollama not running at ${OLLAMA_DEFAULT_URL.replace(/\./g, "\\.")}\\.`));
-    assert.match(t, /Paste Cut List/);
-    assert.match(ollamaUnavailableText({ code: "no_models", url: "http://h:1" }), /No models installed in Ollama at http:\/\/h:1.*ollama pull/);
-    assert.match(ollamaUnavailableText({ code: "http", message: "Ollama error 500: boom" }), /^Ollama error 500: boom/);
+  it("Shots keeps AI Cut Split and drops the Ollama model list, Keep LLM loaded, Copy / Paste buttons", () => {
+    const js = readFileSync(new URL("../../web/gonggan.js", import.meta.url), "utf8");
+    assert.match(js, /class="gg-btn gg-primary gg-ai-split"/);
+    assert.match(js, /postJson\("\/gonggan\/ai-cut-split", \{ story: story\.value \}\)/);
+    for (const gone of [/ollama/i, /Keep LLM loaded/, /gg-aisplit-model/, /gg-copy-split/, /gg-paste-cuts/,
+      /Copy Cut Split Prompt/, /Paste Cut List/, /openPasteCutListModal/, /copyTextToClipboard/]) {
+      assert.doesNotMatch(js, gone);
+    }
   });
 });
