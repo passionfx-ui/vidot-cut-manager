@@ -113,7 +113,7 @@ describe("e2e tests use current selectors and labels", () => {
   const read = (f) => fs.readFileSync(path.join(E2E_DIR, f), "utf8");
 
   it("no action on removed controls (selection bar, top Render, old New Project fields)", () => {
-    const stale = /page\.(click|select|type|waitForSelector|\$eval|\$\$eval)\(\s*[`"'][^`"']*\.gg-(selbar|sel-group|sel-ungroup|sel-x|sel-count|render-btn|render-row|modal-tpl|split-text|split-copy|split-preview)\b/;
+    const stale = /page\.(click|select|type|waitForSelector|\$eval|\$\$eval)\(\s*[`"'][^`"']*\.gg-(selbar|sel-group|sel-ungroup|sel-x|sel-count|render-btn|render-row|modal-tpl|split-text|split-copy|split-preview|fp-path)\b/;
     const hits = files.flatMap((f) => read(f).split("\n").map((line, i) => [f, i + 1, line]).filter(([, , line]) => stale.test(line)));
     assert.deepEqual(hits.map(([f, n]) => `${f}:${n}`), []);
   });
