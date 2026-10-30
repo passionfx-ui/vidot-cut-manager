@@ -1,6 +1,7 @@
 /** Pure context-menu item lists for cut cards, timeline clips and scene headers (no DOM). */
 
 import { queueButtonState } from "./gg_batch_render_core.js";
+import { importButtonState, IMPORT_MENU_LABEL } from "./gg_version_strip_core.js";
 
 export const SINGLE_CUT_TIP = "Select a single cut";
 export const SDK_BUSY_TIP = "Comfy SDK is busy";
@@ -64,7 +65,7 @@ export function cutActionItems(ctx = {}) {
  * @param {{ native?: boolean, multi?: boolean, needsRedo?: boolean, sdkBusy?: boolean, sdkOk?: boolean,
  *   emptyCut?: boolean, readonlyTip?: string, canMoveUp?: boolean, canMoveDown?: boolean, inScene?: boolean, anyInScene?: boolean,
  *   trashLabel?: string, trashCount?: number, queueCount?: number, queuedCount?: number, failedCount?: number,
- *   hasImage?: boolean }} ctx
+ *   hasImage?: boolean, importBusy?: boolean }} ctx
  *   queueCount: selected cuts (default 1); queuedCount / failedCount: selected cuts with a still-queued /
  *   failed prompt (Remove from queue / Re-queue are listed only then); hasImage: the cut has an image version
  *   (Image to Video, native only)
@@ -87,6 +88,8 @@ export function cutCardMenuItems(ctx = {}) {
     : [];
   const i2vTitle = ctx.multi ? SINGLE_CUT_TIP : ctx.sdkBusy ? BUSY_TIP : !ctx.hasImage ? I2V_NO_IMAGE_TIP : "";
   const i2vItems = nat ? [{ key: "i2v", label: "Image to Video", disabled: !!i2vTitle, title: i2vTitle }] : [];
+  const imp = importButtonState({ native: nat, hasCut: !ctx.multi, busy: ctx.importBusy });
+  const importItem = { key: "importVer", label: IMPORT_MENU_LABEL, disabled: imp.disabled, title: imp.title };
   return [
     { key: "group", label: "Group" },
     { key: "ungroup", label: "Ungroup", disabled: !ctx.inScene && !ctx.anyInScene },
@@ -96,6 +99,7 @@ export function cutCardMenuItems(ctx = {}) {
     a.redo,
     a.rename,
     { key: "addCut", label: "Add Cut" },
+    importItem,
     a.regen,
     ...i2vItems,
     { key: "queueSel", label: "Queue selected", disabled: q.disabled, title: q.title },

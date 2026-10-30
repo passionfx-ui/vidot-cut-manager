@@ -86,7 +86,7 @@ describe("cutCardMenuItems", () => {
     const items = cutCardMenuItems({ native: true, sdkOk: true, canMoveUp: true, trashCount: 2, trashLabel: "Trash (2)…" });
     assert.deepEqual(keys(items), [
       "group", "ungroup", "sep", "moveUp", "moveDown", "moveToScene", "split",
-      "redo", "rename", "addCut", "regen", "i2v", "queueSel", "send", "del", "trash",
+      "redo", "rename", "addCut", "importVer", "regen", "i2v", "queueSel", "send", "del", "trash",
     ]);
     assert.deepEqual(items.slice(0, 3).map((i) => i.label), ["Group", "Ungroup", undefined]);
     assert.equal(items[2], MENU_SEPARATOR);
@@ -96,6 +96,14 @@ describe("cutCardMenuItems", () => {
     assert.equal(byKey(items, "trash").label, "Trash (2)…");
     assert.equal(byKey(items, "trash").disabled, false);
     assert.equal(byKey(items, "trash").title, TRASH_TIP);
+  });
+  it("Import image or video (0.9.118): native only, one cut, same disabled rules as the + tile", () => {
+    const on = byKey(cutCardMenuItems({ native: true }), "importVer");
+    assert.equal(on.label, "Import image or video…");
+    assert.equal(on.disabled, false);
+    assert.equal(byKey(cutCardMenuItems({ native: true, multi: true }), "importVer").disabled, true);
+    assert.equal(byKey(cutCardMenuItems({ native: false }), "importVer").disabled, true);
+    assert.equal(byKey(cutCardMenuItems({ native: true, importBusy: true }), "importVer").disabled, true);
   });
   it("Image to Video (0.9.117): native only, needs one cut with an image version and no SDK job starting", () => {
     assert.equal(byKey(cutCardMenuItems({ native: true, hasImage: true }), "i2v").disabled, false);
