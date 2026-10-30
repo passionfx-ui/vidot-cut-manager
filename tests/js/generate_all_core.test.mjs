@@ -69,20 +69,19 @@ describe("progress, buttons, confirm, toast", () => {
     assert.equal(generateAllProgressView({ ...b, status: "done", items: [{ cut_id: "a", status: "done" }] }, "p").show, false);
   });
 
-  it("Queue: one cut = single, none = generate-all, several = selected batch; Stop while batch runs", () => {
+  it("Queue: one cut = single, none = none, two+ = generate batch; Stop while batch runs", () => {
     assert.equal(queueClickAction({ native: true, selected: 1 }), "single");
-    assert.equal(queueClickAction({ native: true, selected: 0 }), "all");
-    assert.equal(queueClickAction({ native: true, selected: 3 }), "selected");
-    assert.equal(queueClickAction({ native: false, selected: 0 }), "selected");
-    const q = queueButtonState({ count: 0, native: true, allCount: 4 });
-    assert.deepEqual(q, { label: "Queue", mode: "all", disabled: false, title: "Nothing selected: generate all 4 cuts one by one (Comfy SDK)" });
+    assert.equal(queueClickAction({ native: true, selected: 0 }), "none");
+    assert.equal(queueClickAction({ native: true, selected: 3 }), "generate");
+    assert.equal(queueClickAction({ native: false, selected: 0 }), "none");
+    assert.equal(queueClickAction({ native: false, selected: 2 }), "none");
+    assert.deepEqual(queueButtonState({ count: 0, native: true }), { label: "Queue", mode: "queue", disabled: true, title: "" });
     const run = batch("running", [["a", "generating"]]);
-    const stop = queueButtonState({ count: 0, native: true, allCount: 4, allRunning: true, batch: run, projectId: "p" });
+    const stop = queueButtonState({ count: 0, native: true, allRunning: true, batch: run, projectId: "p" });
     assert.deepEqual([stop.mode, stop.label, stop.disabled], ["stop", "Stop", false]);
-    assert.equal(queueButtonState({ count: 0, native: true, allCount: 4, allRunning: true, batch: { ...run, stop: true }, projectId: "p" }).disabled, true);
-    assert.equal(queueButtonState({ count: 0, native: true, allCount: 4, allRunning: true, batch: run, projectId: "other" }).disabled, true);
-    assert.equal(queueButtonState({ count: 0, native: true }).disabled, true);
-    assert.equal(queueButtonState({ count: 2, native: true, allCount: 4 }).title, "Queue 2 cuts to ComfyUI");
+    assert.equal(queueButtonState({ count: 0, native: true, allRunning: true, batch: { ...run, stop: true }, projectId: "p" }).disabled, true);
+    assert.equal(queueButtonState({ count: 0, native: true, allRunning: true, batch: run, projectId: "other" }).disabled, true);
+    assert.equal(queueButtonState({ count: 2, native: true }).title, "Queue 2 cuts to ComfyUI");
     assert.equal(isGenerateAllRunning(run), true);
     assert.equal(isGenerateAllRunning(null), false);
   });

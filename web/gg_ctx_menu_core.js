@@ -75,6 +75,12 @@ export function cutCardMenuItems(ctx = {}) {
   const a = cutActionItems(ctx);
   const q = queueButtonState({ count: ctx.queueCount ?? 1, native: nat, busy: ctx.sdkBusy });
   const rq = queueButtonState({ count: ctx.failedCount || 0, native: nat, busy: ctx.sdkBusy });
+  const selectAll = {
+    key: "selectAll",
+    label: "Select all",
+    disabled: !ctx.hasListCuts,
+    title: ctx.allSelected ? "Clear selection" : "",
+  };
   const queueItems = [
     ...(ctx.queuedCount > 0 ? [{ key: "removeQueue", label: "Remove from queue" }] : []),
     ...(ctx.failedCount > 0 ? [{ key: "requeue", label: "Re-queue", disabled: rq.disabled, title: rq.title }] : []),
@@ -91,6 +97,7 @@ export function cutCardMenuItems(ctx = {}) {
   const imp = importButtonState({ native: nat, hasCut: !ctx.multi, busy: ctx.importBusy });
   const importItem = { key: "importVer", label: IMPORT_MENU_LABEL, disabled: imp.disabled, title: imp.title };
   return [
+    selectAll,
     { key: "group", label: "Group" },
     { key: "ungroup", label: "Ungroup", disabled: !ctx.inScene && !ctx.anyInScene },
     MENU_SEPARATOR,

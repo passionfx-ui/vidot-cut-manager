@@ -58,11 +58,11 @@ export function generateAllProgressView(batch, projectId) {
   };
 }
 
-/** What the Queue button does: one cut through the SDK, the selected cuts, or every cut (nothing selected). */
+/** What the Queue button does for a native project (0 selected = none; caller keeps the button disabled). */
 export function queueClickAction({ native = false, selected = 0 } = {}) {
-  if (native && selected === 1) return "single";
-  if (native && selected === 0) return "all";
-  return "selected";
+  if (!native || selected < 1) return "none";
+  if (selected === 1) return "single";
+  return "generate";
 }
 
 /** Confirm text for Generate All: title line, then the first cuts. */

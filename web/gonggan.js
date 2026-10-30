@@ -125,6 +125,9 @@ import {
   shotsKeyAction,
   stepCutId,
   selectAllCutIds,
+  allVisibleCutsSelected,
+  toggleAllCutSelection,
+  listAllButtonView,
 } from "./gg_cut_select_core.js";
 import {
   selectedInDisplayOrder,
@@ -132,7 +135,6 @@ import {
   batchRenderConfirmMessage,
   batchRenderSummary,
   queueButtonState,
-  QUEUE_EMPTY_TIP,
   queueDeleteBody,
   loadRandomSeedOn,
   saveRandomSeedOn,
@@ -2977,7 +2979,7 @@ async function createCutsFromList(reqPid, cuts, wf) {
     recordShotsEntry(reqPid, { kind: "cuts", op: "add", ids, before, after: snapshotOrderGroups(state.timeline) });
     selectCut(ids[0]);
   }
-  ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, `Each cut has ${wf.id ? "the LTX workflow" : "the project's Video template"} with its description as the prompt. Press Queue with no cut selected to render them in order.`, "ok");
+  ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, `Each cut has ${wf.id ? "the LTX workflow" : "the project's Video template"} with its description as the prompt. Select them and press Queue to render in order.`, "ok");
   return true;
 }
 
@@ -3684,20 +3686,24 @@ function openCutContextMenu(e, cutId) {
   const ids = cutSelIds();
   const c = cutById(cutId);
   const nat = isNativeProject();
-  const order = state.timeline ? state.timeline.cuts.map((x) => x.id) : [];
+  const moveOrder = state.timeline ? state.timeline.cuts.map((x) => x.id) : [];
   const failedIds = ids.filter((id) => renderStatus.isFailed(state.pid, id));
+  const { order, hidden } = shotsNavOrder();
+  const visible = selectAllCutIds(order, hidden);
   const items = cutCardMenuItems({
     ...cutMenuCtx(cutId, ids.length > 1),
-    canMoveUp: canMoveUp(order, ids),
-    canMoveDown: canMoveDown(order, ids),
+    canMoveUp: canMoveUp(moveOrder, ids),
+    canMoveDown: canMoveDown(moveOrder, ids),
     inScene: !!(c && c.group_id),
     anyInScene: ids.some((id) => cutById(id)?.group_id),
     trashLabel: trashMenuLabel(),
     trashCount,
-    queueCount: ids.length,
+    queueCount: timelineSelectedCutIds().length || ids.length,
     queuedCount: ids.filter((id) => renderStatus.queuedPromptIds(state.pid, id).length).length,
     failedCount: failedIds.length,
     hasImage: cutHasStartImage(c),
+    hasListCuts: visible.length > 0,
+    allSelected: allVisibleCutsSelected(order, hidden, state.cutSel),
   });
   showCtxMenu(
     e.clientX,
@@ -3706,9 +3712,10 @@ function openCutContextMenu(e, cutId) {
       items,
       {
         ...cutMenuActions(cutId),
+        selectAll: () => applyToggleSelectAllCuts(),
         importVer: () => pickVersionImportFiles(cutId),
         i2v: () => imageToVideoCut(cutId),
-        queueSel: () => queueSelectedCuts(),
+        queueSel: () => void queueButtonClick(),
         removeQueue: () => removeCutsFromQueue(ids),
         requeue: () => queueSelectedCuts(failedIds),
         moveUp: () => applyStepMove(-1),
@@ -3807,6 +3814,15 @@ function openShotsPanelContextMenu(e) {
   const items = [{ label: "Add Cut", action: () => addLocalCut() }];
   const ids = cutSelIds();
   if (ids.length) items.push({ label: "New Scene", action: () => createSceneGroup(ids) });
+  const { order, hidden } = shotsNavOrder();
+  const visible = selectAllCutIds(order, hidden);
+  if (visible.length) {
+    items.unshift({
+      label: "Select all",
+      title: allVisibleCutsSelected(order, hidden, state.cutSel) ? "Clear selection" : "",
+      action: () => applyToggleSelectAllCuts(),
+    });
+  }
   if (nat) {
     items.push({
       label: trashMenuLabel(),
@@ -3828,6 +3844,40 @@ function cutSelIds() {
   const ids = cuts.filter((c) => state.cutSel.has(c.id)).map((c) => c.id);
   if (!ids.length && state.cutId) ids.push(state.cutId);
   return ids;
+}
+
+/** Selected cuts only (no single-cut fallback), in Shots display order. */
+function timelineSelectedCutIds() {
+  const tl = state.timeline;
+  if (!tl || !state.cutSel.size) return [];
+  const { order } = shotsNavOrder();
+  return selectedInDisplayOrder(order, tl.cuts.map((c) => c.id), state.cutSel);
+}
+
+function applyToggleSelectAllCuts() {
+  const { order, hidden } = shotsNavOrder();
+  const { ids } = toggleAllCutSelection(order, hidden, state.cutSel);
+  state.cutSel.clear();
+  for (const id of ids) state.cutSel.add(id);
+  cutSelAnchor = ids.length ? (state.cutSel.has(state.cutId) ? state.cutId : ids[0]) : "";
+  bus.dispatchEvent(new Event("select"));
+}
+
+function paintListAllButton(root) {
+  const btn = root.querySelector(".gg-list-all");
+  if (!btn) return;
+  const { order, hidden } = shotsNavOrder();
+  const visible = selectAllCutIds(order, hidden);
+  const v = listAllButtonView({
+    hasProject: !!currentProject(),
+    visibleCount: visible.length,
+    allSelected: allVisibleCutsSelected(order, hidden, state.cutSel),
+  });
+  btn.hidden = !v.show;
+  btn.disabled = v.disabled;
+  btn.textContent = v.label;
+  btn.className = v.className;
+  btn.title = v.title;
 }
 
 function groupsClone() {
@@ -5490,14 +5540,14 @@ function updateSelectionBar(root) {
     setBtn(row, ".gg-ir-cut", r.cut.disabled, r.cut.title);
     setBtn(row, ".gg-ir-del", r.del.disabled, r.del.title);
   }
+  const queueIds = timelineSelectedCutIds();
   const allCount = generateAllCutIds().length;
   const allRunning = isGenerateAllRunning(genAll.batch);
   const q = queueButtonState({
-    count: n,
+    count: queueIds.length,
     native: isNativeProject(),
     busy: !!sdk.busy || batchRenderUi.running || genAll.starting,
     hasProject,
-    allCount,
     allRunning,
     batch: genAll.batch,
     projectId: state.pid,
@@ -5505,10 +5555,12 @@ function updateSelectionBar(root) {
   const queueBtn = root.querySelector(".gg-queue-btn");
   if (queueBtn) {
     queueBtn.disabled = q.disabled;
-    queueBtn.title = q.title;
+    if (q.title) queueBtn.title = q.title;
+    else queueBtn.removeAttribute("title");
     queueBtn.textContent = q.label;
     queueBtn.classList.toggle("gg-queue-stop", q.mode === "stop");
   }
+  paintListAllButton(root);
   paintGenerateAllProgress(root);
 }
 
@@ -5799,16 +5851,16 @@ async function imageToVideoCut(cutId) {
   }
 }
 
-/** Status panel Queue: one selected native cut = SDK job, none selected = generate-all, several = batch queue; Stop while generate-all runs. */
+/** Status panel Queue: one selected cut = SDK job; two or more = generate-all batch on those cuts; Stop while that batch runs. */
 function queueButtonClick() {
   if (isGenerateAllRunning(genAll.batch) && genAll.batch?.pid === state.pid && !genAll.batch?.stop) {
     return stopGenerateAll();
   }
-  const ids = cutSelIds();
+  const ids = timelineSelectedCutIds();
+  if (!ids.length) return;
   const action = queueClickAction({ native: isNativeProject(), selected: ids.length });
   if (action === "single") return sdkGenerateNativeCut(ids[0], { newSeed: loadRandomSeedOn(localStorage) });
-  if (action === "all") return startGenerateAll();
-  return queueSelectedCuts();
+  if (action === "generate") return startGenerateAll(ids);
 }
 
 /** Every cut of the shown native project in Shots list order (collapsed scenes included). */
@@ -5837,9 +5889,13 @@ async function refreshGenerateAll() {
  * Generate All: every cut in list order, one Comfy SDK job at a time on the server (each cut's own saved
  * workflow and seed, the output added as a new version). Runs without the workflow tab; Stop cancels the rest.
  */
-async function startGenerateAll() {
+async function startGenerateAll(cutIds) {
   if (!isNativeProject() || sdk.busy || batchRenderUi.running || genAll.starting || isGenerateAllRunning(genAll.batch)) return;
-  const ids = generateAllCutIds();
+  const tl = state.timeline;
+  const { order } = shotsNavOrder();
+  const ids = Array.isArray(cutIds) && cutIds.length
+    ? selectedInDisplayOrder(order, tl.cuts.map((c) => c.id), cutIds)
+    : generateAllCutIds();
   if (!ids.length) return;
   const pid = state.pid;
   if (!(await askConfirm({ message: generateAllConfirmMessage(ids.map((id) => shotTitle(cutById(id)))) }))) return;
@@ -6359,10 +6415,10 @@ function statusPanelShellHtml() {
           <span class="gg-render-badge gg-render-global" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
           <span class="gg-batch-prog" hidden></span>
           <span class="gg-genall-prog" hidden></span>
-          <label class="gg-random-seed" title="When on, each Queue (one cut or Generate All) uses new random sampler seeds">
+          <label class="gg-random-seed" title="When on, each Queue run uses new random sampler seeds">
             <input type="checkbox" class="gg-random-seed-cb" /> ${esc(RANDOM_SEED_LABEL)}
           </label>
-          <button type="button" class="gg-btn gg-primary gg-queue-btn" disabled title="${esc(QUEUE_EMPTY_TIP)}">Queue</button>
+          <button type="button" class="gg-btn gg-primary gg-queue-btn" disabled>Queue</button>
         </div>`;
 }
 
@@ -6804,6 +6860,7 @@ function mountShots(el) {
       </div>
       <div class="gg-meta">
         <span class="gg-meta-text">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</span>
+        <button type="button" class="gg-btn gg-primary gg-list-all" hidden title="Select all cuts">All</button>
         <button type="button" class="gg-btn gg-trash-btn" hidden title="Deleted cuts – click to restore">${esc(trashButtonLabel(trashCount))}</button>
       </div>
       <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${listHtml}</div>
@@ -6868,6 +6925,10 @@ function mountShots(el) {
       });
     });
     root.querySelector(".gg-trash-btn")?.addEventListener("click", () => openTrashModal());
+    root.querySelector(".gg-list-all")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      applyToggleSelectAllCuts();
+    });
     syncTrashButton(root);
     syncTimelineToggleButtons();
     root.querySelector(".gg-timeline-toggle")?.addEventListener("click", (e) => {

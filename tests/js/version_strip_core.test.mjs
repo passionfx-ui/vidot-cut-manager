@@ -223,7 +223,7 @@ describe("gonggan.js wiring (0.9.118)", () => {
     assert.match(js, /gg-random-seed-cb/);
     const qb = fnBody("queueButtonClick");
     assert.match(qb, /action === "single"\) return sdkGenerateNativeCut\(ids\[0\], \{ newSeed: loadRandomSeedOn\(localStorage\) \}\)/);
-    assert.match(qb, /action === "all"\) return startGenerateAll\(\)/);
+    assert.match(qb, /action === "generate"\) return startGenerateAll\(ids\)/);
     assert.match(fnBody("startGenerateAll"), /random_seed: loadRandomSeedOn\(localStorage\)/);
     assert.match(fnBody("regenNativeCut"), /sdkGenerateNativeCut\(cutId, \{ newSeed: true \}\)/);
   });

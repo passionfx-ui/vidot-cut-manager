@@ -9,6 +9,9 @@ import {
   shotsKeyAction,
   stepCutId,
   selectAllCutIds,
+  allVisibleCutsSelected,
+  toggleAllCutSelection,
+  listAllButtonView,
 } from "../../web/gg_cut_select_core.js";
 
 describe("shouldScheduleCutWorkflowLoad", () => {
@@ -280,5 +283,33 @@ describe("selectAllCutIds", () => {
     assert.deepEqual(selectAllCutIds(["a", "b", "c"], ["b"]), ["a", "c"]);
     assert.deepEqual(selectAllCutIds(["a", "", "c"]), ["a", "c"]);
     assert.deepEqual(selectAllCutIds(null), []);
+  });
+});
+
+describe("allVisibleCutsSelected / toggleAllCutSelection", () => {
+  it("all selected only when every visible id is chosen", () => {
+    assert.equal(allVisibleCutsSelected(["a", "b", "c"], ["b"], ["a", "c"]), true);
+    assert.equal(allVisibleCutsSelected(["a", "b"], [], ["a"]), false);
+    assert.equal(allVisibleCutsSelected([], [], []), false);
+  });
+
+  it("toggle selects all visible or clears when already all selected", () => {
+    assert.deepEqual(toggleAllCutSelection(["a", "b"], ["b"], []), { ids: ["a"] });
+    assert.deepEqual(toggleAllCutSelection(["a", "b"], [], ["a", "b"]), { ids: [] });
+    assert.deepEqual(toggleAllCutSelection([], [], ["a"]), { ids: [] });
+  });
+});
+
+describe("listAllButtonView", () => {
+  it("shows All when a project has visible cuts; highlights when all selected", () => {
+    const off = listAllButtonView({ hasProject: true, visibleCount: 3, allSelected: false });
+    assert.equal(off.show, true);
+    assert.equal(off.label, "All");
+    assert.match(off.className, /gg-list-all/);
+    assert.ok(!off.className.includes("gg-on"));
+    const on = listAllButtonView({ hasProject: true, visibleCount: 2, allSelected: true });
+    assert.match(on.className, /gg-on/);
+    assert.equal(on.title, "Clear selection");
+    assert.equal(listAllButtonView({ hasProject: false, visibleCount: 1 }).show, false);
   });
 });
