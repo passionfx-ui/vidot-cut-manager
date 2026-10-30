@@ -1,0 +1,209 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import {
+  rowContentKind,
+  cutRowShellHtml,
+  captionRowContentHtml,
+  groupedListHtml,
+  shotsSections,
+  nextSceneName,
+  newSceneGroupId,
+  withNewEmptyScene,
+  stripCutsFromGroups,
+} from "../../web/gg_group_list_core.js";
+
+const count = (s, sub) => s.split(sub).length - 1;
+
+const sections = [
+  { type: "group", group: { id: "g1", name: "Intro", collapsed: false }, cuts: [{ id: "a" }, { id: "b" }] },
+  { type: "group", group: { id: "g2", name: "End", collapsed: true }, cuts: [{ id: "c" }] },
+  { type: "ungrouped", group: null, cuts: [{ id: "d" }] },
+];
+
+describe("rowContentKind", () => {
+  it("maps list modes to row content", () => {
+    assert.equal(rowContentKind("info"), "info");
+    assert.equal(rowContentKind("caption"), "caption");
+    assert.equal(rowContentKind("story"), "caption");
+    assert.equal(rowContentKind(undefined), "info");
+  });
+});
+
+describe("groupedListHtml", () => {
+  const render = (kind) =>
+    groupedListHtml(sections, {
+      cutHtml: (c) => cutRowShellHtml({ id: c.id, kind, selected: c.id === "b", content: `[${kind}:${c.id}]` }),
+      groupHue: () => 42,
+      groupProgress: (cuts) => `0/${cuts.length}`,
+    });
+
+  it("writes each scene header once and every cut once", () => {
+    const html = render("info");
+    assert.equal(count(html, 'data-group-id="g1"'), 1);
+    assert.equal(count(html, 'data-group-id="g2"'), 1);
+    assert.equal(count(html, "Scene · Intro"), 1);
+    assert.equal(count(html, "gg-grp-loose"), 1);
+    assert.equal(count(html, 'class="gg-grp-head"'), 3);
+    for (const id of ["a", "b", "c", "d"]) assert.equal(count(html, `data-cut-id="${id}"`), 1);
+  });
+
+  it("keeps collapse state and progress", () => {
+    const html = render("info");
+    assert.match(html, /data-group-id="g2"[\s\S]*?▸[\s\S]*?<ol class="gg-cutlist" hidden>/);
+    assert.match(html, /data-group-id="g1"[\s\S]*?▾[\s\S]*?<ol class="gg-cutlist">/);
+    assert.match(html, /gg-grp-prog">0\/2</);
+  });
+
+  it("Info and Caption share the same group structure; only row content differs", () => {
+    const strip = (s) => s.replace(/\[(info|caption):/g, "[").replace(/ gg-cut-caption/g, "");
+    const info = render("info");
+    const cap = render("caption");
+    assert.notEqual(info, cap);
+    assert.equal(strip(info), strip(cap));
+    assert.equal(count(cap, 'class="gg-cut gg-cut-caption'), 4);
+    assert.equal(count(info, "gg-cut-caption"), 0);
+  });
+
+  it("escapes scene names", () => {
+    const html = groupedListHtml([{ type: "group", group: { id: "x", name: "<b>&" }, cuts: [{ id: "a" }] }], { cutHtml: () => "" });
+    assert.match(html, /Scene · &lt;b&gt;&amp;/);
+  });
+
+  it("empty sections render nothing", () => {
+    assert.equal(groupedListHtml([], { cutHtml: () => "x" }), "");
+  });
+});
+
+describe("shotsSections (one Ungrouped section at the bottom)", () => {
+  const ids = (secs) => secs.map((s) => `${s.type === "group" ? s.group.id : "U"}:${s.cuts.map((c) => c.id).join("")}`);
+  const cuts = ["x", "a", "y", "b", "c", "z"].map((id) => ({ id }));
+  const groups = [{ id: "g2", cut_ids: ["c"] }, { id: "g1", cut_ids: ["b", "a"] }];
+
+  it("gathers cuts in no scene into one last section, whatever their position", () => {
+    assert.deepEqual(ids(shotsSections(cuts, groups)), ["g1:ab", "g2:c", "U:xyz"]);
+  });
+  it("no Ungrouped section when every cut is in a scene; only Ungrouped when there are no scenes", () => {
+    assert.deepEqual(ids(shotsSections(cuts.slice(1, 2).concat(cuts.slice(3, 5)), groups)), ["g1:ab", "g2:c"]);
+    assert.deepEqual(ids(shotsSections(cuts, [])), ["U:xaybcz"]);
+  });
+  it("drops scenes left with only unknown ids, unknown ids and duplicate membership", () => {
+    const secs = shotsSections(cuts, [{ id: "g0", cut_ids: ["nope"] }, { id: "g1", cut_ids: ["a", "a"] }, { id: "g2", cut_ids: ["a", "b"] }]);
+    assert.deepEqual(ids(secs), ["g1:a", "g2:b", "U:xycz"]);
+  });
+  it("the Ungrouped header is plain: no scene id, rename, delete, fold or drag handle", () => {
+    const html = groupedListHtml(shotsSections(cuts, groups), { cutHtml: (c) => `<li data-cut-id="${c.id}"></li>` });
+    const loose = html.slice(html.indexOf("gg-grp-loose"));
+    assert.equal(html.lastIndexOf("<section"), html.indexOf('<section class="gg-grp-sec gg-grp-loose"'));
+    assert.match(loose, /<span class="gg-grp-title">Ungrouped<\/span><span class="gg-grp-meta">3<\/span>/);
+    assert.doesNotMatch(loose, /data-group-id|gg-grp-ren|gg-grp-del|gg-grp-fold|Scene ·/);
+  });
+  it("keeps empty scenes (New scene): appended ones stack at the end, above Ungrouped", () => {
+    const g = [...groups, { id: "e1", cut_ids: [] }, { id: "e2", cut_ids: [] }];
+    assert.deepEqual(ids(shotsSections(cuts, g)), ["g1:ab", "g2:c", "e1:", "e2:", "U:xyz"]);
+  });
+  it("an empty scene stays after the scene listed before it; first in groups = first in the list", () => {
+    const g = [{ id: "e0", cut_ids: [] }, { id: "g1", cut_ids: ["a", "b"] }, { id: "e1" }, { id: "g2", cut_ids: ["c"] }];
+    assert.deepEqual(ids(shotsSections(cuts, g)), ["e0:", "g1:ab", "e1:", "g2:c", "U:xyz"]);
+  });
+  it("only empty scenes and no cuts: the scenes, no Ungrouped section", () => {
+    assert.deepEqual(ids(shotsSections([], [{ id: "e1", cut_ids: [] }, { id: "e1", cut_ids: [] }])), ["e1:"]);
+  });
+  it("an empty scene renders its header with count 0 and an empty cut list", () => {
+    const html = groupedListHtml(shotsSections([], [{ id: "e1", name: "Scene 2", cut_ids: [] }]), { cutHtml: () => "" });
+    assert.match(html, /data-group-id="e1"[\s\S]*Scene · Scene 2[\s\S]*gg-grp-meta">0<[\s\S]*<ol class="gg-cutlist"><\/ol>/);
+  });
+});
+
+describe("New scene (empty scene stack)", () => {
+  it("nextSceneName: lowest free Scene N, case-insensitive, ignores other names", () => {
+    assert.equal(nextSceneName([]), "Scene 1");
+    assert.equal(nextSceneName(undefined), "Scene 1");
+    assert.equal(nextSceneName([{ name: "Scene 1" }]), "Scene 2");
+    assert.equal(nextSceneName([{ name: "scene 1" }, { name: " Scene 2 " }, { name: "Intro" }]), "Scene 3");
+    assert.equal(nextSceneName([{ name: "Scene 2" }]), "Scene 1");
+    assert.equal(nextSceneName([{ name: "Scene 1" }, { name: "Scene 3" }]), "Scene 2");
+    assert.equal(nextSceneName([{ name: "Scene 10" }, { name: "Scene 1" }]), "Scene 2");
+  });
+
+  it("withNewEmptyScene: each call stacks one more empty scene at the end with a new name", () => {
+    let groups = [{ id: "s1", name: "Scene 1", cut_ids: ["a"] }];
+    const made = [];
+    for (let i = 0; i < 3; i += 1) {
+      const r = withNewEmptyScene(groups, `n${i}`);
+      made.push(r.scene);
+      groups = r.groups;
+    }
+    assert.deepEqual(groups.map((g) => [g.id, g.name, g.cut_ids.length]), [
+      ["s1", "Scene 1", 1],
+      ["n0", "Scene 2", 0],
+      ["n1", "Scene 3", 0],
+      ["n2", "Scene 4", 0],
+    ]);
+    assert.deepEqual(made.map((s) => s.collapsed), [false, false, false]);
+  });
+
+  it("New scene lands after the LAST shown scene (not after the first in groups), just above Ungrouped", () => {
+    const cuts = ["a", "b", "c", "x"].map((id) => ({ id }));
+    const ids = (secs) => secs.map((s) => (s.type === "group" ? s.group.id : "U"));
+    // Scene g2 is listed first in groups but shown second (its cut comes later).
+    const groups = [{ id: "g2", name: "Scene B", cut_ids: ["c"] }, { id: "g1", name: "Scene A", cut_ids: ["a", "b"] }];
+    let g = withNewEmptyScene(groups, "n1").groups;
+    assert.deepEqual(ids(shotsSections(cuts, g)), ["g1", "g2", "n1", "U"]);
+    g = withNewEmptyScene(g, "n2").groups;
+    assert.deepEqual(ids(shotsSections(cuts, g)), ["g1", "g2", "n1", "n2", "U"]);
+  });
+
+  it("withNewEmptyScene does not touch the input groups", () => {
+    const groups = [{ id: "s1", name: "Scene 1", cut_ids: ["a"] }];
+    const r = withNewEmptyScene(groups, "n");
+    r.groups[0].cut_ids.push("zz");
+    assert.deepEqual(groups, [{ id: "s1", name: "Scene 1", cut_ids: ["a"] }]);
+  });
+
+  it("newSceneGroupId: unique for many calls in the same millisecond", () => {
+    const ids = new Set(Array.from({ length: 200 }, () => newSceneGroupId(1700000000000)));
+    assert.equal(ids.size, 200);
+    for (const id of ids) assert.match(id, /^s[0-9a-z]+$/);
+  });
+
+  it("stripCutsFromGroups drops scenes it empties, keeps scenes that were already empty", () => {
+    const groups = [
+      { id: "a", cut_ids: ["1", "2"] },
+      { id: "b", cut_ids: ["3"] },
+      { id: "e", cut_ids: [] },
+      { id: "f" },
+    ];
+    const out = stripCutsFromGroups(groups, ["2", "3"]);
+    assert.deepEqual(out.map((g) => [g.id, g.cut_ids]), [["a", ["1"]], ["e", []], ["f", []]]);
+  });
+});
+
+describe("cutRowShellHtml", () => {
+  it("adds selection and caption classes", () => {
+    assert.equal(cutRowShellHtml({ id: "a", kind: "info", selected: false, content: "X" }), '<li class="gg-cut" data-cut-id="a">X</li>');
+    assert.equal(
+      cutRowShellHtml({ id: "a\"", kind: "caption", selected: true, content: "" }),
+      '<li class="gg-cut gg-cut-caption gg-sel" data-cut-id="a&quot;"></li>',
+    );
+  });
+});
+
+describe("captionRowContentHtml", () => {
+  it("is the caption field, read-only until edit on native projects", () => {
+    const html = captionRowContentHtml({ text: "Hi <there>", placeholder: "Caption", title: "tip", native: true });
+    assert.match(html, /<textarea class="gg-caption-text"[^>]* readonly[^>]*>Hi &lt;there&gt;<\/textarea>$/);
+    assert.doesNotMatch(html, /gg-cut-header|gg-cut-status/);
+  });
+  it("puts the Info thumbnail in the same thumb column, before the caption field", () => {
+    const thumb = '<div class="gg-cut-thumb"><img class="gg-thumb gg-thumb-img"></div>';
+    const html = captionRowContentHtml({ thumb, text: "x", placeholder: "", title: "", native: true });
+    assert.ok(html.startsWith(`<div class="gg-cut-thumb-col">${thumb}</div><textarea class="gg-caption-text"`));
+    assert.equal(count(html, "gg-cut-thumb-col"), 1);
+  });
+  it("keeps the thumb column when there is no thumbnail", () => {
+    assert.ok(captionRowContentHtml({ text: "", placeholder: "", title: "", native: true }).startsWith('<div class="gg-cut-thumb-col"></div><textarea'));
+  });
+  it("is disabled on imported projects", () => {
+    assert.match(captionRowContentHtml({ text: "", placeholder: "", title: "", native: false }), / disabled /);
+  });
+});

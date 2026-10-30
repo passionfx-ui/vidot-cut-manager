@@ -1,0 +1,133 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { selectionBarView, iconRowView, statusPanelView } from "../../web/gg_status_panel_core.js";
+
+const withMedia = {
+  id: "c1",
+  name: "New cut",
+  sec: 3,
+  media: { id: "v2", kind: "image" },
+  pick: null,
+  versions_list: [{ id: "v1" }, { id: "v2" }],
+};
+
+describe("statusPanelView", () => {
+  it("empty selection is one muted line", () => {
+    assert.deepEqual(statusPanelView({ count: 0, cut: null }), { kind: "empty", text: "No cut selected" });
+    assert.deepEqual(statusPanelView({}), { kind: "empty", text: "No cut selected" });
+    assert.equal(statusPanelView({ count: 1, cut: null }).kind, "empty");
+  });
+
+  it("multi-select shows the count only", () => {
+    assert.deepEqual(statusPanelView({ count: 3, cut: withMedia }), { kind: "multi", text: "3 cuts selected" });
+  });
+
+  it("single cut: title, Done when idle with an output, length and Latest version", () => {
+    const v = statusPanelView({ count: 1, cut: withMedia, cutLabel: "1-4", name: "New cut", render: null });
+    assert.equal(v.kind, "cut");
+    assert.equal(v.title, "1-4 New cut");
+    assert.equal(v.label, "1-4");
+    assert.equal(v.name, "New cut");
+    assert.equal(v.status.mode, "done");
+    assert.equal(v.status.text, "Done");
+    assert.equal(v.length.text, "Length 3.0s");
+    assert.equal(v.version.text, "Latest v02");
+  });
+
+  it("Best version and original video length", () => {
+    const cut = { ...withMedia, pick: "v1", media: { id: "v1", kind: "video", seconds: 5.2 } };
+    const v = statusPanelView({ count: 1, cut, cutLabel: "2", name: "Hero" });
+    assert.equal(v.version.text, "Best v01");
+    assert.equal(v.length.text, "Length 5.2s");
+  });
+
+  it("no output: Idle and No versions yet", () => {
+    const v = statusPanelView({ count: 1, cut: { id: "c2", name: "Empty", sec: 2, media: null }, cutLabel: "3" });
+    assert.equal(v.status.mode, "idle");
+    assert.equal(v.status.text, "Idle");
+    assert.equal(v.version.text, "No versions yet");
+    assert.equal(v.title, "3");
+  });
+
+  it("render states from the render status view", () => {
+    const q = statusPanelView({ count: 1, cut: withMedia, render: { state: "queued", percent: null, count: 1, position: 2 } });
+    assert.equal(q.status.mode, "queued");
+    assert.equal(q.status.text, "Queued");
+    const r = statusPanelView({ count: 1, cut: withMedia, render: { state: "rendering", percent: 42, count: 1, position: null } });
+    assert.equal(r.status.mode, "rendering");
+    assert.equal(r.status.text, "Rendering 42%");
+    const f = statusPanelView({ count: 1, cut: withMedia, render: { state: "failed", percent: null, count: 0, position: null, error: "OOM" } });
+    assert.equal(f.status.mode, "failed");
+    assert.equal(f.status.text, "Failed");
+    assert.match(f.status.title, /OOM/);
+  });
+});
+
+describe("selectionBarView", () => {
+  it("nothing selected: same class as with a selection (never hidden), actions disabled", () => {
+    const v = selectionBarView({ count: 0, anyGrouped: false, selSize: 0 });
+    assert.equal(v.className, "gg-selbar");
+    assert.equal(v.countText, "0");
+    assert.deepEqual([v.group.disabled, v.ungroup.disabled, v.clear.disabled], [true, true, true]);
+    assert.deepEqual(selectionBarView(), v);
+  });
+
+  it("class does not change with the selection count", () => {
+    const classes = [0, 1, 2, 7].map((count) => selectionBarView({ count, selSize: count }).className);
+    assert.deepEqual(new Set(classes), new Set(["gg-selbar"]));
+  });
+
+  it("1+ selected: Group and clear on, Ungroup only when a selected cut is in a scene", () => {
+    const one = selectionBarView({ count: 1, anyGrouped: false, selSize: 1 });
+    assert.deepEqual([one.countText, one.group.disabled, one.ungroup.disabled, one.clear.disabled], ["1", false, true, false]);
+    const grouped = selectionBarView({ count: 3, anyGrouped: true, selSize: 3 });
+    assert.deepEqual([grouped.countText, grouped.ungroup.disabled], ["3", false]);
+  });
+
+  it("selection of cuts not on the shown timeline: count 0 but clear stays on", () => {
+    const v = selectionBarView({ count: 0, selSize: 2 });
+    assert.equal(v.group.disabled, true);
+    assert.equal(v.clear.disabled, false);
+  });
+});
+
+describe("iconRowView", () => {
+  it("English tooltips, same class for any selection", () => {
+    const v = iconRowView({ count: 2, hasProject: true });
+    assert.deepEqual([v.scene.title, v.cut.title, v.del.title], ["New scene", "New cut", "Delete"]);
+    const classes = [0, 1, 5].map((count) => iconRowView({ count, hasProject: true }).className);
+    assert.deepEqual(new Set(classes), new Set(["gg-iconrow"]));
+  });
+
+  it("nothing selected: Delete and New scene off, New cut on with a project", () => {
+    const v = iconRowView({ count: 0, hasProject: true });
+    assert.deepEqual([v.scene.disabled, v.cut.disabled, v.del.disabled], [true, false, true]);
+  });
+
+  it("1+ selected: all on", () => {
+    const v = iconRowView({ count: 1, hasProject: true });
+    assert.deepEqual([v.scene.disabled, v.cut.disabled, v.del.disabled], [false, false, false]);
+  });
+
+  it("no project: everything off", () => {
+    const v = iconRowView();
+    assert.deepEqual([v.scene.disabled, v.cut.disabled, v.del.disabled], [true, true, true]);
+  });
+
+  it("no project open: New scene / New cut / Delete all off, even with a stale selection count", () => {
+    const v = iconRowView({ count: 3, hasProject: false });
+    assert.deepEqual([v.scene.disabled, v.cut.disabled, v.del.disabled], [true, true, true]);
+    assert.equal(iconRowView({ count: 0, hasProject: false, native: true }).scene.disabled, true);
+  });
+
+  it("native project: New scene (empty scene) is on with nothing selected; Delete still needs a selection", () => {
+    const v = iconRowView({ count: 0, hasProject: true, native: true });
+    assert.deepEqual([v.scene.disabled, v.cut.disabled, v.del.disabled], [false, false, true]);
+    assert.equal(iconRowView({ count: 2, hasProject: true, native: true }).scene.disabled, false);
+  });
+
+  it("imported project: New scene still needs a selection (unchanged)", () => {
+    assert.equal(iconRowView({ count: 0, hasProject: true, native: false }).scene.disabled, true);
+    assert.equal(iconRowView({ count: 1, hasProject: true, native: false }).scene.disabled, false);
+  });
+});
