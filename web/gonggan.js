@@ -109,6 +109,9 @@ import {
   shotWorkflowRelPathById,
   shouldSkipShotWorkflowReload,
   gongganExtraProjectId,
+  workflowPathKey,
+  isShotTabAtOwnedPath,
+  findWorkflowAtShotPath,
 } from "./gg_shot_names.js";
 import {
   shouldScheduleCutWorkflowLoad,
@@ -1683,6 +1686,7 @@ function markWorkflowGongganOwned(wf, storagePath, meta) {
   const p = normalizeWorkflowPath(storagePath || wf.path || "").replace(/^workflows\//, "");
   if (p) {
     const key = p.toLowerCase();
+    wf.ggGongganOwnedPath = workflowPathKey(p);
     if (meta?.projectId && meta?.cutId) {
       const m = { projectId: String(meta.projectId), cutId: String(meta.cutId) };
       wf.ggGongganMeta = m;
@@ -1694,11 +1698,7 @@ function markWorkflowGongganOwned(wf, storagePath, meta) {
 }
 
 function isGongganOwnedWorkflow(wf) {
-  if (!wf) return false;
-  if (wf.ggGongganOwned) return true;
-  if (wf === ggOwnedShotWorkflow) return true;
-  const p = normalizeWorkflowPath(wf.path || "");
-  return p && isPathGongganOwned(p);
+  return isShotTabAtOwnedPath(wf, (key) => wf === ggOwnedShotWorkflow || isPathGongganOwned(key));
 }
 
 function isLegacyGongganShotTab(wf) {
@@ -1720,13 +1720,22 @@ function collectGongganShotTabs() {
     seen.add(w);
     out.push(w);
   };
+  if (ggOwnedShotWorkflow && !isGongganOwnedWorkflow(ggOwnedShotWorkflow)) releaseMovedShotTab(ggOwnedShotWorkflow);
   add(ggOwnedShotWorkflow);
   for (const w of ws.openWorkflows || []) {
-    if (w === ggOwnedShotWorkflow || isLegacyGongganShotTab(w)) add(w);
-    else if (w?.ggGongganOwned) add(w);
-    else if (w?.path && isPathGongganOwned(w.path)) add(w);
+    if (w?.ggGongganOwned && !isGongganOwnedWorkflow(w)) releaseMovedShotTab(w);
+    else if (isLegacyGongganShotTab(w) || isGongganOwnedWorkflow(w)) add(w);
   }
   return out;
+}
+
+/** A shot tab that ComfyUI Save / Rename moved to another file is the user's workflow now. */
+function releaseMovedShotTab(wf) {
+  delete wf.ggGongganOwned;
+  delete wf.ggGongganOwnedPath;
+  delete wf.ggGongganMeta;
+  delete wf.ggTabLabelCache;
+  if (ggOwnedShotWorkflow === wf) ggOwnedShotWorkflow = null;
 }
 
 async function pruneExtraGongganShotTabs(keep) {
@@ -1814,7 +1823,7 @@ function buildAutosaveDeps() {
 }
 
 function resolveWorkflowCutForWip(wf) {
-  if (!wf) return null;
+  if (!wf || !isGongganOwnedWorkflow(wf)) return null;
   let cutId = wf.ggGongganMeta?.cutId;
   let projectId = wf.ggGongganMeta?.projectId;
   if (!cutId && wf.path) {
@@ -2034,7 +2043,7 @@ async function resolveShotWorkflowStoragePath(relPath, opts = {}) {
 function isGongganShotTabOpenAndActive() {
   const ws = ggWorkflowStore();
   const wf = ggOwnedShotWorkflow;
-  if (!ws || !wf) return false;
+  if (!ws || !wf || !isGongganOwnedWorkflow(wf)) return false;
   if (!(ws.openWorkflows || []).includes(wf)) return false;
   return ws.isActive?.(wf) ?? false;
 }
@@ -2237,45 +2246,16 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   if (isLoadTokenStale(loadToken)) return false;
   const previous = ggOwnedShotWorkflow;
   const ws = ggWorkflowStore();
-  const normKey = normalizeWorkflowPath(loadName).toLowerCase();
-  let existingAtPath =
-    adoptGongganShotWorkflow(loadName) ||
-    ws?.getWorkflowByPath?.(loadName) ||
-    ws?.getWorkflowByPath?.(`workflows/${loadName}`);
-  if (!existingAtPath && ws?.openWorkflows) {
-    existingAtPath =
-      ws.openWorkflows.find((w) => {
-        const p = normalizeWorkflowPath(String(w.path || "").replace(/^workflows\//, "")).toLowerCase();
-        return p === normKey;
-      }) ?? null;
-  }
-  if (existingAtPath && (ws?.openWorkflows || []).includes(existingAtPath)) {
-    ggOwnedShotWorkflow = existingAtPath;
-    if (typeof ws.setActiveWorkflow === "function") {
-      try {
-        ws.setActiveWorkflow(existingAtPath);
-      } catch (e) {
-        console.warn("[gonggan] focus existing shot tab failed", e);
-      }
-    }
-  } else if (
-    ggOwnedShotWorkflow &&
-    (ws?.openWorkflows || []).includes(ggOwnedShotWorkflow) &&
-    typeof ws.setActiveWorkflow === "function"
-  ) {
-    try {
-      ws.setActiveWorkflow(ggOwnedShotWorkflow);
-    } catch (e) {
-      console.warn("[gonggan] focus shot tab failed", e);
-    }
-  }
+  adoptGongganShotWorkflow(loadName);
+  // The tab object, not the path: ComfyUI reuses a same-path tab for a path string only while it is active.
+  const existingAtPath = findWorkflowAtShotPath(ws, loadName);
   ensureWorkflowManagerActive();
   if (isLoadTokenStale(loadToken)) return false;
   const tabCountBefore = (ws?.openWorkflows || []).length;
   try {
     if (isUiWorkflowGraph(workflow)) {
       if (typeof app.loadGraphData !== "function") return false;
-      await app.loadGraphData(workflow, true, true, loadName, { deferWarnings: true });
+      await app.loadGraphData(workflow, true, true, existingAtPath || loadName, { deferWarnings: true });
     } else if (typeof app.loadApiJson === "function") {
       await app.loadApiJson(workflow, loadName, { deferWarnings: true });
     } else if (typeof app.loadGraphData === "function") {
@@ -5597,7 +5577,7 @@ function cutPanelHtml(c, labels) {
   const sendTip = "Copy ComfyUI's last output (from /history, else newest file in output/) into this cut as a new version";
   const rep = repIdOf(c);
   const ws = ggWorkflowStore();
-  const tabOpen = !!ggOwnedShotWorkflow && (ws?.openWorkflows || []).includes(ggOwnedShotWorkflow);
+  const tabOpen = isGongganOwnedWorkflow(ggOwnedShotWorkflow) && (ws?.openWorkflows || []).includes(ggOwnedShotWorkflow);
   const vers = (c.versions_list || []).map((v) => {
     const repState = versionRepState(c, v.id);
     const on = repState === "manual";
