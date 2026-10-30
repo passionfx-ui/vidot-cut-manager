@@ -4,7 +4,8 @@
  * still working, right button never drags, an ordinary cut drag between scenes, and a scene drag while a
  * timeline save is still waiting (0.9.78 hang) with Ctrl+Z / Ctrl+Y, the same in Caption list mode (scene
  * headers once, scene drag, cut drag from the caption field), and cut ids / media / versions / source
- * workflow unchanged by a move.
+ * workflow unchanged by a move. 0.9.104: the icon row New scene stacks one empty scene per click
+ * (Scene 1, 2, 3 above Ungrouped), with Ctrl+Z / Ctrl+Y.
  * ZZ temp native project (2 scenes x 2 cuts), soft-deleted at the end. Blocks POST /prompt and /gonggan/regen.
  */
 import fs from "node:fs";
@@ -698,6 +699,59 @@ async function main() {
       } finally {
         await page.click('.gg-root.gg-shots .gg-list-toggle [data-mode="info"]').catch(() => {});
       }
+    });
+
+    await runScenario("s11", "Icon row New scene: every click stacks one empty scene (Scene 1, 2, 3) above Ungrouped; Ctrl+Z / Ctrl+Y", async () => {
+      await resetBaseline(page);
+      // c4 ungrouped so the list ends with an Ungrouped section.
+      await postJson(page, "/gonggan/groups", { pid: testPid, groups: [baseline.groups[0], { ...baseline.groups[1], cut_ids: [c3] }] });
+      await reloadShots(page);
+      await page.keyboard.press("Escape");
+      const btn = ".gg-root.gg-shots .gg-ir-scene";
+      await page.waitForFunction((s) => !document.querySelector(s)?.disabled, { timeout: 8000 }, btn)
+        .catch(() => { throw new Error("New scene icon disabled on a native project"); });
+      const serverScenes = async () => ((await serverTimeline(page)).groups || []).map((g) => `${g.name}:${g.cut_ids.length}`);
+      const want = ["Scene A:2", "Scene B:1", "Scene 1:0", "Scene 2:0", "Scene 3:0"];
+      // Three clicks back to back: each must add its own scene (no lost click, no reused name).
+      for (let i = 0; i < 3; i++) await page.click(btn);
+      if (await page.$(".gg-ask-backdrop")) throw new Error("New scene should not ask for a name");
+      let got = [];
+      for (let i = 0; i < 30; i++) {
+        got = await serverScenes();
+        if (got.length >= want.length) break;
+        await sleep(300);
+      }
+      if (got.join() !== want.join()) {
+        throw new Error(`server scenes ${got.join()} != ${want.join()} (an empty scene dropped by the server means ComfyUI still runs pre-0.9.104 Python)`);
+      }
+      await sleep(400);
+      const layout = await page.$$eval(".gg-root.gg-shots .gg-grp-sec", (els) => els.map((s) =>
+        `${s.classList.contains("gg-grp-loose") ? "Ungrouped" : s.querySelector(".gg-grp-title")?.textContent.replace(/^Scene · /, "").trim()}:${s.querySelectorAll(".gg-cut").length}`));
+      if (layout.join() !== [...want, "Ungrouped:1"].join()) throw new Error(`Shots sections ${layout.join()}`);
+      if ((await domCutIds(page)).join() !== [c1, c2, c3, c4].join()) throw new Error("New scene moved cuts");
+
+      const keyInShots = async (key) => {
+        await page.$eval(".gg-root.gg-shots .gg-grp-wrap", (el) => el.scrollIntoView({ block: "nearest" }));
+        const box = await (await page.$(".gg-root.gg-shots .gg-grp-wrap")).boundingBox();
+        await page.mouse.move(box.x + box.width / 2, box.y + Math.min(40, box.height / 2));
+        await page.keyboard.down("Control");
+        await page.keyboard.press(key);
+        await page.keyboard.up("Control");
+      };
+      const waitScenes = async (list, what) => {
+        for (let i = 0; i < 30; i++) {
+          if ((await serverScenes()).join() === list.join()) return;
+          await sleep(300);
+        }
+        throw new Error(`${what}: server scenes ${(await serverScenes()).join()} != ${list.join()}`);
+      };
+      await keyInShots("KeyZ");
+      await waitScenes(want.slice(0, 4), "Ctrl+Z");
+      await keyInShots("KeyY");
+      await waitScenes(want, "Ctrl+Y");
+      await sleep(400);
+      const titles = await page.$$eval(".gg-root.gg-shots .gg-grp-sec[data-group-id] .gg-grp-title", (els) => els.map((e) => e.textContent.trim()));
+      if (titles.at(-1) !== "Scene · Scene 3") throw new Error(`after Ctrl+Y the last scene is ${titles.at(-1)}`);
     });
   } finally {
     try {

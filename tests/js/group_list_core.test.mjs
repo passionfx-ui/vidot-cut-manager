@@ -6,6 +6,10 @@ import {
   captionRowContentHtml,
   groupedListHtml,
   shotsSections,
+  nextSceneName,
+  newSceneGroupId,
+  withNewEmptyScene,
+  stripCutsFromGroups,
 } from "../../web/gg_group_list_core.js";
 
 const count = (s, sub) => s.split(sub).length - 1;
@@ -82,7 +86,7 @@ describe("shotsSections (one Ungrouped section at the bottom)", () => {
     assert.deepEqual(ids(shotsSections(cuts.slice(1, 2).concat(cuts.slice(3, 5)), groups)), ["g1:ab", "g2:c"]);
     assert.deepEqual(ids(shotsSections(cuts, [])), ["U:xaybcz"]);
   });
-  it("drops empty scenes, unknown ids and duplicate membership", () => {
+  it("drops scenes left with only unknown ids, unknown ids and duplicate membership", () => {
     const secs = shotsSections(cuts, [{ id: "g0", cut_ids: ["nope"] }, { id: "g1", cut_ids: ["a", "a"] }, { id: "g2", cut_ids: ["a", "b"] }]);
     assert.deepEqual(ids(secs), ["g1:a", "g2:b", "U:xycz"]);
   });
@@ -92,6 +96,74 @@ describe("shotsSections (one Ungrouped section at the bottom)", () => {
     assert.equal(html.lastIndexOf("<section"), html.indexOf('<section class="gg-grp-sec gg-grp-loose"'));
     assert.match(loose, /<span class="gg-grp-title">Ungrouped<\/span><span class="gg-grp-meta">3<\/span>/);
     assert.doesNotMatch(loose, /data-group-id|gg-grp-ren|gg-grp-del|gg-grp-fold|Scene ·/);
+  });
+  it("keeps empty scenes (New scene): appended ones stack at the end, above Ungrouped", () => {
+    const g = [...groups, { id: "e1", cut_ids: [] }, { id: "e2", cut_ids: [] }];
+    assert.deepEqual(ids(shotsSections(cuts, g)), ["g1:ab", "g2:c", "e1:", "e2:", "U:xyz"]);
+  });
+  it("an empty scene stays after the scene listed before it; first in groups = first in the list", () => {
+    const g = [{ id: "e0", cut_ids: [] }, { id: "g1", cut_ids: ["a", "b"] }, { id: "e1" }, { id: "g2", cut_ids: ["c"] }];
+    assert.deepEqual(ids(shotsSections(cuts, g)), ["e0:", "g1:ab", "e1:", "g2:c", "U:xyz"]);
+  });
+  it("only empty scenes and no cuts: the scenes, no Ungrouped section", () => {
+    assert.deepEqual(ids(shotsSections([], [{ id: "e1", cut_ids: [] }, { id: "e1", cut_ids: [] }])), ["e1:"]);
+  });
+  it("an empty scene renders its header with count 0 and an empty cut list", () => {
+    const html = groupedListHtml(shotsSections([], [{ id: "e1", name: "Scene 2", cut_ids: [] }]), { cutHtml: () => "" });
+    assert.match(html, /data-group-id="e1"[\s\S]*Scene · Scene 2[\s\S]*gg-grp-meta">0<[\s\S]*<ol class="gg-cutlist"><\/ol>/);
+  });
+});
+
+describe("New scene (empty scene stack)", () => {
+  it("nextSceneName: lowest free Scene N, case-insensitive, ignores other names", () => {
+    assert.equal(nextSceneName([]), "Scene 1");
+    assert.equal(nextSceneName(undefined), "Scene 1");
+    assert.equal(nextSceneName([{ name: "Scene 1" }]), "Scene 2");
+    assert.equal(nextSceneName([{ name: "scene 1" }, { name: " Scene 2 " }, { name: "Intro" }]), "Scene 3");
+    assert.equal(nextSceneName([{ name: "Scene 2" }]), "Scene 1");
+    assert.equal(nextSceneName([{ name: "Scene 1" }, { name: "Scene 3" }]), "Scene 2");
+    assert.equal(nextSceneName([{ name: "Scene 10" }, { name: "Scene 1" }]), "Scene 2");
+  });
+
+  it("withNewEmptyScene: each call stacks one more empty scene at the end with a new name", () => {
+    let groups = [{ id: "s1", name: "Scene 1", cut_ids: ["a"] }];
+    const made = [];
+    for (let i = 0; i < 3; i += 1) {
+      const r = withNewEmptyScene(groups, `n${i}`);
+      made.push(r.scene);
+      groups = r.groups;
+    }
+    assert.deepEqual(groups.map((g) => [g.id, g.name, g.cut_ids.length]), [
+      ["s1", "Scene 1", 1],
+      ["n0", "Scene 2", 0],
+      ["n1", "Scene 3", 0],
+      ["n2", "Scene 4", 0],
+    ]);
+    assert.deepEqual(made.map((s) => s.collapsed), [false, false, false]);
+  });
+
+  it("withNewEmptyScene does not touch the input groups", () => {
+    const groups = [{ id: "s1", name: "Scene 1", cut_ids: ["a"] }];
+    const r = withNewEmptyScene(groups, "n");
+    r.groups[0].cut_ids.push("zz");
+    assert.deepEqual(groups, [{ id: "s1", name: "Scene 1", cut_ids: ["a"] }]);
+  });
+
+  it("newSceneGroupId: unique for many calls in the same millisecond", () => {
+    const ids = new Set(Array.from({ length: 200 }, () => newSceneGroupId(1700000000000)));
+    assert.equal(ids.size, 200);
+    for (const id of ids) assert.match(id, /^s[0-9a-z]+$/);
+  });
+
+  it("stripCutsFromGroups drops scenes it empties, keeps scenes that were already empty", () => {
+    const groups = [
+      { id: "a", cut_ids: ["1", "2"] },
+      { id: "b", cut_ids: ["3"] },
+      { id: "e", cut_ids: [] },
+      { id: "f" },
+    ];
+    const out = stripCutsFromGroups(groups, ["2", "3"]);
+    assert.deepEqual(out.map((g) => [g.id, g.cut_ids]), [["a", ["1"]], ["e", []], ["f", []]]);
   });
 });
 
