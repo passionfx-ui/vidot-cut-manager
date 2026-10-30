@@ -1,4 +1,5 @@
 {
   "data_root": "",
-  "uid": "demo"
+  "uid": "demo",
+  "ollama_url": "http://127.0.0.1:11434"
 }

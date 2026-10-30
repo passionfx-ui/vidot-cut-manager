@@ -344,6 +344,13 @@ def _notify_regen(job: dict) -> None:
 gg_sdk._notify = _notify_regen
 
 
+def _notify_generate_all(batch: dict) -> None:
+    PromptServer.instance.send_sync("gonggan.generate_all", batch)
+
+
+gg_sdk._batch_notify = _notify_generate_all
+
+
 @routes.get("/gonggan/template")
 async def gg_template_get(request):
     pid = request.query.get("pid", "")
@@ -811,7 +818,7 @@ async def _native_regen(pid: str, cid: str, data: dict):
     try:
         if data.get("dry_run", True) or data.get("confirm") is not True:
             plan = await asyncio.to_thread(gg_sdk.native_plan, pid, cid, new_seed=data.get("mode") != "queue",
-                                           canvas=data.get("api_workflow"))
+                                           canvas=data.get("api_workflow"), convert=data.get("convert") is True)
             return web.json_response({"ok": True, "dry_run": True, "queued": False, "plan": plan})
         return web.json_response(await asyncio.to_thread(gg_sdk.run_native_confirmed, pid, cid, data.get("plan")))
     except gg_native_api.NativeWorkflowError as ex:
@@ -823,6 +830,65 @@ async def _native_regen(pid: str, cid: str, data: dict):
 @routes.get("/gonggan/regen/status")
 async def gg_regen_status(request):
     return web.json_response({"ok": True, "job": gg_sdk.job_status()})
+
+
+@routes.post("/gonggan/generate-all")
+async def gg_generate_all(request):
+    """Native only: {"pid", "cut_ids" (Shots list order), "confirm": true} -> one SDK job per cut, in order."""
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
+        return _err(400, "native pid required")
+    if data.get("confirm") is not True:
+        return _err(400, "confirm required")
+    try:
+        res = await asyncio.to_thread(gg_sdk.start_generate_all, pid, data.get("cut_ids"))
+    except ValueError as ex:
+        return _err(400, str(ex))
+    return web.json_response(res, status=200 if res.get("ok") else 409)
+
+
+@routes.post("/gonggan/generate-all/stop")
+async def gg_generate_all_stop(request):
+    return web.json_response(await asyncio.to_thread(gg_sdk.stop_generate_all))
+
+
+@routes.get("/gonggan/generate-all/status")
+async def gg_generate_all_status(request):
+    return web.json_response({"ok": True, "batch": gg_sdk.generate_all_status()})
+
+
+# ---------------- AI Cut Split (local Ollama) ----------------
+from . import gg_ollama  # noqa: E402
+
+
+def _ollama_err(ex: "gg_ollama.OllamaError") -> web.Response:
+    status = {"bad_request": 400, "invalid": 422, "timeout": 504}.get(ex.code, 502)
+    return web.json_response({"ok": False, "code": ex.code, "message": str(ex), "raw": ex.raw}, status=status)
+
+
+@routes.get("/gonggan/ollama/models")
+async def gg_ollama_models(request):
+    try:
+        res = await asyncio.to_thread(gg_ollama.list_models, request.query.get("base_url") or None)
+    except gg_ollama.OllamaError as ex:
+        return _ollama_err(ex)
+    return web.json_response({"ok": True, **res})
+
+
+@routes.post("/gonggan/ai-cut-split")
+async def gg_ai_cut_split(request):
+    """{"story", "model", "keep_loaded"?, "base_url"?} -> {"cuts": [{cut, duration, description}]}. Creates nothing."""
+    data = await _json_body(request)
+    url = data.get("base_url")
+    if url is not None and not isinstance(url, str):
+        return _err(400, "base_url must be a string")
+    try:
+        res = await asyncio.to_thread(gg_ollama.ai_cut_split, data.get("story"), data.get("model"),
+                                      data.get("keep_loaded") is True, url)
+    except gg_ollama.OllamaError as ex:
+        return _ollama_err(ex)
+    return web.json_response({"ok": True, **res})
 
 
 @routes.get("/gonggan/last-output")
