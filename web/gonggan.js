@@ -5072,19 +5072,10 @@ function bindCutPanelFields(panel, c) {
   const planned = c.planned_sec;
   if (lenIn) {
     lenIn.value = planned != null && Number.isFinite(planned) ? String(planned) : "";
-    lenIn.disabled = !nat;
+    lenIn.readOnly = true;
+    lenIn.tabIndex = -1;
     lenIn.placeholder = plannedLenInputPlaceholder(c);
-    lenIn.title = nat ? "Planned length (seconds). Leave empty to use the default." : roTip;
-    const onLen = () => {
-      const raw = lenIn.value.trim();
-      const val = raw === "" ? null : Number(raw);
-      if (raw !== "" && (!Number.isFinite(val) || val < 0.5 || val > 600)) return;
-      c.planned_sec = val;
-      scheduleCutFieldSave(c.id, { planned_sec: val });
-      refreshCutRowBadges(c.id);
-    };
-    lenIn.addEventListener("change", onLen);
-    lenIn.addEventListener("blur", onLen);
+    lenIn.title = "Planned length (seconds). Read-only.";
   }
   if (endChk) {
     endChk.checked = !!c.end_card;
@@ -6226,7 +6217,7 @@ function cutPanelHtml(c, labels) {
       <div class="gg-cut-fields">
         <div class="gg-cut-meta-row">
           <label class="gg-field-len"${metaTip}>Length (sec)
-            <input type="number" class="gg-len-input" min="0.5" max="600" step="0.1" value="${esc(lenVal)}"${lenPh ? ` placeholder="${esc(lenPh)}"` : ""} title="${nat ? "Planned length (seconds). Leave empty to use the default." : esc(NATIVE_READONLY_TIP)}"${metaDisabled} />
+            <input type="number" class="gg-len-input" min="0.5" max="600" step="0.1" value="${esc(lenVal)}"${lenPh ? ` placeholder="${esc(lenPh)}"` : ""} title="Planned length (seconds). Read-only." readonly tabindex="-1" />
           </label>
           <label class="gg-field-end"${metaTip}><input type="checkbox" class="gg-endcard-chk"${c.end_card ? " checked" : ""}${metaDisabled} /> End card</label>
           <label class="gg-field-redo"${metaTip}><input type="checkbox" class="gg-redo-chk"${c.needs_redo ? " checked" : ""}${metaDisabled} /> Needs redo</label>
