@@ -77,6 +77,53 @@ class MakeProjectFolderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already exists"):
             make_project_folder(str(self.root), "B.txt")
 
+    def test_location_ending_with_the_name_is_used_as_is(self):
+        loc = self.root / "Work" / "2026_Contest_KINFA_PreventionSong"
+        created: list[Path] = []
+        folder = make_project_folder(str(loc) + os.sep + os.sep, "2026_Contest_KINFA_PreventionSong", created)
+        self.assertEqual(folder, loc)
+        self.assertEqual(_tree(self.root), ["Work", "Work/2026_Contest_KINFA_PreventionSong", "Work/2026_Contest_KINFA_PreventionSong/assets"])
+        self.assertEqual(created, [self.root / "Work", loc, loc / "assets"])
+
+    def test_existing_empty_location_with_the_name_is_reused(self):
+        (self.root / "Night_ Walk").mkdir()
+        created: list[Path] = []
+        folder = make_project_folder(str(self.root / "Night_ Walk"), "Night: Walk", created)
+        self.assertEqual(folder, self.root / "Night_ Walk")
+        self.assertEqual(_tree(self.root), ["Night_ Walk", "Night_ Walk/assets"])
+        self.assertEqual(created, [folder / "assets"])
+
+    def test_non_empty_location_with_the_name_only_gets_assets(self):
+        loc = self.root / "Film"
+        (loc / "Film").mkdir(parents=True)
+        (loc / "notes.txt").write_text("x", encoding="utf-8")
+        created: list[Path] = []
+        folder = make_project_folder(str(loc), "Film", created)
+        self.assertEqual(folder, loc)
+        self.assertEqual(_tree(self.root), ["Film", "Film/Film", "Film/assets", "Film/notes.txt"])
+        self.assertEqual((loc / "notes.txt").read_text(encoding="utf-8"), "x")
+        self.assertEqual(created, [loc / "assets"])
+
+    def test_location_with_the_name_and_an_assets_file_is_refused(self):
+        loc = self.root / "Film"
+        loc.mkdir()
+        (loc / "assets").write_text("x", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Cannot create the project folder"):
+            make_project_folder(str(loc), "Film")
+        self.assertEqual(_tree(self.root), ["Film", "Film/assets"])
+
+    @unittest.skipUnless(os.name == "nt", "case-insensitive match on Windows only")
+    def test_name_match_ignores_case_on_windows(self):
+        folder = make_project_folder(str(self.root / "my film"), "My Film")
+        self.assertEqual(folder, self.root / "my film")
+        self.assertEqual(_tree(self.root), ["my film", "my film/assets"])
+
+    def test_only_the_whole_last_segment_counts(self):
+        folder = make_project_folder(str(self.root / "My Film" / "Out"), "My Film")
+        self.assertEqual(folder, self.root / "My Film" / "Out" / "My Film")
+        folder = make_project_folder(str(self.root / "My Film 2"), "My Film")
+        self.assertEqual(folder, self.root / "My Film 2" / "My Film")
+
     def test_bad_locations(self):
         with self.assertRaisesRegex(ValueError, "Choose a location"):
             make_project_folder("  ", "A")
@@ -105,6 +152,14 @@ class CreateNativeProjectLocationTests(unittest.TestCase):
         self.assertEqual(doc["settings"]["project_folder"], str(folder))
         self.assertEqual(_tree(folder), ["assets"])
 
+    def test_location_ending_with_the_name_sets_that_folder(self):
+        loc = self.loc / "Film"
+        res = na.create_native_project("Film", None, None, str(loc))
+        self.assertEqual(res["project"]["folder"], str(loc))
+        doc = self.store.get_project(res["project"]["id"])
+        self.assertEqual(doc["settings"]["project_folder"], str(loc))
+        self.assertEqual(_tree(self.loc), ["Film", "Film/assets"])
+
     def test_without_location_keeps_default_storage(self):
         res = na.create_native_project("Plain")
         self.assertEqual(res["project"]["folder"], "")
@@ -120,6 +175,14 @@ class CreateNativeProjectLocationTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 na.create_native_project("A", None, None, str(self.loc))
         self.assertFalse(self.loc.exists())
+
+    def test_failed_create_keeps_an_existing_location_with_the_name(self):
+        loc = self.loc / "Film"
+        (loc / "01_Planning").mkdir(parents=True)
+        with mock.patch.object(self.store, "create_project", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                na.create_native_project("Film", None, None, str(loc))
+        self.assertEqual(_tree(self.loc), ["Film", "Film/01_Planning"])
 
     def test_outputs_saved_flat_in_assets(self):
         pid = na.create_native_project("Film", None, None, str(self.loc))["project"]["id"]
