@@ -1,5 +1,6 @@
 /**
- * Headless Chrome: horizontal version row directly above the Shots icon row (0.9.106).
+ * Headless Chrome: horizontal version row directly below the borderless Shots icon row (0.9.109);
+ * icons right-aligned, Queue right-aligned in the status panel.
  * - selected cut's versions, newest on the left; scrolls sideways (also with the mouse wheel);
  *   a left arrow appears when scrolled and goes back to the newest
  * - thumbnail click = existing version click (opens that version's workflow, Best unchanged)
@@ -316,18 +317,35 @@ async function main() {
       const root = box(document.querySelector(r));
       const list = box(document.querySelector(`${r} .gg-grp-wrap`));
       const strip = box(document.querySelector(`${r} .gg-vstrip`));
-      const icons = box(document.querySelector(`${r} .gg-iconrow`));
+      const iconEl = document.querySelector(`${r} .gg-iconrow`);
+      const icons = box(iconEl);
+      const iconCss = getComputedStyle(iconEl);
+      const lastIcon = box(document.querySelector(`${r} .gg-iconrow .gg-ir-del`));
+      const firstIcon = box(document.querySelector(`${r} .gg-iconrow .gg-ir-scene`));
+      const ver = box(document.querySelector(`${r} .gg-iconrow .gg-version`));
+      const btnBorders = [...iconEl.querySelectorAll(".gg-ir-btn")].map((b) => getComputedStyle(b).borderTopWidth);
+      const panel = box(document.querySelector(`${r} .gg-cutpanel`));
+      const queue = box(document.querySelector(`${r} .gg-queue-btn`));
       const thumbs = [...document.querySelectorAll(`${s} .gg-ver-wrap`)].slice(0, 3).map((w) => box(w));
       return {
         stripTop: strip.top, stripBottom: strip.bottom, stripLeft: strip.left, stripWidth: strip.width, stripHeight: strip.height,
-        iconTop: icons.top, listBottom: list.bottom, rootLeft: root.left, rootWidth: root.width,
+        iconTop: icons.top, iconBottom: icons.bottom, iconRightGap: icons.right - lastIcon.right, iconLeftOfIcons: firstIcon.left - ver.right,
+        iconBorder: iconCss.borderTopWidth, iconBg: iconCss.backgroundColor, btnBorders,
+        panelTop: panel.top, queueRightGap: panel.right - queue.right, queueLeft: queue.left - panel.left,
+        listBottom: list.bottom, rootLeft: root.left, rootWidth: root.width,
         sameLine: thumbs.every((t) => Math.abs(t.top - thumbs[0].top) < 1),
         leftToRight: thumbs.every((t, i) => !i || t.left >= thumbs[i - 1].right),
         thumbs: thumbs.map((t) => [Math.round(t.left), Math.round(t.right)]),
       };
     }, ROOT, STRIP);
-    if (Math.abs(geo.stripBottom - geo.iconTop) > 2) throw new Error(`row not directly above the icon row: ${JSON.stringify(geo)}`);
-    if (geo.listBottom > geo.stripTop + 2) throw new Error(`row overlaps the cut list: ${JSON.stringify(geo)}`);
+    if (Math.abs(geo.iconBottom - geo.stripTop) > 2) throw new Error(`row not directly below the icon row: ${JSON.stringify(geo)}`);
+    if (geo.listBottom > geo.iconTop + 2) throw new Error(`icon row overlaps the cut list: ${JSON.stringify(geo)}`);
+    if (Math.abs(geo.stripBottom - geo.panelTop) > 2) throw new Error(`status panel not right below the row: ${JSON.stringify(geo)}`);
+    if (geo.iconRightGap < 0 || geo.iconRightGap > 12 || geo.iconLeftOfIcons < 20) throw new Error(`icons not right-aligned: ${JSON.stringify(geo)}`);
+    if (geo.iconBorder !== "0px" || !/rgba\(0, 0, 0, 0\)|transparent/.test(geo.iconBg) || geo.btnBorders.some((w) => w !== "0px")) {
+      throw new Error(`icon row not borderless: ${JSON.stringify(geo)}`);
+    }
+    if (geo.queueRightGap < 0 || geo.queueRightGap > 16 || geo.queueLeft < 40) throw new Error(`Queue not right-aligned: ${JSON.stringify(geo)}`);
     if (Math.abs(geo.stripLeft - geo.rootLeft) > 2 || Math.abs(geo.stripWidth - geo.rootWidth) > 2) throw new Error(`row not full width: ${JSON.stringify(geo)}`);
     if (geo.stripHeight > 90) throw new Error(`row too tall: ${geo.stripHeight}`);
     if (!geo.sameLine || !geo.leftToRight) throw new Error(`thumbnails not in one horizontal line without overlap: ${JSON.stringify(geo)}`);
@@ -338,7 +356,7 @@ async function main() {
     if (!st.items[serverVers[0]].latest || Object.values(st.items).some((x) => x.best || x.star === "★")) {
       throw new Error(`expected newest = current, no Best: ${JSON.stringify(st.items)}`);
     }
-    console.log(`PASS  layout: ${Math.round(geo.stripWidth)}x${Math.round(geo.stripHeight)} row directly above the icon row; ${SEED_COUNT} versions newest on the left; latest current, no Best`);
+    console.log(`PASS  layout: borderless icon row (icons right-aligned), ${Math.round(geo.stripWidth)}x${Math.round(geo.stripHeight)} row directly below it, Queue right-aligned; ${SEED_COUNT} versions newest on the left; latest current, no Best`);
 
     // 2. horizontal scroll (wheel + scrollbar) + left arrow back to the newest
     if (st.newestShown) throw new Error("left arrow shown at the newest");

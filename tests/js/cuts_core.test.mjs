@@ -457,4 +457,15 @@ describe("addCutTarget", () => {
       group: "scene1",
     });
   });
+
+  it("looseWhenNone (native): no active cut means Ungrouped at the end, never the last scene", () => {
+    const allGrouped = [{ id: "a", group_id: "g1" }, { id: "b", group_id: "g2" }];
+    assert.deepEqual(addCutTarget({ timelineCuts: allGrouped, activeCutId: null, looseWhenNone: true }), { after: null, group: null });
+    assert.deepEqual(addCutTarget({ timelineCuts: allGrouped, activeCutId: "gone", looseWhenNone: true }), { after: null, group: null });
+    assert.deepEqual(addCutTarget({ timelineCuts: [], activeCutId: null, looseWhenNone: true }), { after: null, group: null });
+  });
+
+  it("looseWhenNone keeps the active cut's scene when a cut is active", () => {
+    assert.deepEqual(addCutTarget({ timelineCuts: cuts, activeCutId: "b", looseWhenNone: true }), { after: "b", group: "g1" });
+  });
 });
