@@ -476,11 +476,11 @@ async function main() {
       if ((await confirmSeen(page)) !== seen0) throw new Error("cut Delete showed a confirm modal");
     });
 
-    await runScenario("b1", "Scene header menu: items, Select cuts, Add Cut, Delete Scene confirm (cancel)", async () => {
+    await runScenario("b1", "Scene header menu: items, Select cuts, Add Cut; header × delete confirm (cancel)", async () => {
       await resetBaseline(page);
       await rightClickAt(page, `${secSel(gA)} .gg-grp-title`);
       const labels = await ctxLabels(page);
-      const want = ["Add Cut", "Select cuts", "Collapse", "Rename", "Ungroup", "Delete Scene"];
+      const want = ["Add Cut", "Select cuts", "Collapse", "Rename", "Ungroup"];
       if (labels.join("|") !== want.join("|")) throw new Error(`scene menu items: ${labels.join("|")}`);
       await clickCtxItem(page, "Select cuts");
       await sleep(400);
@@ -499,8 +499,7 @@ async function main() {
       if ((await sectionCutIds(page, gA)).length !== 2) throw new Error("scene A should keep 2 cuts");
 
       const seen0 = await confirmSeen(page);
-      await rightClickAt(page, `${secSel(gA)} .gg-grp-title`);
-      await clickCtxItem(page, "Delete Scene");
+      await page.click(`${secSel(gA)} .gg-grp-del`);
       await page.waitForSelector(".gg-confirm-dialog", { timeout: 8000 });
       if ((await confirmSeen(page)) !== seen0 + 1) throw new Error("confirm watcher did not count the scene modal");
       await page.click(".gg-confirm-cancel");
@@ -539,13 +538,15 @@ async function main() {
       if ((await confirmSeen(page)) !== seen0) throw new Error("clip Delete showed a confirm modal");
     });
 
-    await runScenario("b3", "Cut card menu includes Regen and Send last output (not clicked)", async () => {
+    await runScenario("b3", "Cut card menu: Group / Ungroup first, includes Regen and Send last output (not clicked)", async () => {
       await resetBaseline(page);
       await rightClickAt(page, `${cutSel(c2)} .gg-cut-title`);
       const labels = await ctxLabels(page);
+      if (labels[0] !== "Group" || labels[1] !== "Ungroup") throw new Error(`cut menu should start with Group, Ungroup: ${labels.join("|")}`);
       for (const l of ["Regen", "Send last output", "Delete"]) {
         if (!labels.includes(l)) throw new Error(`cut menu missing ${l}: ${labels.join("|")}`);
       }
+      if (new Set(labels).size !== labels.length) throw new Error(`cut menu has duplicate items: ${labels.join("|")}`);
       await closeCtx(page);
     });
 

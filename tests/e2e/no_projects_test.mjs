@@ -1,5 +1,5 @@
 /**
- * Empty-project hint: with 0 projects the panel says how to create one, and right-click there offers New Project....
+ * Empty-project hint: with 0 projects the panel shows a hint + New project button, and right-click there offers New Project....
  * Read-only: GET /gonggan/projects is answered by the test with an empty list, nothing is created or deleted on the server.
  * Blocks POST /prompt and /gonggan/regen.
  */
@@ -188,10 +188,13 @@ async function run() {
     await waitForComfy(page);
     await openShotsTab(page);
     await page.waitForSelector(".gg-root.gg-shots .gg-no-projects", { timeout: 15000 });
-    const text = await page.$eval(".gg-no-projects", (e) => e.textContent.trim());
-    if (text !== "No projects yet. Right-click here and choose New Project\u2026") throw new Error(`hint text: ${text}`);
+    const hint = await page.$eval(".gg-no-projects", (e) => ({
+      text: e.querySelector("span")?.textContent.trim() || "",
+      button: e.querySelector(".gg-new-project-btn")?.textContent.trim() || "",
+    }));
+    if (hint.text !== "No projects yet. Create one to start." || hint.button !== "New project") throw new Error(`hint: ${JSON.stringify(hint)}`);
     if (!stubbed) throw new Error("projects stub was never used");
-    console.log("PASS  0 projects shows the New Project hint");
+    console.log("PASS  0 projects shows the hint and the New project button");
     const box = await (await page.$(".gg-no-projects")).boundingBox();
     await page.mouse.click(box.x + 12, box.y + 8, { button: "right" });
     await page.waitForSelector(".gg-ctx", { timeout: 8000 });

@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
+import { fillNewProjectModal, NEW_PROJECT_MODAL } from "./new_project_helpers.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
@@ -186,18 +187,13 @@ async function openNewProjectModal(page) {
     );
   });
   await clickCtxItem(page, "New Project…");
-  await page.waitForSelector(".gg-modal", { timeout: 10000 });
-  await page.waitForSelector(".gg-modal-tpl", { timeout: 10000 });
+  await page.waitForSelector(`${NEW_PROJECT_MODAL} .gg-tpl-combo`, { timeout: 10000 });
 }
 
 async function createProjectViaUi(page, name, templateRef) {
   await openNewProjectModal(page);
-  await page.click(".gg-modal-name", { clickCount: 3 });
-  await page.type(".gg-modal-name", name, { delay: 8 });
-  if (templateRef !== undefined) {
-    await page.select(".gg-modal-tpl", templateRef).catch(() => {});
-  }
-  await page.click(".gg-modal .gg-primary");
+  await fillNewProjectModal(page, { name, templateRef });
+  await page.click(".gg-modal-create");
   await page.waitForFunction(
     (n) => {
       const sel = document.querySelector(".gg-root.gg-shots .gg-proj");
@@ -345,7 +341,8 @@ async function main() {
     }
 
     await openNewProjectModal(page);
-    const modalTpl = await page.$eval(".gg-modal-tpl", (el) => el.value);
+    await sleep(1500);
+    const modalTpl = await page.$eval(".gg-tpl-combo", (el) => el.value);
     if (modalTpl !== "") throw new Error(`expected modal template (none), got "${modalTpl}"`);
     await page.click(".gg-modal-cancel");
 
