@@ -73,6 +73,8 @@ import {
   sdkRegenErrorMessage,
   sdkPlanSummary,
   sdkJobToast,
+  i2vConfirmMessage,
+  i2vErrorMessage,
 } from "./gg_native_regen_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import { REFERENCE_CATEGORIES } from "./gg_import_core.js";
@@ -208,6 +210,9 @@ import {
   IMPORT_ACCEPT,
   regenButtonState,
   REGEN_LABEL,
+  i2vButtonState,
+  I2V_LABEL,
+  cutHasStartImage,
 } from "./gg_version_strip_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { batchProgressView, createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
@@ -234,6 +239,8 @@ import {
   pickInitialTemplate,
   shortTemplateName,
   templateComboItems,
+  templateLabel,
+  isBuiltinTemplate,
 } from "./gg_template_pick_core.js";
 import { comboFilter, comboActiveIndex, comboKey, comboTypedValue } from "./gg_combo_core.js";
 import {
@@ -279,6 +286,7 @@ import {
   zoomKeyAction,
 } from "./gg_zoombar_core.js";
 import {
+  DEFAULT_PROJECT_SETTINGS,
   normalizeProjectSettings,
   projectSettingsModalPatch,
   folderCheckErrorText,
@@ -297,7 +305,7 @@ import {
 } from "./gg_undo_core.js";
 import {
   CUT_SPLIT_PROMPT,
-  LTX_WORKFLOWS,
+  cutListWorkflowOptions,
   parseCutList,
   cutListSummary,
   createCutsConfirmMessage,
@@ -723,6 +731,8 @@ function openNewProjectModal() {
         <span class="gg-modal-hint gg-split-err gg-modal-folder-err" aria-live="polite"></span>
       </label>
       ${templateFieldHtml()}
+      ${templateFieldHtml("image")}
+      ${templateFieldHtml("video")}
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
         <button type="submit" class="gg-btn gg-primary gg-modal-create">Create</button>
@@ -738,13 +748,21 @@ function openNewProjectModal() {
   const createBtn = wrap.querySelector(".gg-modal-create");
   let template = "";
   let templateTouched = false;
-  const showTemplate = wireProjectTemplateField(wrap, {
+  const defaultField = wrap.querySelector('[data-tpl="default"]');
+  const showTemplate = wireProjectTemplateField(defaultField, {
     get: () => template,
     set: (ref) => { template = ref; templateTouched = true; },
   });
-  const tplIn = wrap.querySelector(".gg-tpl-combo");
+  const kindTemplates = { image: DEFAULT_PROJECT_SETTINGS.image_template, video: DEFAULT_PROJECT_SETTINGS.video_template };
+  for (const kind of ["image", "video"]) {
+    wireProjectTemplateField(wrap.querySelector(`[data-tpl="${kind}"]`), {
+      get: () => kindTemplates[kind],
+      set: (ref) => { kindTemplates[kind] = ref; },
+    });
+  }
+  const tplIn = defaultField?.querySelector(".gg-tpl-combo");
   fetchUserWorkflowPaths().then(() => {
-    if (templateTouched || !wrap.isConnected || (tplIn && tplIn.value !== template)) return;
+    if (templateTouched || !wrap.isConnected || (tplIn && tplIn.value !== (template ? templateLabel(template) : ""))) return;
     template = pickInitialTemplate(userWorkflowPaths, loadLastTemplate(localStorage));
     showTemplate();
   });
@@ -775,7 +793,13 @@ function openNewProjectModal() {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (submitting) return;
-    const req = newProjectRequest({ name: nameIn.value, location: locIn.value, template });
+    const req = newProjectRequest({
+      name: nameIn.value,
+      location: locIn.value,
+      template,
+      imageTemplate: kindTemplates.image,
+      videoTemplate: kindTemplates.video,
+    });
     if (req.error) {
       if (req.field === "location") showLocErr(req.error);
       else nameIn.focus();
@@ -794,7 +818,7 @@ function openNewProjectModal() {
       if (folderNotCreated(d.project)) ggToast("Project", `Created "${name}". ${NO_FOLDER_ROUTE_HINT}`, "warn");
       else ggToast("Project", `Created "${name}" in ${d.project.folder}`, "ok");
     } catch (err) {
-      if (err.status === 400) showLocErr(err.message);
+      if (err.status === 400 && !/template/i.test(err.message || "")) showLocErr(err.message);
       else ggToast("Project", err.message, "warn");
     } finally {
       submitting = false;
@@ -804,37 +828,51 @@ function openNewProjectModal() {
   nameIn.focus();
 }
 
-function templateFieldHtml() {
-  return `<div class="gg-modal-field" title="ComfyUI saved workflow used as this project's template">
-        <span class="gg-tpl-label">Default template</span>
+const TEMPLATE_FIELDS = {
+  default: { label: "Default template", title: "ComfyUI saved workflow used as this project's template", none: true },
+  image: { label: "Image template", title: "Workflow for new image cuts and Generate All (a cut's own workflow wins)", none: false },
+  video: { label: "Video template", title: "Workflow for Paste Cut List / AI Cut Split cuts and Image to Video", none: false },
+};
+
+function templateFieldHtml(key = "default") {
+  const f = TEMPLATE_FIELDS[key];
+  const listId = key === "default" ? "gg-tpl-list" : `gg-tpl-list-${key}`;
+  return `<div class="gg-modal-field gg-tpl-field" data-tpl="${key}" title="${esc(f.title)}">
+        <span class="gg-tpl-label">${esc(f.label)}</span>
         <span class="gg-tpl-wrap">
           <span class="gg-tpl-box">
-            <input type="text" class="gg-tpl-combo" role="combobox" aria-label="Default template" aria-autocomplete="list"
-              aria-expanded="false" aria-controls="gg-tpl-list" placeholder="(none)" autocomplete="off" spellcheck="false" />
+            <input type="text" class="gg-tpl-combo" role="combobox" aria-label="${esc(f.label)}" aria-autocomplete="list"
+              aria-expanded="false" aria-controls="${listId}" placeholder="${f.none ? "(none)" : esc(templateLabel(DEFAULT_PROJECT_SETTINGS[`${key}_template`]))}" autocomplete="off" spellcheck="false" />
             <button type="button" class="gg-tpl-toggle" tabindex="-1" aria-label="Show templates" title="Show templates">▼</button>
           </span>
-          <button type="button" class="gg-btn gg-tpl-use-last" hidden>Use last</button>
+          ${key === "default" ? `<button type="button" class="gg-btn gg-tpl-use-last" hidden>Use last</button>` : ""}
         </span>
-        <ul class="gg-tpl-list" id="gg-tpl-list" role="listbox" aria-label="Templates" hidden></ul>
+        <ul class="gg-tpl-list" id="${listId}" role="listbox" aria-label="Templates" hidden></ul>
       </div>`;
 }
 
 /**
- * Default template editable combobox (Project Settings, New Project): ▼ or a click shows the list, typing filters it,
+ * Template editable combobox (Project Settings, New Project): ▼ or a click shows the list, typing filters it,
  * arrows + Enter or a click pick; typed text becomes the value on Enter or when the field loses focus; Escape reverts.
- * Without `field` a pick links the open project's template right away (no Save needed) and the Use last button is
- * offered; with `field` the value lives in field.get / field.set.
+ * Built-in templates show their label; typing a label picks its ref.
+ * Without `field` a pick links the open project's Default template right away (no Save needed) and the Use last button
+ * is offered; with `field` the value lives in field.get / field.set.
+ * @param {Element | null} wrap the field from templateFieldHtml
  * @param {{ get: () => string, set: (ref: string) => void } | undefined} field
  * @returns {() => void} repaints the shown value
  */
 function wireProjectTemplateField(wrap, field) {
-  const input = wrap.querySelector(".gg-tpl-combo");
-  const list = wrap.querySelector(".gg-tpl-list");
+  const input = wrap?.querySelector(".gg-tpl-combo");
+  const list = wrap?.querySelector(".gg-tpl-list");
   if (!input || !list) return () => {};
+  const key = wrap.dataset.tpl || "default";
+  const none = TEMPLATE_FIELDS[key]?.none !== false;
   const ui = { open: false, active: -1, items: [] };
   const current = () => (field ? field.get() : projectTemplateRef) || "";
+  const shown = () => (current() ? templateLabel(current()) : "");
+  const comboItems = () => templateComboItems(userWorkflowPaths, current(), { none });
   const showValue = () => {
-    input.value = current();
+    input.value = shown();
     input.title = current() || "(none)";
   };
   const render = () => {
@@ -846,16 +884,16 @@ function wireProjectTemplateField(wrap, field) {
     list.innerHTML = ui.items.length
       ? ui.items.map((it, i) => {
         const cls = `gg-combo-opt${i === ui.active ? " gg-active" : ""}${it.value === cur ? " gg-cur" : ""}`;
-        return `<li role="option" id="gg-tpl-opt-${i}" class="${cls}" data-i="${i}" aria-selected="${i === ui.active}" title="${esc(it.label)}">${esc(it.label)}</li>`;
+        return `<li role="option" id="gg-tpl-opt-${key}-${i}" class="${cls}" data-i="${i}" aria-selected="${i === ui.active}" title="${esc(it.label)}">${esc(it.label)}</li>`;
       }).join("")
       : `<li class="gg-combo-empty">No matches</li>`;
     if (ui.active >= 0) {
-      input.setAttribute("aria-activedescendant", `gg-tpl-opt-${ui.active}`);
+      input.setAttribute("aria-activedescendant", `gg-tpl-opt-${key}-${ui.active}`);
       list.children[ui.active]?.scrollIntoView({ block: "nearest" });
     }
   };
   const openList = (query) => {
-    ui.items = comboFilter(templateComboItems(userWorkflowPaths, current()), query);
+    ui.items = comboFilter(comboItems(), query);
     ui.active = comboActiveIndex(ui.items, current(), query);
     ui.open = true;
     render();
@@ -876,17 +914,17 @@ function wireProjectTemplateField(wrap, field) {
     const it = ui.items[i];
     close(!it);
     if (!it) return;
-    input.value = it.value;
+    input.value = it.label;
     void apply(it.value);
   };
   const commitTyped = () => {
-    const ref = comboTypedValue(templateComboItems(userWorkflowPaths, current()), input.value);
+    const ref = comboTypedValue(comboItems(), input.value) || (none ? "" : current());
     if (ref === current()) showValue();
     else void apply(ref);
   };
   const showAll = () => {
     openList("");
-    fetchUserWorkflowPaths().then(() => { if (ui.open && wrap.isConnected) openList(input.value === current() ? "" : input.value); });
+    fetchUserWorkflowPaths().then(() => { if (ui.open && wrap.isConnected) openList(input.value === shown() ? "" : input.value); });
   };
   input.addEventListener("click", () => {
     if (ui.open) return;
@@ -915,7 +953,7 @@ function wireProjectTemplateField(wrap, field) {
     else if (!r.open) {
       if (wasOpen) close(r.revert);
       if (r.commit) commitTyped();
-    } else if (!wasOpen) openList(input.value === current() ? "" : input.value);
+    } else if (!wasOpen) openList(input.value === shown() ? "" : input.value);
     else {
       ui.active = r.active;
       render();
@@ -1132,6 +1170,7 @@ function openProjectSettingsModal() {
         <span class="gg-modal-hint gg-split-err gg-modal-folder-err" aria-live="polite"></span>
       </label>` : ""}
       ${templateFieldHtml()}
+      ${nat ? `${templateFieldHtml("image")}${templateFieldHtml("video")}` : ""}
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-modal-cancel">${nat ? "Cancel" : "Close"}</button>
         ${nat ? `<button type="submit" class="gg-btn gg-primary">Save</button>` : ""}
@@ -1140,7 +1179,14 @@ function openProjectSettingsModal() {
   document.body.appendChild(wrap);
   projectModalEl = wrap;
   const form = wrap.querySelector("form");
-  wireProjectTemplateField(wrap);
+  wireProjectTemplateField(wrap.querySelector('[data-tpl="default"]'));
+  const kindTemplates = { image: curSettings.image_template, video: curSettings.video_template };
+  for (const kind of ["image", "video"]) {
+    wireProjectTemplateField(wrap.querySelector(`[data-tpl="${kind}"]`), {
+      get: () => kindTemplates[kind],
+      set: (ref) => { kindTemplates[kind] = ref; },
+    });
+  }
   wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeProjectModal(); });
   wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", closeProjectModal);
   const folderIn = wrap.querySelector(".gg-modal-folder");
@@ -1169,7 +1215,10 @@ function openProjectSettingsModal() {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (saving) return;
-    const patch = projectSettingsModalPatch(curSettings, folderIn.value);
+    const patch = projectSettingsModalPatch(curSettings, folderIn.value, {
+      image_template: kindTemplates.image,
+      video_template: kindTemplates.video,
+    });
     if (!patch) {
       closeProjectModal();
       return;
@@ -2802,11 +2851,11 @@ function syncTplUseLastButton(root) {
   const btn = root?.querySelector(".gg-tpl-use-last");
   if (!btn) return;
   const last = loadLastTemplate(localStorage);
-  const show = !projectTemplateRef && typeof last === "string" && !!last && userWorkflowPaths.includes(last);
+  const show = !projectTemplateRef && typeof last === "string" && !!last && (userWorkflowPaths.includes(last) || isBuiltinTemplate(last));
   btn.hidden = !show;
   if (!show) return;
-  btn.title = `Link last used template: ${last}`;
-  btn.textContent = `Use ${shortTemplateName(last, 24)}`;
+  btn.title = `Link last used template: ${templateLabel(last)}`;
+  btn.textContent = `Use ${shortTemplateName(templateLabel(last), 24)}`;
   btn.dataset.ref = last;
 }
 
@@ -2927,7 +2976,7 @@ async function createCutsFromList(reqPid, cuts, wf) {
     recordShotsEntry(reqPid, { kind: "cuts", op: "add", ids, before, after: snapshotOrderGroups(state.timeline) });
     selectCut(ids[0]);
   }
-  ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, "Each cut has the LTX workflow with its description as the prompt. Press Queue with no cut selected to render them in order.", "ok");
+  ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, `Each cut has ${wf.id ? "the LTX workflow" : "the project's Video template"} with its description as the prompt. Press Queue with no cut selected to render them in order.`, "ok");
   return true;
 }
 
@@ -3061,7 +3110,7 @@ function openAiCutSplitModal() {
     sync();
     if (!cuts || !wrap.isConnected) return;
     try {
-      if (await createCutsFromList(reqPid, cuts, LTX_WORKFLOWS[0])) close();
+      if (await createCutsFromList(reqPid, cuts, cutListWorkflowOptions(state.timeline?.project?.settings)[0])) close();
     } catch (e) {
       err.textContent = e.message;
     }
@@ -3073,6 +3122,7 @@ function openAiCutSplitModal() {
 function openPasteCutListModal(prefill = "") {
   if (!isNativeProject() || document.querySelector(".gg-cutlist-modal")) return;
   const reqPid = state.pid;
+  const wfOptions = cutListWorkflowOptions(state.timeline?.project?.settings);
   const wrap = document.createElement("div");
   wrap.className = "gg-modal-backdrop";
   wrap.innerHTML = `
@@ -3082,7 +3132,7 @@ function openPasteCutListModal(prefill = "") {
         <textarea class="gg-cutlist-text" rows="12" spellcheck="false" placeholder='[{"cut": 1, "duration": 3, "description": "..."}]'></textarea>
       </label>
       <label class="gg-modal-field">Workflow for the new cuts
-        <select class="gg-cutlist-wf">${LTX_WORKFLOWS.map((w) => `<option value="${esc(w.id)}">${esc(w.label)}</option>`).join("")}</select>
+        <select class="gg-cutlist-wf">${wfOptions.map((w) => `<option value="${esc(w.id)}">${esc(w.label)}</option>`).join("")}</select>
       </label>
       <span class="gg-modal-hint gg-cutlist-summary" aria-live="polite"></span>
       <span class="gg-modal-hint gg-split-err gg-cutlist-err" aria-live="polite"></span>
@@ -3112,7 +3162,7 @@ function openPasteCutListModal(prefill = "") {
   wrap.addEventListener("keydown", (e) => { if (e.key === "Escape" && !busy) { e.stopPropagation(); close(); } });
   createBtn.addEventListener("click", async () => {
     if (!parsed.ok || busy) return;
-    const wf = LTX_WORKFLOWS.find((w) => w.id === wfSel.value) || LTX_WORKFLOWS[0];
+    const wf = wfOptions.find((w) => w.id === wfSel.value) || wfOptions[0];
     busy = true;
     sync();
     try {
@@ -3645,6 +3695,7 @@ function openCutContextMenu(e, cutId) {
     queueCount: ids.length,
     queuedCount: ids.filter((id) => renderStatus.queuedPromptIds(state.pid, id).length).length,
     failedCount: failedIds.length,
+    hasImage: cutHasStartImage(c),
   });
   showCtxMenu(
     e.clientX,
@@ -3653,6 +3704,7 @@ function openCutContextMenu(e, cutId) {
       items,
       {
         ...cutMenuActions(cutId),
+        i2v: () => imageToVideoCut(cutId),
         queueSel: () => queueSelectedCuts(),
         removeQueue: () => removeCutsFromQueue(ids),
         requeue: () => queueSelectedCuts(failedIds),
@@ -5709,6 +5761,41 @@ function regenNativeCut(cutId) {
   return sdkGenerateNativeCut(cutId, { newSeed: true });
 }
 
+/**
+ * Image to Video: the project's Video template with this cut's Best (else selected, else newest) image as start
+ * image and its description as prompt, through the Comfy SDK path without opening a tab; the server adds the
+ * video as a new version of the same cut.
+ */
+async function imageToVideoCut(cutId) {
+  const cut = cutById(cutId);
+  if (!cut || !state.timeline || !isNativeProject() || sdk.busy) return;
+  const title = shotTitle(cut);
+  const pid = state.pid;
+  const open = wfOpenVersion;
+  const selectedVid = open && open.projectId === pid && open.cutId === cutId ? open.vid : "";
+  sdk.busy = "regen";
+  sdk.msg = `Preparing Image to Video for ${title}…`;
+  bus.dispatchEvent(new Event("sdk"));
+  try {
+    const plan = (await postJson("/gonggan/image-to-video", { pid, cut_id: cutId, ...(selectedVid ? { selected_vid: selectedVid } : {}) })).plan;
+    sdk.msg = `${title}: ${sdkPlanSummary(plan)}`;
+    bus.dispatchEvent(new Event("sdk"));
+    if (!(await askConfirm({ message: i2vConfirmMessage(title, plan) }))) {
+      sdk.msg = "Not queued (cancelled).";
+      return;
+    }
+    await postJson("/gonggan/regen", { pid, cut_id: cutId, dry_run: false, confirm: true, plan: plan.plan });
+    sdk.msg = `Queued through Comfy SDK: ${title} (Image to Video)`;
+    ggToast("Queued", `${title}: Image to Video (Comfy SDK)`, "ok");
+  } catch (e) {
+    sdk.msg = `Image to Video failed: ${i2vErrorMessage(e)}`;
+    ggToast("Image to Video", `${title} — ${i2vErrorMessage(e)}`, "warn");
+  } finally {
+    sdk.busy = "";
+    bus.dispatchEvent(new Event("sdk"));
+  }
+}
+
 /** Status panel Queue: one selected native cut = SDK job, none selected = generate-all, several = batch queue; Stop while generate-all runs. */
 function queueButtonClick() {
   if (isGenerateAllRunning(genAll.batch) && genAll.batch?.pid === state.pid && !genAll.batch?.stop) {
@@ -6181,11 +6268,13 @@ async function importVersionFiles(pid, cutId, files) {
 function versionImportButtonHtml(c) {
   const s = importButtonState({ hasCut: !!c, native: isNativeProject(), busy: stripImportBusy });
   const r = regenButtonState({ hasCut: !!c, native: isNativeProject(), busy: !!sdk.busy });
+  const v = i2vButtonState({ hasCut: !!c, native: isNativeProject(), busy: !!sdk.busy, hasImage: cutHasStartImage(c) });
   return `<button type="button" class="gg-btn gg-vs-import" title="${esc(s.title)}"${s.disabled ? " disabled" : ""}>${esc(IMPORT_LABEL)}</button>` +
-    `<button type="button" class="gg-btn gg-vs-regen" title="${esc(r.title)}" aria-label="${esc(r.title)}"${r.disabled ? " disabled" : ""}>${esc(REGEN_LABEL)}</button>`;
+    `<button type="button" class="gg-btn gg-vs-regen" title="${esc(r.title)}" aria-label="${esc(r.title)}"${r.disabled ? " disabled" : ""}>${esc(REGEN_LABEL)}</button>` +
+    `<button type="button" class="gg-btn gg-vs-i2v" title="${esc(v.title)}" aria-label="${esc(v.title)}"${v.disabled ? " disabled" : ""}>${esc(I2V_LABEL)}</button>`;
 }
 
-/** Version row below the icon row: Import and Regen first, then the selected cut's versions, newest on the left. */
+/** Version row below the icon row: Import, Regen and Image to Video first, then the selected cut's versions, newest on the left. */
 function versionStripHtml(c) {
   const importBtn = versionImportButtonHtml(c);
   if (!c) return importBtn + '<div class="gg-vs-empty gg-dim">Select a cut to see its versions</div>';
@@ -6354,6 +6443,10 @@ function mountShots(el) {
     list.querySelector(".gg-vs-regen")?.addEventListener("click", (e) => {
       e.stopPropagation();
       void regenNativeCut(cutId);
+    });
+    list.querySelector(".gg-vs-i2v")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void imageToVideoCut(cutId);
     });
     if (!c) return;
     bindThumbFallbacks(list);

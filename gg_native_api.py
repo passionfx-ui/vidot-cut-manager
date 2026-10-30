@@ -11,21 +11,23 @@ try:
     from .gg_project import LocalStore
     from .gg_project.timeline import timeline_order
     from .gg_project.ids import is_uuid_id
-    from .gg_project.project_settings import make_project_folder
+    from .gg_project.project_settings import TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings
     from .gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids
 except ImportError:  # unittest / plain script
     from gg_data import PACK_DIR, clamp_clip  # type: ignore
     from gg_project import LocalStore  # type: ignore
     from gg_project.timeline import timeline_order  # type: ignore
     from gg_project.ids import is_uuid_id  # type: ignore
-    from gg_project.project_settings import make_project_folder  # type: ignore
+    from gg_project.project_settings import TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings  # type: ignore
     from gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids  # type: ignore
 
 try:
     from . import gg_template
+    from . import gg_wfnodes
     from . import gg_wfstore
 except ImportError:
     import gg_template  # type: ignore
+    import gg_wfnodes  # type: ignore
     import gg_wfstore  # type: ignore
 
 NATIVE_UNAVAILABLE = "Not available for native projects yet"
@@ -95,6 +97,58 @@ def resolve_template_graph(template_ref: str | None) -> dict | None:
         return None
 
 
+_TEMPLATE_SETTING_LABELS = {"image_template": "Image template", "video_template": "Video template"}
+
+
+def check_template_settings(settings: dict | None) -> None:
+    """Each Image / Video template given in `settings` must be a built-in or an existing user workflow."""
+    for key in TEMPLATE_SETTING_KEYS:
+        ref = (settings or {}).get(key) if isinstance(settings, dict) else None
+        if ref is None or (isinstance(ref, str) and not ref.strip()):
+            continue
+        label = _TEMPLATE_SETTING_LABELS[key]
+        if not isinstance(ref, str):
+            raise ValueError(f"{label} must be a string")
+        try:
+            gg_template.read_workflow_ref(ref)
+        except ValueError:
+            raise ValueError(f"{label} not found: {ref}") from None
+
+
+def project_template_ref(doc: dict, kind: str) -> str:
+    """The project's Image ("image") or Video ("video") template ref (built-in defaults for old projects)."""
+    s = normalize_settings(doc.get("settings") if isinstance(doc.get("settings"), dict) else None)
+    return s["video_template" if kind == "video" else "image_template"]
+
+
+def project_template_graph(doc: dict, kind: str = "image") -> dict | None:
+    """Workflow a new cut starts from. Image cuts: the linked Default template (an explicit pick wins), else the
+    project's Image template. "video" (cut-list cuts, Image to Video): the project's Video template."""
+    if kind != "video":
+        ref = doc.get("template_ref")
+        if isinstance(ref, str) and ref:
+            graph = resolve_template_graph(ref)
+            if graph is not None:
+                return graph
+        try:
+            legacy = gg_template.get_template(doc.get("id") or "")
+        except ValueError:
+            legacy = None
+        if legacy:
+            return legacy
+    return resolve_template_graph(project_template_ref(doc, kind))
+
+
+def project_video_template(doc: dict) -> tuple[str, dict]:
+    """(label, graph) of the project's Video template; ValueError when it cannot be read."""
+    ref = project_template_ref(doc, "video")
+    label = gg_template.template_label(ref)
+    try:
+        return label, gg_template.read_workflow_ref(ref)
+    except ValueError:
+        raise ValueError(f"Video template not found: {label}. Pick another one in Project Settings.") from None
+
+
 def create_native_project(
     name: str,
     template_ref: str | None = None,
@@ -102,12 +156,16 @@ def create_native_project(
     location: str | None = None,
 ) -> dict:
     """With a location, the project folder <location>/<name> (only an `assets` subfolder) is created
-    first and becomes settings.project_folder; a location already ending with the name is used as is."""
+    first and becomes settings.project_folder; a location already ending with the name is used as is.
+    The first cut starts from the Default template when given, else from the Image template."""
     name = (name or "").strip()
     if not name:
         raise ValueError("name required")
+    check_template_settings(settings)
     ref = (template_ref or "").strip() or None
     graph = resolve_template_graph(ref) if ref else None
+    if graph is None:
+        graph = resolve_template_graph(normalize_settings(settings)["image_template"])
     folder = None
     created: list[Path] = []
     if location is not None:
@@ -229,14 +287,7 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
     doc = store.get_project(pid)
     if not doc:
         raise ValueError("project not found")
-    graph = None
-    ref = doc.get("template_ref")
-    if isinstance(ref, str) and ref:
-        graph = resolve_template_graph(ref)
-    if graph is None:
-        tpl = gg_template.get_template(pid)
-        if tpl:
-            graph = tpl
+    graph = project_template_graph(doc, "image")
     scene_id = group_id if isinstance(group_id, str) and group_id else None
     before = store.get_project(pid)
     before_ids = set()
@@ -261,17 +312,25 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
 
 
 def native_add_cut_list(pid: str, cuts, workflow: str | None = None, after: str | None = None) -> dict:
-    """Paste Cut List: one cut per entry, each with the bundled LTX workflow (its ltx_prompt and length injected)."""
+    """Paste Cut List / AI Cut Split: one cut per entry, each with a copy of the project's Video template (or the
+    bundled LTX example `workflow` "t2v" / "i2v") with the description in its prompt node and the LTX length set."""
     try:
         from . import gg_ltx
     except ImportError:
         import gg_ltx  # type: ignore
     store = native_store()
-    if not store.get_project(pid):
+    doc = store.get_project(pid)
+    if not doc:
         raise ValueError("project not found")
     rows = gg_ltx.validate_cut_list(cuts)
-    base = gg_ltx.load_ltx_workflow(workflow or None)
-    entries = [{**r, "graph": gg_ltx.inject_ltx(base, r["prompt"], r["sec"])} for r in rows]
+    if workflow:
+        label, base = workflow, gg_ltx.load_ltx_workflow(workflow)
+    else:
+        label, base = project_video_template(doc)
+    try:
+        entries = [{**r, "graph": gg_ltx.inject_ltx(base, r["prompt"], r["sec"])} for r in rows]
+    except gg_wfnodes.NodeNotFound as ex:
+        raise ValueError(f"Video template {label}: {ex}") from None
     _doc, ids = store.add_cuts(pid, entries, after=after if isinstance(after, str) and after else None)
     return {"ok": True, "cut_ids": ids, "timeline": store.to_timeline(pid)}
 
@@ -281,12 +340,7 @@ def native_import_structure(pid: str, payload: dict) -> dict:
     doc = store.get_project(pid)
     if not doc:
         raise ValueError("project not found")
-    graph = None
-    ref = doc.get("template_ref")
-    if isinstance(ref, str) and ref:
-        graph = resolve_template_graph(ref)
-    if graph is None:
-        graph = gg_template.get_template(pid)
+    graph = project_template_graph(doc, "image")
     store.import_structure(
         pid,
         payload.get("scenes"),
@@ -304,12 +358,7 @@ def native_add_reference(pid: str, name: str, category: str) -> dict | None:
         return None
     if not isinstance(name, str) or not name.strip() or len(name.strip()) > 80:
         raise ValueError("name must be 1-80 characters")
-    graph = None
-    ref = doc.get("template_ref")
-    if isinstance(ref, str) and ref:
-        graph = resolve_template_graph(ref)
-    if graph is None:
-        graph = gg_template.get_template(pid)
+    graph = project_template_graph(doc, "image")
     c = store.add_reference(pid, name, category, template_graph=graph or None)
     return {"ok": True, "reference": {"id": c["id"], "name": c["name"], "category": c["category"]}, "timeline": store.to_timeline(pid)}
 
@@ -378,6 +427,7 @@ def native_update_project(
         return None
     if not isinstance(fields, dict) or not fields:
         raise ValueError("fields required")
+    check_template_settings(fields.get("settings"))
     store.update_project(pid, fields, expected_rev=expected_rev)
     try:
         from . import gg_data
@@ -397,7 +447,7 @@ def native_template_info(pid: str) -> dict:
         raise ValueError("project not found")
     ref = doc.get("template_ref")
     if isinstance(ref, str) and ref:
-        path_ok = gg_template.safe_workflow_path(ref) is not None
+        path_ok = gg_template.workflow_ref_exists(ref)
         wf = gg_template.read_workflow_ref(ref) if path_ok else None
         return {"ref": ref, "exists": path_ok, "workflow": wf}
     legacy = gg_template.get_template_info(pid)
@@ -526,18 +576,178 @@ def native_cut_api_workflow(pid: str, cut_id: str, canvas: dict | None = None, c
         if not isinstance(canvas, dict) or not gg_template._is_api_workflow(canvas):
             raise ValueError("canvas workflow must be an API-format prompt")
         return {"workflow": canvas, "source": "canvas"}
+    source = src.get("source") or "stored"
     if not wf:
-        raise NativeWorkflowError("empty", "This cut has no workflow yet. Not queued.")
+        wf, source = project_template_graph(store.get_project(pid), "image"), "template"
+        if not wf:
+            raise NativeWorkflowError("empty", "This cut has no workflow yet. Not queued.")
+    if source == "template":
+        wf = _with_cut_prompt(wf, cut)
+        if gg_template._is_api_workflow(wf):
+            return {"workflow": wf, "source": "template"}
     if convert and isinstance(wf, dict) and gg_template._is_ui_workflow(wf):
         try:
-            from . import gg_wfconvert
-        except ImportError:
-            import gg_wfconvert  # type: ignore
-        try:
-            return {"workflow": gg_wfconvert.ui_to_api(wf), "source": "converted"}
+            return {"workflow": _ui_to_api(wf), "source": "template" if source == "template" else "converted"}
         except ValueError as ex:
             raise NativeWorkflowError("ui_only", f"{UI_ONLY_MESSAGE} ({ex})") from None
     raise NativeWorkflowError("ui_only", UI_ONLY_MESSAGE)
+
+
+def _ui_to_api(graph: dict) -> dict:
+    try:
+        from . import gg_wfconvert
+    except ImportError:
+        import gg_wfconvert  # type: ignore
+    return gg_wfconvert.ui_to_api(graph)
+
+
+def cut_prompt_text(cut: dict) -> str:
+    """The cut's description: its prompt (Paste Cut List / AI Cut Split), else its caption."""
+    for key in ("prompt", "caption"):
+        v = cut.get(key)
+        if isinstance(v, str) and v.strip():
+            return " ".join(v.split())
+    return ""
+
+
+def _with_cut_prompt(graph: dict, cut: dict) -> dict:
+    """Copy of a template graph with the cut's description in its prompt node (unchanged when either is missing)."""
+    import copy
+
+    g = copy.deepcopy(graph)
+    text = cut_prompt_text(cut)
+    if text:
+        try:
+            gg_wfnodes.set_prompt(g, text)
+        except gg_wfnodes.NodeNotFound:
+            pass
+    return g
+
+
+# ---- start image: a still image version of the cut copied into ComfyUI's input folder ----
+_STILL_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+INPUT_SUBFOLDER = "gonggan"
+NO_START_IMAGE = "This cut has no image version to start from. Generate or import an image first."
+
+
+def _is_animated_webp(path: Path) -> bool:
+    try:
+        with open(path, "rb") as f:
+            head = f.read(21)
+    except OSError:
+        return False
+    return len(head) == 21 and head[:4] == b"RIFF" and head[8:16] == b"WEBPVP8X" and bool(head[20] & 0x02)
+
+
+def is_still_image(path: Path | None) -> bool:
+    return (path is not None and path.is_file() and path.suffix.lower() in _STILL_EXT
+            and not (path.suffix.lower() == ".webp" and _is_animated_webp(path)))
+
+
+def pick_start_version(pid: str, cut_id: str, selected_vid: str | None = None) -> tuple[dict, Path]:
+    """The version a video starts from: Best, else `selected_vid` (the one open in the version row), else the
+    newest — the first of these that is a still image whose file exists. ValueError when there is none."""
+    store = native_store()
+    doc = store.get_project(pid)
+    cut = (doc.get("cuts") or {}).get(cut_id) if doc else None
+    if not cut or cut.get("deleted_at"):
+        raise ValueError("cut not found")
+    versions = store.list_versions(pid, cut_id)
+    by_id = {v.get("id"): v for v in versions}
+    order = [cut.get("pick_version_id"), selected_vid, *by_id]
+    for vid in dict.fromkeys(x for x in order if isinstance(x, str) and x):
+        ver = by_id.get(vid)
+        path = store.version_file(pid, ver) if ver else None
+        if ver and is_still_image(path):
+            return ver, path
+    raise ValueError(NO_START_IMAGE)
+
+
+def _comfy_input_dir() -> Path:
+    import folder_paths
+
+    return Path(folder_paths.get_input_directory())
+
+
+def stage_start_image(src: Path, vid: str) -> str:
+    """Copy a version image to ComfyUI's input/gonggan/start_<version id>.<ext> (once per version, the version
+    file is never changed) and return the Load Image name for it."""
+    folder = _comfy_input_dir() / INPUT_SUBFOLDER
+    name = f"start_{vid}{src.suffix.lower()}"
+    dest = folder / name
+    if not (dest.is_file() and dest.stat().st_size == src.stat().st_size):
+        import shutil
+
+        folder.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(f"{name}.tmp")
+        shutil.copy2(src, tmp)
+        tmp.replace(dest)
+    return f"{INPUT_SUBFOLDER}/{name}"
+
+
+def fill_titled_start_image(pid: str, cut_id: str, api: dict) -> str | None:
+    """Generate All: a node titled "Start Image" gets the cut's Best / newest still image. Returns the version id,
+    or None when there is no such node or no image (the workflow then runs as saved)."""
+    try:
+        gg_wfnodes.find_start_image_node(api, titled_only=True)
+    except gg_wfnodes.NodeNotFound as ex:
+        if str(ex) == gg_wfnodes.START_IMAGE_MISSING:
+            return None
+        raise
+    try:
+        ver, path = pick_start_version(pid, cut_id)
+    except ValueError:
+        return None
+    gg_wfnodes.set_start_image(api, stage_start_image(path, ver["id"]), titled_only=True)
+    return ver["id"]
+
+
+def _version_prompt(pid: str, ver: dict, path: Path) -> str:
+    """Prompt text of the workflow that made a version (its PNG prompt, else its stored workflow)."""
+    wfs = []
+    if path.suffix.lower() == ".png":
+        wfs.append(gg_wfstore.extract_png_meta(path).get("prompt"))
+    wfs.append(_workflow_from_sha(native_store(), pid, ver.get("workflow_sha")))
+    for wf in wfs:
+        if isinstance(wf, dict):
+            text = gg_wfnodes.prompt_text(wf).strip()
+            if text:
+                return text
+    return ""
+
+
+def native_image_to_video_workflow(pid: str, cut_id: str, selected_vid: str | None = None) -> dict:
+    """API prompt of the project's Video template for Image to Video: the start image node gets the cut's Best
+    (else selected / newest) still image, the prompt node the cut's description, the LTX length its duration.
+    Nothing is queued. ValueError with a user-facing message when something is missing."""
+    try:
+        from . import gg_ltx
+    except ImportError:
+        import gg_ltx  # type: ignore
+    store = native_store()
+    doc = store.get_project(pid)
+    if not doc or doc.get("deleted_at"):
+        raise ValueError("project not found")
+    cut = (doc.get("cuts") or {}).get(cut_id)
+    if not cut or cut.get("deleted_at"):
+        raise ValueError("cut not found")
+    label, graph = project_video_template(doc)
+    if gg_template._is_ui_workflow(graph):
+        try:
+            graph = _ui_to_api(graph)
+        except ValueError as ex:
+            raise ValueError(f"Video template {label} cannot run without its tab: {ex}") from None
+    gg_wfnodes.find_start_image_node(graph)
+    ver, path = pick_start_version(pid, cut_id, selected_vid)
+    prompt = cut_prompt_text(cut) or _version_prompt(pid, ver, path)
+    if not prompt:
+        raise ValueError("This cut has no description. Add a caption first.")
+    sec = cut.get("planned_sec") or cut.get("sec") or gg_ltx.DURATION_MAX
+    wf = gg_ltx.inject_ltx(graph, prompt, float(sec))
+    image = stage_start_image(path, ver["id"])
+    node = gg_wfnodes.set_start_image(wf, image)
+    return {"workflow": wf, "template": label, "start_version": ver["id"], "start_node": node, "image": image,
+            "prompt": prompt, "frames": gg_ltx.frames_for_duration(float(sec), gg_ltx.workflow_fps(wf))}
 
 
 def _skip_native_media_lookup(media_id: str) -> bool:

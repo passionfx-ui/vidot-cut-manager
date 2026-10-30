@@ -9,6 +9,11 @@ import re
 from pathlib import Path
 from typing import Any
 
+try:
+    from . import gg_wfnodes
+except ImportError:  # unit tests import this module directly
+    import gg_wfnodes  # type: ignore
+
 EXAMPLES_DIR = Path(__file__).resolve().parent / "examples" / "workflows"
 LTX_WORKFLOWS = {
     "t2v": "ltxv_text_to_video.json",
@@ -115,59 +120,19 @@ def workflow_fps(graph: dict) -> float:
     return cond or DEFAULT_FPS
 
 
-def _positive_text_node_ui(graph: dict) -> dict | None:
-    nodes = [n for n in graph["nodes"] if isinstance(n, dict)]
-    by_id = {n.get("id"): n for n in nodes}
-    encoders = [n for n in nodes if n.get("type") == "CLIPTextEncode"]
-    for link in graph.get("links") or []:
-        if not isinstance(link, list) or len(link) < 5:
-            continue
-        src, dst, slot = by_id.get(link[1]), by_id.get(link[3]), link[4]
-        if not src or src.get("type") != "CLIPTextEncode" or not dst:
-            continue
-        inputs = dst.get("inputs") or []
-        if isinstance(slot, int) and 0 <= slot < len(inputs) and (inputs[slot] or {}).get("name") == "positive":
-            return src
-    titled = [n for n in encoders if "positive" in str(n.get("title") or "").lower()]
-    return (titled or encoders or [None])[0]
-
-
-def _positive_text_node_api(graph: dict) -> dict | None:
-    encoders = {k: n for k, n in graph.items() if isinstance(n, dict) and n.get("class_type") == "CLIPTextEncode"}
-    for n in graph.values():
-        if not isinstance(n, dict) or not isinstance(n.get("inputs"), dict):
-            continue
-        ref = n["inputs"].get("positive")
-        if isinstance(ref, list) and ref and str(ref[0]) in encoders:
-            return encoders[str(ref[0])]
-    titled = [n for n in encoders.values() if "positive" in str((n.get("_meta") or {}).get("title") or "").lower()]
-    return (titled or list(encoders.values()) or [None])[0]
-
-
 def inject_ltx(graph: dict, prompt: str, duration: float) -> dict:
-    """Copy of `graph` with `prompt` in the positive CLIPTextEncode and the LTX length set from `duration`."""
+    """Copy of `graph` with `prompt` in its prompt node (gg_wfnodes rule) and the LTX length set from `duration`."""
     if not isinstance(graph, dict):
         raise ValueError("workflow must be an object")
     g = copy.deepcopy(graph)
     frames = frames_for_duration(duration, workflow_fps(g))
+    gg_wfnodes.set_prompt(g, prompt)
     if _is_ui(g):
-        pos = _positive_text_node_ui(g)
-        if pos is None:
-            raise ValueError("workflow has no CLIPTextEncode node")
-        wv = pos.get("widgets_values")
-        if isinstance(wv, list) and wv:
-            wv[0] = prompt
-        else:
-            pos["widgets_values"] = [prompt]
         for n in g["nodes"]:
             wv = n.get("widgets_values") if isinstance(n, dict) else None
             if n.get("type") in _LENGTH_NODES and isinstance(wv, list) and len(wv) > _LENGTH_WIDGET_INDEX:
                 wv[_LENGTH_WIDGET_INDEX] = frames
     else:
-        pos = _positive_text_node_api(g)
-        if pos is None:
-            raise ValueError("workflow has no CLIPTextEncode node")
-        pos.setdefault("inputs", {})["text"] = prompt
         for n in g.values():
             if isinstance(n, dict) and n.get("class_type") in _LENGTH_NODES and isinstance(n.get("inputs"), dict):
                 n["inputs"]["length"] = frames

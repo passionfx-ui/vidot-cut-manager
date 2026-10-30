@@ -13,6 +13,44 @@ except ImportError:
 TEMPLATES_DIR = PACK_DIR / "templates"
 _USER_WF_SUB = Path("default") / "workflows"
 
+# Built-in templates shipped in examples/workflows (same refs and labels as BUILTIN_TEMPLATES in
+# web/gg_template_pick_core.js; a test keeps them equal).
+EXAMPLES_DIR = PACK_DIR / "examples" / "workflows"
+BUILTIN_PREFIX = "builtin:"
+BUILTIN_TEMPLATES = (
+    {"ref": "builtin:image", "label": "Image (default)", "kind": "image", "file": "z_image_turbo_t2i.json"},
+    {"ref": "builtin:video-ltx", "label": "Video LTX (default)", "kind": "video", "file": "ltxv_image_to_video.json"},
+    {"ref": "builtin:video-ltx-t2v", "label": "Video LTX text-to-video", "kind": "video",
+     "file": "ltxv_text_to_video.json"},
+)
+_BUILTIN_BY_REF = {t["ref"]: t for t in BUILTIN_TEMPLATES}
+
+
+def list_builtin_templates() -> list[dict]:
+    """[{ref, label, kind}] of the built-in templates, in dropdown order."""
+    return [{k: t[k] for k in ("ref", "label", "kind")} for t in BUILTIN_TEMPLATES]
+
+
+def is_builtin_ref(ref) -> bool:
+    return isinstance(ref, str) and ref.strip() in _BUILTIN_BY_REF
+
+
+def template_label(ref) -> str:
+    """Dropdown label of a template ref (built-in label, else the workflow path)."""
+    r = (ref or "").strip() if isinstance(ref, str) else ""
+    return _BUILTIN_BY_REF[r]["label"] if r in _BUILTIN_BY_REF else r
+
+
+def read_builtin_template(ref: str) -> dict:
+    t = _BUILTIN_BY_REF.get((ref or "").strip())
+    if t is None:
+        raise ValueError(f"unknown built-in template: {ref}")
+    try:
+        data = json.loads((EXAMPLES_DIR / t["file"]).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as ex:
+        raise ValueError(f"built-in template {t['label']} is unreadable: {ex}") from ex
+    return validate_workflow(data)
+
 
 def _template_file(pid: str) -> Path:
     if not PID_RE.fullmatch(pid or ""):
@@ -58,6 +96,8 @@ def user_workflows_dir() -> Path:
 
 
 def _normalize_ref(ref: str) -> str:
+    if is_builtin_ref(ref):
+        return ref.strip()
     ref = (ref or "").replace("\\", "/").strip().lstrip("/")
     if ref.startswith("workflows/"):
         ref = ref[len("workflows/") :]
@@ -83,7 +123,16 @@ def safe_workflow_path(rel_ref: str) -> Path | None:
     return full if full.is_file() else None
 
 
+def workflow_ref_exists(ref: str) -> bool:
+    """A built-in template, or a workflow file under ComfyUI's user workflows folder."""
+    return is_builtin_ref(ref) or safe_workflow_path(ref) is not None
+
+
 def read_workflow_ref(rel_ref: str) -> dict:
+    if is_builtin_ref(rel_ref):
+        return read_builtin_template(rel_ref)
+    if isinstance(rel_ref, str) and rel_ref.strip().startswith(BUILTIN_PREFIX):
+        raise ValueError(f"unknown built-in template: {rel_ref}")
     path = safe_workflow_path(rel_ref)
     if path is None:
         raise ValueError("workflow ref not found")
@@ -127,7 +176,7 @@ def template_ref_exists(pid: str) -> bool:
     ref = store.get("ref")
     if not ref:
         return False
-    return safe_workflow_path(ref) is not None
+    return workflow_ref_exists(ref)
 
 
 def get_template(pid: str) -> dict | None:
@@ -153,7 +202,7 @@ def get_template_info(pid: str) -> dict:
     ref = store.get("ref") or None
     if not ref:
         return {"ref": None, "exists": False, "workflow": None}
-    path_ok = safe_workflow_path(ref) is not None
+    path_ok = workflow_ref_exists(ref)
     wf = read_workflow_ref(ref) if path_ok else None
     return {"ref": ref, "exists": path_ok, "workflow": wf}
 

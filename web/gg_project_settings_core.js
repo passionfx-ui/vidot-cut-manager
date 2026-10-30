@@ -1,5 +1,7 @@
 /** Pure helpers for native project setup fields (no DOM). */
 
+import { DEFAULT_IMAGE_TEMPLATE, DEFAULT_VIDEO_TEMPLATE } from "./gg_template_pick_core.js";
+
 export const RESOLUTION_PRESETS = [
   { aspect: "16:9", width: 1280, height: 720, label: "16:9 1280×720" },
   { aspect: "16:9", width: 1920, height: 1080, label: "16:9 1920×1080" },
@@ -28,9 +30,11 @@ export const DEFAULT_PROJECT_SETTINGS = {
   cut_seconds: 3,
   caption_lang: "English",
   project_folder: "",
+  image_template: DEFAULT_IMAGE_TEMPLATE,
+  video_template: DEFAULT_VIDEO_TEMPLATE,
 };
 
-const SETTING_KEYS = ["aspect", "width", "height", "fps", "cut_seconds", "caption_lang", "project_folder"];
+const SETTING_KEYS = ["aspect", "width", "height", "fps", "cut_seconds", "caption_lang", "project_folder", "image_template", "video_template"];
 
 /** @param {{ aspect: string, width: number, height: number }} preset */
 export function presetKey(preset) {
@@ -88,14 +92,29 @@ export function clampProjectFolder(value) {
   return String(value ?? "").replace(/[\u0000-\u001f]/g, "").trim().slice(0, 260);
 }
 
+/** Image / Video template ref (built-in or user workflow path); empty = the built-in default. */
+export function clampTemplateRef(value, fallback) {
+  const s = String(value ?? "").replace(/[\u0000-\u001f]/g, "").trim().replace(/\\/g, "/").slice(0, 260);
+  return s || fallback;
+}
+
 /**
- * Settings patch for the Project Settings modal: only the Output folder (other stored keys are left as they are).
- * @returns {{ project_folder: string } | null} null when the folder is unchanged
+ * Settings patch for the Project Settings modal: Output folder and the Image / Video templates, only the keys
+ * that changed (other stored keys are left as they are).
+ * @param {{ image_template?: string, video_template?: string }} [templates] omitted keys are not changed
+ * @returns {{ project_folder?: string, image_template?: string, video_template?: string } | null} null when nothing changed
  */
-export function projectSettingsModalPatch(current, folderValue) {
+export function projectSettingsModalPatch(current, folderValue, templates = {}) {
+  const cur = normalizeProjectSettings(current);
+  const patch = {};
   const folder = clampProjectFolder(folderValue);
-  if (folder === normalizeProjectSettings(current).project_folder) return null;
-  return { project_folder: folder };
+  if (folder !== cur.project_folder) patch.project_folder = folder;
+  for (const key of ["image_template", "video_template"]) {
+    if (templates[key] === undefined) continue;
+    const ref = clampTemplateRef(templates[key], DEFAULT_PROJECT_SETTINGS[key]);
+    if (ref !== cur[key]) patch[key] = ref;
+  }
+  return Object.keys(patch).length ? patch : null;
 }
 
 /** Inline message for a failed POST /gonggan/folder/check. @param {{ status?: number, message?: string }|null|undefined} err */
@@ -123,6 +142,8 @@ export function normalizeProjectSettings(raw) {
   out.cut_seconds = clampCutSeconds(out.cut_seconds);
   out.caption_lang = clampCaptionLang(out.caption_lang);
   out.project_folder = clampProjectFolder(out.project_folder);
+  out.image_template = clampTemplateRef(out.image_template, DEFAULT_IMAGE_TEMPLATE);
+  out.video_template = clampTemplateRef(out.video_template, DEFAULT_VIDEO_TEMPLATE);
   return out;
 }
 

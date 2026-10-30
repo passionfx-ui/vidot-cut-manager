@@ -1,5 +1,7 @@
 /** Script to cuts with LTX: the LLM prompt, the Paste Cut List / AI Cut Split parser and Ollama helpers (pure, no DOM). */
 
+import { DEFAULT_VIDEO_TEMPLATE, templateLabel } from "./gg_template_pick_core.js";
+
 export const CUT_DURATION_MIN = 0.5;
 export const CUT_DURATION_MAX = 3;
 export const CUT_LIST_MAX = 200;
@@ -172,13 +174,23 @@ export function createCutsConfirmMessage(cuts, workflowLabel) {
   return `Create ${n} cut${n === 1 ? "" : "s"}?\n\nWorkflow: ${workflowLabel}\n${lines.join("\n")}\n\nNothing is queued. Press Queue with no cut selected (or Queue on a cut) to render.`;
 }
 
-/** Request body for POST /gonggan/cut/add-list. */
+/**
+ * Workflow choices for new list cuts: the project's Video template first (id "" = let the server use it), then the
+ * bundled LTX examples.
+ * @param {{ video_template?: string } | null | undefined} settings project settings
+ */
+export function cutListWorkflowOptions(settings) {
+  const ref = String(settings?.video_template || "").trim() || DEFAULT_VIDEO_TEMPLATE;
+  return [{ id: "", label: `Project Video template (${templateLabel(ref)})` }, ...LTX_WORKFLOWS];
+}
+
+/** Request body for POST /gonggan/cut/add-list; no workflow = the project's Video template. */
 export function cutListPayload(pid, cuts, workflow, after) {
   const body = {
     pid,
-    workflow: workflow || "t2v",
     cuts: cuts.map((c) => ({ cut: c.cut, duration: c.duration, description: c.description })),
   };
+  if (workflow) body.workflow = workflow;
   if (after) body.after = after;
   return body;
 }

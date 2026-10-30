@@ -224,7 +224,7 @@ class AddCutListTests(unittest.TestCase):
         self.assertEqual((c2["name"], c2["planned_sec"], c2["prompt"]), ("Second shot", 1.5, "Second shot"))
         wf = self.store.get_blob(self.pid, c2["workflow_sha"])
         self.assertEqual(_node(wf, 6)["widgets_values"][0], "Second shot")
-        self.assertEqual(_node(wf, 70)["widgets_values"][2], 41)
+        self.assertEqual(_node(wf, 95)["widgets_values"][2], 41, "0.9.117: project Video template (LTX i2v)")
         src = na.native_cut_source_workflow(self.pid, ids[0])
         self.assertEqual((src["source"], src["kind"]), ("stored", "ui"))
         self.assertEqual([c["id"] for c in res["timeline"]["cuts"]][-2:], ids)
