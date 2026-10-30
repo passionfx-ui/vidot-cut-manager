@@ -82,14 +82,14 @@ describe("cutActionItems", () => {
 });
 
 describe("cutCardMenuItems", () => {
-  it("native order: Group/Ungroup then a separator at the top, moves next, Regen/Send after Add Cut, Trash last", () => {
-    const items = cutCardMenuItems({ native: true, sdkOk: true, canMoveUp: true, trashCount: 2, trashLabel: "Trash (2)…" });
+  it("native order: Select all, Group/Ungroup then a separator at the top, moves next, Regen/Send after Add Cut, Trash last", () => {
+    const items = cutCardMenuItems({ native: true, sdkOk: true, canMoveUp: true, trashCount: 2, trashLabel: "Trash (2)…", hasListCuts: true });
     assert.deepEqual(keys(items), [
-      "group", "ungroup", "sep", "moveUp", "moveDown", "moveToScene", "split",
+      "selectAll", "group", "ungroup", "sep", "moveUp", "moveDown", "moveToScene", "split",
       "redo", "rename", "addCut", "importVer", "regen", "i2v", "queueSel", "send", "del", "trash",
     ]);
-    assert.deepEqual(items.slice(0, 3).map((i) => i.label), ["Group", "Ungroup", undefined]);
-    assert.equal(items[2], MENU_SEPARATOR);
+    assert.deepEqual(items.slice(1, 4).map((i) => i.label), ["Group", "Ungroup", undefined]);
+    assert.equal(items[3], MENU_SEPARATOR);
     assert.equal(byKey(items, "queueSel").label, "Queue selected");
     assert.equal(byKey(items, "moveUp").disabled, false);
     assert.equal(byKey(items, "moveDown").disabled, true);
@@ -115,7 +115,7 @@ describe("cutCardMenuItems", () => {
   });
   it("imported project: Group/Ungroup still on top, no move items, trash off with read-only tip", () => {
     const items = cutCardMenuItems({ native: false, trashCount: 3, readonlyTip: TIP });
-    assert.deepEqual(keys(items).slice(0, 4), ["group", "ungroup", "sep", "split"]);
+    assert.deepEqual(keys(items).slice(0, 5), ["selectAll", "group", "ungroup", "sep", "split"]);
     assert.equal(byKey(items, "trash").disabled, true);
     assert.equal(byKey(items, "trash").title, TIP);
   });
@@ -258,7 +258,7 @@ describe("menus list each action once", () => {
   it("cut menu: Group and Ungroup are the first two items, followed by one separator", () => {
     for (const ctx of ctxs) {
       const items = cutCardMenuItems(ctx);
-      assert.deepEqual(keys(items).slice(0, 3), ["group", "ungroup", "sep"]);
+      assert.deepEqual(keys(items).slice(0, 4), ["selectAll", "group", "ungroup", "sep"]);
       assert.equal(items.filter((it) => it.separator).length, 1);
     }
   });
