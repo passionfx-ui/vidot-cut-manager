@@ -33,7 +33,7 @@ except ImportError:
     import gg_wfnodes  # type: ignore
     import gg_wfstore  # type: ignore
 
-NATIVE_UNAVAILABLE = "Not available for native projects yet"
+NATIVE_UNAVAILABLE = "Not available for this project type yet"
 _STORE: LocalStore | None = None
 
 
@@ -208,6 +208,38 @@ def restore_native_project(pid: str) -> dict:
 
 def native_timeline(pid: str) -> dict | None:
     return native_store().to_timeline(pid)
+
+
+def _is_video_ver(v: dict) -> bool:
+    return v.get("kind") == "video" or bool(v.get("animated"))
+
+
+def native_export_timeline(pid: str) -> tuple[dict, Path] | None:
+    """Timeline for MP4 export plus the output folder (<project folder>/04_Export).
+    Per cut, in timeline order: Best version, else the newest video, else the newest image (still for the clip length)."""
+    store = native_store()
+    doc = store.get_project(pid)
+    tl = store.to_timeline(pid)
+    if not doc or tl is None:
+        return None
+    tl = copy.deepcopy(tl)
+    for c in tl["cuts"]:
+        vers = [v for v in c.get("versions_list") or [] if not v.get("missing")]   # newest first
+        best = next((v for v in vers if v["id"] == c.get("pick")), None) if c.get("pick") else None
+        if best is None:
+            best = next((v for v in vers if _is_video_ver(v)), None) or (vers[0] if vers else None)
+        if best is None:
+            c["media"] = None
+            continue
+        if c.get("media") and c["media"].get("id") == best["id"]:
+            continue
+        kind = "video" if _is_video_ver(best) else "image"
+        dur = best.get("seconds") if kind == "video" else None
+        c["in"], c["sec"] = clamp_clip(kind, 0.0, c.get("sec") or c.get("tl_sec") or 3.0, dur)
+        c["media"] = {"id": best["id"], "kind": kind}
+    folder = normalize_settings(doc.get("settings")).get("project_folder")
+    base = Path(folder) if folder else store._project_dir(pid)
+    return tl, base / "04_Export"
 
 
 def native_save_edit(pid: str, order, clips) -> dict | None:

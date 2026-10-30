@@ -274,9 +274,11 @@ def export_plan(cuts: list[dict], fps: int) -> list[tuple[dict, int]]:
     return plan
 
 
-def _worker(job_id: str, tl: dict, w: int, h: int, fps: int, sound: bool) -> None:
+def _worker(job_id: str, tl: dict, w: int, h: int, fps: int, sound: bool, resolve=None, out_dir=None) -> None:
+    resolve = resolve or gg_data.media_path
     exe = gg_data.ffmpeg_exe()
     work = gg_data.CACHE_DIR / "export" / job_id
+    tmp = None
     try:
         if not exe:
             raise RuntimeError("ffmpeg not found (PATH or imageio_ffmpeg)")
@@ -289,7 +291,7 @@ def _worker(job_id: str, tl: dict, w: int, h: int, fps: int, sound: bool) -> Non
         font = caption_font()
         lay = caption_layout(w, h)
         for i, (c, frames) in enumerate(plan):
-            src = gg_data.media_path(c["media"]["id"]) if c.get("media") else None
+            src = resolve(c["media"]["id"]) if c.get("media") else None
             seg = work / f"seg_{i:03d}.mkv"
             label = f"clip {i + 1}/{len(plan)}"
             _set(step=label, current=i + 1)
@@ -309,7 +311,9 @@ def _worker(job_id: str, tl: dict, w: int, h: int, fps: int, sound: bool) -> Non
         lst = work / "list.txt"
         lst.write_text("".join(f"file '{s.name}'\n" for s in segs), encoding="utf-8")
         name = f"{_safe_name(tl['project']['name'])}_{time.strftime('%Y%m%d-%H%M%S')}.mp4"
-        out = output_dir() / name
+        dest = Path(out_dir) if out_dir else output_dir()
+        dest.mkdir(parents=True, exist_ok=True)
+        out = dest / name
         tmp = out.with_suffix(".part.mp4")
         _set(step="joining", progress=0.97)
         _run([exe, "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(lst),
@@ -324,14 +328,16 @@ def _worker(job_id: str, tl: dict, w: int, h: int, fps: int, sound: bool) -> Non
         _set(status="error", step="error", error=str(ex)[-800:], finished_at=time.time())
     finally:
         shutil.rmtree(work, ignore_errors=True)
-        for p in output_dir().glob("*.part.mp4"):
-            try:
-                p.unlink()
-            except OSError:
-                pass
+        try:
+            if tmp is not None and tmp.exists():   # only this job's partial file, never other files
+                tmp.unlink()
+        except OSError:
+            pass
 
 
-def start(pid: str, preset: str = "720p", width=None, height=None, fps=24, sound=True) -> dict:
+def start(pid: str, preset: str = "720p", width=None, height=None, fps=24, sound=True,
+          tl=None, resolve=None, out_dir=None) -> dict:
+    """tl/resolve/out_dir: a prebuilt timeline, a media id -> Path resolver and an output folder (project export)."""
     with _lock:
         if _job.get("status") in ("running",):
             return {"ok": False, "message": "an export is already running", "job": dict(_job)}
@@ -348,7 +354,8 @@ def start(pid: str, preset: str = "720p", width=None, height=None, fps=24, sound
     fps = int(fps or 24)
     if fps not in FPS_ALLOWED:
         raise ValueError("fps must be 24, 25 or 30")
-    tl = gg_data.timeline(pid)
+    if tl is None:
+        tl = gg_data.timeline(pid)
     if tl is None:
         return {"ok": False, "message": "project not found"}
     job_id = uuid.uuid4().hex[:10]
@@ -358,7 +365,7 @@ def start(pid: str, preset: str = "720p", width=None, height=None, fps=24, sound
         _job.update(status="running", id=job_id, pid=pid, project=tl["project"]["name"], preset=preset,
                     width=w, height=h, fps=fps, sound=bool(sound), progress=0.0, step="starting",
                     current=0, clips=len(tl["cuts"]), timeline_sec=tl["total_sec"], started_at=time.time())
-    threading.Thread(target=_worker, args=(job_id, tl, w, h, fps, bool(sound)),
+    threading.Thread(target=_worker, args=(job_id, tl, w, h, fps, bool(sound), resolve, out_dir),
                      name="gonggan-export", daemon=True).start()
     return {"ok": True, "job": status()}
 
@@ -378,6 +385,10 @@ def cancel() -> dict:
 def export_file(name: str) -> Path | None:
     if not isinstance(name, str) or not name.endswith(".mp4") or "/" in name or "\\" in name or name.startswith("."):
         return None
+    with _lock:
+        last = _job.get("path") if _job.get("file") == name else None
+    if last and Path(last).is_file():
+        return Path(last)
     d = output_dir().resolve()
     p = (d / name).resolve()
     try:
