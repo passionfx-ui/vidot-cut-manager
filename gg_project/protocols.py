@@ -78,6 +78,7 @@ class ProjectStore(Protocol):
         src_file: Path | str,
         workflow: dict | None = None,
         prompt_id: str | None = None,
+        animated: bool = False,
     ) -> dict[str, Any]: ...
 
     def list_versions(self, pid: str, cut_id: str) -> list[dict[str, Any]]: ...

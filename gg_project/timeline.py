@@ -159,6 +159,11 @@ def version_asset_file(project_dir: Path, asset: Any) -> Path | None:
     return path if path.is_file() else None
 
 
+def _asset_seconds(asset: dict[str, Any]) -> float | None:
+    s = asset.get("seconds")
+    return float(s) if isinstance(s, (int, float)) and not isinstance(s, bool) and s > 0 else None
+
+
 def _version_job(root: Path, pid: str, ver: dict[str, Any]) -> dict[str, Any] | None:
     path = version_asset_file(root / "projects" / pid, ver.get("asset"))
     if path is None:
@@ -169,16 +174,18 @@ def _version_job(root: Path, pid: str, ver: dict[str, Any]) -> dict[str, Any] | 
         mtime = path.stat().st_mtime
     except OSError:
         mtime = 0.0
+    animated = kind == "video" and asset.get("animated") is True
     return {
         "id": ver["id"],
         "kind": kind,
+        "animated": animated,
         "ext": path.suffix.lower(),
         "mtime": mtime,
         "cut_id": ver.get("cut_id") or "",
         "project_id": pid,
         "width": None,
         "height": None,
-        "seconds": None,
+        "seconds": _asset_seconds(asset) if animated else None,
         "model": "",
         "aspect": "",
         "source": "native",
@@ -200,7 +207,7 @@ def current_version(cut: dict[str, Any], versions: list[dict[str, Any]]) -> dict
 def _media_view(job: dict[str, Any] | None) -> dict[str, Any] | None:
     if not job:
         return None
-    return {k: job.get(k) for k in ("id", "kind", "width", "height", "seconds", "model", "source")}
+    return {k: job.get(k) for k in ("id", "kind", "animated", "width", "height", "seconds", "model", "source")}
 
 
 def _reference_views(root: Path, project: dict[str, Any]) -> list[dict[str, Any]]:
@@ -228,8 +235,8 @@ def _reference_views(root: Path, project: dict[str, Any]) -> list[dict[str, Any]
             "media": _media_view(job),
             "versions": len(versions),
             "versions_list": [
-                {"id": j["id"], "kind": j["kind"], "source": "native", "model": None, "created": j["mtime"],
-                 "seconds": None, "width": None, "height": None}
+                {"id": j["id"], "kind": j["kind"], "animated": j["animated"], "source": "native", "model": None,
+                 "created": j["mtime"], "seconds": j["seconds"], "width": None, "height": None}
                 for j in jobs
             ],
             "pick": job["id"] if job else None,
@@ -287,10 +294,11 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             {
                 "id": v["id"],
                 "kind": (v.get("asset") or {}).get("kind") or "image",
+                "animated": bool(jobs[v["id"]] and jobs[v["id"]]["animated"]),
                 "source": "native",
                 "model": None,
                 "created": jobs[v["id"]]["mtime"] if jobs[v["id"]] else 0,
-                "seconds": None,
+                "seconds": jobs[v["id"]]["seconds"] if jobs[v["id"]] else None,
                 "width": None,
                 "height": None,
                 "missing": jobs[v["id"]] is None,

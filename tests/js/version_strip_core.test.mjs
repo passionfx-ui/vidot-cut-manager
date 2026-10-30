@@ -67,6 +67,8 @@ describe("versionSeconds / needsDurationProbe", () => {
     assert.equal(needsDurationProbe(c.versions_list[1], c, new Map()), false, "image");
     assert.equal(needsDurationProbe(c.versions_list[2], c, new Map()), false, "missing file");
     assert.equal(needsDurationProbe(cut().versions_list[0], cut(), new Map()), false, "current media knows it");
+    assert.equal(needsDurationProbe({ id: "a1", kind: "video", animated: true }, cut(), new Map()), false,
+      "animated image: a <video> probe cannot read it (0.9.119)");
   });
 });
 
@@ -161,6 +163,8 @@ describe("Image to Video button (0.9.117)", () => {
     assert.equal(cutHasStartImage({ versions_list: [{ id: "v1", kind: "image", missing: true }] }), false);
     assert.equal(cutHasStartImage({ versions_list: [{ id: "v2", kind: "video" }, { id: "v1", kind: "image" }] }), true);
     assert.equal(cutHasStartImage(null), false);
+    assert.equal(cutHasStartImage({ versions_list: [{ id: "a1", kind: "video", animated: true }] }), false, "animated webp (0.9.119)");
+    assert.equal(cutHasStartImage({ versions_list: [{ id: "a1", kind: "image", animated: true }] }), false);
   });
 
   it("sits after the import tile and runs imageToVideoCut", () => {
