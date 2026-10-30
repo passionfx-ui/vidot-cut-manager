@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-gonggan-cut"
-version = "0.9.109"
-description = "Shot list and rough-cut timeline inside ComfyUI"
+version = "0.9.110"
+description = "Vidot Studio – Cut Manager: shot list and rough-cut timeline inside ComfyUI"
 readme = "README.md"
 license = { text = "GPL-3.0-only" }
 classifiers = ["License :: OSI Approved :: GNU General Public License v3 (GPLv3)"]
@@ -14,5 +14,5 @@ Repository = "https://github.com/passionfx-ui/comfyui-gonggan-cut"
 [tool.comfy]
 # TODO: replace with your Comfy Registry publisher id before publishing
 PublisherId = "TODO-publisher"
-DisplayName = "Shots - shot list and rough-cut timeline"
+DisplayName = "Vidot Studio – Cut Manager"
 Icon = ""

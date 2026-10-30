@@ -1,4 +1,4 @@
-# comfyui-gonggan-cut
+# Vidot Studio – Cut Manager
 
 **A shot list + rough-cut timeline that lives inside ComfyUI.**
 Plan a short film as projects, scenes and cuts, open each cut's workflow on the canvas with one click, keep every take, pick the best one, and watch the whole edit play back on a timeline - without leaving ComfyUI.
