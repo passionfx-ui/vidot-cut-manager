@@ -14,6 +14,7 @@ import {
   BUSY_TIP,
   REGEN_EMPTY_TIP,
   TRASH_TIP,
+  I2V_NO_IMAGE_TIP,
   MENU_SEPARATOR,
 } from "../../web/gg_ctx_menu_core.js";
 
@@ -85,7 +86,7 @@ describe("cutCardMenuItems", () => {
     const items = cutCardMenuItems({ native: true, sdkOk: true, canMoveUp: true, trashCount: 2, trashLabel: "Trash (2)…" });
     assert.deepEqual(keys(items), [
       "group", "ungroup", "sep", "moveUp", "moveDown", "moveToScene", "split",
-      "redo", "rename", "addCut", "regen", "queueSel", "send", "del", "trash",
+      "redo", "rename", "addCut", "regen", "i2v", "queueSel", "send", "del", "trash",
     ]);
     assert.deepEqual(items.slice(0, 3).map((i) => i.label), ["Group", "Ungroup", undefined]);
     assert.equal(items[2], MENU_SEPARATOR);
@@ -95,6 +96,14 @@ describe("cutCardMenuItems", () => {
     assert.equal(byKey(items, "trash").label, "Trash (2)…");
     assert.equal(byKey(items, "trash").disabled, false);
     assert.equal(byKey(items, "trash").title, TRASH_TIP);
+  });
+  it("Image to Video (0.9.117): native only, needs one cut with an image version and no SDK job starting", () => {
+    assert.equal(byKey(cutCardMenuItems({ native: true, hasImage: true }), "i2v").disabled, false);
+    assert.equal(byKey(cutCardMenuItems({ native: true, hasImage: true }), "i2v").label, "Image to Video");
+    assert.equal(byKey(cutCardMenuItems({ native: true }), "i2v").title, I2V_NO_IMAGE_TIP);
+    assert.equal(byKey(cutCardMenuItems({ native: true, hasImage: true, multi: true }), "i2v").title, SINGLE_CUT_TIP);
+    assert.equal(byKey(cutCardMenuItems({ native: true, hasImage: true, sdkBusy: true }), "i2v").disabled, true);
+    assert.ok(!keys(cutCardMenuItems({ native: false, hasImage: true })).includes("i2v"));
   });
   it("imported project: Group/Ungroup still on top, no move items, trash off with read-only tip", () => {
     const items = cutCardMenuItems({ native: false, trashCount: 3, readonlyTip: TIP });

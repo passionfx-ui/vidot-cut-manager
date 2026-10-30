@@ -19,6 +19,9 @@ CAPTION_LANG_ALLOWED = frozenset(
     {"English", "Korean", "Japanese", "Chinese", "Spanish", "French", "German"}
 )
 
+DEFAULT_IMAGE_TEMPLATE = "builtin:image"
+DEFAULT_VIDEO_TEMPLATE = "builtin:video-ltx"
+
 DEFAULT_PROJECT_SETTINGS: dict[str, Any] = {
     "aspect": "16:9",
     "width": 1280,
@@ -27,9 +30,13 @@ DEFAULT_PROJECT_SETTINGS: dict[str, Any] = {
     "cut_seconds": 3.0,
     "caption_lang": "English",
     "project_folder": "",
+    "image_template": DEFAULT_IMAGE_TEMPLATE,
+    "video_template": DEFAULT_VIDEO_TEMPLATE,
 }
 
-_SETTING_KEYS = frozenset({"aspect", "width", "height", "fps", "cut_seconds", "caption_lang", "project_folder"})
+_SETTING_KEYS = frozenset({"aspect", "width", "height", "fps", "cut_seconds", "caption_lang", "project_folder",
+                           "image_template", "video_template"})
+TEMPLATE_SETTING_KEYS = ("image_template", "video_template")
 
 
 def preset_key(preset: dict[str, Any]) -> str:
@@ -94,6 +101,12 @@ def _clamp_project_folder(value: Any) -> str:
     """Optional local project folder; when set, generated outputs are saved in its `assets` subfolder."""
     s = "".join(ch for ch in str(value or "") if ch >= " ").strip()
     return s[:260]
+
+
+def _clamp_template_ref(value: Any, default: str) -> str:
+    """Image / Video template: a built-in ref or a ComfyUI user workflow path; empty = the built-in default."""
+    s = "".join(ch for ch in str(value or "") if ch >= " ").strip().replace("\\", "/")[:260]
+    return s or default
 
 
 _WIN_BAD_NAME_CHARS = set('<>:"|?*')
@@ -211,6 +224,8 @@ def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     out["cut_seconds"] = _clamp_cut_seconds(out.get("cut_seconds"))
     out["caption_lang"] = _clamp_caption_lang(out.get("caption_lang"))
     out["project_folder"] = _clamp_project_folder(out.get("project_folder"))
+    out["image_template"] = _clamp_template_ref(out.get("image_template"), DEFAULT_IMAGE_TEMPLATE)
+    out["video_template"] = _clamp_template_ref(out.get("video_template"), DEFAULT_VIDEO_TEMPLATE)
     return out
 
 

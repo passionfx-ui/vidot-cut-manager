@@ -23,7 +23,40 @@ export function sdkRegenErrorMessage(message) {
   return m || "unknown error";
 }
 
-const SOURCE_LABEL = { embedded: "current version", stored: "saved workflow", template: "project template", history: "last run", canvas: "open tab", converted: "saved workflow (converted)" };
+const SOURCE_LABEL = {
+  embedded: "current version",
+  stored: "saved workflow",
+  template: "project template",
+  history: "last run",
+  canvas: "open tab",
+  converted: "saved workflow (converted)",
+  image_to_video: "Video template",
+};
+
+export const I2V_CONFIRM_TITLE = "Make a video from this cut's image now?";
+
+/**
+ * Confirm text for Image to Video: what runs (template, start image node and version, frames, seed, prompt).
+ * @param {string} label cut title
+ * @param {{ template?: string, start_node?: string, start_version?: string, frames?: number, seed?: number, prompt?: string }} plan
+ *   the /gonggan/image-to-video dry-run plan
+ */
+export function i2vConfirmMessage(label, plan = {}) {
+  const prompt = String(plan.prompt || "");
+  const lines = [
+    `Template: ${plan.template || "Video template"}`,
+    `Start image: version ${String(plan.start_version || "?").slice(0, 8)} into node ${plan.start_node || "?"}`,
+    `Frames: ${plan.frames ?? "as saved"}${plan.seed != null ? ` · new seed ${plan.seed}` : ""}`,
+    `Prompt: ${prompt.length > 160 ? `${prompt.slice(0, 160)}…` : prompt}`,
+  ];
+  return `${I2V_CONFIRM_TITLE}\n\n${label ? `${label}\n` : ""}${lines.join("\n")}\n\nThe result is added as a new version of this cut.`;
+}
+
+/** Error text for a failed Image to Video request; a missing route means ComfyUI was not restarted. */
+export function i2vErrorMessage(err) {
+  if (err?.status === 404 || err?.status === 405) return "Restart ComfyUI to use Image to Video.";
+  return sdkRegenErrorMessage(err?.message || err);
+}
 
 /** Status line after the dry run: which workflow and seed will run. */
 export function sdkPlanSummary(plan = {}) {

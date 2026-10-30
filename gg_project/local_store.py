@@ -1154,6 +1154,10 @@ class LocalStore:
             self._save_project_doc(pid, doc, "sync_groups", pid)
             return doc
 
+    def version_file(self, pid: str, ver: dict[str, Any]) -> Path | None:
+        """Absolute media path of a version of this project (None when its file is gone)."""
+        return version_asset_file(self._project_dir(pid), ver.get("asset") if isinstance(ver, dict) else None)
+
     def find_version_asset(self, version_id: str) -> tuple[str, Path] | None:
         """Return (pid, absolute media path) for a native version id."""
         if not isinstance(version_id, str) or not version_id:

@@ -2,7 +2,7 @@
 
 Plain graphs only: no subgraphs, and no muted/bypassed node feeding an active one. Widget values are matched to
 input names in each node's INPUT_TYPES order (ComfyUI's NODE_CLASS_MAPPINGS when running inside ComfyUI, else the
-small table below that covers the bundled LTX examples)."""
+small table below that covers the bundled templates in examples/workflows)."""
 from __future__ import annotations
 
 from typing import Any
@@ -15,8 +15,15 @@ ACTIVE_MODES = (0, None)
 # (input name, default, extra UI-only values after it: control_after_generate / upload button)
 _KNOWN: dict[str, list[tuple[str, Any, int]]] = {
     "CheckpointLoaderSimple": [("ckpt_name", None, 0)],
+    "UNETLoader": [("unet_name", None, 0), ("weight_dtype", "default", 0)],
+    "VAELoader": [("vae_name", None, 0)],
     "CLIPLoader": [("clip_name", None, 0), ("type", "stable_diffusion", 0), ("device", "default", 0)],
     "CLIPTextEncode": [("text", None, 0)],
+    "ConditioningZeroOut": [],
+    "ModelSamplingAuraFlow": [("shift", 1.73, 0)],
+    "EmptySD3LatentImage": [("width", 1024, 0), ("height", 1024, 0), ("batch_size", 1, 0)],
+    "KSampler": [("seed", 0, 1), ("steps", 20, 0), ("cfg", 8.0, 0), ("sampler_name", None, 0), ("scheduler", None, 0),
+                 ("denoise", 1.0, 0)],
     "VAEDecode": [],
     "KSamplerSelect": [("sampler_name", None, 0)],
     "SamplerCustom": [("add_noise", True, 0), ("noise_seed", 0, 1), ("cfg", 8.0, 0)],

@@ -1,4 +1,6 @@
-/** Pure helpers for the New Project window: name, location, Default template (no DOM). */
+/** Pure helpers for the New Project window: name, location, Default / Image / Video template (no DOM). */
+
+import { DEFAULT_IMAGE_TEMPLATE, DEFAULT_VIDEO_TEMPLATE } from "./gg_template_pick_core.js";
 
 export const LAST_LOCATION_KEY = "gonggan-cut.lastProjectLocation";
 export const NO_FOLDER_ROUTE_HINT = "Restart ComfyUI to create project folders. This project uses the default storage.";
@@ -56,9 +58,11 @@ export function projectFolderPath(location, name) {
 }
 
 /**
- * Validate the window and build the POST /gonggan/project/create body.
- * @param {{ name?: string, location?: string, template?: string }} v
- * @returns {{ error: string, field: "name"|"location" } | { body: { name: string, location: string, template_ref?: string } }}
+ * Validate the window and build the POST /gonggan/project/create body. The Image / Video templates go into the
+ * project settings (blank = the built-in defaults).
+ * @param {{ name?: string, location?: string, template?: string, imageTemplate?: string, videoTemplate?: string }} v
+ * @returns {{ error: string, field: "name"|"location" } | { body: { name: string, location: string, template_ref?: string,
+ *   settings: { image_template: string, video_template: string } } }}
  */
 export function newProjectRequest(v = {}) {
   const name = String(v.name ?? "").trim();
@@ -66,7 +70,11 @@ export function newProjectRequest(v = {}) {
   const location = clampPath(v.location);
   if (!location) return { error: "Choose a location", field: "location" };
   const template = String(v.template ?? "").trim();
-  return { body: { name, location, ...(template ? { template_ref: template } : {}) } };
+  const settings = {
+    image_template: String(v.imageTemplate ?? "").trim() || DEFAULT_IMAGE_TEMPLATE,
+    video_template: String(v.videoTemplate ?? "").trim() || DEFAULT_VIDEO_TEMPLATE,
+  };
+  return { body: { name, location, ...(template ? { template_ref: template } : {}), settings } };
 }
 
 /** True when the server created the project without its folder (route from before 0.9.99, ComfyUI not restarted). */
