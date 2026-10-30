@@ -302,7 +302,22 @@ import {
   cutListSummary,
   createCutsConfirmMessage,
   cutListPayload,
+  OLLAMA_DEFAULT_URL,
+  ollamaBaseUrl,
+  ollamaModelsQuery,
+  pickDefaultModel,
+  aiCutSplitPayload,
+  ollamaUnavailableText,
 } from "./gg_cut_list_core.js";
+import {
+  generateAllOrder,
+  generateAllCutView,
+  generateAllProgressView,
+  generateAllConfirmMessage,
+  generateAllFinishedToast,
+  isGenerateAllRunning,
+  queueClickAction,
+} from "./gg_generate_all_core.js";
 
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
@@ -359,6 +374,8 @@ const projectFieldUi = { timer: 0 };
 const JOBS_KEY = "gonggan.jobs";
 const progressTracker = createProgressTracker();
 const renderStatus = createRenderStatus();
+/** Server Generate All batch snapshot (GET /gonggan/generate-all/status, `gonggan.generate_all` events). */
+const genAll = { batch: null, starting: false };
 const autoCapture = createAutoCapture({ isNativePid });
 let captureRestartToastShown = false;
 const progUi = { paintTimer: 0, statusDebounce: 0, timelineReloadTimer: 0, wired: false, handlers: {} };
@@ -2893,8 +2910,167 @@ async function copyCutSplitPrompt() {
   }
 }
 
-/** Paste Cut List: JSON from the LLM -> new cuts (after the last cut), each with the LTX workflow and its prompt. */
-function openPasteCutListModal() {
+/**
+ * Shared create path of Paste Cut List and AI Cut Split: confirm `Create N cuts?`, then POST /gonggan/cut/add-list
+ * (after the last cut). Returns true when the cuts were created; throws on a server error.
+ */
+async function createCutsFromList(reqPid, cuts, wf) {
+  if (!(await askConfirm({ message: createCutsConfirmMessage(cuts, wf.label) }))) return false;
+  if (state.pid !== reqPid) return false;
+  const order = displayedCutIds();
+  const before = snapshotOrderGroups(state.timeline);
+  const d = await postJson("/gonggan/cut/add-list", cutListPayload(reqPid, cuts, wf.id, order[order.length - 1]));
+  if (d.timeline && adoptMutationTimeline(d.timeline, reqPid)) bus.dispatchEvent(new Event("timeline"));
+  else await loadTimeline();
+  const ids = d.cut_ids || [];
+  if (ids.length) {
+    recordShotsEntry(reqPid, { kind: "cuts", op: "add", ids, before, after: snapshotOrderGroups(state.timeline) });
+    selectCut(ids[0]);
+  }
+  ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, "Each cut has the LTX workflow with its description as the prompt. Press Queue with no cut selected to render them in order.", "ok");
+  return true;
+}
+
+const OLLAMA_URL_SETTING = "Gonggan.AiCutSplit.OllamaUrl";
+const AI_SPLIT_MODEL_KEY = "gg.aiSplitModel";
+const AI_SPLIT_KEEP_KEY = "gg.aiSplitKeepLoaded";
+
+function ollamaUrlSetting() {
+  try {
+    return ollamaBaseUrl(app.extensionManager?.setting?.get(OLLAMA_URL_SETTING));
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * AI Cut Split: story -> local Ollama (through the plugin's server routes, no CORS) -> validated cuts ->
+ * `Create N cuts?` -> the Paste Cut List create path. Nothing is queued.
+ */
+function openAiCutSplitModal() {
+  if (!isNativeProject() || document.querySelector(".gg-aisplit-modal")) return;
+  const reqPid = state.pid;
+  const baseUrl = ollamaUrlSetting();
+  const shownUrl = baseUrl || OLLAMA_DEFAULT_URL;
+  const wrap = document.createElement("div");
+  wrap.className = "gg-modal-backdrop";
+  wrap.innerHTML = `
+    <div class="gg-modal gg-aisplit-modal" role="dialog" aria-label="AI Cut Split">
+      <h3 class="gg-modal-title">AI Cut Split</h3>
+      <label class="gg-modal-field">Story
+        <textarea class="gg-aisplit-story" rows="10" placeholder="Write or paste your story. The local LLM splits it into cuts of at most 3 seconds."></textarea>
+      </label>
+      <label class="gg-modal-field">Model (local Ollama)
+        <select class="gg-aisplit-model" disabled><option value="">Loading models…</option></select>
+      </label>
+      <label class="gg-aisplit-keep" title="Off: the LLM is unloaded right after the split (keep_alive 0), so LTX gets the VRAM"><input type="checkbox" class="gg-aisplit-keep-cb"${localStorage.getItem(AI_SPLIT_KEEP_KEY) === "1" ? " checked" : ""} /> Keep LLM loaded</label>
+      <span class="gg-modal-hint gg-aisplit-status" aria-live="polite">Ollama: ${esc(shownUrl)}</span>
+      <span class="gg-modal-hint gg-split-err gg-aisplit-err" aria-live="polite"></span>
+      <div class="gg-modal-actions">
+        <button type="button" class="gg-btn gg-aisplit-paste" hidden>Paste Cut List instead</button>
+        <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
+        <button type="button" class="gg-btn gg-primary gg-aisplit-run" disabled>Split</button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  const story = wrap.querySelector(".gg-aisplit-story");
+  const modelSel = wrap.querySelector(".gg-aisplit-model");
+  const keepCb = wrap.querySelector(".gg-aisplit-keep-cb");
+  const status = wrap.querySelector(".gg-aisplit-status");
+  const err = wrap.querySelector(".gg-aisplit-err");
+  const pasteBtn = wrap.querySelector(".gg-aisplit-paste");
+  const runBtn = wrap.querySelector(".gg-aisplit-run");
+  let busy = false;
+  let rawAnswer = "";
+  const close = () => wrap.remove();
+  const sync = () => {
+    runBtn.disabled = busy || !modelSel.value || !story.value.trim();
+    runBtn.textContent = busy ? "Splitting…" : "Split";
+    story.disabled = busy;
+    modelSel.disabled = busy || !modelSel.options.length || !modelSel.value;
+  };
+  const showBackup = (text, raw = "") => {
+    err.textContent = text;
+    rawAnswer = raw;
+    pasteBtn.hidden = false;
+    pasteBtn.textContent = raw ? "Fix in Paste Cut List" : "Paste Cut List instead";
+  };
+  pasteBtn.addEventListener("click", () => {
+    close();
+    openPasteCutListModal(rawAnswer);
+  });
+  story.addEventListener("input", sync);
+  modelSel.addEventListener("change", () => {
+    localStorage.setItem(AI_SPLIT_MODEL_KEY, modelSel.value);
+    sync();
+  });
+  keepCb.addEventListener("change", () => localStorage.setItem(AI_SPLIT_KEEP_KEY, keepCb.checked ? "1" : "0"));
+  wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", close);
+  wrap.addEventListener("mousedown", (e) => { if (e.target === wrap && !busy) close(); });
+  wrap.addEventListener("keydown", (e) => { if (e.key === "Escape" && !busy) { e.stopPropagation(); close(); } });
+
+  (async () => {
+    let data = {};
+    let res;
+    try {
+      res = await api.fetchApi(`/gonggan/ollama/models${ollamaModelsQuery(baseUrl)}`);
+      data = await res.json().catch(() => ({}));
+    } catch (e) {
+      data = { ok: false, message: String(e?.message || e) };
+    }
+    if (!wrap.isConnected) return;
+    modelSel.innerHTML = "";
+    if (res?.status === 404 && data.ok === undefined) {
+      showBackup("Restart ComfyUI to use AI Cut Split (new server route).");
+    } else if (!res?.ok || data.ok === false) {
+      showBackup(ollamaUnavailableText({ code: data.code, message: data.message, url: shownUrl }));
+    } else if (!(data.models || []).length) {
+      showBackup(ollamaUnavailableText({ code: "no_models", url: data.base_url || shownUrl }));
+    } else {
+      const pick = pickDefaultModel(data.models, localStorage.getItem(AI_SPLIT_MODEL_KEY));
+      modelSel.innerHTML = data.models.map((m) => `<option value="${esc(m)}"${m === pick ? " selected" : ""}>${esc(m)}</option>`).join("");
+      status.textContent = `Ollama: ${data.base_url || shownUrl} · ${data.models.length} model${data.models.length === 1 ? "" : "s"}`;
+    }
+    if (!modelSel.options.length) modelSel.innerHTML = '<option value="">No models</option>';
+    sync();
+  })();
+
+  runBtn.addEventListener("click", async () => {
+    if (busy || runBtn.disabled) return;
+    busy = true;
+    err.textContent = "";
+    pasteBtn.hidden = true;
+    status.textContent = `Splitting with ${modelSel.value}… (up to 3 minutes)`;
+    sync();
+    let cuts = null;
+    try {
+      const d = await postJson("/gonggan/ai-cut-split", aiCutSplitPayload({
+        story: story.value, model: modelSel.value, keepLoaded: keepCb.checked, baseUrl,
+      }));
+      const parsed = parseCutList(JSON.stringify(d.cuts || []));
+      if (!parsed.ok) throw Object.assign(new Error(parsed.errors.slice(0, 4).join("\n")), { code: "invalid" });
+      cuts = parsed.cuts;
+      status.textContent = `${cutListSummary(parsed)} · ${d.keep_loaded ? "LLM kept loaded" : "LLM unloaded"}`;
+    } catch (e) {
+      status.textContent = `Ollama: ${shownUrl}`;
+      const msg = e.status === 404 && !e.code ? "Restart ComfyUI to use AI Cut Split (new server route)." : e.message;
+      if (e.code === "unreachable") showBackup(ollamaUnavailableText({ code: e.code, url: shownUrl }));
+      else showBackup(msg, e.code === "invalid" ? e.data?.raw || "" : "");
+    }
+    busy = false;
+    sync();
+    if (!cuts || !wrap.isConnected) return;
+    try {
+      if (await createCutsFromList(reqPid, cuts, LTX_WORKFLOWS[0])) close();
+    } catch (e) {
+      err.textContent = e.message;
+    }
+  });
+  story.focus();
+}
+
+/** Paste Cut List: JSON from the LLM -> new cuts (after the last cut), each with the LTX workflow and its description as the prompt. */
+function openPasteCutListModal(prefill = "") {
   if (!isNativeProject() || document.querySelector(".gg-cutlist-modal")) return;
   const reqPid = state.pid;
   const wrap = document.createElement("div");
@@ -2903,7 +3079,7 @@ function openPasteCutListModal() {
     <div class="gg-modal gg-cutlist-modal" role="dialog" aria-label="Paste Cut List">
       <h3 class="gg-modal-title">Paste Cut List</h3>
       <label class="gg-modal-field">LLM answer (JSON array)
-        <textarea class="gg-cutlist-text" rows="12" spellcheck="false" placeholder='[{"cut": 1, "duration": 3, "content": "...", "ltx_prompt": "..."}]'></textarea>
+        <textarea class="gg-cutlist-text" rows="12" spellcheck="false" placeholder='[{"cut": 1, "duration": 3, "description": "..."}]'></textarea>
       </label>
       <label class="gg-modal-field">Workflow for the new cuts
         <select class="gg-cutlist-wf">${LTX_WORKFLOWS.map((w) => `<option value="${esc(w.id)}">${esc(w.label)}</option>`).join("")}</select>
@@ -2927,7 +3103,7 @@ function openPasteCutListModal() {
   const sync = () => {
     parsed = parseCutList(ta.value);
     summary.textContent = cutListSummary(parsed);
-    err.textContent = ta.value.trim() ? parsed.errors.slice(0, 4).join(" ") : "";
+    err.textContent = ta.value.trim() ? parsed.errors.slice(0, 4).join("\n") : "";
     createBtn.disabled = busy || !parsed.ok;
   };
   ta.addEventListener("input", sync);
@@ -2937,29 +3113,20 @@ function openPasteCutListModal() {
   createBtn.addEventListener("click", async () => {
     if (!parsed.ok || busy) return;
     const wf = LTX_WORKFLOWS.find((w) => w.id === wfSel.value) || LTX_WORKFLOWS[0];
-    if (!(await askConfirm({ message: createCutsConfirmMessage(parsed.cuts, wf.label) }))) return;
-    if (state.pid !== reqPid) { close(); return; }
     busy = true;
     sync();
-    const order = displayedCutIds();
-    const before = snapshotOrderGroups(state.timeline);
     try {
-      const d = await postJson("/gonggan/cut/add-list", cutListPayload(reqPid, parsed.cuts, wf.id, order[order.length - 1]));
-      if (d.timeline && adoptMutationTimeline(d.timeline, reqPid)) bus.dispatchEvent(new Event("timeline"));
-      else await loadTimeline();
-      const ids = d.cut_ids || [];
-      if (ids.length) {
-        recordShotsEntry(reqPid, { kind: "cuts", op: "add", ids, before, after: snapshotOrderGroups(state.timeline) });
-        selectCut(ids[0]);
-      }
-      close();
-      ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, "Each cut has the LTX workflow with its prompt. Select a cut and press Queue to generate it.", "ok");
+      if (await createCutsFromList(reqPid, parsed.cuts, wf) || state.pid !== reqPid) close();
     } catch (e) {
-      busy = false;
-      sync();
       err.textContent = e.message;
     }
+    busy = false;
+    if (wrap.isConnected) sync();
   });
+  if (prefill) {
+    ta.value = prefill;
+    sync();
+  }
   ta.focus();
 }
 
@@ -4025,6 +4192,7 @@ function paintRenderBadge(badge, v) {
   badge.classList.toggle("gg-rs-rendering", v.mode === "rendering");
   badge.classList.toggle("gg-rs-queued", v.mode === "queued");
   badge.classList.toggle("gg-rs-failed", v.mode === "failed");
+  badge.classList.toggle("gg-rs-done", v.mode === "done");
   const text = badge.querySelector(".gg-rs-text");
   if (text) text.textContent = v.text;
   const pos = badge.querySelector(".gg-rs-pos");
@@ -4044,10 +4212,15 @@ function paintRenderGlobal() {
   });
 }
 
+/** A cut's render state: its ComfyUI queue prompts first, else its Generate All item. */
+function cutRenderView(cutId) {
+  return renderStatus.cutView(state.pid, cutId) || generateAllCutView(genAll.batch, state.pid, cutId);
+}
+
 /** Badge-only update for the given cuts (cut cards + timeline clips) and the header indicator. */
 function paintRenderStatus(cutIds) {
   for (const id of cutIds || []) {
-    const v = renderBadgeView(renderStatus.cutView(state.pid, id));
+    const v = renderBadgeView(cutRenderView(id));
     const sel = `.gg-cut[data-cut-id="${CSS.escape(id)}"] .gg-render-badge, .gg-clip[data-cut-id="${CSS.escape(id)}"] .gg-render-badge`;
     document.querySelectorAll(sel).forEach((el) => paintRenderBadge(el, v));
   }
@@ -5262,11 +5435,35 @@ function updateSelectionBar(root) {
     setBtn(row, ".gg-ir-cut", r.cut.disabled, r.cut.title);
     setBtn(row, ".gg-ir-del", r.del.disabled, r.del.title);
   }
-  const q = queueButtonState({ count: n, native: isNativeProject(), busy: !!sdk.busy, hasProject });
+  const allCount = generateAllCutIds().length;
+  const allRunning = isGenerateAllRunning(genAll.batch);
+  const q = queueButtonState({
+    count: n,
+    native: isNativeProject(),
+    busy: !!sdk.busy || batchRenderUi.running || genAll.starting,
+    hasProject,
+    allCount,
+    allRunning,
+    batch: genAll.batch,
+    projectId: state.pid,
+  });
   const queueBtn = root.querySelector(".gg-queue-btn");
   if (queueBtn) {
     queueBtn.disabled = q.disabled;
     queueBtn.title = q.title;
+    queueBtn.textContent = q.label;
+    queueBtn.classList.toggle("gg-queue-stop", q.mode === "stop");
+  }
+  paintGenerateAllProgress(root);
+}
+
+function paintGenerateAllProgress(root) {
+  const p = generateAllProgressView(genAll.batch, state.pid);
+  const prog = root.querySelector(".gg-genall-prog");
+  if (prog) {
+    prog.hidden = !p.show;
+    prog.textContent = p.text;
+    prog.title = p.title;
   }
 }
 
@@ -5335,6 +5532,7 @@ async function postJson(route, body) {
     const err = new Error(data.message || data.error || `HTTP ${res.status}`);
     err.status = res.status;
     err.code = data.code;
+    err.data = data;
     throw err;
   }
   return data;
@@ -5467,7 +5665,8 @@ async function planNativeSdkJob(pid, cutId, mode) {
   try {
     return (await postJson("/gonggan/regen", body)).plan;
   } catch (e) {
-    if (e.code !== "ui_only" || !nativeRegenCheck(cutId, wfLoadToken).ok) throw e;
+    if (e.code !== "ui_only") throw e;
+    if (!nativeRegenCheck(cutId, wfLoadToken).ok) return (await postJson("/gonggan/regen", { ...body, convert: true })).plan;
     const p = await app.graphToPrompt();
     return (await postJson("/gonggan/regen", { ...body, api_workflow: p.output })).plan;
   }
@@ -5510,12 +5709,88 @@ function regenNativeCut(cutId) {
   return sdkGenerateNativeCut(cutId, { newSeed: true });
 }
 
-/** Status panel Queue: one selected native cut goes through the Comfy SDK; otherwise the batch queue. */
+/** Status panel Queue: one selected native cut = SDK job, none selected = generate-all, several = batch queue; Stop while generate-all runs. */
 function queueButtonClick() {
+  if (isGenerateAllRunning(genAll.batch) && genAll.batch?.pid === state.pid && !genAll.batch?.stop) {
+    return stopGenerateAll();
+  }
   const ids = cutSelIds();
-  if (isNativeProject() && ids.length === 1) return sdkGenerateNativeCut(ids[0], { newSeed: false });
+  const action = queueClickAction({ native: isNativeProject(), selected: ids.length });
+  if (action === "single") return sdkGenerateNativeCut(ids[0], { newSeed: false });
+  if (action === "all") return startGenerateAll();
   return queueSelectedCuts();
 }
+
+/** Every cut of the shown native project in Shots list order (collapsed scenes included). */
+function generateAllCutIds() {
+  const tl = state.timeline;
+  if (!tl || !isNativeProject()) return [];
+  return generateAllOrder(displayedCutIds(), tl.cuts);
+}
+
+function setGenerateAllBatch(batch) {
+  const prev = genAll.batch;
+  genAll.batch = batch && Array.isArray(batch.items) ? batch : null;
+  const ids = new Set([...(prev?.items || []), ...(genAll.batch?.items || [])].map((it) => it.cut_id));
+  paintRenderStatus(ids);
+  document.querySelectorAll(".gg-shots").forEach((root) => updateSelectionBar(root));
+}
+
+async function refreshGenerateAll() {
+  try {
+    const d = await getJson("/gonggan/generate-all/status");
+    setGenerateAllBatch(d.batch);
+  } catch (_) {}
+}
+
+/**
+ * Generate All: every cut in list order, one Comfy SDK job at a time on the server (each cut's own saved
+ * workflow and seed, the output added as a new version). Runs without the workflow tab; Stop cancels the rest.
+ */
+async function startGenerateAll() {
+  if (!isNativeProject() || sdk.busy || batchRenderUi.running || genAll.starting || isGenerateAllRunning(genAll.batch)) return;
+  const ids = generateAllCutIds();
+  if (!ids.length) return;
+  const pid = state.pid;
+  if (!(await askConfirm({ message: generateAllConfirmMessage(ids.map((id) => shotTitle(cutById(id)))) }))) return;
+  if (state.pid !== pid) return;
+  genAll.starting = true;
+  document.querySelectorAll(".gg-shots").forEach((root) => updateSelectionBar(root));
+  try {
+    const d = await postJson("/gonggan/generate-all", { pid, cut_ids: ids, confirm: true });
+    setGenerateAllBatch(d.batch);
+    sdk.msg = `Generate All: ${ids.length} cut${ids.length === 1 ? "" : "s"} queued through Comfy SDK`;
+    ggToast("Generate All started", `${ids.length} cut${ids.length === 1 ? "" : "s"}, one at a time in list order`, "ok");
+  } catch (e) {
+    const msg = e.status === 404 && !e.code ? "Restart ComfyUI to use Generate All (new server route)." : e.message;
+    if (e.data?.batch) setGenerateAllBatch(e.data.batch);
+    ggToast("Generate All", msg, "warn");
+  } finally {
+    genAll.starting = false;
+    bus.dispatchEvent(new Event("sdk"));
+    document.querySelectorAll(".gg-shots").forEach((root) => updateSelectionBar(root));
+  }
+}
+
+async function stopGenerateAll() {
+  try {
+    const d = await postJson("/gonggan/generate-all/stop", {});
+    setGenerateAllBatch(d.batch);
+    ggToast("Stopping batch", "The cut generating now finishes; the rest are cancelled.", "ok");
+  } catch (e) {
+    ggToast("Stop failed", e.message, "warn");
+  }
+}
+
+api.addEventListener("gonggan.generate_all", (e) => {
+  const b = e.detail || {};
+  const wasRunning = isGenerateAllRunning(genAll.batch) && genAll.batch?.id === b.id;
+  setGenerateAllBatch(b);
+  if (wasRunning && !isGenerateAllRunning(b)) {
+    const t = generateAllFinishedToast(b);
+    if (t) ggToast(t.summary, t.detail, t.kind);
+  }
+});
 
 const batchRenderUi = { running: false };
 
@@ -5942,7 +6217,7 @@ function statusPanelHtml() {
     cut,
     cutLabel: head?.cutLabel,
     name: head?.name,
-    render: cut ? renderStatus.cutView(state.pid, cut.id) : null,
+    render: cut ? cutRenderView(cut.id) : null,
   });
   if (v.kind === "multi") return `<div class="gg-sp-title gg-sp-count">${esc(v.text)}</div>`;
   if (v.kind !== "cut") return `<div class="gg-sp-empty">${esc(v.text)}</div>`;
@@ -5984,6 +6259,7 @@ function statusPanelShellHtml() {
         <div class="gg-sp-actions">
           <span class="gg-render-badge gg-render-global" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
           <span class="gg-batch-prog" hidden></span>
+          <span class="gg-genall-prog" hidden></span>
           <button type="button" class="gg-btn gg-primary gg-queue-btn" disabled title="${esc(QUEUE_EMPTY_TIP)}">Queue</button>
         </div>`;
 }
@@ -6418,7 +6694,8 @@ function mountShots(el) {
         </div>
         ${SHOW_REDO_FILTER ? `<label class="gg-filter-redo" title="Show only cuts marked for redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Show redo cuts only</label>` : ""}
         ${tl && isNativeProject() ? `<div class="gg-cutlist-btns">
-          <button type="button" class="gg-btn gg-copy-split" title="Copy a prompt for any LLM that splits your story into cuts with LTX-Video prompts">Copy Cut Split Prompt</button>
+          <button type="button" class="gg-btn gg-primary gg-ai-split" title="Split a story into cuts with a local LLM (Ollama)">AI Cut Split</button>
+          <button type="button" class="gg-btn gg-copy-split" title="Copy a prompt for any LLM that splits your story into cuts (one-line descriptions used as LTX-Video prompts)">Copy Cut Split Prompt</button>
           <button type="button" class="gg-btn gg-paste-cuts" title="Paste the LLM's JSON answer to create the cuts">Paste Cut List</button>
         </div>` : ""}
       </div>
@@ -6502,6 +6779,7 @@ function mountShots(el) {
     root.querySelector(".gg-ir-cut")?.addEventListener("click", () => addLocalCut());
     root.querySelector(".gg-copy-split")?.addEventListener("click", () => void copyCutSplitPrompt());
     root.querySelector(".gg-paste-cuts")?.addEventListener("click", () => openPasteCutListModal());
+    root.querySelector(".gg-ai-split")?.addEventListener("click", () => openAiCutSplitModal());
     root.querySelector(".gg-ir-del")?.addEventListener("click", () => void confirmDeleteSelectedCuts());
     root.querySelector(".gg-queue-btn")?.addEventListener("click", () => void queueButtonClick());
     const vsList = root.querySelector(".gg-vs-list");
@@ -7911,6 +8189,16 @@ function bindHoverPlay(root) {
 
 app.registerExtension({
   name: EXT,
+  settings: [
+    {
+      id: OLLAMA_URL_SETTING,
+      category: ["Vidot Studio", "AI Cut Split", "Ollama URL"],
+      name: "Ollama URL for AI Cut Split",
+      tooltip: `Local Ollama server used by AI Cut Split. Blank = ${OLLAMA_DEFAULT_URL} (or "ollama_url" in gonggan_settings.json).`,
+      type: "text",
+      defaultValue: "",
+    },
+  ],
   bottomPanelTabs: [
     { id: TIMELINE_TAB, title: "Timeline", type: "custom", icon: "pi pi-video", render: (el) => mountTimeline(el) },
   ],
@@ -7954,6 +8242,7 @@ app.registerExtension({
     bindLoadImageUi({ ggToast });
     installLoadImageQueueGuard();
     loadPersistedJobs();
+    void refreshGenerateAll();
     if (!api._ggQueuePatched) {
       api._ggQueuePatched = true;
       const origQueue = api.queuePrompt.bind(api);

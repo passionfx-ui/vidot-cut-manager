@@ -310,10 +310,10 @@ def _native_api():
     return gg_native_api
 
 
-def native_plan(pid: str, cut_id: str, *, new_seed: bool, canvas: dict | None = None) -> dict:
+def native_plan(pid: str, cut_id: str, *, new_seed: bool, canvas: dict | None = None, convert: bool = False) -> dict:
     """Resolve the cut's current saved workflow, set its seeds (new random ones for Regen, the saved ones for
     Queue) and store it under cache/regen. Never queues; run_native_confirmed runs exactly this file."""
-    src = _native_api().native_cut_api_workflow(pid, cut_id, canvas)
+    src = _native_api().native_cut_api_workflow(pid, cut_id, canvas, convert)
     if new_seed:
         wf, seeds = randomize_seeds(src["workflow"])
     else:
@@ -358,6 +358,143 @@ def run_native_confirmed(pid: str, cut_id: str, plan_name) -> dict:
     threading.Thread(target=_run_native_worker, args=(wf_file, pid, cut_id), name="gonggan-regen-native",
                      daemon=True).start()
     return {"ok": True, "queued": True, "plan": plan_name}
+
+
+# ---- Generate All: every cut of a native project in list order, one SDK job at a time ----
+# Item status: waiting -> generating -> done | failed | skipped (no workflow); Stop turns waiting into cancelled.
+GENERATE_ALL_MAX = 500
+SLOT_WAIT_SEC = 2.0
+_batch: dict = {"status": "idle", "items": []}
+_batch_notify = None
+
+
+def _batch_snapshot() -> dict:
+    return {**_batch, "items": [dict(it) for it in _batch.get("items") or []]}
+
+
+def generate_all_status() -> dict:
+    with _lock:
+        return _batch_snapshot()
+
+
+def _batch_update(batch_id: str, index: int | None = None, **kw) -> None:
+    with _lock:
+        if _batch.get("id") != batch_id:
+            return
+        if index is None:
+            _batch.update(kw)
+        else:
+            _batch["items"][index].update(kw)
+        snap = _batch_snapshot()
+    if _batch_notify:
+        try:
+            _batch_notify(snap)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _batch_stopping(batch_id: str) -> bool:
+    with _lock:
+        return _batch.get("id") != batch_id or bool(_batch.get("stop"))
+
+
+def _claim_slot_for_batch(batch_id: str, pid: str, cut_id: str) -> bool:
+    """Take the single SDK job slot (a Regen started meanwhile finishes first). False when stopped while waiting."""
+    while True:
+        with _lock:
+            if _batch.get("id") != batch_id or _batch.get("stop"):
+                return False
+            if _job.get("status") != "running":
+                _job.clear()
+                _job.update(status="running", native=True, batch=batch_id, pid=pid, cut_id=cut_id,
+                            started_at=time.time(), error=None, versions=[])
+                break
+        time.sleep(SLOT_WAIT_SEC)
+    _set()
+    return True
+
+
+def _generate_one(batch_id: str, pid: str, cut_id: str) -> dict:
+    """One cut through the 0.9.114 native SDK path with its saved seeds: {"status", "error"?, "version"?}."""
+    na = _native_api()
+    try:
+        p = native_plan(pid, cut_id, new_seed=False, convert=True)
+    except na.NativeWorkflowError as ex:
+        return {"status": "skipped" if ex.code == "empty" else "failed", "error": str(ex)}
+    except (ValueError, OSError) as ex:
+        return {"status": "failed", "error": str(ex)}
+    if not _claim_slot_for_batch(batch_id, pid, cut_id):
+        return {"status": "cancelled"}
+    _run_native_worker(REGEN_DIR / f"{p['plan']}.json", pid, cut_id)
+    j = job_status()
+    if j.get("status") == "done":
+        return {"status": "done", "version": (j.get("versions") or [None])[0]}
+    return {"status": "failed", "error": j.get("error") or "SDK job failed"}
+
+
+def _generate_all_worker(batch_id: str) -> None:
+    with _lock:
+        n = len(_batch.get("items") or [])
+        pid = _batch.get("pid")
+    for i in range(n):
+        if _batch_stopping(batch_id):
+            break
+        with _lock:
+            if _batch.get("id") != batch_id:
+                return
+            item = _batch["items"][i]
+            if item.get("status") != "waiting":
+                continue
+            cut_id = item["cut_id"]
+        _batch_update(batch_id, i, status="generating", started_at=time.time())
+        try:
+            res = _generate_one(batch_id, pid, cut_id)
+        except Exception as ex:  # noqa: BLE001
+            res = {"status": "failed", "error": str(ex)}
+        _batch_update(batch_id, i, **res, finished_at=time.time())
+    with _lock:
+        if _batch.get("id") != batch_id:
+            return
+        stopped = bool(_batch.get("stop"))
+        for it in _batch["items"]:
+            if it.get("status") == "waiting":
+                it["status"] = "cancelled"
+    _batch_update(batch_id, status="stopped" if stopped else "done", finished_at=time.time())
+
+
+def start_generate_all(pid: str, cut_ids) -> dict:
+    """Queue every cut in `cut_ids` (Shots list order) for one-at-a-time SDK generation; returns the batch."""
+    if not isinstance(cut_ids, list) or not all(isinstance(c, str) and c for c in cut_ids):
+        raise ValueError("cut_ids must be a list of cut ids")
+    ids = list(dict.fromkeys(cut_ids))
+    if not ids:
+        raise ValueError("no cuts to generate")
+    if len(ids) > GENERATE_ALL_MAX:
+        raise ValueError(f"at most {GENERATE_ALL_MAX} cuts per Generate All")
+    batch_id = secrets.token_hex(6)
+    with _lock:
+        if _batch.get("status") == "running":
+            return {"ok": False, "message": "Generate All is already running", "batch": _batch_snapshot()}
+        _batch.clear()
+        _batch.update(id=batch_id, status="running", pid=pid, stop=False, started_at=time.time(),
+                      items=[{"cut_id": c, "status": "waiting"} for c in ids])
+    _batch_update(batch_id)
+    threading.Thread(target=_generate_all_worker, args=(batch_id,), name="gonggan-generate-all", daemon=True).start()
+    return {"ok": True, "batch": generate_all_status()}
+
+
+def stop_generate_all() -> dict:
+    """Cancel the cuts still waiting; the one generating now runs to the end."""
+    with _lock:
+        if _batch.get("status") != "running":
+            return {"ok": False, "message": "Generate All is not running", "batch": _batch_snapshot()}
+        _batch["stop"] = True
+        for it in _batch["items"]:
+            if it.get("status") == "waiting":
+                it["status"] = "cancelled"
+        batch_id = _batch["id"]
+    _batch_update(batch_id)
+    return {"ok": True, "batch": generate_all_status()}
 
 
 # ---- send last ComfyUI output to a cut (no generation) ----

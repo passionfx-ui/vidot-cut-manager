@@ -488,12 +488,13 @@ UI_ONLY_MESSAGE = ("This cut's workflow is saved only in UI (graph) format and c
                    "canvas. Open the cut once (its shot tab), then try again.")
 
 
-def native_cut_api_workflow(pid: str, cut_id: str, canvas: dict | None = None) -> dict:
+def native_cut_api_workflow(pid: str, cut_id: str, canvas: dict | None = None, convert: bool = False) -> dict:
     """The cut's current saved workflow in API format for an SDK run: {"workflow", "source"}.
 
     Order: the current version's API prompt embedded in its PNG, the stored cut/version workflow when it is
     API format, the ComfyUI history prompt of the current version's run, then `canvas` (the API prompt of
-    that cut's open shot tab, sent by the browser only after a "ui_only" answer)."""
+    that cut's open shot tab, sent by the browser only after a "ui_only" answer), then with `convert` the
+    stored UI workflow converted on the server (no tab needed; plain graphs only)."""
     try:
         from . import gg_sdk
         from .gg_project.cut_source import current_version_id
@@ -527,6 +528,15 @@ def native_cut_api_workflow(pid: str, cut_id: str, canvas: dict | None = None) -
         return {"workflow": canvas, "source": "canvas"}
     if not wf:
         raise NativeWorkflowError("empty", "This cut has no workflow yet. Not queued.")
+    if convert and isinstance(wf, dict) and gg_template._is_ui_workflow(wf):
+        try:
+            from . import gg_wfconvert
+        except ImportError:
+            import gg_wfconvert  # type: ignore
+        try:
+            return {"workflow": gg_wfconvert.ui_to_api(wf), "source": "converted"}
+        except ValueError as ex:
+            raise NativeWorkflowError("ui_only", f"{UI_ONLY_MESSAGE} ({ex})") from None
     raise NativeWorkflowError("ui_only", UI_ONLY_MESSAGE)
 
 

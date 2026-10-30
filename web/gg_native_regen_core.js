@@ -23,7 +23,7 @@ export function sdkRegenErrorMessage(message) {
   return m || "unknown error";
 }
 
-const SOURCE_LABEL = { embedded: "current version", stored: "saved workflow", template: "project template", history: "last run", canvas: "open tab" };
+const SOURCE_LABEL = { embedded: "current version", stored: "saved workflow", template: "project template", history: "last run", canvas: "open tab", converted: "saved workflow (converted)" };
 
 /** Status line after the dry run: which workflow and seed will run. */
 export function sdkPlanSummary(plan = {}) {
@@ -36,11 +36,11 @@ export function sdkPlanSummary(plan = {}) {
 
 /**
  * Toast for a `gonggan.regen` event of a native SDK job; null while it is running or for legacy jobs.
- * @param {{ native?: boolean, status?: string, error?: string }} job
+ * @param {{ native?: boolean, batch?: string, status?: string, error?: string }} job  Generate All jobs (`batch`) get no per-cut toast
  * @param {string} [cutText] cut label shown in the toast
  */
 export function sdkJobToast(job = {}, cutText = "") {
-  if (!job.native) return null;
+  if (!job.native || job.batch) return null;
   if (job.status === "done") return { summary: "New version added", detail: cutText, kind: "ok" };
   if (job.status === "error") return { summary: "SDK job failed", detail: [cutText, job.error].filter(Boolean).join(" — "), kind: "warn" };
   return null;
