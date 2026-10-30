@@ -260,6 +260,22 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
     }
 
 
+def native_add_cut_list(pid: str, cuts, workflow: str | None = None, after: str | None = None) -> dict:
+    """Paste Cut List: one cut per entry, each with the bundled LTX workflow (its ltx_prompt and length injected)."""
+    try:
+        from . import gg_ltx
+    except ImportError:
+        import gg_ltx  # type: ignore
+    store = native_store()
+    if not store.get_project(pid):
+        raise ValueError("project not found")
+    rows = gg_ltx.validate_cut_list(cuts)
+    base = gg_ltx.load_ltx_workflow(workflow or None)
+    entries = [{**r, "graph": gg_ltx.inject_ltx(base, r["prompt"], r["sec"])} for r in rows]
+    _doc, ids = store.add_cuts(pid, entries, after=after if isinstance(after, str) and after else None)
+    return {"ok": True, "cut_ids": ids, "timeline": store.to_timeline(pid)}
+
+
 def native_import_structure(pid: str, payload: dict) -> dict:
     store = native_store()
     doc = store.get_project(pid)
