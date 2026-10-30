@@ -17,6 +17,7 @@
 - MiniMax H3 보너스는 메인 상과 중복 가능.
 
 ## 3. 결정 사항 (시간순)
+- 2026-10-30: **0.9.122 AI Cut Split = SDK TextGenerate, Ollama 제거** — AI Cut Split은 이제 Ollama 대신 ComfyUI 내장 **TextGenerate** 노드를 기존 SDK 경로(`gg_sdk.run_api_workflow` → `.venv-sdk` `sdk_runner.py run` → 프록시 :8189 → ComfyUI :8188)로 실행(`gg_cut_split.py`). 그래프 `CLIPLoader(qwen3vl_4b_int8_convrot, stable_diffusion)` → `TextGenerate(max_length 2048, sampling_mode "off", thinking false)` → `PreviewAny`, 답은 `GET :8188/history/<job_id>` → `outputs[3].text[0]`. 기존 프롬프트(`gg_ltx.CUT_SPLIT_PROMPT`)·검증(0.5–3초) 그대로, 잘못된 JSON은 문제 목록을 붙여 **1회만** 재시도(자동 재시도 최대 1회 규칙). 성공/실패 후 `POST :8188/free {unload_models, free_memory}` best-effort(LTX VRAM 확보). Queue/Regen·Generate All 실행 중이면 거절(409). 모델은 `gonggan_settings.json` `cut_split_clip`/`cut_split_clip_type`(`ollama_url` 대체). **Copy Cut Split Prompt / Paste Cut List 버튼·모달, 모델 드롭다운, Keep LLM loaded, Ollama URL 설정, `gg_ollama.py`, `/gonggan/ollama/models` 삭제**(0.9.115·0.9.116의 붙여넣기 백업·Ollama 항목은 이걸로 폐기). 새 컷은 항상 프로젝트 Video template. Python 변경 → ComfyUI 재시작 필요. 40GB 여유 RAM 가드는 그대로(손대지 않음).
 - 2026-10-30: **0.9.120 전체 선택 + Queue는 선택 필수** — 컷 리스트 헤더 **All**(primary) = 보이는 컷 전체 선택, 다시 누르거나 빈 영역 클릭 시 선택 해제. 리스트 우클릭 **Select all** 동일 토글(Ctrl/Cmd+A 유지). 선택 0개면 **Queue** 비활성(툴팁 없음), 1개 이상이면 즉시 활성. 1컷 = SDK 단일 job, 2컷 이상 = 선택 컷만 서버 generate-all 배치(Waiting/Generating/Done/Failed, Stop) — 선택 없이 전체 렌더 경로 제거. 프론트만(Ctrl+F5).
 - 2026-10-30: **0.9.121 컷 정보 길이(초) 읽기 전용** — 컷 패널 Length (sec) 입력칸을 네이티브 포함 모든 프로젝트에서 표시 전용(readonly)으로 변경, 편집/저장 핸들러 제거. 프론트만(Ctrl+F5).
 - 2026-10-30: **0.9.119 움직이는 이미지 = 영상 버전** — 결과가 history `animated: [true]`(SaveAnimatedWEBP 등)이거나 WebP/GIF/APNG 2프레임 이상이면 버전 asset `kind: video` + `animated: true`(+ 알면 `frames`/`seconds`, `gg_project/media_anim.py`). GIF 결과도 이제 잡힘. Image to Video 시작 이미지는 정지 이미지 버전만(Best→선택→최신 중 영상/움직이는 이미지 건너뜀, 없으면 명확한 에러). UI는 animated를 `<img>`로 그리되 영상처럼 취급(▶, 길이, 시작 이미지 제외). 기존 버전은 마이그레이션 안 함. Python 변경 → ComfyUI 재시작 필요.
@@ -83,9 +84,10 @@ routes.py                      aiohttp 라우트 (/gonggan/*, /api/gonggan/* 동
 gg_data.py                     legacy import _workspace.json 읽기 전용 로더
 gg_export.py                   mp4 내보내기 워커 (libx264 veryfast, 4 threads, 낮은 우선순위)
 gg_sdk.py                      SDK venv 호출, 재생성 워크플로 구성, 프롬프트 정리
-sdk_runner.py                  .venv-sdk에서 실행되는 comfy-sdk 러너 (1,500초 타임아웃 후 취소)
+gg_cut_split.py                AI Cut Split: TextGenerate 그래프를 SDK로 실행, /history에서 답 읽기, 검증, /free
+sdk_runner.py                  .venv-sdk에서 실행되는 comfy-sdk 러너 (기본 1,500초, --timeout 후 취소)
 start_proxy.bat                comfy-api-proxy를 127.0.0.1:8189로 실행
-gonggan_settings.default.json  data_root, uid (복사해서 gonggan_settings.json으로, gitignore)
+gonggan_settings.default.json  data_root, uid, cut_split_clip(_type) (복사해서 gonggan_settings.json으로, gitignore)
 web/gonggan.js, gonggan.css    UI (클래스는 gg- 접두사)
 edits/  versions/  cache/      팩 전용 쓰기 폴더 (gitignore)
 ```

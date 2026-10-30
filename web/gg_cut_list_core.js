@@ -1,4 +1,4 @@
-/** Script to cuts with LTX: the LLM prompt, the Paste Cut List / AI Cut Split parser and Ollama helpers (pure, no DOM). */
+/** AI Cut Split: cut list parser / checks and the create-cuts request (pure, no DOM). */
 
 import { DEFAULT_VIDEO_TEMPLATE, templateLabel } from "./gg_template_pick_core.js";
 
@@ -6,37 +6,10 @@ export const CUT_DURATION_MIN = 0.5;
 export const CUT_DURATION_MAX = 3;
 export const CUT_LIST_MAX = 200;
 
-export const LTX_WORKFLOWS = [
-  { id: "t2v", label: "Text to video (LTX-Video)" },
-  { id: "i2v", label: "Image to video (LTX-Video, pick a start image per cut)" },
-];
-
 export const DESCRIPTION_MAX_LEN = 300;
 const NAME_MAX_LEN = 80;
 /** "content" / "ltx_prompt" (0.9.115 lists) are read as "description". */
 const DESCRIPTION_ALIASES = ["description", "content", "ltx_prompt"];
-
-// Same text as CUT_SPLIT_PROMPT in gg_ltx.py (the server sends it to Ollama; a test keeps them equal).
-export const CUT_SPLIT_PROMPT = `You are a film director and storyboard artist. Split the story below into cuts for short AI-generated video clips.
-
-Return ONLY a JSON array, with no other text and no markdown code fences:
-[
-  {"cut": 1, "duration": 3, "description": "one short line describing the shot"}
-]
-
-Fields:
-- "cut": whole number, 1, 2, 3 ... in story order.
-- "duration": seconds, a number from 0.5 to 3 (never more than 3).
-- "description": one short line in English, under 200 characters: who or what, the action, the place, the shot size and the camera move. It is used directly as the video prompt and as the cut name.
-
-Guidance:
-- One action per cut, at most 3 seconds. Split longer actions into several cuts.
-- Every description must stand alone: name the characters and the place again each time (no "he", no "same room").
-- No dialogue, no on-screen text, no cut numbers inside description.
-- Valid JSON only: double quotes, no trailing commas, no comments.
-
-STORY:
-`;
 
 /** Text of the first top-level JSON array in `text` (code fences and surrounding prose ignored), else null. */
 export function extractJsonArray(text) {
@@ -145,9 +118,9 @@ export function validateCutItems(items) {
   return { ok: true, cuts: rows.map((r, i) => ({ cut: i + 1, duration: r.duration, description: r.description })), errors: [] };
 }
 
-/** Parse pasted LLM output (or the AI Cut Split answer) into cuts; see validateCutItems. */
+/** Parse the AI Cut Split answer into cuts; see validateCutItems. */
 export function parseCutList(text) {
-  if (!String(text ?? "").trim()) return { ok: false, cuts: [], errors: ["Paste the JSON cut list first."] };
+  if (!String(text ?? "").trim()) return { ok: false, cuts: [], errors: ["The answer is empty."] };
   const x = extractCutItems(text);
   if (x.error) return { ok: false, cuts: [], errors: [x.error] };
   return validateCutItems(x.items);
@@ -175,13 +148,12 @@ export function createCutsConfirmMessage(cuts, workflowLabel) {
 }
 
 /**
- * Workflow choices for new list cuts: the project's Video template first (id "" = let the server use it), then the
- * bundled LTX examples.
+ * Workflow of the new cuts: the project's Video template (id "" = let the server use it).
  * @param {{ video_template?: string } | null | undefined} settings project settings
  */
-export function cutListWorkflowOptions(settings) {
+export function cutListWorkflow(settings) {
   const ref = String(settings?.video_template || "").trim() || DEFAULT_VIDEO_TEMPLATE;
-  return [{ id: "", label: `Project Video template (${templateLabel(ref)})` }, ...LTX_WORKFLOWS];
+  return { id: "", label: `Project Video template (${templateLabel(ref)})` };
 }
 
 /** Request body for POST /gonggan/cut/add-list; no workflow = the project's Video template. */
@@ -195,39 +167,9 @@ export function cutListPayload(pid, cuts, workflow, after) {
   return body;
 }
 
-// ---- AI Cut Split (local Ollama through the plugin's server routes) ----
-export const OLLAMA_DEFAULT_URL = "http://127.0.0.1:11434";
-
-/** Base URL from the plugin setting (blank = server default). */
-export function ollamaBaseUrl(setting) {
-  return String(setting ?? "").trim().replace(/\/+$/, "");
-}
-
-/** Query string for GET /gonggan/ollama/models. */
-export function ollamaModelsQuery(baseUrl) {
-  const u = ollamaBaseUrl(baseUrl);
-  return u ? `?base_url=${encodeURIComponent(u)}` : "";
-}
-
-/** Model to preselect: the last used one when still installed, else a qwen2.5 model, else the first. */
-export function pickDefaultModel(models, last) {
-  const list = Array.isArray(models) ? models : [];
-  if (last && list.includes(last)) return last;
-  return list.find((m) => /^qwen2\.5/i.test(m)) || list[0] || "";
-}
-
-/** Request body for POST /gonggan/ai-cut-split (keep_alive 0 on the server unless keepLoaded). */
-export function aiCutSplitPayload({ story, model, keepLoaded = false, baseUrl = "" }) {
-  const body = { story: String(story ?? ""), model: String(model ?? ""), keep_loaded: !!keepLoaded };
-  const u = ollamaBaseUrl(baseUrl);
-  if (u) body.base_url = u;
-  return body;
-}
-
-/** Text under the model list when Ollama could not be reached / has no models. */
-export function ollamaUnavailableText({ code, message, url } = {}) {
-  const where = ollamaBaseUrl(url) || OLLAMA_DEFAULT_URL;
-  if (code === "no_models") return `No models installed in Ollama at ${where}. Run: ollama pull qwen2.5:7b — or use Paste Cut List instead.`;
-  const head = code === "unreachable" || !message ? `Ollama not running at ${where}.` : String(message);
-  return `${head} Start Ollama, or use Copy Cut Split Prompt with any LLM and Paste Cut List instead.`;
+/** Status line after a split, e.g. "6 cuts · 15.5 s total · qwen3vl_4b_int8_convrot.safetensors · 1 retry". */
+export function aiCutSplitStatusText(parsed, { model = "", attempts = 1 } = {}) {
+  const retries = Math.max(0, (Number(attempts) || 1) - 1);
+  return [cutListSummary(parsed), model, retries ? `${retries} ${retries === 1 ? "retry" : "retries"}` : ""]
+    .filter(Boolean).join(" · ");
 }

@@ -314,7 +314,7 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
 
 
 def native_add_cut_list(pid: str, cuts, workflow: str | None = None, after: str | None = None) -> dict:
-    """Paste Cut List / AI Cut Split: one cut per entry, each with a copy of the project's Video template (or the
+    """AI Cut Split: one cut per entry, each with a copy of the project's Video template (or the
     bundled LTX example `workflow` "t2v" / "i2v") with the description in its prompt node and the LTX length set."""
     try:
         from . import gg_ltx
@@ -604,7 +604,7 @@ def _ui_to_api(graph: dict) -> dict:
 
 
 def cut_prompt_text(cut: dict) -> str:
-    """The cut's description: its prompt (Paste Cut List / AI Cut Split), else its caption."""
+    """The cut's description: its prompt (AI Cut Split), else its caption."""
     for key in ("prompt", "caption"):
         v = cut.get(key)
         if isinstance(v, str) and v.strip():

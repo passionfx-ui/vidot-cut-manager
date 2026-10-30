@@ -880,36 +880,24 @@ async def gg_generate_all_status(request):
     return web.json_response({"ok": True, "batch": gg_sdk.generate_all_status()})
 
 
-# ---------------- AI Cut Split (local Ollama) ----------------
-from . import gg_ollama  # noqa: E402
+# ---------------- AI Cut Split (TextGenerate in ComfyUI through the Comfy SDK) ----------------
+from . import gg_cut_split  # noqa: E402
 
-
-def _ollama_err(ex: "gg_ollama.OllamaError") -> web.Response:
-    status = {"bad_request": 400, "invalid": 422, "timeout": 504}.get(ex.code, 502)
-    return web.json_response({"ok": False, "code": ex.code, "message": str(ex), "raw": ex.raw}, status=status)
-
-
-@routes.get("/gonggan/ollama/models")
-async def gg_ollama_models(request):
-    try:
-        res = await asyncio.to_thread(gg_ollama.list_models, request.query.get("base_url") or None)
-    except gg_ollama.OllamaError as ex:
-        return _ollama_err(ex)
-    return web.json_response({"ok": True, **res})
+_CUT_SPLIT_STATUS = {"bad_request": 400, "busy": 409, "invalid": 422}
 
 
 @routes.post("/gonggan/ai-cut-split")
 async def gg_ai_cut_split(request):
-    """{"story", "model", "keep_loaded"?, "base_url"?} -> {"cuts": [{cut, duration, description}]}. Creates nothing."""
+    """{"story"} -> {"cuts": [{cut, duration, description}], "model", "attempts", "seconds"}. Creates nothing."""
     data = await _json_body(request)
-    url = data.get("base_url")
-    if url is not None and not isinstance(url, str):
-        return _err(400, "base_url must be a string")
     try:
-        res = await asyncio.to_thread(gg_ollama.ai_cut_split, data.get("story"), data.get("model"),
-                                      data.get("keep_loaded") is True, url)
-    except gg_ollama.OllamaError as ex:
-        return _ollama_err(ex)
+        res = await asyncio.to_thread(gg_cut_split.ai_cut_split, data.get("story"))
+    except gg_cut_split.CutSplitError as ex:
+        return web.json_response({"ok": False, "code": ex.code, "message": str(ex)},
+                                 status=_CUT_SPLIT_STATUS.get(ex.code, 502))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] AI Cut Split failed")
+        return _err(500, f"AI Cut Split failed: {ex}")
     return web.json_response({"ok": True, **res})
 
 

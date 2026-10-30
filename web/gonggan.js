@@ -307,18 +307,11 @@ import {
   applyTimelineSnapshot,
 } from "./gg_undo_core.js";
 import {
-  CUT_SPLIT_PROMPT,
-  cutListWorkflowOptions,
+  cutListWorkflow,
   parseCutList,
-  cutListSummary,
+  aiCutSplitStatusText,
   createCutsConfirmMessage,
   cutListPayload,
-  OLLAMA_DEFAULT_URL,
-  ollamaBaseUrl,
-  ollamaModelsQuery,
-  pickDefaultModel,
-  aiCutSplitPayload,
-  ollamaUnavailableText,
 } from "./gg_cut_list_core.js";
 import {
   generateAllOrder,
@@ -834,7 +827,7 @@ function openNewProjectModal() {
 const TEMPLATE_FIELDS = {
   default: { label: "Default template", title: "ComfyUI saved workflow used as this project's template", none: true },
   image: { label: "Image template", title: "Workflow for new image cuts and Generate All (a cut's own workflow wins)", none: false },
-  video: { label: "Video template", title: "Workflow for Paste Cut List / AI Cut Split cuts and Image to Video", none: false },
+  video: { label: "Video template", title: "Workflow for AI Cut Split cuts and Image to Video", none: false },
 };
 
 function templateFieldHtml(key = "default") {
@@ -2932,39 +2925,9 @@ async function addLocalCut() {
   }
 }
 
-async function copyTextToClipboard(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.setAttribute("readonly", "");
-    ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;";
-    document.body.appendChild(ta);
-    ta.select();
-    let ok = false;
-    try {
-      ok = document.execCommand("copy");
-    } catch {
-      ok = false;
-    }
-    ta.remove();
-    return ok;
-  }
-}
-
-async function copyCutSplitPrompt() {
-  if (await copyTextToClipboard(CUT_SPLIT_PROMPT)) {
-    ggToast("Copied", "Paste it into any LLM, add your story after STORY:, then use Paste Cut List.", "ok");
-  } else {
-    ggToast("Copy failed", "The clipboard is not available in this browser.", "warn");
-  }
-}
-
 /**
- * Shared create path of Paste Cut List and AI Cut Split: confirm `Create N cuts?`, then POST /gonggan/cut/add-list
- * (after the last cut). Returns true when the cuts were created; throws on a server error.
+ * AI Cut Split create path: confirm `Create N cuts?`, then POST /gonggan/cut/add-list (after the last cut).
+ * Returns true when the cuts were created; throws on a server error.
  */
 async function createCutsFromList(reqPid, cuts, wf) {
   if (!(await askConfirm({ message: createCutsConfirmMessage(cuts, wf.label) }))) return false;
@@ -2979,208 +2942,78 @@ async function createCutsFromList(reqPid, cuts, wf) {
     recordShotsEntry(reqPid, { kind: "cuts", op: "add", ids, before, after: snapshotOrderGroups(state.timeline) });
     selectCut(ids[0]);
   }
-  ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, `Each cut has ${wf.id ? "the LTX workflow" : "the project's Video template"} with its description as the prompt. Select them and press Queue to render in order.`, "ok");
+  ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, "Each cut has the project's Video template with its description as the prompt. Select them and press Queue to render in order.", "ok");
   return true;
 }
 
-const OLLAMA_URL_SETTING = "Gonggan.AiCutSplit.OllamaUrl";
-const AI_SPLIT_MODEL_KEY = "gg.aiSplitModel";
-const AI_SPLIT_KEEP_KEY = "gg.aiSplitKeepLoaded";
-
-function ollamaUrlSetting() {
-  try {
-    return ollamaBaseUrl(app.extensionManager?.setting?.get(OLLAMA_URL_SETTING));
-  } catch {
-    return "";
-  }
-}
+const AI_SPLIT_IDLE_HINT = "Runs a local text model (TextGenerate) in ComfyUI through the Comfy SDK, then unloads it so the VRAM is free for video.";
 
 /**
- * AI Cut Split: story -> local Ollama (through the plugin's server routes, no CORS) -> validated cuts ->
- * `Create N cuts?` -> the Paste Cut List create path. Nothing is queued.
+ * AI Cut Split: story -> POST /gonggan/ai-cut-split (TextGenerate in ComfyUI through the Comfy SDK) -> validated
+ * cuts -> `Create N cuts?` -> new cuts with the project's Video template. Nothing is queued.
  */
 function openAiCutSplitModal() {
   if (!isNativeProject() || document.querySelector(".gg-aisplit-modal")) return;
   const reqPid = state.pid;
-  const baseUrl = ollamaUrlSetting();
-  const shownUrl = baseUrl || OLLAMA_DEFAULT_URL;
   const wrap = document.createElement("div");
   wrap.className = "gg-modal-backdrop";
   wrap.innerHTML = `
     <div class="gg-modal gg-aisplit-modal" role="dialog" aria-label="AI Cut Split">
       <h3 class="gg-modal-title">AI Cut Split</h3>
       <label class="gg-modal-field">Story
-        <textarea class="gg-aisplit-story" rows="10" placeholder="Write or paste your story. The local LLM splits it into cuts of at most 3 seconds."></textarea>
+        <textarea class="gg-aisplit-story" rows="10" placeholder="Write or paste your story. A local text model splits it into cuts of at most 3 seconds."></textarea>
       </label>
-      <label class="gg-modal-field">Model (local Ollama)
-        <select class="gg-aisplit-model" disabled><option value="">Loading models…</option></select>
-      </label>
-      <label class="gg-aisplit-keep" title="Off: the LLM is unloaded right after the split (keep_alive 0), so LTX gets the VRAM"><input type="checkbox" class="gg-aisplit-keep-cb"${localStorage.getItem(AI_SPLIT_KEEP_KEY) === "1" ? " checked" : ""} /> Keep LLM loaded</label>
-      <span class="gg-modal-hint gg-aisplit-status" aria-live="polite">Ollama: ${esc(shownUrl)}</span>
+      <span class="gg-modal-hint gg-aisplit-status" aria-live="polite">${esc(AI_SPLIT_IDLE_HINT)}</span>
       <span class="gg-modal-hint gg-split-err gg-aisplit-err" aria-live="polite"></span>
       <div class="gg-modal-actions">
-        <button type="button" class="gg-btn gg-aisplit-paste" hidden>Paste Cut List instead</button>
         <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
         <button type="button" class="gg-btn gg-primary gg-aisplit-run" disabled>Split</button>
       </div>
     </div>`;
   document.body.appendChild(wrap);
   const story = wrap.querySelector(".gg-aisplit-story");
-  const modelSel = wrap.querySelector(".gg-aisplit-model");
-  const keepCb = wrap.querySelector(".gg-aisplit-keep-cb");
   const status = wrap.querySelector(".gg-aisplit-status");
   const err = wrap.querySelector(".gg-aisplit-err");
-  const pasteBtn = wrap.querySelector(".gg-aisplit-paste");
   const runBtn = wrap.querySelector(".gg-aisplit-run");
   let busy = false;
-  let rawAnswer = "";
   const close = () => wrap.remove();
   const sync = () => {
-    runBtn.disabled = busy || !modelSel.value || !story.value.trim();
+    runBtn.disabled = busy || !story.value.trim();
     runBtn.textContent = busy ? "Splitting…" : "Split";
     story.disabled = busy;
-    modelSel.disabled = busy || !modelSel.options.length || !modelSel.value;
   };
-  const showBackup = (text, raw = "") => {
-    err.textContent = text;
-    rawAnswer = raw;
-    pasteBtn.hidden = false;
-    pasteBtn.textContent = raw ? "Fix in Paste Cut List" : "Paste Cut List instead";
-  };
-  pasteBtn.addEventListener("click", () => {
-    close();
-    openPasteCutListModal(rawAnswer);
-  });
   story.addEventListener("input", sync);
-  modelSel.addEventListener("change", () => {
-    localStorage.setItem(AI_SPLIT_MODEL_KEY, modelSel.value);
-    sync();
-  });
-  keepCb.addEventListener("change", () => localStorage.setItem(AI_SPLIT_KEEP_KEY, keepCb.checked ? "1" : "0"));
   wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", close);
   wrap.addEventListener("mousedown", (e) => { if (e.target === wrap && !busy) close(); });
   wrap.addEventListener("keydown", (e) => { if (e.key === "Escape" && !busy) { e.stopPropagation(); close(); } });
-
-  (async () => {
-    let data = {};
-    let res;
-    try {
-      res = await api.fetchApi(`/gonggan/ollama/models${ollamaModelsQuery(baseUrl)}`);
-      data = await res.json().catch(() => ({}));
-    } catch (e) {
-      data = { ok: false, message: String(e?.message || e) };
-    }
-    if (!wrap.isConnected) return;
-    modelSel.innerHTML = "";
-    if (res?.status === 404 && data.ok === undefined) {
-      showBackup("Restart ComfyUI to use AI Cut Split (new server route).");
-    } else if (!res?.ok || data.ok === false) {
-      showBackup(ollamaUnavailableText({ code: data.code, message: data.message, url: shownUrl }));
-    } else if (!(data.models || []).length) {
-      showBackup(ollamaUnavailableText({ code: "no_models", url: data.base_url || shownUrl }));
-    } else {
-      const pick = pickDefaultModel(data.models, localStorage.getItem(AI_SPLIT_MODEL_KEY));
-      modelSel.innerHTML = data.models.map((m) => `<option value="${esc(m)}"${m === pick ? " selected" : ""}>${esc(m)}</option>`).join("");
-      status.textContent = `Ollama: ${data.base_url || shownUrl} · ${data.models.length} model${data.models.length === 1 ? "" : "s"}`;
-    }
-    if (!modelSel.options.length) modelSel.innerHTML = '<option value="">No models</option>';
-    sync();
-  })();
 
   runBtn.addEventListener("click", async () => {
     if (busy || runBtn.disabled) return;
     busy = true;
     err.textContent = "";
-    pasteBtn.hidden = true;
-    status.textContent = `Splitting with ${modelSel.value}… (up to 3 minutes)`;
+    status.textContent = "Splitting… (loading the text model can take a minute)";
     sync();
     let cuts = null;
     try {
-      const d = await postJson("/gonggan/ai-cut-split", aiCutSplitPayload({
-        story: story.value, model: modelSel.value, keepLoaded: keepCb.checked, baseUrl,
-      }));
+      const d = await postJson("/gonggan/ai-cut-split", { story: story.value });
       const parsed = parseCutList(JSON.stringify(d.cuts || []));
-      if (!parsed.ok) throw Object.assign(new Error(parsed.errors.slice(0, 4).join("\n")), { code: "invalid" });
+      if (!parsed.ok) throw new Error(parsed.errors.slice(0, 4).join("\n"));
       cuts = parsed.cuts;
-      status.textContent = `${cutListSummary(parsed)} · ${d.keep_loaded ? "LLM kept loaded" : "LLM unloaded"}`;
+      status.textContent = aiCutSplitStatusText(parsed, { model: d.model, attempts: d.attempts });
     } catch (e) {
-      status.textContent = `Ollama: ${shownUrl}`;
-      const msg = e.status === 404 && !e.code ? "Restart ComfyUI to use AI Cut Split (new server route)." : e.message;
-      if (e.code === "unreachable") showBackup(ollamaUnavailableText({ code: e.code, url: shownUrl }));
-      else showBackup(msg, e.code === "invalid" ? e.data?.raw || "" : "");
+      status.textContent = AI_SPLIT_IDLE_HINT;
+      err.textContent = e.status === 404 && !e.code ? "Restart ComfyUI to use AI Cut Split (new server route)." : e.message;
     }
     busy = false;
     sync();
     if (!cuts || !wrap.isConnected) return;
     try {
-      if (await createCutsFromList(reqPid, cuts, cutListWorkflowOptions(state.timeline?.project?.settings)[0])) close();
+      if (await createCutsFromList(reqPid, cuts, cutListWorkflow(state.timeline?.project?.settings))) close();
     } catch (e) {
       err.textContent = e.message;
     }
   });
   story.focus();
-}
-
-/** Paste Cut List: JSON from the LLM -> new cuts (after the last cut), each with the LTX workflow and its description as the prompt. */
-function openPasteCutListModal(prefill = "") {
-  if (!isNativeProject() || document.querySelector(".gg-cutlist-modal")) return;
-  const reqPid = state.pid;
-  const wfOptions = cutListWorkflowOptions(state.timeline?.project?.settings);
-  const wrap = document.createElement("div");
-  wrap.className = "gg-modal-backdrop";
-  wrap.innerHTML = `
-    <div class="gg-modal gg-cutlist-modal" role="dialog" aria-label="Paste Cut List">
-      <h3 class="gg-modal-title">Paste Cut List</h3>
-      <label class="gg-modal-field">LLM answer (JSON array)
-        <textarea class="gg-cutlist-text" rows="12" spellcheck="false" placeholder='[{"cut": 1, "duration": 3, "description": "..."}]'></textarea>
-      </label>
-      <label class="gg-modal-field">Workflow for the new cuts
-        <select class="gg-cutlist-wf">${wfOptions.map((w) => `<option value="${esc(w.id)}">${esc(w.label)}</option>`).join("")}</select>
-      </label>
-      <span class="gg-modal-hint gg-cutlist-summary" aria-live="polite"></span>
-      <span class="gg-modal-hint gg-split-err gg-cutlist-err" aria-live="polite"></span>
-      <div class="gg-modal-actions">
-        <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
-        <button type="button" class="gg-btn gg-primary gg-cutlist-create" disabled>Create cuts</button>
-      </div>
-    </div>`;
-  document.body.appendChild(wrap);
-  const ta = wrap.querySelector(".gg-cutlist-text");
-  const wfSel = wrap.querySelector(".gg-cutlist-wf");
-  const summary = wrap.querySelector(".gg-cutlist-summary");
-  const err = wrap.querySelector(".gg-cutlist-err");
-  const createBtn = wrap.querySelector(".gg-cutlist-create");
-  let parsed = parseCutList("");
-  let busy = false;
-  const close = () => wrap.remove();
-  const sync = () => {
-    parsed = parseCutList(ta.value);
-    summary.textContent = cutListSummary(parsed);
-    err.textContent = ta.value.trim() ? parsed.errors.slice(0, 4).join("\n") : "";
-    createBtn.disabled = busy || !parsed.ok;
-  };
-  ta.addEventListener("input", sync);
-  wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", close);
-  wrap.addEventListener("mousedown", (e) => { if (e.target === wrap && !busy) close(); });
-  wrap.addEventListener("keydown", (e) => { if (e.key === "Escape" && !busy) { e.stopPropagation(); close(); } });
-  createBtn.addEventListener("click", async () => {
-    if (!parsed.ok || busy) return;
-    const wf = wfOptions.find((w) => w.id === wfSel.value) || wfOptions[0];
-    busy = true;
-    sync();
-    try {
-      if (await createCutsFromList(reqPid, parsed.cuts, wf) || state.pid !== reqPid) close();
-    } catch (e) {
-      err.textContent = e.message;
-    }
-    busy = false;
-    if (wrap.isConnected) sync();
-  });
-  if (prefill) {
-    ta.value = prefill;
-    sync();
-  }
-  ta.focus();
 }
 
 function displayedCutIds() {
@@ -6844,9 +6677,7 @@ function mountShots(el) {
         </div>
         ${SHOW_REDO_FILTER ? `<label class="gg-filter-redo" title="Show only cuts marked for redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Show redo cuts only</label>` : ""}
         ${tl && isNativeProject() ? `<div class="gg-cutlist-btns">
-          <button type="button" class="gg-btn gg-primary gg-ai-split" title="Split a story into cuts with a local LLM (Ollama)">AI Cut Split</button>
-          <button type="button" class="gg-btn gg-copy-split" title="Copy a prompt for any LLM that splits your story into cuts (one-line descriptions used as LTX-Video prompts)">Copy Cut Split Prompt</button>
-          <button type="button" class="gg-btn gg-paste-cuts" title="Paste the LLM's JSON answer to create the cuts">Paste Cut List</button>
+          <button type="button" class="gg-btn gg-primary gg-ai-split" title="Split a story into cuts with a local text model in ComfyUI">AI Cut Split</button>
         </div>` : ""}
       </div>
       <div class="gg-meta">
@@ -6932,8 +6763,6 @@ function mountShots(el) {
     root.querySelector(".gg-ir-scene")?.addEventListener("click", () =>
       isNativeProject() ? void addEmptyScene() : createSceneGroup(cutSelIds()));
     root.querySelector(".gg-ir-cut")?.addEventListener("click", () => addLocalCut());
-    root.querySelector(".gg-copy-split")?.addEventListener("click", () => void copyCutSplitPrompt());
-    root.querySelector(".gg-paste-cuts")?.addEventListener("click", () => openPasteCutListModal());
     root.querySelector(".gg-ai-split")?.addEventListener("click", () => openAiCutSplitModal());
     root.querySelector(".gg-ir-del")?.addEventListener("click", () => void confirmDeleteSelectedCuts());
     root.querySelector(".gg-queue-btn")?.addEventListener("click", () => void queueButtonClick());
@@ -8350,16 +8179,6 @@ function bindHoverPlay(root) {
 
 app.registerExtension({
   name: EXT,
-  settings: [
-    {
-      id: OLLAMA_URL_SETTING,
-      category: ["Vidot Studio", "AI Cut Split", "Ollama URL"],
-      name: "Ollama URL for AI Cut Split",
-      tooltip: `Local Ollama server used by AI Cut Split. Blank = ${OLLAMA_DEFAULT_URL} (or "ollama_url" in gonggan_settings.json).`,
-      type: "text",
-      defaultValue: "",
-    },
-  ],
   bottomPanelTabs: [
     { id: TIMELINE_TAB, title: "Timeline", type: "custom", icon: "pi pi-video", render: (el) => mountTimeline(el) },
   ],
