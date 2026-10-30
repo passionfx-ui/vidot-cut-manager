@@ -89,7 +89,7 @@ Turn a story into ready-to-render cuts (native projects) with **AI Cut Split** (
 
 ### AI Cut Split (local text model in ComfyUI)
 
-**AI Cut Split** (Shots toolbar) runs ComfyUI's own **TextGenerate** node through the Comfy SDK path (plugin → `.venv-sdk` `sdk_runner.py` → comfy-api-proxy `:8189` → ComfyUI `:8188`), so no extra LLM server is needed. The graph is `CLIPLoader` (Qwen3-VL 4B) → `TextGenerate` (fixed cut split prompt + your story, greedy, no thinking, up to 2048 tokens) → `Preview Any`; the answer is read from ComfyUI's history and checked with the cut list rules. An invalid answer is retried once with its problems listed. After the split (success or failure) the plugin asks ComfyUI to unload models (`POST /free`), so the VRAM is free for video.
+**AI Cut Split** (Shots toolbar) runs ComfyUI's own **TextGenerate** node through the Comfy SDK path (plugin → `.venv-sdk` `sdk_runner.py` → comfy-api-proxy `:8189` → ComfyUI `:8188`), so no extra LLM server is needed. The graph is `CLIPLoader` (Qwen3-VL 4B) → `TextGenerate` (fixed cut split prompt + your story, greedy, no thinking, up to 768 tokens) → `Preview Any`; the answer is read from ComfyUI's history and checked with the cut list rules. An invalid answer is retried once with its problems listed. After the split (success or failure) the plugin asks ComfyUI to unload models (`POST /free`), so the VRAM is free for video.
 
 1. Put `qwen3vl_4b_int8_convrot.safetensors` in `models/text_encoders/` and start the Comfy SDK proxy (`start_proxy.bat`, see [Comfy SDK path](docs/DEVELOPMENT.md#comfy-sdk-path-local)).
 2. In Shots click **AI Cut Split**, write or paste the story and click **Split**. The first run loads the model, which can take a minute.
