@@ -445,13 +445,16 @@ export function finalCutList(timeline) {
 
 /**
  * Where to insert a new cut: after the reference cut, in the same scene (or ungrouped).
- * @param {{ timelineCuts: object[], activeCutId?: string|null }} args
+ * With no active cut the reference is the last cut, unless `looseWhenNone` (native projects): then the
+ * new cut is ungrouped at the end, below the last scene.
+ * @param {{ timelineCuts: object[], activeCutId?: string|null, looseWhenNone?: boolean }} args
  * @returns {{ after: string|null, group: string|null }}
  */
-export function addCutTarget({ timelineCuts, activeCutId }) {
+export function addCutTarget({ timelineCuts, activeCutId, looseWhenNone = false }) {
   const cuts = Array.isArray(timelineCuts) ? timelineCuts : [];
   let refId =
     activeCutId && cuts.some((c) => c && c.id === activeCutId) ? String(activeCutId) : null;
+  if (!refId && looseWhenNone) return { after: null, group: null };
   if (!refId && cuts.length) {
     const last = cuts[cuts.length - 1];
     if (last?.id) refId = String(last.id);
