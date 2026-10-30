@@ -20,6 +20,7 @@ from .entities import (
 )
 from .errors import ConflictError
 from .ids import is_uuid_id, now_iso, uuid7
+from .media_anim import animation_info
 from .project_settings import PROJECT_ASSETS_DIR, merge_settings_patch, normalize_settings
 from .timeline import (
     build_timeline,
@@ -42,7 +43,6 @@ _MEDIA_EXT = {
     ".mp4": "video",
     ".webm": "video",
 }
-
 
 def _atomic_write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -909,7 +909,10 @@ class LocalStore:
         src_file: Path | str,
         workflow: dict | None = None,
         prompt_id: str | None = None,
+        animated: bool = False,
     ) -> dict[str, Any]:
+        """`animated`: ComfyUI reported the output as animated (history `animated: [true]`). Such an image,
+        or a WebP / GIF / APNG file with more than one frame, is stored as kind "video" with animated: true."""
         with self._lock:
             doc = self._load_project_doc(pid)
             if not doc or doc.get("deleted_at"):
@@ -922,6 +925,10 @@ class LocalStore:
                 raise FileNotFoundError(str(src))
             ext = src.suffix.lower()
             kind = _MEDIA_EXT.get(ext, "image")
+            anim = animation_info(src) if kind == "image" else None
+            is_anim = kind == "image" and (animated or anim is not None)
+            if is_anim:
+                kind = "video"
             vid = uuid7()
             dest_name = f"{vid}{ext}"
             folder = normalize_settings(doc.get("settings")).get("project_folder")
@@ -950,6 +957,9 @@ class LocalStore:
                 "sha256": digest,
                 "bytes": dest.stat().st_size,
             }
+            if is_anim:
+                asset["animated"] = True
+                asset.update({k: anim[k] for k in ("frames", "seconds") if anim and anim.get(k)})
             wf_sha = self.put_blob(pid, workflow) if workflow else None
             ver = new_version(cut_id, asset, wf_sha, prompt_id)
             vpath = self._project_dir(pid) / "versions" / cut_id / f"{ver['id']}.json"

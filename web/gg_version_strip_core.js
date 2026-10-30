@@ -38,7 +38,7 @@ export function versionSeconds(v, cut, probed) {
 
 /** A video version whose length is still unknown and whose file exists (read its metadata once). */
 export function needsDurationProbe(v, cut, probed) {
-  if (!v?.id || v.kind !== "video" || v.missing) return false;
+  if (!v?.id || v.kind !== "video" || v.animated || v.missing) return false;
   if (probed?.has?.(v.id)) return false;
   return versionSeconds(v, cut, probed) <= 0;
 }
@@ -82,9 +82,10 @@ export function importButtonState({ hasCut, native, busy } = {}) {
 
 export const I2V_LABEL = "Image to Video";
 
-/** The cut has an image version to start a video from (the server picks Best, else selected, else newest). */
+/** The cut has a still image version to start a video from (the server picks Best, else selected, else newest;
+ * video and animated image versions never count). */
 export function cutHasStartImage(cut) {
-  return (Array.isArray(cut?.versions_list) ? cut.versions_list : []).some((v) => v && v.id && v.kind !== "video" && !v.missing);
+  return (Array.isArray(cut?.versions_list) ? cut.versions_list : []).some((v) => v && v.id && v.kind !== "video" && !v.animated && !v.missing);
 }
 
 /** Image to Video button after the import tile: native projects, a selected cut with an image version, no SDK job starting. */
