@@ -3952,7 +3952,8 @@ function cutSelIds() {
 /** Selected cuts only (no single-cut fallback), in Shots display order. */
 function timelineSelectedCutIds() {
   const tl = state.timeline;
-  if (!tl || !state.cutSel.size) return [];
+  if (!tl) return [];
+  if (!state.cutSel.size) return state.cutId && tl.cuts.some((c) => c.id === state.cutId) ? [state.cutId] : [];
   const { order } = shotsNavOrder();
   return selectedInDisplayOrder(order, tl.cuts.map((c) => c.id), state.cutSel);
 }
@@ -8375,23 +8376,22 @@ function paintTimelineNativeLocks() {
   const nat = isNativeProject();
   const tip = "Not available for this project yet";
   document.querySelectorAll(".gg-timeline .gg-export").forEach((btn) => {
-    btn.disabled = nat;
-    btn.title = nat ? tip : "Render the timeline to one mp4 (CPU, ffmpeg)";
+    btn.disabled = false;
+    btn.title = "Render the timeline to one mp4 (CPU, ffmpeg)";
   });
   document.querySelectorAll(".gg-timeline .gg-reset").forEach((btn) => {
     btn.disabled = false;
     btn.title = nat ? "Rebuild the timeline from the cut list (order, original lengths, no gaps)" : "Reset to original order and lengths";
   });
   document.querySelectorAll(".gg-timeline .gg-ex-preset, .gg-timeline .gg-ex-sound").forEach((el) => {
-    el.disabled = nat;
+    el.disabled = false;
   });
 }
 
 async function startExport(preset, sound) {
   const tl = state.timeline;
-  if (!tl || !tl.cuts.length) return;
-  if (isNativeProject()) {
-    ggToast("Export", "Not available for this project yet", "warn");
+  if (!tl || !tl.cuts.length) {
+    ggToast("Export", "Add at least one cut with a generated version before exporting", "warn");
     return;
   }
   clearTimeout(ed.saveTimer);
