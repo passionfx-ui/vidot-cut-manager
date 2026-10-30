@@ -171,7 +171,7 @@ export function createCutsConfirmMessage(cuts, workflowLabel) {
   const n = cuts.length;
   const lines = cuts.slice(0, 8).map((c) => `${c.cut}. ${c.description.slice(0, 60)} (${c.duration}s)`);
   if (n > 8) lines.push(`… and ${n - 8} more`);
-  return `Create ${n} cut${n === 1 ? "" : "s"}?\n\nWorkflow: ${workflowLabel}\n${lines.join("\n")}\n\nNothing is queued. Press Queue with no cut selected (or Queue on a cut) to render.`;
+  return `Create ${n} cut${n === 1 ? "" : "s"}?\n\nWorkflow: ${workflowLabel}\n${lines.join("\n")}\n\nNothing is queued. Select the cuts and press Queue to render.`;
 }
 
 /**

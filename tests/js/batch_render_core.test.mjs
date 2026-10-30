@@ -59,7 +59,7 @@ describe("queueButtonState", () => {
     assert.deepEqual(queueButtonState({ count: 2, native: false, busy: true }), { label: "Queue", mode: "queue", disabled: true, title: QUEUE_NATIVE_TIP });
     assert.deepEqual(queueButtonState({ count: 2, native: true, busy: true }), { label: "Queue", mode: "queue", disabled: true, title: QUEUE_BUSY_TIP });
     assert.equal(queueButtonState().disabled, true);
-    assert.equal(QUEUE_EMPTY_TIP, "Select cuts to queue");
+    assert.equal(QUEUE_EMPTY_TIP, "");
   });
   it("enabled for 1+ cuts in a native project", () => {
     assert.deepEqual(queueButtonState({ count: 1, native: true }), { label: "Queue", mode: "queue", disabled: false, title: "Queue 1 cut to ComfyUI" });

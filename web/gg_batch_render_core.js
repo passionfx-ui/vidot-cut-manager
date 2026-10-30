@@ -2,7 +2,8 @@
 
 import { isRegenEmptyCut } from "./gg_native_regen_core.js";
 
-export const QUEUE_EMPTY_TIP = "Select cuts to queue";
+/** Empty title when Queue is off because nothing is selected (0.9.120: no tooltip). */
+export const QUEUE_EMPTY_TIP = "";
 export const QUEUE_NATIVE_TIP = "Native projects only";
 export const QUEUE_BUSY_TIP = "Busy, try again in a moment";
 export const QUEUE_NO_PROJECT_TIP = "No project open";
@@ -10,7 +11,7 @@ export const RANDOM_SEED_LS_KEY = "gonggan-cut.randomSeed";
 export const RANDOM_SEED_LABEL = "Random seed";
 const LIST_MAX = 8;
 
-/** Default on: each Queue (one cut / Generate All) uses new sampler seeds when enabled. */
+/** Default on: each Queue run uses new sampler seeds when enabled. */
 export function loadRandomSeedOn(localStorage) {
   const v = localStorage?.getItem?.(RANDOM_SEED_LS_KEY);
   if (v === "0") return false;
@@ -67,16 +68,14 @@ export function queueDeleteBody(promptIds) {
 }
 
 /**
- * Status panel Queue button state (also Queue selected / Re-queue in the cut menu); off while no project is open.
- * With nothing selected in a native project, Queue starts generate-all over `allCount` cuts; while that batch runs,
- * Queue shows Stop (same project only).
+ * Status panel Queue button state (also Queue selected / Re-queue in the cut menu); off with no project or no selection.
+ * While a generate-all batch runs for this project, Queue shows Stop.
  */
 export function queueButtonState({
   count = 0,
   native = false,
   busy = false,
   hasProject = true,
-  allCount = 0,
   allRunning = false,
   batch = null,
   projectId = "",
@@ -97,15 +96,6 @@ export function queueButtonState({
       };
     }
     return { ...queue, disabled: true, title: "Generate-all batch is running for another project" };
-  }
-  if (!(count > 0) && native && allCount > 0) {
-    if (busy) return { ...queue, disabled: true, title: QUEUE_BUSY_TIP };
-    return {
-      ...queue,
-      disabled: false,
-      mode: "all",
-      title: `Nothing selected: generate all ${cuts(allCount)} one by one (Comfy SDK)`,
-    };
   }
   const title = !(count > 0) ? QUEUE_EMPTY_TIP : !native ? QUEUE_NATIVE_TIP : busy ? QUEUE_BUSY_TIP : `Queue ${cuts(count)} to ComfyUI`;
   return { ...queue, disabled: !(count > 0) || !native || !!busy, title };
