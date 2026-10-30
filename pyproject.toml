@@ -1,6 +1,6 @@
 [project]
 name = "vidot-cut-manager"
-version = "0.9.125"
+version = "0.9.130"
 description = "Vidot Cut Manager: shot list and rough-cut timeline inside ComfyUI"
 readme = "README.md"
 license = { text = "GPL-3.0-only" }

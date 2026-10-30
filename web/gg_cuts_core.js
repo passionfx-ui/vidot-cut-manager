@@ -171,13 +171,62 @@ export function versionRepState(cut, versionId) {
   return cut.media?.id === versionId ? "implicit" : "";
 }
 
+/** Default name for a newly added cut (matches server NEW_CUT_NAME). */
+export const NEW_CUT_NAME = "New cut";
+
+/** @param {{ name?: string, notes?: string, prompt?: string }} cut */
+export function cutInfoText(cut) {
+  const parts = [];
+  const name = String(cut?.name ?? "").trim().replace(/\s+/g, " ");
+  if (name && name !== NEW_CUT_NAME) parts.push(name);
+  const notes = String(cut?.notes ?? "").trim().replace(/\s+/g, " ");
+  if (notes) parts.push(notes);
+  if (!parts.length) return "";
+  return parts.length === 1 ? parts[0] : `${parts[0]}. ${parts[1]}`;
+}
+
+/** Prompt text for Generate: Prompt field, else title + Info. */
+export function cutGenerationPromptText(cut) {
+  const prompt = String(cut?.prompt ?? "").trim().replace(/\s+/g, " ");
+  if (prompt) return prompt;
+  return cutInfoText(cut);
+}
+
+/** @param {{ caption?: string }} cut */
+export function cutCaptionText(cut) {
+  return String(cut?.caption ?? "").trim().replace(/\s+/g, " ");
+}
+
+/** Video/LTX injected prompt: Prompt (or Info fallback) plus Dialogue caption when set. */
+export function cutVideoGenerationPromptText(cut) {
+  const base = cutGenerationPromptText(cut);
+  if (!base) return "";
+  const cap = cutCaptionText(cut);
+  if (!cap) return base;
+  return `${base} Dialogue: ${cap}`;
+}
+
+export const WRITE_PROMPT_FIRST = "Write a prompt for this cut first.";
+
 /** @param {{ planned_sec?: number|null, sec?: number }} cut */
-export function computeEffectiveSec(cut) {
-  const planned = cut?.planned_sec;
-  if (planned != null && Number.isFinite(planned)) return Number(planned);
+export function cutGenerationSec(cut) {
   const sec = cut?.sec;
   if (sec != null && Number.isFinite(sec)) return Number(sec);
+  const planned = cut?.planned_sec;
+  if (planned != null && Number.isFinite(planned)) return Number(planned);
   return 0;
+}
+
+/** @param {{ planned_sec?: number|null, sec?: number }} cut */
+export function computeEffectiveSec(cut) {
+  return cutGenerationSec(cut);
+}
+
+/** True when timeline length differs from stored planned length (0.9.130). */
+export function cutLengthDrift(cut) {
+  const planned = cut?.planned_sec;
+  if (planned == null || !Number.isFinite(planned)) return false;
+  return Math.abs(cutGenerationSec(cut) - Number(planned)) > 0.04;
 }
 
 /** Placeholder when planned length is unset (aligns with panel length badge, else 3 s). */
@@ -196,7 +245,8 @@ export function plannedLenInputPlaceholder(cut) {
 export function lengthWarning(cut, opts = {}) {
   const limit = opts.limit ?? 3;
   if (cut?.end_card) return null;
-  const sec = computeEffectiveSec(cut);
+  const planned = cut?.planned_sec;
+  const sec = planned != null && Number.isFinite(planned) ? Number(planned) : cutGenerationSec(cut);
   if (sec > limit) {
     return {
       kind: "over3s",

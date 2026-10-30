@@ -70,7 +70,7 @@ export function versionStripRows(cut, probed) {
  */
 export function stripSelectedVid(cut, { picked = "", open = "" } = {}) {
   const ids = (Array.isArray(cut?.versions_list) ? cut.versions_list : []).filter((v) => v && v.id).map((v) => v.id);
-  for (const id of [picked, open, cut?.pick, cut?.media?.id, ids[0]]) {
+  for (const id of [picked, open, cut?.display, cut?.pick, cut?.media?.id, ids[0]]) {
     if (id && ids.includes(id)) return id;
   }
   return "";
@@ -82,6 +82,7 @@ export function isStillVersion(v) {
 }
 
 export const BEST_BUTTON_LABEL = "Best";
+export const BEST_THUMB_BORDER = "#e8c547";
 export const MAKE_VIDEO_LABEL = "Make Video";
 export const IMPORT_BUTTON_LABEL = "Import";
 export const MAKE_VIDEO_TIP = "Make Video: the selected image is the start image of the project's Video template; the video is added as a new version";

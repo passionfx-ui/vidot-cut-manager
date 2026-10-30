@@ -19,12 +19,20 @@ def version_media_kind(ver: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _version_id_on_cut(cut: dict[str, Any], versions: list[dict[str, Any]], key: str) -> str | None:
+    vid = cut.get(key)
+    if isinstance(vid, str) and any(ver.get("id") == vid for ver in versions):
+        return vid
+    return None
+
+
 def current_version_id(cut: dict[str, Any], versions: list[dict[str, Any]]) -> str | None:
-    """Manual pick when it is still a version, else the newest version (versions are newest-first)."""
-    pick = cut.get("pick_version_id")
-    if isinstance(pick, str) and any(ver.get("id") == pick for ver in versions):
-        return pick
-    return versions[0].get("id") if versions else None
+    """Displayed version: explicit display, else manual Best pick, else the newest (versions are newest-first)."""
+    return (
+        _version_id_on_cut(cut, versions, "display_version_id")
+        or _version_id_on_cut(cut, versions, "pick_version_id")
+        or (versions[0].get("id") if versions else None)
+    )
 
 
 def rep_media_kind(cut: dict[str, Any], versions: list[dict[str, Any]]) -> str | None:

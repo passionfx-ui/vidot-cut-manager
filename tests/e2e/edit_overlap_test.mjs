@@ -227,8 +227,9 @@ async function run() {
     if (Math.abs(shown - sec2) > 0.051) throw new Error(`old reply overwrote the newer trim: shown ${shown}, newest local ${sec2}`);
     if (Math.abs(srv - sec2) > 0.051) throw new Error(`server did not end with the newest trim: server ${srv}, newest local ${sec2}`);
     console.log(`PASS  overlapping trim saves: panel ${shown}s and server ${srv}s both end at the newest trim (${sec0} -> ${sec1} -> ${sec2})`);
-    if ((await tlNow()).cuts[0].tl_sec !== ownSec0) throw new Error("a timeline trim changed the cut's own length");
-    console.log("PASS  timeline trim leaves the cut's own length alone");
+    const tlAfter = await tlNow();
+    if (Math.abs(tlAfter.cuts[0].sec - sec2) > 0.051) throw new Error("timeline trim did not sync cut sec");
+    console.log("PASS  timeline trim writes effective length back to the cut");
 
     // 2) 0.9.78: the timeline is independent of the Shots cut list
     const row = (t, id) => t.cuts.find((c) => c.id === id);

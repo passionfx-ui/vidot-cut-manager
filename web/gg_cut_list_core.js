@@ -10,6 +10,61 @@ export const DESCRIPTION_MAX_LEN = 300;
 const NAME_MAX_LEN = 80;
 /** "content" / "ltx_prompt" (0.9.115 lists) are read as "description". */
 const DESCRIPTION_ALIASES = ["description", "content", "ltx_prompt"];
+const TITLE_ALIASES = ["title", "name"];
+const NOTES_ALIASES = ["notes", "info"];
+const TITLE_SHORT_MAX = 40;
+const TITLE_WORD_MAX = 5;
+const TITLE_CAMERA_RE =
+  /\b(wide shot|close-up|close up|closeup|tracking shot|tracking|pan shot|pan\b|zoom|dolly|aerial|pov|medium shot|extreme close|establishing shot|over-the-shoulder|ots\b|camera|cinematic|lens|angle|shot size|4k|8k)\b/gi;
+
+const TITLE_CAMERA_PHRASES = [
+  "wide shot", "close-up", "close up", "closeup", "tracking shot", "tracking",
+  "pan shot", "medium shot", "extreme close", "establishing shot", "over-the-shoulder",
+  "aerial shot", "aerial",
+];
+
+/** Same rules as gg_ltx.normalize_cut_title (AI Make Cut / paste list). */
+export function normalizeCutTitle(raw) {
+  let t = String(raw ?? "").trim().replace(/\s+/g, " ").replace(/\.$/, "");
+  for (const ph of TITLE_CAMERA_PHRASES) {
+    t = t.replace(new RegExp(ph.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ");
+  }
+  t = t.replace(/\s+/g, " ").trim();
+  const cleaned = [];
+  for (const w of t.split(/\s+/)) {
+    const token = w.replace(/^[,;:]+|[,;:]+$/g, "");
+    if (!token) continue;
+    if (TITLE_CAMERA_RE.test(token)) continue;
+    TITLE_CAMERA_RE.lastIndex = 0;
+    cleaned.push(token);
+    if (cleaned.length >= TITLE_WORD_MAX) break;
+  }
+  const out = cleaned
+    .map((w) => (w.length > 1 && w === w.toUpperCase() ? w : w.slice(0, 1).toUpperCase() + w.slice(1).toLowerCase()))
+    .join(" ");
+  return out.slice(0, TITLE_SHORT_MAX).trim();
+}
+
+/** AI Make Cut Captions option (POST /gonggan/ai-cut-split `captions`). */
+export const AI_MAKE_CUT_CAPTIONS_KEY = "gonggan-cut.aiMakeCutCaptions";
+export const CAPTION_MODE_DEFAULT = "dialogue_only";
+export const CAPTION_MODE_CHOICES = [
+  { value: "dialogue_only", label: "Dialogue only" },
+  { value: "include_narration", label: "Include narration" },
+  { value: "no_captions", label: "No captions" },
+];
+
+/** @param {string | null | undefined} stored */
+export function readCaptionMode(stored) {
+  const v = String(stored ?? "").trim().toLowerCase();
+  if (v === "include_narration" || v === "no_captions") return v;
+  return CAPTION_MODE_DEFAULT;
+}
+
+/** @param {string} mode */
+export function captionModeLabel(mode) {
+  return CAPTION_MODE_CHOICES.find((c) => c.value === mode)?.label || CAPTION_MODE_CHOICES[0].label;
+}
 
 /** Text of the first top-level JSON array in `text` (code fences and surrounding prose ignored), else null. */
 export function extractJsonArray(text) {
@@ -111,11 +166,55 @@ export function validateCutItems(items) {
     if (desc == null || desc === "") errors.push(`${where}: "description" is missing.`);
     else if (typeof desc !== "string") errors.push(`${where}: "${key}" must be text (got ${show(desc)}).`);
     else if (desc.length > DESCRIPTION_MAX_LEN) errors.push(`${where}: "${key}" is too long (${desc.length} characters, max ${DESCRIPTION_MAX_LEN}).`);
-    if (errors.length === bad) rows.push({ order: num, duration: Math.round(sec * 100) / 100, description: desc });
+    const titleKey = TITLE_ALIASES.find((k) => e[k] != null);
+    let title = titleKey ? e[titleKey] : null;
+    if (typeof title === "string") title = title.split(/\s+/).filter(Boolean).join(" ");
+    const capKey = e.caption != null ? "caption" : null;
+    let caption = capKey ? e.caption : null;
+    if (typeof caption === "string") caption = caption.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    else if (caption != null && typeof caption !== "string") errors.push(`${where}: "caption" must be text (got ${show(caption)}).`);
+    const notesKey = NOTES_ALIASES.find((k) => e[k] != null);
+    let notes = notesKey ? e[notesKey] : null;
+    if (typeof notes === "string") notes = notes.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+    else if (notes != null && typeof notes !== "string") errors.push(`${where}: "notes" must be text (got ${show(notes)}).`);
+    if (errors.length === bad) {
+      if (title == null || title === "") title = normalizeCutTitle(desc ? String(desc).slice(0, NAME_MAX_LEN).trim() : "");
+      else if (title.length > NAME_MAX_LEN) errors.push(`${where}: "title" is too long (${title.length} characters, max ${NAME_MAX_LEN}).`);
+      else title = normalizeCutTitle(title);
+      if (caption == null) caption = titleKey || capKey ? "" : desc;
+      if (typeof caption === "string" && caption.length > DESCRIPTION_MAX_LEN) {
+        errors.push(`${where}: "caption" is too long (${caption.length} characters, max ${DESCRIPTION_MAX_LEN}).`);
+      }
+      if (notes == null) notes = "";
+      else if (notes.length > DESCRIPTION_MAX_LEN) {
+        errors.push(`${where}: "notes" is too long (${notes.length} characters, max ${DESCRIPTION_MAX_LEN}).`);
+      }
+    }
+    if (errors.length === bad) {
+      rows.push({
+        order: num,
+        duration: Math.round(sec * 100) / 100,
+        description: desc,
+        title: title || "",
+        caption: typeof caption === "string" ? caption : "",
+        notes: typeof notes === "string" ? notes : "",
+      });
+    }
   });
   if (errors.length) return { ok: false, cuts: [], errors };
   rows.sort((a, b) => a.order - b.order);
-  return { ok: true, cuts: rows.map((r, i) => ({ cut: i + 1, duration: r.duration, description: r.description })), errors: [] };
+  return {
+    ok: true,
+    cuts: rows.map((r, i) => ({
+      cut: i + 1,
+      duration: r.duration,
+      title: r.title || r.description.slice(0, NAME_MAX_LEN).trim(),
+      description: r.description,
+      caption: r.caption ?? "",
+      notes: r.notes ?? "",
+    })),
+    errors: [],
+  };
 }
 
 /** Parse the AI Cut Split answer into cuts; see validateCutItems. */
@@ -126,9 +225,14 @@ export function parseCutList(text) {
   return validateCutItems(x.items);
 }
 
-/** Cut name shown in Shots for a description (the full text is the caption and the LTX prompt). */
-export function cutNameOf(description) {
-  return String(description || "").slice(0, NAME_MAX_LEN).trim();
+/** Cut name shown in Shots (short title, not the full video prompt). */
+export function cutNameOf(cut) {
+  if (cut && typeof cut === "object") {
+    const t = cut.title ?? cut.name;
+    if (t) return String(t).slice(0, NAME_MAX_LEN).trim();
+    return String(cut.description || "").slice(0, NAME_MAX_LEN).trim();
+  }
+  return String(cut || "").slice(0, NAME_MAX_LEN).trim();
 }
 
 /** One-line preview under the textarea, e.g. "6 cuts · 15.5 s total". */
@@ -142,7 +246,10 @@ export function cutListSummary(parsed) {
 /** Confirm text: title line, then the first cuts. */
 export function createCutsConfirmMessage(cuts, workflowLabel) {
   const n = cuts.length;
-  const lines = cuts.slice(0, 8).map((c) => `${c.cut}. ${c.description.slice(0, 60)} (${c.duration}s)`);
+  const lines = cuts.slice(0, 8).map((c) => {
+    const name = cutNameOf(c);
+    return `${c.cut}. ${name.slice(0, 60)} (${c.duration}s)`;
+  });
   if (n > 8) lines.push(`… and ${n - 8} more`);
   return `Create ${n} cut${n === 1 ? "" : "s"}?\n\nWorkflow: ${workflowLabel}\n${lines.join("\n")}\n\nNothing is queued. Select the cuts and press Queue to render.`;
 }
@@ -160,7 +267,14 @@ export function cutListWorkflow(settings) {
 export function cutListPayload(pid, cuts, workflow, after) {
   const body = {
     pid,
-    cuts: cuts.map((c) => ({ cut: c.cut, duration: c.duration, description: c.description })),
+    cuts: cuts.map((c) => ({
+      cut: c.cut,
+      duration: c.duration,
+      description: c.description,
+      title: c.title ?? cutNameOf(c),
+      caption: c.caption ?? "",
+      notes: c.notes ?? "",
+    })),
   };
   if (workflow) body.workflow = workflow;
   if (after) body.after = after;
