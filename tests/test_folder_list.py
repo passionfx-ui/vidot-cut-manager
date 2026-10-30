@@ -92,6 +92,56 @@ class ListFoldersTests(unittest.TestCase):
             self.assertTrue(ctypes.windll.kernel32.SetFileAttributesW(str(hidden), 0x2))
         self.assertNotIn(".hidden", fl.list_folders(str(self.root))["folders"])
 
+    def test_never_lists_files_links_to_files_or_broken_links(self):
+        made = []
+        for name, target, is_dir in (("link_to_file", self.root / "notes.txt", False),
+                                     ("broken_link", self.root / "gone", True),
+                                     ("link_to_dir", self.root / "beta", True)):
+            try:
+                os.symlink(target, self.root / name, target_is_directory=is_dir)
+                made.append(name)
+            except (OSError, NotImplementedError):
+                pass  # no symlink privilege on this Windows account
+        res = fl.list_folders(str(self.root))["folders"]
+        self.assertNotIn("notes.txt", res)
+        self.assertNotIn("clip.mp4", res)
+        self.assertNotIn("link_to_file", res)
+        self.assertNotIn("broken_link", res)
+        if "link_to_dir" in made:
+            self.assertIn("link_to_dir", res)
+        for n in res:
+            self.assertTrue(os.path.isdir(self.root / n), n)
+
+    def test_entry_that_claims_folder_but_is_a_file_is_skipped(self):
+        real_scandir = os.scandir
+
+        class Liar:
+            def __init__(self, entry):
+                self._e = entry
+                self.name, self.path = entry.name, entry.path
+
+            def is_dir(self, follow_symlinks=True):
+                return True
+
+            def is_file(self, follow_symlinks=True):
+                return False
+
+            def stat(self, follow_symlinks=True):
+                return self._e.stat()
+
+        class Ctx:
+            def __init__(self, path):
+                self._it = real_scandir(path)
+
+            def __enter__(self):
+                return (Liar(e) for e in self._it)
+
+            def __exit__(self, *a):
+                self._it.close()
+
+        with mock.patch.object(fl.os, "scandir", side_effect=Ctx):
+            self.assertEqual(fl.list_folders(str(self.root))["folders"], ["Alpha", "beta", "gamma"])
+
     def test_relative_rejected(self):
         for bad in ("Films", "Films\\A", "./x", "..", "C:Films" if os.name == "nt" else "x/y"):
             with self.assertRaises(ValueError, msg=bad):

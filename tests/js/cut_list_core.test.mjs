@@ -189,10 +189,10 @@ describe("AI Cut Split (0.9.122: TextGenerate through the Comfy SDK)", () => {
     }
   });
 
-  it("Shots keeps AI Cut Split and drops the Ollama model list, Keep LLM loaded, Copy / Paste buttons", () => {
+  it("Shots keeps AI Make Cut (AI Cut Split) and drops the Ollama model list, Keep LLM loaded, Copy / Paste buttons", () => {
     const js = readFileSync(new URL("../../web/gonggan.js", import.meta.url), "utf8");
     assert.match(js, /class="gg-btn gg-primary gg-ai-split"/);
-    assert.match(js, /postJson\("\/gonggan\/ai-cut-split", \{ story: story\.value \}\)/);
+    assert.match(js, /postJson\("\/gonggan\/ai-cut-split", \{ story: story\.value, background: true \}, \{ timeoutMs: AI_MAKE_CUT_WAIT_MS \}\)/);
     for (const gone of [/ollama/i, /Keep LLM loaded/, /gg-aisplit-model/, /gg-copy-split/, /gg-paste-cuts/,
       /Copy Cut Split Prompt/, /Paste Cut List/, /openPasteCutListModal/, /copyTextToClipboard/]) {
       assert.doesNotMatch(js, gone);

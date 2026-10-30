@@ -1,10 +1,9 @@
-/** Version row below the Shots icon row: the selected cut's versions, newest on the left (no DOM). */
+/** Version row below the Shots icon row: a fixed header (Best, Make Video, Import) over the selected cut's
+ * versions, newest on the left (no DOM). */
 
 import { versionRepState } from "./gg_cuts_core.js";
 
 export const SET_BEST_LABEL = "Set as Best";
-export const BEST_TIP = "Best (set by you)";
-export const SET_BEST_TIP = "Set as Best";
 export const IMPORT_TILE_TIP = "Import image or video";
 export const IMPORT_MENU_LABEL = "Import image or video…";
 export const IMPORT_ACCEPT = "image/*,video/*";
@@ -61,9 +60,69 @@ export function versionStripRows(cut, probed) {
         latest: rep === "implicit",
         duration: video ? formatClipDuration(versionSeconds(v, cut, probed)) : "",
         state: rep === "manual" ? "Best" : rep === "implicit" ? "Latest (no Best set)" : "",
-        starTitle: rep === "manual" ? BEST_TIP : SET_BEST_TIP,
       };
     });
+}
+
+/**
+ * Selected version of the row: the thumbnail clicked last for this cut (`picked`), else the one open in the
+ * canvas (`open`), else the current one (Best, else newest). "" when the cut has no versions.
+ */
+export function stripSelectedVid(cut, { picked = "", open = "" } = {}) {
+  const ids = (Array.isArray(cut?.versions_list) ? cut.versions_list : []).filter((v) => v && v.id).map((v) => v.id);
+  for (const id of [picked, open, cut?.pick, cut?.media?.id, ids[0]]) {
+    if (id && ids.includes(id)) return id;
+  }
+  return "";
+}
+
+/** A still image version whose file exists (video and animated image versions never count). */
+export function isStillVersion(v) {
+  return !!v && !!v.id && v.kind !== "video" && !v.animated && !v.missing;
+}
+
+export const BEST_BUTTON_LABEL = "Best";
+export const MAKE_VIDEO_LABEL = "Make Video";
+export const IMPORT_BUTTON_LABEL = "Import";
+export const MAKE_VIDEO_TIP = "Make Video: the selected image is the start image of the project's Video template; the video is added as a new version";
+
+/** Header Best: toggles Best on the selected version (pressed when it is the Best). */
+export function bestButtonState({ cut, vid } = {}) {
+  if (!cut) return { disabled: true, pressed: false, title: "Select a cut first" };
+  if (!vid) return { disabled: true, pressed: false, title: "This cut has no versions yet" };
+  const on = cut.pick === vid;
+  return { disabled: false, pressed: on, title: on ? "Best (click to clear)" : "Set the selected version as Best" };
+}
+
+/** Header Make Video: native projects, the selected version is a still image, no SDK job starting. */
+export function makeVideoButtonState({ cut, version, native, busy } = {}) {
+  if (!native) return { disabled: true, title: "Make Video is not available for read-only (imported) projects" };
+  if (!cut) return { disabled: true, title: "Select a cut first" };
+  if (!version) return { disabled: true, title: "Select an image version" };
+  if (version.missing) return { disabled: true, title: "The selected version's file is missing" };
+  if (!isStillVersion(version)) return { disabled: true, title: "Select an image version (the selected one is a video)" };
+  if (busy) return { disabled: true, title: "Busy, try again in a moment" };
+  return { disabled: false, title: MAKE_VIDEO_TIP };
+}
+
+export const MAKE_VIDEO_OLD_SERVER = "Restart ComfyUI to use Make Video with the selected image.";
+
+/** Make Video dry run: the plan must start from the requested image (a server without `start_vid` picks Best first). */
+export function makeVideoPlanOk(plan, startVid) {
+  return !startVid || plan?.start_version === startVid;
+}
+
+/**
+ * The three header buttons above the row (Best, Make Video, Import) for the selected cut and version.
+ * @param {{ cut?: object|null, vid?: string, native?: boolean, sdkBusy?: boolean, importBusy?: boolean }} ctx
+ */
+export function stripHeaderState({ cut = null, vid = "", native = false, sdkBusy = false, importBusy = false } = {}) {
+  const version = (Array.isArray(cut?.versions_list) ? cut.versions_list : []).find((v) => v && v.id && v.id === vid) || null;
+  return {
+    best: bestButtonState({ cut, vid: version ? vid : "" }),
+    video: makeVideoButtonState({ cut, version, native, busy: sdkBusy }),
+    import: importButtonState({ hasCut: !!cut, native, busy: importBusy }),
+  };
 }
 
 /** Right-click menu for one row thumbnail. Best is only ever set, never cleared (same as the cut panel). */
@@ -72,7 +131,7 @@ export function versionStripMenuItems(row) {
   return [{ key: "best", label: SET_BEST_LABEL, disabled: best, title: best ? "Already Best" : "" }];
 }
 
-/** + import tile at the left end of the version row: native projects with a selected cut only. */
+/** Header Import button (and the cut menu item): native projects with a selected cut only. */
 export function importButtonState({ hasCut, native, busy } = {}) {
   if (!native) return { disabled: true, title: "Import is not available for read-only (imported) projects" };
   if (!hasCut) return { disabled: true, title: "Select a cut to import" };
@@ -80,21 +139,10 @@ export function importButtonState({ hasCut, native, busy } = {}) {
   return { disabled: false, title: IMPORT_TILE_TIP };
 }
 
-export const I2V_LABEL = "Image to Video";
-
-/** The cut has a still image version to start a video from (the server picks Best, else selected, else newest;
- * video and animated image versions never count). */
+/** The cut has a still image version to start a video from (right-click Image to Video: the server picks Best,
+ * else selected, else newest; video and animated image versions never count). */
 export function cutHasStartImage(cut) {
-  return (Array.isArray(cut?.versions_list) ? cut.versions_list : []).some((v) => v && v.id && v.kind !== "video" && !v.animated && !v.missing);
-}
-
-/** Image to Video button after the import tile: native projects, a selected cut with an image version, no SDK job starting. */
-export function i2vButtonState({ hasCut, native, busy, hasImage } = {}) {
-  if (!native) return { disabled: true, title: "Image to Video is not available for read-only (imported) projects" };
-  if (!hasCut) return { disabled: true, title: "Select a cut to turn its image into a video" };
-  if (!hasImage) return { disabled: true, title: "This cut has no image version yet" };
-  if (busy) return { disabled: true, title: "Busy, try again in a moment" };
-  return { disabled: false, title: "Image to Video: run the project's Video template with this cut's Best (else selected, else newest) image" };
+  return (Array.isArray(cut?.versions_list) ? cut.versions_list : []).some(isStillVersion);
 }
 
 /** Show the left arrow (back to newest) only when the row is scrolled right. */

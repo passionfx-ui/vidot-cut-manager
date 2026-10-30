@@ -1,6 +1,6 @@
 [project]
-name = "comfyui-gonggan-cut"
-version = "0.9.124"
+name = "vidot-cut-manager"
+version = "0.9.125"
 description = "Vidot Studio – Cut Manager: shot list and rough-cut timeline inside ComfyUI"
 readme = "README.md"
 license = { text = "GPL-3.0-only" }
@@ -9,7 +9,7 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.urls]
-Repository = "https://github.com/passionfx-ui/comfyui-gonggan-cut"
+Repository = "https://github.com/passionfx-ui/vidot-cut-manager"
 
 [tool.comfy]
 # TODO: replace with your Comfy Registry publisher id before publishing

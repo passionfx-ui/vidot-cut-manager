@@ -103,6 +103,23 @@ export function folderPickerPlaces(data, lastUsed) {
 }
 
 /**
+ * Rows of the folder list: only the `folders` names of the listing (never files or other entries), each a plain
+ * non-empty name (drive roots only in the drive list), deduped.
+ * @param {unknown} folders
+ * @param {string} path "" = drive list
+ * @returns {string[]}
+ */
+export function folderNames(folders, path) {
+  const out = [];
+  for (const n of Array.isArray(folders) ? folders : []) {
+    if (typeof n !== "string" || !n.trim()) continue;
+    if (path && /[\\/]/.test(n)) continue;
+    if (!out.includes(n)) out.push(n);
+  }
+  return out;
+}
+
+/**
  * @param {{ path?: string, parent?: string|null, folders?: string[], quick?: object[], drives?: string[] }|null|undefined} data
  *   GET /gonggan/folder/list body
  * @param {string} [lastUsed] last-used location, listed under the quick folders
@@ -110,7 +127,7 @@ export function folderPickerPlaces(data, lastUsed) {
 export function folderPickerView(data, lastUsed) {
   const path = String(data?.path ?? "");
   const parent = data?.parent == null ? null : String(data.parent);
-  const names = Array.isArray(data?.folders) ? data.folders.map((n) => String(n)) : [];
+  const names = folderNames(data?.folders, path);
   return {
     path,
     parent,

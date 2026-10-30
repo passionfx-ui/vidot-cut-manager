@@ -64,6 +64,8 @@ import {
   sceneMenuItems,
   sceneCutIds,
   attachMenuActions,
+  aiMakeCutMenuItem,
+  SELECT_ALL_LABEL,
 } from "./gg_ctx_menu_core.js";
 import {
   regenConfirmMessage,
@@ -125,9 +127,6 @@ import {
   shotsKeyAction,
   stepCutId,
   selectAllCutIds,
-  allVisibleCutsSelected,
-  toggleAllCutSelection,
-  listAllButtonView,
 } from "./gg_cut_select_core.js";
 import {
   selectedInDisplayOrder,
@@ -210,12 +209,15 @@ import {
   showNewestButton,
   stripScrollLeft,
   wheelToScrollLeft,
-  importButtonState,
-  IMPORT_TILE_TIP,
   IMPORT_ACCEPT,
-  i2vButtonState,
-  I2V_LABEL,
   cutHasStartImage,
+  stripSelectedVid,
+  stripHeaderState,
+  BEST_BUTTON_LABEL,
+  MAKE_VIDEO_LABEL,
+  IMPORT_BUTTON_LABEL,
+  makeVideoPlanOk,
+  MAKE_VIDEO_OLD_SERVER,
 } from "./gg_version_strip_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { batchProgressView, createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
@@ -295,6 +297,19 @@ import {
   folderCheckErrorText,
 } from "./gg_project_settings_core.js";
 import {
+  cutSplitModelOptions,
+  cutSplitModelOptionsHtml,
+  cutSplitModelLoadErrorText,
+  cutSplitUseAi,
+  aiCutSplitButtonState,
+  cutSplitSettingsPatch,
+  cutSplitMissingModel,
+  cutSplitMissingModelHtml,
+  cutSplitMemoryConfirm,
+  cutSplitPrecheckStep,
+  USE_AI_OFF_TIP,
+} from "./gg_cut_split_model_core.js";
+import {
   undoKeyAction,
   undoScope,
   nextUndoArea,
@@ -312,6 +327,13 @@ import {
   aiCutSplitStatusText,
   createCutsConfirmMessage,
   cutListPayload,
+  runAiMakeCutJob,
+  aiMakeCutProgressText,
+  aiMakeCutErrorText,
+  aiMakeCutResumable,
+  AI_MAKE_CUT_LABEL,
+  AI_MAKE_CUT_WAIT_MS,
+  AI_MAKE_CUT_TIMEOUT_TEXT,
 } from "./gg_cut_list_core.js";
 import {
   generateAllOrder,
@@ -338,6 +360,12 @@ const SHOW_SEL_BAR = false;
 const SHOW_REDO_FILTER = false;
 /** "Cuts | Final cut list" toggle in the Shots toolbar. Off = not shown and the view is forced to "cuts". */
 const SHOW_FINAL_LIST = false;
+/**
+ * AI Make Cut (internally "cut split") in the UI: the Shots toolbar button, the cut list right-click entry and the
+ * Project Settings AI section (Use AI, model, pre-check). Off = none of it is shown and nothing calls
+ * /gonggan/cut-split/*; code and server routes are kept.
+ */
+const AI_CUT_SPLIT_VISIBLE = true;
 const bus = new EventTarget();
 const state = { projects: [], projectsLoaded: false, pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
 // Every assignment to state.timeline that is not a load result counts as a mutation (see gg_timeline_guard_core.js).
@@ -448,7 +476,11 @@ function bindThumbFallbacks(root) {
 async function getJson(route) {
   const res = await api.fetchApi(route);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
+  if (!res.ok || data.ok === false) {
+    const err = new Error(data.message || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -827,7 +859,11 @@ function openNewProjectModal() {
 const TEMPLATE_FIELDS = {
   default: { label: "Default template", title: "ComfyUI saved workflow used as this project's template", none: true },
   image: { label: "Image template", title: "Workflow for new image cuts and Generate All (a cut's own workflow wins)", none: false },
-  video: { label: "Video template", title: "Workflow for AI Cut Split cuts and Image to Video", none: false },
+  video: {
+    label: "Video template",
+    title: AI_CUT_SPLIT_VISIBLE ? "Workflow for AI Make Cut cuts and Image to Video" : "Workflow for Image to Video",
+    none: false,
+  },
 };
 
 function templateFieldHtml(key = "default") {
@@ -1167,6 +1203,15 @@ function openProjectSettingsModal() {
       </label>` : ""}
       ${templateFieldHtml()}
       ${nat ? `${templateFieldHtml("image")}${templateFieldHtml("video")}` : ""}
+      ${nat && AI_CUT_SPLIT_VISIBLE ? `<label class="gg-modal-field gg-use-ai-field">
+        <span class="gg-switch-row">Use AI
+          <input type="checkbox" class="gg-switch gg-modal-use-ai" role="switch" checked disabled />
+        </span>
+        <span class="gg-modal-hint">AI Make Cut on/off. Off: the text model is never loaded.</span>
+      </label>
+      <label class="gg-modal-field gg-cut-split-model-field">AI Make Cut model
+        <select class="gg-modal-cut-split-model" disabled><option>Loading…</option></select>
+      </label>` : ""}
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-modal-cancel">${nat ? "Cancel" : "Close"}</button>
         ${nat ? `<button type="submit" class="gg-btn gg-primary">Save</button>` : ""}
@@ -1207,6 +1252,35 @@ function openProjectSettingsModal() {
       folderIn.focus();
     });
   });
+  const modelSel = wrap.querySelector(".gg-modal-cut-split-model");
+  const modelField = wrap.querySelector(".gg-cut-split-model-field");
+  const useAiIn = wrap.querySelector(".gg-modal-use-ai");
+  let modelInitial = "";
+  let useAiInitial = null;
+  const syncModelField = () => {
+    const off = !!useAiIn && !useAiIn.checked;
+    if (modelSel) modelSel.disabled = !modelInitial || off;
+    modelField?.classList.toggle("gg-off", off);
+    if (modelField) modelField.title = off ? USE_AI_OFF_TIP : "";
+  };
+  useAiIn?.addEventListener("change", syncModelField);
+  if (modelSel) void getJson("/gonggan/cut-split/model").then(
+    (d) => {
+      if (!wrap.isConnected || !modelSel) return;
+      const opts = cutSplitModelOptions(d);
+      modelSel.innerHTML = cutSplitModelOptionsHtml(opts, esc);
+      modelInitial = opts.find((o) => o.selected)?.value || "";
+      if (useAiIn) {
+        useAiInitial = cutSplitUseAi(d);
+        useAiIn.checked = useAiInitial;
+        useAiIn.disabled = false;
+      }
+      syncModelField();
+    },
+    (err) => {
+      if (modelSel) modelSel.innerHTML = `<option>${esc(cutSplitModelLoadErrorText(err))}</option>`;
+    },
+  );
   let saving = false;
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1215,7 +1289,13 @@ function openProjectSettingsModal() {
       image_template: kindTemplates.image,
       video_template: kindTemplates.video,
     });
-    if (!patch) {
+    const aiPatch = cutSplitSettingsPatch({
+      modelInitial,
+      model: modelSel?.value,
+      useAiInitial,
+      useAi: useAiIn?.checked,
+    });
+    if (!patch && !aiPatch) {
       closeProjectModal();
       return;
     }
@@ -1223,13 +1303,24 @@ function openProjectSettingsModal() {
     saving = true;
     if (saveBtn) saveBtn.disabled = true;
     try {
-      if (patch.project_folder) {
+      if (patch?.project_folder) {
         try {
           await postJson("/gonggan/folder/check", { path: patch.project_folder });
         } catch (err) {
           showFolderErr(folderCheckErrorText(err));
           return;
         }
+      }
+      if (aiPatch) {
+        const saved = await postJson("/gonggan/cut-split/model", aiPatch);
+        if (aiPatch.clip_name) modelInitial = aiPatch.clip_name;
+        useAiInitial = cutSplitUseAi(saved);
+        setCutSplitUseAi(useAiInitial);
+      }
+      if (!patch) {
+        closeProjectModal();
+        ggToast("Project", "Settings saved", "ok");
+        return;
       }
       const data = await postJson("/gonggan/project/update", { pid: reqPid, fields: { settings: patch } });
       closeProjectModal();
@@ -1513,13 +1604,14 @@ let askConfirmEl = null;
 
 /**
  * In-app replacement for window.confirm (same wording, OK / Cancel). Enter = OK, Esc = Cancel.
- * @param {{ message: string, danger?: boolean }} opts  danger: emphasize the OK button (deletes / reset)
+ * @param {{ message: string, danger?: boolean, okLabel?: string }} opts  danger: emphasize the OK button (deletes / reset)
  * @returns {Promise<boolean>}
  */
 function askConfirm(opts) {
   if (askConfirmEl) return Promise.resolve(false);
   const { title, body } = splitConfirmMessage(opts?.message);
   const danger = !!opts?.danger;
+  const okLabel = opts?.okLabel || "OK";
   return new Promise((resolve) => {
     const wrap = document.createElement("div");
     wrap.className = "gg-modal-backdrop gg-confirm-backdrop";
@@ -1529,7 +1621,7 @@ function askConfirm(opts) {
         ${body ? `<div class="gg-confirm-body">${esc(body)}</div>` : ""}
         <div class="gg-modal-actions">
           <button type="button" class="gg-btn gg-confirm-cancel">Cancel</button>
-          <button type="button" class="gg-btn gg-confirm-ok ${danger ? "gg-danger" : "gg-primary"}">OK</button>
+          <button type="button" class="gg-btn gg-confirm-ok ${danger ? "gg-danger" : "gg-primary"}">${esc(okLabel)}</button>
         </div>
       </div>`;
     document.body.appendChild(wrap);
@@ -2078,7 +2170,7 @@ async function prepareGongganShotTabReplace() {
 }
 
 function shotWorkflowRelPathForCut(cut) {
-  return shotWorkflowRelPathById({ projectId: state.pid, cutId: cut?.id || "" });
+  return shotWorkflowRelPathById({ projectId: state.pid, cutId: cut?.id || "", kind: workflowKindForCut(cut) });
 }
 
 function adoptGongganShotWorkflow(relPath) {
@@ -2492,10 +2584,13 @@ function userWorkflowKindSwitch(cutId) {
   return readCutWorkflowKindSwitch(localStorage, cutId) || fromUi || null;
 }
 
+/** Cut whose tab Make Video switched to its video workflow; cleared when its selected version changes. */
+let ggMakeVideoCutId = "";
+
 function workflowKindForCut(cut) {
   if (!cut) return null;
   return resolveEffectiveWorkflowKind({
-    userKind: userWorkflowKindSwitch(cut.id),
+    userKind: ggMakeVideoCutId === cut.id ? "video" : userWorkflowKindSwitch(cut.id),
     repKind: repMediaKind(cut),
   });
 }
@@ -2544,6 +2639,7 @@ async function reloadOpenCutWorkflowIfRepChanged() {
   if (!cut) return;
   const rep = repIdOf(cut);
   if (rep === wfLastLoadedRepId) return;
+  if (ggMakeVideoCutId === cutId) ggMakeVideoCutId = "";
   const loadToken = ++wfLoadToken;
   await loadCutWorkflow(cutId, cut, loadToken);
 }
@@ -2873,6 +2969,38 @@ async function refreshProjectTemplateFlag() {
   bus.dispatchEvent(new Event("template"));
 }
 
+/** Project Settings › Use AI (global, gonggan_settings.json). Unknown (older server, error) counts as on. */
+let cutSplitUseAiOn = true;
+
+async function refreshCutSplitUseAi() {
+  if (!AI_CUT_SPLIT_VISIBLE) return;
+  try {
+    cutSplitUseAiOn = cutSplitUseAi(await getJson("/gonggan/cut-split/model"));
+  } catch (_) {
+    cutSplitUseAiOn = true;
+  }
+  bus.dispatchEvent(new Event("cut-split-use-ai"));
+}
+
+function setCutSplitUseAi(on) {
+  cutSplitUseAiOn = !!on;
+  bus.dispatchEvent(new Event("cut-split-use-ai"));
+}
+
+function aiSplitButtonHtml() {
+  const s = aiCutSplitButtonState(cutSplitUseAiOn);
+  return `<span class="gg-ai-split-wrap" title="${esc(s.title)}"><button type="button" class="gg-btn gg-primary gg-ai-split" title="${esc(s.title)}"${s.disabled ? " disabled" : ""}>${esc(AI_MAKE_CUT_LABEL)}</button></span>`;
+}
+
+function syncAiSplitButton(root) {
+  const btn = root?.querySelector(".gg-ai-split");
+  if (!btn) return;
+  const s = aiCutSplitButtonState(cutSplitUseAiOn);
+  btn.disabled = s.disabled;
+  btn.title = s.title;
+  if (btn.parentElement?.classList.contains("gg-ai-split-wrap")) btn.parentElement.title = s.title;
+}
+
 async function setProjectTemplateRef(ref) {
   if (!state.pid) {
     ggToast("Template", "Pick a project in the list first.", "warn");
@@ -2926,7 +3054,7 @@ async function addLocalCut() {
 }
 
 /**
- * AI Cut Split create path: confirm `Create N cuts?`, then POST /gonggan/cut/add-list (after the last cut).
+ * AI Make Cut create path: confirm `Create N cuts?`, then POST /gonggan/cut/add-list (after the last cut).
  * Returns true when the cuts were created; throws on a server error.
  */
 async function createCutsFromList(reqPid, cuts, wf) {
@@ -2948,23 +3076,32 @@ async function createCutsFromList(reqPid, cuts, wf) {
 
 const AI_SPLIT_IDLE_HINT = "Runs a local text model (TextGenerate) in ComfyUI through the Comfy SDK, then unloads it so the VRAM is free for video.";
 
+/** Id of the last background run whose cuts were created (so reopening the dialog does not offer it again). */
+const AI_MAKE_CUT_USED_KEY = "gonggan-cut.aiMakeCutUsed";
+
 /**
- * AI Cut Split: story -> POST /gonggan/ai-cut-split (TextGenerate in ComfyUI through the Comfy SDK) -> validated
- * cuts -> `Create N cuts?` -> new cuts with the project's Video template. Nothing is queued.
+ * AI Make Cut: story -> POST /gonggan/ai-cut-split {background: true} (TextGenerate in ComfyUI through the Comfy SDK)
+ * -> poll GET /gonggan/ai-cut-split/status until the validated cuts are ready -> `Create N cuts?` -> new cuts with the
+ * project's Video template. Nothing is queued. The server keeps the last result, so reopening the dialog picks up a
+ * run that is still going or finished while the dialog was closed.
  */
 function openAiCutSplitModal() {
-  if (!isNativeProject() || document.querySelector(".gg-aisplit-modal")) return;
-  const reqPid = state.pid;
+  if (!AI_CUT_SPLIT_VISIBLE || !isNativeProject() || document.querySelector(".gg-aisplit-modal")) return;
+  if (!cutSplitUseAiOn) {
+    ggToast(AI_MAKE_CUT_LABEL, USE_AI_OFF_TIP, "warn");
+    return;
+  }
   const wrap = document.createElement("div");
   wrap.className = "gg-modal-backdrop";
   wrap.innerHTML = `
-    <div class="gg-modal gg-aisplit-modal" role="dialog" aria-label="AI Cut Split">
-      <h3 class="gg-modal-title">AI Cut Split</h3>
+    <div class="gg-modal gg-aisplit-modal" role="dialog" aria-label="${esc(AI_MAKE_CUT_LABEL)}">
+      <h3 class="gg-modal-title">${esc(AI_MAKE_CUT_LABEL)}</h3>
       <label class="gg-modal-field">Story
         <textarea class="gg-aisplit-story" rows="10" placeholder="Write or paste your story. A local text model splits it into cuts of at most 3 seconds."></textarea>
       </label>
       <span class="gg-modal-hint gg-aisplit-status" aria-live="polite">${esc(AI_SPLIT_IDLE_HINT)}</span>
       <span class="gg-modal-hint gg-split-err gg-aisplit-err" aria-live="polite"></span>
+      <div class="gg-mm-notice" role="alert" hidden></div>
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
         <button type="button" class="gg-btn gg-primary gg-aisplit-run" disabled>Split</button>
@@ -2974,46 +3111,179 @@ function openAiCutSplitModal() {
   const story = wrap.querySelector(".gg-aisplit-story");
   const status = wrap.querySelector(".gg-aisplit-status");
   const err = wrap.querySelector(".gg-aisplit-err");
+  const notice = wrap.querySelector(".gg-mm-notice");
   const runBtn = wrap.querySelector(".gg-aisplit-run");
+  const showMissing = (missing) => {
+    const info = cutSplitMissingModel(missing);
+    notice.innerHTML = info ? cutSplitMissingModelHtml(info, esc) : "";
+    notice.hidden = !info;
+    return !!info;
+  };
+  /** GET /gonggan/cut-split/precheck; true = go ahead. A failed check (e.g. older server) does not block. */
+  const precheckOk = async () => {
+    let pre = null;
+    try {
+      pre = await getJson("/gonggan/cut-split/precheck");
+    } catch (_) {
+      return true;
+    }
+    const step = cutSplitPrecheckStep(pre);
+    if (step === "off") {
+      setCutSplitUseAi(false);
+      err.textContent = USE_AI_OFF_TIP;
+      return false;
+    }
+    if (step === "missing") return !showMissing(pre.missing);
+    if (step === "confirm") {
+      const c = cutSplitMemoryConfirm(pre.memory, pre.model);
+      return askConfirm({ message: c.message, okLabel: c.okLabel });
+    }
+    return true;
+  };
   let busy = false;
-  const close = () => wrap.remove();
+  /** A run is going on the server (closing the dialog does not stop it). */
+  let running = false;
+  /** A finished answer waiting for `Create N cuts?`; kept until the story is edited, so it is never lost. */
+  let result = null;
+  const close = () => {
+    if (running) {
+      ggToast(AI_MAKE_CUT_LABEL, "Still running in ComfyUI. Open AI Make Cut again to get the result.", "ok");
+    }
+    wrap.remove();
+  };
   const sync = () => {
-    runBtn.disabled = busy || !story.value.trim();
-    runBtn.textContent = busy ? "Splitting…" : "Split";
+    const n = result ? result.cuts.length : 0;
+    runBtn.disabled = busy || (!result && !story.value.trim());
+    runBtn.textContent = busy ? "Working…" : result ? `Create ${n} cut${n === 1 ? "" : "s"}` : "Split";
     story.disabled = busy;
   };
-  story.addEventListener("input", sync);
+  story.addEventListener("input", () => {
+    if (result) {
+      result = null;
+      status.textContent = AI_SPLIT_IDLE_HINT;
+    }
+    sync();
+  });
   wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", close);
   wrap.addEventListener("mousedown", (e) => { if (e.target === wrap && !busy) close(); });
   wrap.addEventListener("keydown", (e) => { if (e.key === "Escape" && !busy) { e.stopPropagation(); close(); } });
 
-  runBtn.addEventListener("click", async () => {
-    if (busy || runBtn.disabled) return;
-    busy = true;
-    err.textContent = "";
-    status.textContent = "Splitting… (loading the text model can take a minute)";
-    sync();
-    let cuts = null;
+  /** Keep a finished run's cuts in the dialog (checked again with the same cut list rules). */
+  const takeResult = (job, prefix = "") => {
+    const parsed = parseCutList(JSON.stringify(job.cuts || []));
+    if (!parsed.ok) throw new Error(parsed.errors.slice(0, 4).join("\n"));
+    result = { id: job.id || "", cuts: parsed.cuts };
+    status.textContent = prefix + aiCutSplitStatusText(parsed, { model: job.model, attempts: job.attempts });
+  };
+  /** Start (`start`) or resume (`job`) a background run and wait for it; true = `result` is set. */
+  const follow = async ({ start = null, job = null }) => {
     try {
-      const d = await postJson("/gonggan/ai-cut-split", { story: story.value });
-      const parsed = parseCutList(JSON.stringify(d.cuts || []));
-      if (!parsed.ok) throw new Error(parsed.errors.slice(0, 4).join("\n"));
-      cuts = parsed.cuts;
-      status.textContent = aiCutSplitStatusText(parsed, { model: d.model, attempts: d.attempts });
+      const out = await runAiMakeCutJob({
+        start,
+        job,
+        poll: (id) => getJson(`/gonggan/ai-cut-split/status?job=${encodeURIComponent(id)}`),
+        onProgress: (j) => {
+          running = true;
+          if (wrap.isConnected) status.textContent = aiMakeCutProgressText(j);
+        },
+        isActive: () => wrap.isConnected,
+      });
+      running = false;
+      if (out.kind === "done") {
+        takeResult(out.job);
+        return true;
+      }
+      if (out.kind === "timeout") {
+        status.textContent = AI_SPLIT_IDLE_HINT;
+        err.textContent = AI_MAKE_CUT_TIMEOUT_TEXT;
+      }
     } catch (e) {
+      running = false;
       status.textContent = AI_SPLIT_IDLE_HINT;
-      err.textContent = e.status === 404 && !e.code ? "Restart ComfyUI to use AI Cut Split (new server route)." : e.message;
+      if (e.code === "disabled") setCutSplitUseAi(false);
+      if (!(e.code === "missing_model" && showMissing(e.data?.missing))) err.textContent = aiMakeCutErrorText(e);
     }
-    busy = false;
-    sync();
-    if (!cuts || !wrap.isConnected) return;
+    return false;
+  };
+  const createFromResult = async () => {
+    if (!result || !wrap.isConnected) return;
+    if (!isNativeProject()) {
+      err.textContent = "Pick a project you can edit, then click Create again.";
+      return;
+    }
     try {
-      if (await createCutsFromList(reqPid, cuts, cutListWorkflow(state.timeline?.project?.settings))) close();
+      if (await createCutsFromList(state.pid, result.cuts, cutListWorkflow(state.timeline?.project?.settings))) {
+        if (result.id) localStorage.setItem(AI_MAKE_CUT_USED_KEY, result.id);
+        result = null;
+        close();
+      }
     } catch (e) {
       err.textContent = e.message;
     }
+  };
+
+  runBtn.addEventListener("click", async () => {
+    if (busy || runBtn.disabled) return;
+    err.textContent = "";
+    if (result) {
+      await createFromResult();
+      return;
+    }
+    busy = true;
+    showMissing(null);
+    status.textContent = "Checking the text model…";
+    sync();
+    let ok = false;
+    try {
+      if (await precheckOk() && wrap.isConnected) {
+        status.textContent = "Starting… (loading the text model can take a minute)";
+        ok = await follow({
+          start: () => postJson("/gonggan/ai-cut-split", { story: story.value, background: true }, { timeoutMs: AI_MAKE_CUT_WAIT_MS }),
+        });
+      } else {
+        status.textContent = AI_SPLIT_IDLE_HINT;
+      }
+    } finally {
+      busy = false;
+      if (wrap.isConnected) sync();
+    }
+    if (ok) await createFromResult();
   });
+
+  /** On open: follow a run that is still going, or offer a finished one whose cuts were not created yet. */
+  const resume = async () => {
+    let job = null;
+    try {
+      job = (await getJson("/gonggan/ai-cut-split/status")).job;
+    } catch (_) {
+      return; // older server: nothing to resume
+    }
+    if (!job || busy || result || !wrap.isConnected || story.value.trim()) return;
+    if (job.state === "running") {
+      story.value = job.story || "";
+      busy = true;
+      sync();
+      status.textContent = aiMakeCutProgressText(job);
+      let ok = false;
+      try {
+        ok = await follow({ job });
+      } finally {
+        busy = false;
+        if (wrap.isConnected) sync();
+      }
+      if (ok) await createFromResult();
+    } else if (aiMakeCutResumable(job, localStorage.getItem(AI_MAKE_CUT_USED_KEY) || "")) {
+      story.value = job.story || "";
+      try {
+        takeResult(job, "Finished earlier: ");
+      } catch (_) {
+        result = null;
+      }
+      sync();
+    }
+  };
   story.focus();
+  void resume();
 }
 
 function displayedCutIds() {
@@ -3536,7 +3806,8 @@ function openCutContextMenu(e, cutId) {
     failedCount: failedIds.length,
     hasImage: cutHasStartImage(c),
     hasListCuts: visible.length > 0,
-    allSelected: allVisibleCutsSelected(order, hidden, state.cutSel),
+    aiMakeCut: AI_CUT_SPLIT_VISIBLE,
+    useAi: cutSplitUseAiOn,
   });
   showCtxMenu(
     e.clientX,
@@ -3545,7 +3816,7 @@ function openCutContextMenu(e, cutId) {
       items,
       {
         ...cutMenuActions(cutId),
-        selectAll: () => applyToggleSelectAllCuts(),
+        selectAll: () => selectAllListCuts(),
         importVer: () => pickVersionImportFiles(cutId),
         i2v: () => imageToVideoCut(cutId),
         queueSel: () => void queueButtonClick(),
@@ -3557,6 +3828,7 @@ function openCutContextMenu(e, cutId) {
         split: () => splitSceneHere(cutId),
         ungroup: () => ungroupCuts(ids),
         addCut: () => addCutAfter(cutId),
+        aiMakeCut: () => openAiCutSplitModal(),
         del: () => deleteSelectedCuts(),
         trash: () => openTrashModal(),
       },
@@ -3649,12 +3921,10 @@ function openShotsPanelContextMenu(e) {
   if (ids.length) items.push({ label: "New Scene", action: () => createSceneGroup(ids) });
   const { order, hidden } = shotsNavOrder();
   const visible = selectAllCutIds(order, hidden);
-  if (visible.length) {
-    items.unshift({
-      label: "Select all",
-      title: allVisibleCutsSelected(order, hidden, state.cutSel) ? "Clear selection" : "",
-      action: () => applyToggleSelectAllCuts(),
-    });
+  if (visible.length) items.unshift({ label: SELECT_ALL_LABEL, action: () => selectAllListCuts() });
+  if (nat && AI_CUT_SPLIT_VISIBLE) {
+    const { key: _k, ...ai } = aiMakeCutMenuItem(cutSplitUseAiOn);
+    items.push({ ...ai, action: () => openAiCutSplitModal() });
   }
   if (nat) {
     items.push({
@@ -3687,30 +3957,16 @@ function timelineSelectedCutIds() {
   return selectedInDisplayOrder(order, tl.cuts.map((c) => c.id), state.cutSel);
 }
 
-function applyToggleSelectAllCuts() {
+/** Ctrl/Cmd+A and the list menu's Select All: every cut shown in the list. */
+function selectAllListCuts() {
   const { order, hidden } = shotsNavOrder();
-  const { ids } = toggleAllCutSelection(order, hidden, state.cutSel);
+  const ids = selectAllCutIds(order, hidden);
+  if (!ids.length) return false;
   state.cutSel.clear();
   for (const id of ids) state.cutSel.add(id);
-  cutSelAnchor = ids.length ? (state.cutSel.has(state.cutId) ? state.cutId : ids[0]) : "";
+  cutSelAnchor = state.cutSel.has(state.cutId) ? state.cutId : ids[0];
   bus.dispatchEvent(new Event("select"));
-}
-
-function paintListAllButton(root) {
-  const btn = root.querySelector(".gg-list-all");
-  if (!btn) return;
-  const { order, hidden } = shotsNavOrder();
-  const visible = selectAllCutIds(order, hidden);
-  const v = listAllButtonView({
-    hasProject: !!currentProject(),
-    visibleCount: visible.length,
-    allSelected: allVisibleCutsSelected(order, hidden, state.cutSel),
-  });
-  btn.hidden = !v.show;
-  btn.disabled = v.disabled;
-  btn.textContent = v.label;
-  btn.className = v.className;
-  btn.title = v.title;
+  return true;
 }
 
 function groupsClone() {
@@ -5384,7 +5640,6 @@ function updateSelectionBar(root) {
     queueBtn.textContent = q.label;
     queueBtn.classList.toggle("gg-queue-stop", q.mode === "stop");
   }
-  paintListAllButton(root);
   paintGenerateAllProgress(root);
 }
 
@@ -5456,8 +5711,21 @@ function sdkBadge() {
 
 const fmtSrc = (s) => ({ gonggan: "Import", "local-sdk": "SDK", "comfy-history": "Comfy", "comfy-output-folder": "Comfy" }[s] || s || "");
 
-async function postJson(route, body) {
-  const res = await api.fetchApi(route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+/** `timeoutMs`: abort the request after that long (the error's name is "AbortError"); default = no limit. */
+async function postJson(route, body, { timeoutMs = 0 } = {}) {
+  const ctl = timeoutMs > 0 ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : 0;
+  let res;
+  try {
+    res = await api.fetchApi(route, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      ...(ctl ? { signal: ctl.signal } : {}),
+    });
+  } finally {
+    clearTimeout(timer);
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) {
     const err = new Error(data.message || data.error || `HTTP ${res.status}`);
@@ -5482,14 +5750,16 @@ function recomputeCutStarts() {
   tl.total_sec = total;
 }
 
-/** Optimistic promote: swap timeline media + clamp trim, then persist via /gonggan/edit. */
+/** Optimistic promote: swap timeline media + clamp trim, then persist via /gonggan/edit. `vid` null = clear
+ * Best, so the newest version is current again (same as the server). */
 function applyPickLocally(c, vid) {
-  if (!c || !vid || c.pick === vid) return false;
-  const v = (c.versions_list || []).find((x) => x.id === vid);
-  if (!v) return false;
-  c.pick = vid;
+  const clear = vid === null;
+  if (!c || (clear ? !c.pick : !vid || c.pick === vid)) return false;
+  const v = clear ? (c.versions_list || []).find((x) => x && x.id) : (c.versions_list || []).find((x) => x.id === vid);
+  if (!v && !clear) return false;
+  c.pick = clear ? null : vid;
   c.media = versionMedia(v);
-  c.src_dur = c.media && c.media.kind === "video" ? Math.max(0, Number(v.seconds) || 0) : 0;
+  c.src_dur = c.media && c.media.kind === "video" ? Math.max(0, Number(v?.seconds) || 0) : 0;
   const clamped = clampClip(c, c.in, c.sec);
   c.in = clamped.in;
   c.sec = clamped.sec;
@@ -5497,6 +5767,13 @@ function applyPickLocally(c, vid) {
   recomputeCutStarts();
   play.idx = -1;
   return true;
+}
+
+/** Version row Best: sets Best on the version, or clears it when that version already is the Best. */
+function toggleBest(cutId, vid) {
+  const c = cutsNow().find((x) => x.id === cutId);
+  if (!c || !vid) return;
+  void setPick(cutId, c.pick === vid ? null : vid);
 }
 
 async function setPick(cutId, vid) {
@@ -5643,20 +5920,27 @@ function regenNativeCut(cutId) {
 /**
  * Image to Video: the project's Video template with this cut's Best (else selected, else newest) image as start
  * image and its description as prompt, through the Comfy SDK path without opening a tab; the server adds the
- * video as a new version of the same cut.
+ * video as a new version of the same cut. `startVid` (version row Make Video): exactly that image version.
  */
-async function imageToVideoCut(cutId) {
+async function imageToVideoCut(cutId, { startVid = "" } = {}) {
   const cut = cutById(cutId);
   if (!cut || !state.timeline || !isNativeProject() || sdk.busy) return;
   const title = shotTitle(cut);
   const pid = state.pid;
   const open = wfOpenVersion;
-  const selectedVid = open && open.projectId === pid && open.cutId === cutId ? open.vid : "";
+  const selectedVid = startVid || (open && open.projectId === pid && open.cutId === cutId ? open.vid : "");
+  const what = startVid ? MAKE_VIDEO_LABEL : "Image to Video";
   sdk.busy = "regen";
-  sdk.msg = `Preparing Image to Video for ${title}…`;
+  sdk.msg = `Preparing ${what} for ${title}…`;
   bus.dispatchEvent(new Event("sdk"));
   try {
-    const plan = (await postJson("/gonggan/image-to-video", { pid, cut_id: cutId, ...(selectedVid ? { selected_vid: selectedVid } : {}) })).plan;
+    const plan = (await postJson("/gonggan/image-to-video", {
+      pid,
+      cut_id: cutId,
+      ...(selectedVid ? { selected_vid: selectedVid } : {}),
+      ...(startVid ? { start_vid: startVid } : {}),
+    })).plan;
+    if (!makeVideoPlanOk(plan, startVid)) throw new Error(MAKE_VIDEO_OLD_SERVER);
     sdk.msg = `${title}: ${sdkPlanSummary(plan)}`;
     bus.dispatchEvent(new Event("sdk"));
     if (!(await askConfirm({ message: i2vConfirmMessage(title, plan) }))) {
@@ -5664,11 +5948,17 @@ async function imageToVideoCut(cutId) {
       return;
     }
     await postJson("/gonggan/regen", { pid, cut_id: cutId, dry_run: false, confirm: true, plan: plan.plan });
-    sdk.msg = `Queued through Comfy SDK: ${title} (Image to Video)`;
-    ggToast("Queued", `${title}: Image to Video (Comfy SDK)`, "ok");
+    sdk.msg = `Queued through Comfy SDK: ${title} (${what})`;
+    ggToast("Queued", `${title}: ${what} (Comfy SDK)`, "ok");
+    if (wfLastLoadedCutId === cutId && wfLastLoadedProjectId === pid && isGongganShotTabOpenAndActive()) {
+      ggMakeVideoCutId = cutId;
+      wfLastLoadedCutId = "";
+      const cutNow = cutById(cutId);
+      if (cutNow) await loadCutWorkflow(cutId, cutNow, ++wfLoadToken);
+    }
   } catch (e) {
-    sdk.msg = `Image to Video failed: ${i2vErrorMessage(e)}`;
-    ggToast("Image to Video", `${title} — ${i2vErrorMessage(e)}`, "warn");
+    sdk.msg = `${what} failed: ${i2vErrorMessage(e)}`;
+    ggToast(what, `${title} — ${i2vErrorMessage(e)}`, "warn");
   } finally {
     sdk.busy = "";
     bus.dispatchEvent(new Event("sdk"));
@@ -6153,32 +6443,42 @@ async function importVersionFiles(pid, cutId, files) {
   else ggToast(`Imported ${added} file${added === 1 ? "" : "s"}`, "", "ok");
 }
 
-function versionStripLeadingHtml(c) {
-  const s = importButtonState({ hasCut: !!c, native: isNativeProject(), busy: stripImportBusy });
-  const v = i2vButtonState({ hasCut: !!c, native: isNativeProject(), busy: !!sdk.busy, hasImage: cutHasStartImage(c) });
-  const tile =
-    `<button type="button" class="gg-ver-wrap gg-vs-import" title="${esc(s.title)}" aria-label="${esc(s.title)}"${s.disabled ? " disabled" : ""}>` +
-    `<div class="gg-ver"><span class="gg-vs-plus" aria-hidden="true">+</span></div></button>`;
-  const i2v =
-    `<button type="button" class="gg-btn gg-vs-i2v" title="${esc(v.title)}" aria-label="${esc(v.title)}"${v.disabled ? " disabled" : ""}>${esc(I2V_LABEL)}</button>`;
-  return tile + i2v;
+/** Thumbnail clicked last in the version row (the row's selected version until another cut or project). */
+const stripPick = { pid: "", cutId: "", vid: "" };
+
+/** Selected version of the row for this cut (see stripSelectedVid). */
+function stripSelectedVersionId(c) {
+  if (!c) return "";
+  const picked = stripPick.pid === state.pid && stripPick.cutId === c.id ? stripPick.vid : "";
+  const o = wfOpenVersion;
+  const open = o && o.projectId === state.pid && o.cutId === c.id && ownedShotTabOpen() ? o.vid : "";
+  return stripSelectedVid(c, { picked, open });
 }
 
-/** Version row below the icon row: import tile and Image to Video, then the selected cut's versions, newest on the left. */
-function versionStripHtml(c) {
-  const leading = versionStripLeadingHtml(c);
-  if (!c) return leading + '<div class="gg-vs-empty gg-dim">Select a cut to see its versions</div>';
+/** Fixed header above the thumbnails: Best, Make Video, Import (state set by syncStripHeader). */
+function versionStripHeadHtml() {
+  const btn = (cls, label) => `<button type="button" class="gg-btn gg-vs-hbtn ${cls}" disabled>${esc(label)}</button>`;
+  return `<div class="gg-vs-head">
+          ${btn("gg-vs-best-btn", BEST_BUTTON_LABEL)}
+          ${btn("gg-vs-video-btn", MAKE_VIDEO_LABEL)}
+          ${btn("gg-vs-import-btn", IMPORT_BUTTON_LABEL)}
+        </div>`;
+}
+
+/** Thumbnails of the selected cut's versions, newest on the left; Best = highlighted border, no icons on them. */
+function versionStripHtml(c, selVid) {
+  if (!c) return '<div class="gg-vs-empty gg-dim">Select a cut to see its versions</div>';
   const rows = versionStripRows(c, stripProbe.dur);
-  if (!rows.length) return leading + '<div class="gg-vs-empty gg-dim">No versions</div>';
+  if (!rows.length) return '<div class="gg-vs-empty gg-dim">No versions</div>';
   const tabOpen = ownedShotTabOpen();
   const byId = new Map((c.versions_list || []).map((v) => [v.id, v]));
-  return leading + rows.map((r) => {
+  return rows.map((r) => {
     const { wrapCls, tip, img } = versionThumbParts(c, byId.get(r.id), tabOpen);
     const title = r.state ? `${r.state} · ${tip}` : tip;
-    return `<div class="${wrapCls} gg-vs-item${r.best ? " gg-vs-best" : ""}" data-vid="${esc(r.id)}">
+    const sel = r.id === selVid;
+    return `<div class="${wrapCls} gg-vs-item${r.best ? " gg-vs-best" : ""}${sel ? " gg-vs-sel" : ""}" data-vid="${esc(r.id)}"${sel ? ' aria-selected="true"' : ""}>
       <div class="gg-ver" title="${esc(title)}">
         ${img}
-        <button type="button" class="gg-vs-star${r.best ? " gg-on" : ""}" title="${esc(r.starTitle)}" aria-label="${esc(r.starTitle)}"${r.best ? ' aria-pressed="true"' : ""}>${r.best ? "★" : "☆"}</button>
         ${r.video ? `<span class="gg-vs-dur"${r.duration ? "" : " hidden"}>${esc(r.duration)}</span>` : ""}
       </div>
     </div>`;
@@ -6206,7 +6506,7 @@ function statusPanelHtml() {
     <div class="gg-sp-meta"><span class="gg-sp-len" title="${esc(v.length.title)}">${esc(v.length.text)}</span><span class="gg-sp-ver" title="${esc(v.version.title)}">${esc(v.version.text)}</span></div>`;
 }
 
-const ICON_SVG_ATTRS = 'width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+const ICON_SVG_ATTRS = 'width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
 const ICON_FOLDER = `<svg ${ICON_SVG_ATTRS}><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10v6M9 13h6"/></svg>`;
 const ICON_NEW_PAGE = `<svg ${ICON_SVG_ATTRS}><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M12 12v6M9 15h6"/></svg>`;
 const ICON_TRASH = `<svg ${ICON_SVG_ATTRS}><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg>`;
@@ -6299,13 +6599,9 @@ function mountShots(el) {
       const vid = wrap.dataset.vid;
       const row = rows.get(vid);
       if (!row) return;
-      wrap.querySelector(".gg-ver")?.addEventListener("click", (e) => {
+      wrap.addEventListener("click", (e) => {
         e.stopPropagation();
-        openVersionWorkflow(c.id, vid);
-      });
-      wrap.querySelector(".gg-vs-star")?.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (!row.best) setPick(c.id, vid);
+        selectStripVersion(c.id, vid);
       });
       wrap.addEventListener("contextmenu", (e) => {
         e.preventDefault();
@@ -6314,12 +6610,51 @@ function mountShots(el) {
       });
     });
   };
+  const stripCut = () => (state.timeline ? state.timeline.cuts.find((x) => x.id === state.cutId) || null : null);
+  /** Thumbnail click: it becomes the row's selected version and opens in the shot tab (existing version open). */
+  const selectStripVersion = (cutId, vid) => {
+    Object.assign(stripPick, { pid: state.pid, cutId, vid });
+    openVersionWorkflow(cutId, vid);
+    paintVersionStrip();
+  };
+  const syncStripHeader = (c, selVid) => {
+    const s = stripHeaderState({ cut: c, vid: selVid, native: isNativeProject(), sdkBusy: !!sdk.busy, importBusy: stripImportBusy });
+    const set = (sel, st) => {
+      const b = root.querySelector(`.gg-vs-head ${sel}`);
+      if (!b) return;
+      b.disabled = st.disabled;
+      b.title = st.title;
+      if ("pressed" in st) {
+        b.classList.toggle("gg-on", st.pressed);
+        b.setAttribute("aria-pressed", st.pressed ? "true" : "false");
+      }
+    };
+    set(".gg-vs-best-btn", s.best);
+    set(".gg-vs-video-btn", s.video);
+    set(".gg-vs-import-btn", s.import);
+  };
+  const bindStripHeader = () => {
+    const on = (sel, fn) => root.querySelector(`.gg-vs-head ${sel}`)?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (e.currentTarget.disabled) return;
+      const c = stripCut();
+      if (c) fn(c, stripSelectedVersionId(c));
+    });
+    on(".gg-vs-best-btn", (c, vid) => {
+      Object.assign(stripPick, { pid: state.pid, cutId: c.id, vid });
+      toggleBest(c.id, vid);
+    });
+    on(".gg-vs-video-btn", (c, vid) => void imageToVideoCut(c.id, { startVid: vid }));
+    on(".gg-vs-import-btn", (c) => pickVersionImportFiles(c.id));
+  };
   const paintVersionStrip = () => {
     const list = root.querySelector(".gg-vstrip .gg-vs-list");
     if (!list) return;
-    const c = state.timeline ? state.timeline.cuts.find((x) => x.id === state.cutId) || null : null;
+    const c = stripCut();
     const cutId = c?.id || "";
-    const html = versionStripHtml(c);
+    const selVid = stripSelectedVersionId(c);
+    syncStripHeader(c, selVid);
+    const html = versionStripHtml(c, selVid);
     const key = `${cutId}\n${html}`;
     if (list.dataset.html === key) return;
     const left = stripScrollLeft(stripScroll, cutId);
@@ -6329,15 +6664,6 @@ function mountShots(el) {
     list.innerHTML = html;
     list.scrollLeft = left;
     syncStripNewest();
-    list.querySelector(".gg-vs-import")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (e.currentTarget.disabled) return;
-      pickVersionImportFiles(cutId);
-    });
-    list.querySelector(".gg-vs-i2v")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      void imageToVideoCut(cutId);
-    });
     if (!c) return;
     bindThumbFallbacks(list);
     bindStripItems(list, c);
@@ -6676,13 +7002,10 @@ function mountShots(el) {
           <button type="button" class="gg-btn${listCaption ? " gg-on" : ""}" data-mode="caption" title="Edit dialogue / captions per cut">Caption</button>
         </div>
         ${SHOW_REDO_FILTER ? `<label class="gg-filter-redo" title="Show only cuts marked for redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Show redo cuts only</label>` : ""}
-        ${tl && isNativeProject() ? `<div class="gg-cutlist-btns">
-          <button type="button" class="gg-btn gg-primary gg-ai-split" title="Split a story into cuts with a local text model in ComfyUI">AI Cut Split</button>
-        </div>` : ""}
+        ${AI_CUT_SPLIT_VISIBLE && tl && isNativeProject() ? `<div class="gg-cutlist-btns">${aiSplitButtonHtml()}</div>` : ""}
       </div>
       <div class="gg-meta">
         <span class="gg-meta-text">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</span>
-        <button type="button" class="gg-btn gg-primary gg-list-all" hidden title="Select all cuts">All</button>
         <button type="button" class="gg-btn gg-trash-btn" hidden title="Deleted cuts – click to restore">${esc(trashButtonLabel(trashCount))}</button>
       </div>
       <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${listHtml}</div>
@@ -6695,8 +7018,11 @@ function mountShots(el) {
       </div>` : ""}
       ${iconRowHtml()}
       <div class="gg-vstrip" role="group" aria-label="Versions"${tl && !viewFinal ? "" : " hidden"}>
-        <div class="gg-vs-list"></div>
-        <button type="button" class="gg-btn gg-vs-newest" hidden title="Back to newest" aria-label="Back to newest">‹</button>
+        ${versionStripHeadHtml()}
+        <div class="gg-vs-body">
+          <div class="gg-vs-list"></div>
+          <button type="button" class="gg-btn gg-vs-newest" hidden title="Back to newest" aria-label="Back to newest">‹</button>
+        </div>
       </div>
       <div class="gg-cutpanel">${!SHOW_CUT_PANEL && SHOW_STATUS_PANEL ? statusPanelShellHtml() : ""}</div>
       <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>`;
@@ -6708,7 +7034,7 @@ function mountShots(el) {
     root.querySelector(".gg-proj-settings")?.addEventListener("click", () => openProjectSettingsModal());
     root.querySelector(".gg-new-project-btn")?.addEventListener("click", () => openNewProjectModal());
     root.querySelector(".gg-cut-add")?.addEventListener("click", () => addLocalCut());
-    root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); refreshProjectTemplateFlag(); });
+    root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); refreshProjectTemplateFlag(); refreshCutSplitUseAi(); });
     root.querySelectorAll(".gg-view-toggle .gg-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         shotsUi.view = btn.dataset.view === "final" ? "final" : "cuts";
@@ -6747,10 +7073,6 @@ function mountShots(el) {
       });
     });
     root.querySelector(".gg-trash-btn")?.addEventListener("click", () => openTrashModal());
-    root.querySelector(".gg-list-all")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      applyToggleSelectAllCuts();
-    });
     syncTrashButton(root);
     syncTimelineToggleButtons();
     root.querySelector(".gg-timeline-toggle")?.addEventListener("click", (e) => {
@@ -6772,6 +7094,7 @@ function mountShots(el) {
       randomSeedCb.checked = loadRandomSeedOn(localStorage);
       randomSeedCb.addEventListener("change", () => saveRandomSeedOn(localStorage, randomSeedCb.checked));
     }
+    bindStripHeader();
     const vsList = root.querySelector(".gg-vs-list");
     vsList?.addEventListener("scroll", () => {
       stripScroll.left = vsList.scrollLeft;
@@ -6920,6 +7243,8 @@ function mountShots(el) {
   bus.addEventListener("projects", paint);
   bus.addEventListener("timeline", paint);
   bus.addEventListener("trash", () => syncTrashButton(root));
+  const onUseAi = () => syncAiSplitButton(root);
+  bus.addEventListener("cut-split-use-ai", onUseAi);
   bus.addEventListener("template", onTemplate);
   bus.addEventListener("select", onSel);
   bus.addEventListener("gg-opentab", onOpenTab);
@@ -6928,6 +7253,7 @@ function mountShots(el) {
   paint();
   if (!state.projects.length) loadProjects();
   refreshProjectTemplateFlag();
+  refreshCutSplitUseAi();
   refreshSdk(false);
   const timer = setInterval(() => refreshSdk(false), 20000);
   const selectCutFromKeys = (cutId) => {
@@ -7054,13 +7380,7 @@ function mountShots(el) {
     if (action !== "select-all" || !state.timeline) return;
     e.preventDefault();
     e.stopPropagation();
-    const { order, hidden } = shotsNavOrder();
-    const ids = selectAllCutIds(order, hidden);
-    if (!ids.length) return;
-    state.cutSel.clear();
-    for (const id of ids) state.cutSel.add(id);
-    cutSelAnchor = state.cutSel.has(state.cutId) ? state.cutId : ids[0];
-    bus.dispatchEvent(new Event("select"));
+    selectAllListCuts();
   };
   const onShotsEmptyClick = (e) => {
     if (!root.contains(e.target)) return;
@@ -7103,6 +7423,7 @@ function mountShots(el) {
     bus.removeEventListener("projects", paint);
     bus.removeEventListener("timeline", paint);
     bus.removeEventListener("template", onTemplate);
+    bus.removeEventListener("cut-split-use-ai", onUseAi);
     bus.removeEventListener("select", onSel);
     bus.removeEventListener("gg-opentab", onOpenTab);
     bus.removeEventListener("gg-playcut", onPlayCut);

@@ -241,19 +241,22 @@ class ProjectDefaultsTests(ProjectDefaultsBase):
         res = na.native_add_cut(pid, None, None)
         self.assertEqual(self.cut_graph(pid, res["cut"]["id"])["nodes"][0]["id"], 9, "Default template overrides")
 
-    def test_cut_list_uses_video_template(self):
-        pid = self.new_project({"video_template": "builtin:video-ltx-t2v"})
-        ids = na.native_add_cut_list(pid, [{"cut": 1, "duration": 2, "description": "Fox"}])["cut_ids"]
-        g = self.cut_graph(pid, ids[0])
-        self.assertEqual(_node(g, 70)["widgets_values"][2], 49)
-        self.assertEqual(_node(g, 6)["widgets_values"][0], "Fox")
-        ids = na.native_add_cut_list(pid, [{"cut": 1, "duration": 2, "description": "Owl"}], workflow="i2v")["cut_ids"]
-        self.assertTrue(any(n["type"] == "LTXVImgToVideo" for n in self.cut_graph(pid, ids[0])["nodes"]))
+    def test_cut_list_uses_image_template(self):
+        """0.9.125: AI Make Cut cuts start from the Image template, even with workflow="i2v"."""
+        img = self.user_workflow("img.json", {"nodes": [
+            {"id": 3, "type": "CLIPTextEncode", "title": "Prompt", "widgets_values": ["old"]},
+            {"id": 4, "type": "SaveImage"}], "links": []})
+        pid = self.new_project({"image_template": img, "video_template": "builtin:video-ltx-t2v"})
+        for wf in (None, "i2v"):
+            ids = na.native_add_cut_list(pid, [{"cut": 1, "duration": 2, "description": "Fox"}], workflow=wf)["cut_ids"]
+            g = self.cut_graph(pid, ids[0])
+            self.assertEqual([n["id"] for n in g["nodes"]], [3, 4])
+            self.assertEqual(_node(g, 3)["widgets_values"][0], "Fox")
 
     def test_cut_list_with_template_without_prompt_node(self):
-        bad = self.user_workflow("v.json", {"nodes": [{"id": 1, "type": "CLIPTextEncode"}], "links": []})
-        pid = self.new_project({"video_template": bad})
-        with self.assertRaisesRegex(ValueError, "Video template v.json: Prompt node not found"):
+        bad = self.user_workflow("v.json", {"nodes": [{"id": 1, "type": "SaveImage"}], "links": []})
+        pid = self.new_project({"image_template": bad})
+        with self.assertRaisesRegex(ValueError, "Image template: Prompt node not found"):
             na.native_add_cut_list(pid, [{"cut": 1, "duration": 2, "description": "Fox"}])
 
     def test_empty_cut_runs_image_template_with_its_caption(self):
@@ -299,6 +302,27 @@ class ImageToVideoTests(ProjectDefaultsBase):
         self.store.apply_timeline_edit(self.pid, [], {self.cut: {"pick": old["id"]}})
         self.assertEqual(na.pick_start_version(self.pid, self.cut, mid["id"])[0]["id"], old["id"], "Best wins")
 
+    def test_start_vid_is_exactly_the_selected_image(self):
+        """0.9.125 version row Make Video: the selected image even when another one is Best."""
+        old = self.add("old.png")
+        mid = self.add("mid.png")
+        self.store.apply_timeline_edit(self.pid, [], {self.cut: {"pick": mid["id"]}})
+        self.assertEqual(na.pick_start_version(self.pid, self.cut, None, old["id"])[0]["id"], old["id"])
+        plan = gg_sdk.image_to_video_plan(self.pid, self.cut, old["id"], old["id"])
+        self.assertEqual(plan["start_version"], old["id"])
+        self.assertEqual(plan["image"], f"gonggan/start_{old['id']}.png")
+        self.assertEqual(gg_sdk.image_to_video_plan(self.pid, self.cut, old["id"])["start_version"], mid["id"],
+                         "without start_vid Best still wins (right-click Image to Video)")
+
+    def test_start_vid_must_be_a_still_image_of_the_cut(self):
+        self.add("still.png")
+        anim = self.add("anim.webp", _animated_webp)
+        with self.assertRaisesRegex(ValueError, "not a still image"):
+            na.pick_start_version(self.pid, self.cut, None, anim["id"])
+        with self.assertRaisesRegex(ValueError, "not in this cut"):
+            gg_sdk.image_to_video_plan(self.pid, self.cut, None, "no-such-version")
+        self.assertFalse(self.regen_dir.exists(), "no plan written")
+
     def test_no_image_version(self):
         with self.assertRaisesRegex(ValueError, "no still image version"):
             gg_sdk.image_to_video_plan(self.pid, self.cut)
@@ -327,7 +351,9 @@ class ImageToVideoTests(ProjectDefaultsBase):
 
     def test_generate_all_fills_titled_start_image(self):
         v = self.add("still.png")
-        ids = na.native_add_cut_list(self.pid, [{"cut": 1, "duration": 2, "description": "Fox"}])["cut_ids"]
+        video = na.project_video_template(self.store.get_project(self.pid))[1]
+        with mock.patch.object(na, "project_template_graph", return_value=video):
+            ids = na.native_add_cut_list(self.pid, [{"cut": 1, "duration": 2, "description": "Fox"}])["cut_ids"]
         plan = gg_sdk.native_plan(self.pid, ids[0], new_seed=False, convert=True, fill_start=True)
         self.assertNotIn("start_version", plan, "cut without image runs as saved")
         self.store.add_version(self.pid, ids[0], _png(self.root / "c.png"))

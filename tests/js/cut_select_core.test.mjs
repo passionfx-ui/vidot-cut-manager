@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import * as cutSelectCore from "../../web/gg_cut_select_core.js";
 import {
   shouldScheduleCutWorkflowLoad,
   shouldCancelPendingWorkflowLoad,
@@ -9,10 +13,11 @@ import {
   shotsKeyAction,
   stepCutId,
   selectAllCutIds,
-  allVisibleCutsSelected,
-  toggleAllCutSelection,
-  listAllButtonView,
 } from "../../web/gg_cut_select_core.js";
+
+const WEB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web");
+const GONGGAN_JS = readFileSync(path.join(WEB, "gonggan.js"), "utf8");
+const GONGGAN_CSS = readFileSync(path.join(WEB, "gonggan.css"), "utf8");
 
 describe("shouldScheduleCutWorkflowLoad", () => {
   it("plain click schedules", () => {
@@ -286,30 +291,51 @@ describe("selectAllCutIds", () => {
   });
 });
 
-describe("allVisibleCutsSelected / toggleAllCutSelection", () => {
-  it("all selected only when every visible id is chosen", () => {
-    assert.equal(allVisibleCutsSelected(["a", "b", "c"], ["b"], ["a", "c"]), true);
-    assert.equal(allVisibleCutsSelected(["a", "b"], [], ["a"]), false);
-    assert.equal(allVisibleCutsSelected([], [], []), false);
+describe("0.9.125: no visible All button; Ctrl+A and Select All share one select-all", () => {
+  const fnBody = (name) => {
+    const s = GONGGAN_JS.slice(GONGGAN_JS.indexOf(`function ${name}(`));
+    return s.slice(0, s.indexOf("\n}\n"));
+  };
+
+  it("the All button and its helpers are gone", () => {
+    assert.ok(!GONGGAN_JS.includes("gg-list-all"));
+    assert.ok(!GONGGAN_JS.includes("paintListAllButton"));
+    assert.ok(!GONGGAN_CSS.includes("gg-list-all"));
+    for (const name of ["listAllButtonView", "toggleAllCutSelection", "allVisibleCutsSelected"]) {
+      assert.equal(typeof cutSelectCore[name], "undefined", name);
+      assert.ok(!GONGGAN_JS.includes(name), name);
+    }
   });
 
-  it("toggle selects all visible or clears when already all selected", () => {
-    assert.deepEqual(toggleAllCutSelection(["a", "b"], ["b"], []), { ids: ["a"] });
-    assert.deepEqual(toggleAllCutSelection(["a", "b"], [], ["a", "b"]), { ids: [] });
-    assert.deepEqual(toggleAllCutSelection([], [], ["a"]), { ids: [] });
+  it("Ctrl/Cmd+A selects all (also when everything is already selected), not inside text fields", () => {
+    assert.equal(shotsKeyAction({ key: "a", ctrlKey: true }), "select-all");
+    assert.equal(shotsKeyAction({ key: "a", metaKey: true }), "select-all");
+    assert.equal(shotsKeyAction({ key: "A", code: "KeyA", ctrlKey: true, repeat: true }), "select-all");
+    assert.equal(shotsKeyAction({ key: "a", ctrlKey: true, fieldEditing: true }), null);
+    assert.equal(shotsKeyAction({ key: "a", ctrlKey: true, modalOpen: true }), null);
+    assert.equal(shotsKeyAction({ key: "a", ctrlKey: true, shiftKey: true }), null);
+    const handler = GONGGAN_JS.slice(GONGGAN_JS.indexOf("const onShotsSelectAllKey"));
+    const body = handler.slice(0, handler.indexOf("\n  };\n"));
+    assert.match(body, /tag === "INPUT" \|\| tag === "TEXTAREA" \|\| tag === "SELECT" \|\| t\?\.isContentEditable/);
+    assert.match(body, /selectAllListCuts\(\)/);
   });
-});
 
-describe("listAllButtonView", () => {
-  it("shows All when a project has visible cuts; highlights when all selected", () => {
-    const off = listAllButtonView({ hasProject: true, visibleCount: 3, allSelected: false });
-    assert.equal(off.show, true);
-    assert.equal(off.label, "All");
-    assert.match(off.className, /gg-list-all/);
-    assert.ok(!off.className.includes("gg-on"));
-    const on = listAllButtonView({ hasProject: true, visibleCount: 2, allSelected: true });
-    assert.match(on.className, /gg-on/);
-    assert.equal(on.title, "Clear selection");
-    assert.equal(listAllButtonView({ hasProject: false, visibleCount: 1 }).show, false);
+  it("selectAllListCuts selects every shown cut (no toggle back to none)", () => {
+    const body = fnBody("selectAllListCuts");
+    assert.match(body, /selectAllCutIds\(order, hidden\)/);
+    assert.match(body, /state\.cutSel\.add\(id\)/);
+    assert.ok(!/toggle/i.test(body));
+  });
+
+  it("cut card menu and empty list menu offer Select All", () => {
+    assert.match(fnBody("openCutContextMenu"), /selectAll: \(\) => selectAllListCuts\(\)/);
+    assert.match(fnBody("openShotsPanelContextMenu"), /label: SELECT_ALL_LABEL, action: \(\) => selectAllListCuts\(\)/);
+  });
+
+  it("click / Shift / Ctrl selection and the empty Queue rule are kept", () => {
+    assert.match(GONGGAN_JS, /function selectCutRange\(fromId, toId\)/);
+    assert.match(GONGGAN_JS, /function timelineSelectedCutIds\(\)/);
+    assert.equal(shouldScheduleCutWorkflowLoad({ multi: true }), false);
+    assert.equal(shouldScheduleCutWorkflowLoad({ range: true }), false);
   });
 });

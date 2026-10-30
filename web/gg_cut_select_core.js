@@ -130,46 +130,6 @@ export function selectAllCutIds(order, hidden) {
 }
 
 /**
- * Whether every visible list cut is in `selectedIds` (collapsed-scene cuts do not count).
- * @param {string[]} order
- * @param {Iterable<string>} hidden
- * @param {Iterable<string>} selectedIds
- */
-export function allVisibleCutsSelected(order, hidden, selectedIds) {
-  const visible = selectAllCutIds(order, hidden);
-  if (!visible.length) return false;
-  const sel = new Set(selectedIds || []);
-  return visible.every((id) => sel.has(id));
-}
-
-/**
- * All button / Select all menu: select every visible cut, or clear when all are already selected.
- * @returns {{ ids: string[] }}
- */
-export function toggleAllCutSelection(order, hidden, selectedIds) {
-  const visible = selectAllCutIds(order, hidden);
-  if (!visible.length) return { ids: [] };
-  if (allVisibleCutsSelected(order, hidden, selectedIds)) return { ids: [] };
-  return { ids: visible };
-}
-
-/**
- * Visible **All** button in the cut list header (English UI).
- * @param {{ hasProject?: boolean, visibleCount?: number, allSelected?: boolean }} s
- */
-export function listAllButtonView(s = {}) {
-  const n = Math.max(0, Number(s.visibleCount) || 0);
-  const show = !!s.hasProject && n > 0;
-  return {
-    show,
-    label: "All",
-    className: `gg-btn gg-primary gg-list-all${s.allSelected ? " gg-on" : ""}`,
-    title: show ? (s.allSelected ? "Clear selection" : "Select all cuts") : "",
-    disabled: !show,
-  };
-}
-
-/**
  * Next / previous cut id in list order, skipping hidden ids (cuts inside collapsed scenes).
  * With no current cut in the list, down picks the first visible cut and up the last.
  * @param {string[]} order

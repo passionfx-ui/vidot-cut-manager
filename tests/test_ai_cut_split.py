@@ -96,7 +96,7 @@ class WorkflowTests(CutSplitTestBase):
         gen = wf["2"]["inputs"]
         self.assertEqual(gen["clip"], ["1", 0])
         self.assertEqual(gen["prompt"], gg_ltx.CUT_SPLIT_PROMPT + "A fox in the snow.")
-        self.assertEqual(gen["max_length"], 768)
+        self.assertEqual(gen["max_length"], 1536)
         self.assertEqual(gen["sampling_mode"], "off")
         self.assertIs(gen["thinking"], False)
         self.assertEqual(wf["3"], {"class_type": "PreviewAny", "inputs": {"source": ["2", 0]}})
@@ -222,11 +222,11 @@ class ErrorTests(CutSplitTestBase):
 
     def test_node_missing(self):
         err = self.run_error("ComfyError: Cannot execute because node TextGenerate does not exist.")
-        self.assertEqual(str(err), "This ComfyUI has no TextGenerate node. Update ComfyUI to use AI Cut Split.")
+        self.assertEqual(str(err), "This ComfyUI has no TextGenerate node. Update ComfyUI to use AI Make Cut.")
 
     def test_timeout_and_other(self):
         self.assertIn("did not finish within 600 s", str(self.run_error("timed out after 600 s; cancel requested")))
-        self.assertEqual(str(self.run_error("boom")), "AI Cut Split failed in ComfyUI: boom")
+        self.assertEqual(str(self.run_error("boom")), "AI Make Cut failed in ComfyUI: boom")
 
     def test_failed_job_reads_the_comfy_error(self):
         hist = {"job-9": {"status": {"messages": [
