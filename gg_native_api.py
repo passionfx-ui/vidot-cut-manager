@@ -556,6 +556,21 @@ def _add_output_version(pid: str, cut_id: str, lo: dict) -> dict:
     )
 
 
+def native_import_version(pid: str, cut_id: str, src: Path | str) -> dict:
+    """A picked image/video file becomes a new version of the cut. The file is copied (never moved)
+    into the project's assets under a new version id name; `src` itself is only read."""
+    src = Path(src)
+    if src.suffix.lower() not in _MEDIA_KIND:
+        raise ValueError(f"Unsupported file type: {src.suffix or '(none)'}")
+    doc = native_store().get_project(pid)
+    if not doc or doc.get("deleted_at"):
+        raise ValueError("project not found")
+    cut = (doc.get("cuts") or {}).get(cut_id)
+    if not cut or cut.get("deleted_at"):
+        raise ValueError("cut not found")
+    return {"ok": True, "version": _add_output_version(pid, cut_id, {"path": str(src)})}
+
+
 _CAPTURE_LOCK = threading.Lock()
 
 

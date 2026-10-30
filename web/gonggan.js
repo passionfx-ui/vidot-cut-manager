@@ -201,6 +201,9 @@ import {
   showNewestButton,
   stripScrollLeft,
   wheelToScrollLeft,
+  importButtonState,
+  IMPORT_LABEL,
+  IMPORT_ACCEPT,
 } from "./gg_version_strip_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { batchProgressView, createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
@@ -5724,14 +5727,66 @@ function probeStripDurations(c) {
   runStripProbe();
 }
 
-/** Version row below the icon row: the selected cut's versions, newest on the left. */
+let stripImportBusy = false;
+
+/** Version row Import: native file picker; each picked file becomes a new version of the cut. */
+function pickVersionImportFiles(cutId) {
+  const pid = state.pid;
+  if (!cutId || !isNativeProject() || stripImportBusy) return;
+  const input = document.createElement("input");
+  input.type = "file";
+  input.multiple = true;
+  input.accept = IMPORT_ACCEPT;
+  input.addEventListener("change", () => void importVersionFiles(pid, cutId, [...(input.files || [])]));
+  input.click();
+}
+
+/** One upload per file in pick order, so the last picked file ends up newest (left). */
+async function importVersionFiles(pid, cutId, files) {
+  if (!files.length) return;
+  stripImportBusy = true;
+  bus.dispatchEvent(new Event("sdk"));
+  const failed = [];
+  let added = 0;
+  try {
+    for (const file of files) {
+      const form = new FormData();
+      form.append("pid", pid);
+      form.append("cut_id", cutId);
+      form.append("file", file, file.name);
+      try {
+        const res = await api.fetchApi("/gonggan/import-version", { method: "POST", body: form });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 404 || res.status === 405) throw new Error("Restart ComfyUI to enable Import");
+        if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
+        added++;
+      } catch (e) {
+        failed.push(`${file.name}: ${e.message}`);
+      }
+    }
+  } finally {
+    stripImportBusy = false;
+    if (added && state.pid === pid) await loadTimeline();
+    bus.dispatchEvent(new Event("sdk"));
+  }
+  if (failed.length) ggToast(`Imported ${added} of ${files.length}`, failed.join("\n"), "warn");
+  else ggToast(`Imported ${added} file${added === 1 ? "" : "s"}`, "", "ok");
+}
+
+function versionImportButtonHtml(c) {
+  const s = importButtonState({ hasCut: !!c, native: isNativeProject(), busy: stripImportBusy });
+  return `<button type="button" class="gg-btn gg-vs-import" title="${esc(s.title)}"${s.disabled ? " disabled" : ""}>${esc(IMPORT_LABEL)}</button>`;
+}
+
+/** Version row below the icon row: Import first, then the selected cut's versions, newest on the left. */
 function versionStripHtml(c) {
-  if (!c) return '<div class="gg-vs-empty gg-dim">Select a cut to see its versions</div>';
+  const importBtn = versionImportButtonHtml(c);
+  if (!c) return importBtn + '<div class="gg-vs-empty gg-dim">Select a cut to see its versions</div>';
   const rows = versionStripRows(c, stripProbe.dur);
-  if (!rows.length) return '<div class="gg-vs-empty gg-dim">No versions</div>';
+  if (!rows.length) return importBtn + '<div class="gg-vs-empty gg-dim">No versions</div>';
   const tabOpen = ownedShotTabOpen();
   const byId = new Map((c.versions_list || []).map((v) => [v.id, v]));
-  return rows.map((r) => {
+  return importBtn + rows.map((r) => {
     const { wrapCls, tip, img } = versionThumbParts(c, byId.get(r.id), tabOpen);
     const title = r.state ? `${r.state} · ${tip}` : tip;
     return `<div class="${wrapCls} gg-vs-item${r.best ? " gg-vs-best" : ""}" data-vid="${esc(r.id)}">
@@ -5884,6 +5939,10 @@ function mountShots(el) {
     list.innerHTML = html;
     list.scrollLeft = left;
     syncStripNewest();
+    list.querySelector(".gg-vs-import")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      pickVersionImportFiles(cutId);
+    });
     if (!c) return;
     bindThumbFallbacks(list);
     bindStripItems(list, c);
