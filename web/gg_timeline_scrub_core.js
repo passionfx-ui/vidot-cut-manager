@@ -146,12 +146,12 @@ function clampFrame(idx, frames) {
 }
 
 /**
- * Animated clip viewer mode: live <img> while playing, canvas frame while paused/scrubbing.
- * @returns {"animate"|"canvas"|"none"}
+ * Animated clip viewer mode: decoded canvas synced to playhead (paused, scrubbing, and playback).
+ * Export view uses separate rendering ("none" here).
+ * @returns {"canvas"|"none"}
  */
 export function animatedViewerMode(media, playing, exportView, scrubbing) {
   if (exportView || !isAnimatedImage(media)) return "none";
-  if (playing && !scrubbing) return "animate";
   return "canvas";
 }
 

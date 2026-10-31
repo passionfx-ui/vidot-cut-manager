@@ -8256,7 +8256,7 @@ function showFrame(force) {
     if (play.on && !ed.scrubbing && viewer?.box) viewer.box.dataset.ggFrame = "";
   }
   syncAnimatedStill(c, local);
-  if (ed.scrubbing && c && isAnimatedImage(c.media)) {
+  if (c && isAnimatedImage(c.media)) {
     const cache = animScrubBytesCache.get(mediaUrl(c.media.id));
     const idx = computeScrubFrameIndex(c, local, cache?.ready ? cache : null);
     if (idx != null) setPreviewFrameIndex(idx);
@@ -8359,13 +8359,27 @@ async function decodeAnimatedScrubFrame(cache, frameIdx) {
 async function paintAnimatedScrubFrame(c, local) {
   if (!viewer?.still || !c?.media || !isAnimatedImage(c.media)) return;
   const url = mediaUrl(c.media.id);
-  const gen = ++animScrubPaintGen;
+  let cache = animScrubBytesCache.get(url);
+  const idxEarly = computeScrubFrameIndex(c, local, cache?.ready ? cache : null);
   const { still } = viewer;
+  if (idxEarly != null) {
+    const key = `${url}#${idxEarly}`;
+    if (still._ggKey === key && !still.hidden) {
+      setPreviewFrameIndex(idxEarly);
+      return;
+    }
+  }
+  const gen = ++animScrubPaintGen;
   try {
-    const cache = await ensureAnimScrubCache(url, c);
+    cache = await ensureAnimScrubCache(url, c);
     if (gen !== animScrubPaintGen || !viewer) return;
     const idx = computeScrubFrameIndex(c, local, cache);
     if (idx == null) return;
+    const key = `${url}#${idx}`;
+    if (still._ggKey === key && !still.hidden) {
+      setPreviewFrameIndex(idx);
+      return;
+    }
     const { bmp, frameIdx } = await decodeAnimatedScrubFrame(cache, idx);
     if (gen !== animScrubPaintGen || !viewer) {
       bmp.close?.();
@@ -8375,25 +8389,17 @@ async function paintAnimatedScrubFrame(c, local) {
     still.height = bmp.height;
     still.getContext("2d").drawImage(bmp, 0, 0);
     still.hidden = false;
+    still._ggKey = key;
     bmp.close?.();
     setPreviewFrameIndex(frameIdx);
   } catch (_) {}
 }
 
-/**
- * Animated WebP/GIF clips: live <img> while playing; decoded frame on canvas while paused/scrubbing.
- */
+/** Animated WebP/GIF clips: playhead-synced decoded frame on canvas (paused, scrub, playback). */
 function syncAnimatedStill(c, local) {
   if (!viewer || !viewer.still) return;
   const { img, still } = viewer;
   const mode = animatedViewerMode(c && c.media, play.on, viewer.mode === "export", ed.scrubbing);
-  if (mode === "animate") {
-    still.hidden = true;
-    still._ggKey = "";
-    if (img.dataset.src) img.hidden = false;
-    setPreviewFrameIndex(null);
-    return;
-  }
   if (mode !== "canvas") {
     if (!still.hidden) still.hidden = true;
     still._ggKey = "";

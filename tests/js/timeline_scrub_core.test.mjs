@@ -114,13 +114,30 @@ describe("videoPreviewFrameIndex", () => {
 
 describe("animatedViewerMode", () => {
   const anim = { kind: "video", animated: true };
-  it("animates only while playing and not scrubbing", () => {
-    assert.equal(animatedViewerMode(anim, true, false, false), "animate");
+  it("uses decoded canvas while playing (playhead-synced), scrubbing, or paused", () => {
+    assert.equal(animatedViewerMode(anim, true, false, false), "canvas");
     assert.equal(animatedViewerMode(anim, true, false, true), "canvas");
     assert.equal(animatedViewerMode(anim, false, false, false), "canvas");
   });
-  it("ignores non-animated media", () => {
+  it("ignores non-animated media and export view", () => {
     assert.equal(animatedViewerMode({ kind: "video" }, false, false, false), "none");
+    assert.equal(animatedViewerMode(anim, true, true, false), "none");
+  });
+});
+
+describe("animated playback preview frame (UI contract)", () => {
+  it("maps clip-local time to frame index while playing (same as scrub)", () => {
+    const media = { kind: "video", animated: true, frames: 24, seconds: 1 };
+    assert.equal(animatedViewerMode(media, true, false, false), "canvas");
+    assert.equal(
+      animatedScrubFrameIndex({
+        localSec: 0.5,
+        clipSec: 1,
+        sourceSeconds: 1,
+        mediaFrames: 24,
+      }),
+      12,
+    );
   });
 });
 
