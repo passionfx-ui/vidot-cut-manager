@@ -2,6 +2,8 @@
 
 import { formatCutHeaderLengths, formatCutVersionStatus, formatCutInfoLengthField } from "./gg_cuts_core.js";
 import { idleStateView, renderBadgeView } from "./gg_render_status_core.js";
+import { cutProgressStatusView } from "./gg_progress_core.js";
+import { sdkCutStatusView } from "./gg_native_regen_core.js";
 
 /**
  * Selection bar: always shown with the same class (so the same fixed height); with nothing selected
@@ -38,7 +40,8 @@ export function iconRowView(s = {}) {
 }
 
 /**
- * @param {{ count?: number, cut?: object|null, cutLabel?: string, name?: string, render?: object|null }} s
+ * @param {{ count?: number, cut?: object|null, cutLabel?: string, name?: string, render?: object|null,
+ *   progress?: object|null, sdkJob?: object|null, projectId?: string, cutId?: string }} s
  *   count: selected cuts; cut: the single selected cut; render: `renderStatus.cutView(...)` for it.
  * @returns {{ kind: 'empty'|'multi', text: string }
  *   | { kind: 'cut', title: string, label: string, name: string, status: { mode: string, text: string, title: string },
@@ -56,9 +59,15 @@ export function statusPanelView(s = {}) {
   let status;
   if (badge.show) status = { mode: badge.mode, text: badge.text, title: badge.title };
   else {
-    const hasMedia = !!cut.media?.id;
-    const idle = idleStateView(hasMedia);
-    status = { mode: hasMedia ? "done" : "idle", text: idle.text, title: idle.title };
+    const sdk = sdkCutStatusView(s.sdkJob || null, { projectId: s.projectId, cutId: s.cutId });
+    const prog = cutProgressStatusView(s.progress || null);
+    const live = sdk || prog;
+    if (live) status = live;
+    else {
+      const hasMedia = !!cut.media?.id;
+      const idle = idleStateView(hasMedia);
+      status = { mode: hasMedia ? "done" : "idle", text: idle.text, title: idle.title };
+    }
   }
   const len = formatCutHeaderLengths(cut);
   const infoLen = formatCutInfoLengthField(cut);

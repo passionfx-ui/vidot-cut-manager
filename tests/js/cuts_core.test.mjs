@@ -169,13 +169,21 @@ describe("cut header lengths", () => {
     assert.equal(cutOriginalSec({ tl_sec: 3, media: { id: "v", kind: "video", seconds: 0 } }), 3);
   });
   it("version status: Best vN with a pick, Latest vN without", () => {
-    const vl = [{ id: "a", created: 1 }, { id: "b", created: 2 }, { id: "c", created: 3 }];
+    const vl = [{ id: "c", created: 3 }, { id: "b", created: 2 }, { id: "a", created: 1 }];
     const best = formatCutVersionStatus({ pick: "b", media: { id: "b", kind: "image", width: 1024, height: 576 }, versions_list: vl });
     assert.equal(best.text, "Best v02");
     assert.equal(best.detail, "image · 1024x576");
     const latest = formatCutVersionStatus({ pick: null, media: { id: "c", kind: "video" }, versions_list: vl });
     assert.equal(latest.text, "Latest v03");
     assert.equal(latest.detail, "video");
+    const stale = formatCutVersionStatus({
+      pick: null,
+      display: "a",
+      media: { id: "a", kind: "image" },
+      versions_list: [{ id: "b", kind: "video" }, { id: "a", kind: "image" }],
+    });
+    assert.equal(stale.text, "Latest v02");
+    assert.equal(stale.detail, "video");
     assert.deepEqual(formatCutVersionStatus({ media: null }), { text: "", detail: "", title: "No versions yet" });
   });
   it("uses planned_sec as base", () => {

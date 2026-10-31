@@ -196,6 +196,7 @@ def _version_job(root: Path, pid: str, ver: dict[str, Any]) -> dict[str, Any] | 
         "width": None,
         "height": None,
         "seconds": _asset_seconds(asset) if animated else None,
+        "frames": asset.get("frames") if animated and isinstance(asset.get("frames"), int) else None,
         "model": "",
         "aspect": "",
         "source": "native",
@@ -219,7 +220,7 @@ def current_version(cut: dict[str, Any], versions: list[dict[str, Any]]) -> dict
 def _media_view(job: dict[str, Any] | None) -> dict[str, Any] | None:
     if not job:
         return None
-    return {k: job.get(k) for k in ("id", "kind", "animated", "width", "height", "seconds", "model", "source")}
+    return {k: job.get(k) for k in ("id", "kind", "animated", "width", "height", "seconds", "frames", "model", "source")}
 
 
 def _reference_views(root: Path, project: dict[str, Any]) -> list[dict[str, Any]]:

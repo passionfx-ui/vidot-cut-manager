@@ -8,7 +8,7 @@ const withMedia = {
   sec: 3,
   media: { id: "v2", kind: "image" },
   pick: null,
-  versions_list: [{ id: "v1" }, { id: "v2" }],
+  versions_list: [{ id: "v2" }, { id: "v1" }],
 };
 
 describe("statusPanelView", () => {
@@ -60,6 +60,24 @@ describe("statusPanelView", () => {
     assert.equal(f.status.mode, "failed");
     assert.equal(f.status.text, "Failed");
     assert.match(f.status.title, /OOM/);
+  });
+
+  it("SDK and Comfy progress override Idle", () => {
+    const sdk = statusPanelView({
+      count: 1,
+      cut: withMedia,
+      render: null,
+      sdkJob: { native: true, status: "running", pid: "p1", cut_id: "c1" },
+      projectId: "p1",
+      cutId: "c1",
+    });
+    assert.equal(sdk.status.text, "Generating");
+    const prog = statusPanelView({
+      count: 1,
+      cut: withMedia,
+      progress: { state: "running", percent: 12 },
+    });
+    assert.equal(prog.status.text, "Generating 12%");
   });
 });
 

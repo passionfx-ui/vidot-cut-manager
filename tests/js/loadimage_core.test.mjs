@@ -5,6 +5,7 @@ import {
   missingLoadImageReport,
   formatMissingImageToast,
   formatQueueBlockedToast,
+  shouldReportMissingLoadImage,
   parseImageWidgetValue,
   isLoadImageCandidate,
   isNodeSkipped,
@@ -139,6 +140,21 @@ describe("message formatting", () => {
       nodeLabel: "Load",
     });
     assert.equal(msg, "Missing image: a.png (node Load)");
+  });
+
+  it("toast strips internal folder prefix", () => {
+    const msg = formatMissingImageToast({
+      filename: "start.png",
+      subfolder: "gonggan",
+      nodeLabel: "Start Image",
+    });
+    assert.equal(msg, "Missing image: start.png (node Start Image)");
+  });
+
+  it("shouldReportMissingLoadImage: combo miss but file on server is ok", () => {
+    assert.equal(shouldReportMissingLoadImage(false, true), false);
+    assert.equal(shouldReportMissingLoadImage(false, false), true);
+    assert.equal(shouldReportMissingLoadImage(null, false), true);
   });
 
   it("parseImageWidgetValue strips annotation", () => {

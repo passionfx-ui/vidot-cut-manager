@@ -77,6 +77,30 @@ export function firstShowTimelineHeight(defaultPx, viewportH) {
 }
 
 /**
+ * Cap an inflated layout measure before first-show halving (overflow / pre-shrink panel).
+ * @param {number} measuredTimelinePx
+ * @param {number} nestedAvailPx room for timeline inside nested canvas pane (0 = unknown)
+ */
+export function capMeasuredTimelineForFirstShow(measuredTimelinePx, nestedAvailPx) {
+  const m = Number(measuredTimelinePx) || 0;
+  const nested = Number(nestedAvailPx) || 0;
+  if (nested <= 0) return m;
+  return Math.min(m, nested);
+}
+
+/**
+ * Splitter percent denominator: nested canvas pane height (keeps the bottom panel in the viewport),
+ * not the overlay splitter box if it has grown with content.
+ * @param {number} nestedPaneHeight px from `.p-splitterpanel-nested`
+ * @param {number} splitterHeight px from `.p-splitter` (fallback)
+ */
+export function bottomPanelSplitterTotal(nestedPaneHeight, splitterHeight) {
+  const nested = Number(nestedPaneHeight) || 0;
+  if (nested > 0) return nested;
+  return Number(splitterHeight) || 0;
+}
+
+/**
  * Bottom panel share (percent) of the canvas/bottom splitter for a wanted height.
  * @param {number} want px
  * @param {number} total splitter height px
@@ -84,7 +108,68 @@ export function firstShowTimelineHeight(defaultPx, viewportH) {
 export function bottomPanelPercent(want, total, min = TIMELINE_MIN_HEIGHT) {
   const t = Number(total) || 0;
   if (t <= 0) return 0;
-  return Math.min(70, Math.max((want / t) * 100, (min / t) * 100));
+  return Math.min(100, Math.max((want / t) * 100, (min / t) * 100));
+}
+
+/**
+ * Dragging the timeline resize handle up (negative deltaY in screen coords) grows the panel.
+ * @param {number} startHeight px when the drag started
+ * @param {number} deltaY clientY - startClientY
+ * @param {number} viewportH
+ * @param {number} [min]
+ */
+export function timelineHeightFromDrag(startHeight, deltaY, viewportH, min = TIMELINE_MIN_HEIGHT) {
+  const start = Number(startHeight) || min;
+  const next = start - (Number(deltaY) || 0);
+  return clampHeight(next, viewportH, min);
+}
+
+/** Pointer position during handle drag (viewport edges snap to min / max). */
+export function timelineHeightFromPointer(startHeight, startY, clientY, viewportH, min = TIMELINE_MIN_HEIGHT) {
+  const vh = Number(viewportH) || 0;
+  const y = Number(clientY) || 0;
+  const sy = Number(startY) || 0;
+  const start = Number(startHeight) || min;
+  const delta = y - sy;
+  const cap = clampHeight(1e9, vh, min);
+  if (start >= cap - 16 && vh > 0) {
+    const travelDown = Math.max(0, vh - 1 - sy);
+    const fromDrag = timelineHeightFromDrag(startHeight, delta, vh, min);
+    if (fromDrag > min && travelDown > 0 && delta >= travelDown - 2) return min;
+    if (y >= vh - 1) return min;
+  }
+  if (y <= 1) return cap;
+  return timelineHeightFromDrag(startHeight, delta, vh, min);
+}
+
+/** Extra px in `.bottom-panel` above/besides `.gg-timeline` (tab chrome, padding). */
+export function timelinePanelChrome(panelHeight, timelineHeight) {
+  const p = Number(panelHeight) || 0;
+  const t = Number(timelineHeight) || 0;
+  return Math.max(0, p - t);
+}
+
+/**
+ * Tab chrome + padding from layout boxes (panel vs timeline), not panelH - timelineH
+ * (those can match while tabs consume space).
+ * @param {{ top?: number, bottom?: number }} panelRect
+ * @param {{ top?: number, bottom?: number }} timelineRect
+ */
+export function timelineLayoutChrome(panelRect, timelineRect) {
+  const pt = Number(panelRect?.top) || 0;
+  const pb = Number(panelRect?.bottom) || 0;
+  const tt = Number(timelineRect?.top) || 0;
+  const tb = Number(timelineRect?.bottom) || 0;
+  const top = Math.max(0, tt - pt);
+  const bottom = Math.max(0, pb - tb);
+  return top + bottom;
+}
+
+/** Bottom panel height needed so `.gg-timeline` can be `timelineHeight` px tall. */
+export function panelHeightForTimelineHeight(timelineHeight, chromePx) {
+  const t = Number(timelineHeight) || 0;
+  const c = Math.max(0, Number(chromePx) || 0);
+  return t + c;
 }
 
 /** @param {string} open */

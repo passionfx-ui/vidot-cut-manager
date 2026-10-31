@@ -7,6 +7,9 @@ import {
   aiMakeCutProgressText,
   aiMakeCutErrorText,
   aiMakeCutResumable,
+  shouldOfferStoredAiMakeCut,
+  markAiMakeCutOffered,
+  aiMakeCutOfferedStorageKey,
   formatElapsed,
   AI_MAKE_CUT_LABEL,
   AI_MAKE_CUT_WAIT_MS,
@@ -227,6 +230,19 @@ describe("AI Make Cut texts", () => {
     assert.equal(aiMakeCutResumable({ ...job, id: "" }, ""), false);
     assert.equal(aiMakeCutResumable(null, ""), false);
   });
+
+  it("stored-job toast only for matching pid and only once", () => {
+    const m = new Map();
+    const storage = { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, v) };
+    const pid = "p1";
+    const job = { id: "j1", state: "done", cuts: [{ cut: 1 }], pid: "p1" };
+    assert.equal(shouldOfferStoredAiMakeCut(storage, pid, job, "j1", ""), true);
+    assert.equal(shouldOfferStoredAiMakeCut(storage, pid, job, "", ""), false);
+    assert.equal(shouldOfferStoredAiMakeCut(storage, pid, { ...job, pid: "other" }, "j1", ""), false);
+    markAiMakeCutOffered(storage, pid, "j1");
+    assert.equal(storage.getItem(aiMakeCutOfferedStorageKey(pid)), "j1");
+    assert.equal(shouldOfferStoredAiMakeCut(storage, pid, job, "j1", ""), false);
+  });
 });
 
 describe("AI Make Cut right-click entry", () => {
@@ -249,6 +265,8 @@ describe("AI Make Cut right-click entry", () => {
 describe("AI Make Cut dialog wiring (gonggan.js)", () => {
   const fn = GONGGAN_JS.slice(GONGGAN_JS.indexOf("function openAiCutSplitModal("));
   const body = fn.slice(0, fn.indexOf("\n}\n"));
+  const offerFn = GONGGAN_JS.slice(GONGGAN_JS.indexOf("async function offerStoredAiMakeCutResult("));
+  const offerBody = offerFn.slice(0, offerFn.indexOf("\n}\n"));
 
   it("starts a background run (10 minute request limit) and polls its status", () => {
     assert.match(body, /postJson\("\/gonggan\/ai-cut-split", \{\s*story: story\.value,\s*captions: captionsSel\.value,\s*background: true,/);
@@ -260,14 +278,22 @@ describe("AI Make Cut dialog wiring (gonggan.js)", () => {
 
   it("never loses a finished answer: kept for Create, resumed on reopen", () => {
     assert.match(body, /result \? `Create \$\{n\} cut\$\{n === 1 \? "" : "s"\}`/);
-    assert.match(body, /getJson\("\/gonggan\/ai-cut-split\/status"\)/);
-    assert.match(body, /aiMakeCutResumable\(job, localStorage\.getItem\(AI_MAKE_CUT_USED_KEY\)/);
-    assert.match(body, /localStorage\.setItem\(AI_MAKE_CUT_USED_KEY, result\.id\)/);
+    assert.match(body, /loadAiMakeCutJob\(localStorage, state\.pid\)/);
+    assert.match(body, /ai-cut-split\/status\?job=\$\{encodeURIComponent\(storedId\)\}/);
+    assert.match(body, /aiMakeCutResumable\(job, localStorage\.getItem\(aiMakeCutUsedStorageKey\(state\.pid\)\)/);
+    assert.match(body, /localStorage\.setItem\(aiMakeCutUsedStorageKey\(state\.pid\), result\.id\)/);
     assert.match(body, /void resume\(\);/);
   });
 
   it("postJson takes a timeout", () => {
     const pj = GONGGAN_JS.slice(GONGGAN_JS.indexOf("async function postJson("));
     assert.match(pj.slice(0, pj.indexOf("\n}\n")), /setTimeout\(\(\) => ctl\.abort\(\), timeoutMs\)/);
+  });
+
+  it("loadTimeline offer uses stored job id only", () => {
+    assert.match(offerBody, /if \(!storedId\) return;/);
+    assert.match(offerBody, /shouldOfferStoredAiMakeCut/);
+    assert.match(offerBody, /markAiMakeCutOffered/);
+    assert.doesNotMatch(offerBody, /getJson\("\/gonggan\/ai-cut-split\/status"\)/);
   });
 });

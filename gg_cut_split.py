@@ -433,6 +433,11 @@ def _split(story: str, model: dict, captions_mode: str | None = None, on_attempt
                 log.info("[gonggan-cut] AI Cut Split attempt %d: answer cut off at max_length %d (%d chars)",
                          attempt, MAX_LENGTH, len(raw))
                 raise
+            try:
+                from . import gg_story_scenes
+            except ImportError:
+                import gg_story_scenes  # type: ignore
+            cuts = gg_story_scenes.assign_scene_names(story, cuts)
             return {"model": model["clip_name"], "attempts": attempt, "seconds": round(time.time() - t0, 1),
                     "cuts": cuts}
         raise CutSplitError("invalid", f"The model's answer is not a valid cut list (tried {RETRIES + 1} times):\n"
@@ -501,15 +506,16 @@ def _job_main(job_id: str, story: str, model: dict, captions_mode: str | None) -
             _run_lock.release()
 
 
-def start_job(story, captions_mode=None, start_thread=True) -> dict:
+def start_job(story, captions_mode=None, start_thread=True, pid=None) -> dict:
     """Same checks as ai_cut_split, then the run continues in a background thread; returns its first snapshot."""
     mode = gg_script_presplit.normalize_caption_mode(captions_mode)
     model = _begin(story)
     job_id = secrets.token_hex(6)
     with _job_lock:
         _job.clear()
+        extra = {"pid": pid} if isinstance(pid, str) and pid.strip() else {}
         _job.update({"id": job_id, "state": "running", "story": story, "model": model["clip_name"], "attempt": 1,
-                     "max_attempts": RETRIES + 1, "started": time.time(), "finished": None, "captions": mode})
+                     "max_attempts": RETRIES + 1, "started": time.time(), "finished": None, "captions": mode, **extra})
     presplit = gg_script_presplit.presplit_public(story, mode)
     if presplit is not None:
         _job_update(job_id, state="done", finished=time.time(), cuts=presplit, attempts=0, presplit=True)

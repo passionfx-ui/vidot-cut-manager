@@ -24,6 +24,7 @@ _RE_SCENE_SHOT = re.compile(
     r"^\s*scene\s+(\d+)\s*[/\\]\s*shot\s+(\d+)\s*(?:[:\.\-–—]\s*|\s+)\s*(.*)?\s*$",
     re.IGNORECASE,
 )
+_RE_SCENE_ONLY = re.compile(r"^\s*scene\s+(\d+)\s*[:\.\-–—]?\s*$", re.IGNORECASE)
 _RE_NUM_LIST = re.compile(r"^\s*(\d+)\.\s+(.+)\s*$")
 _RE_DURATION = re.compile(
     r"(?:\(\s*(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?\s*\)|duration\s*[:=]\s*(\d+(?:\.\d+)?))",
@@ -64,21 +65,22 @@ def _header_match(line: str) -> tuple[float, str, str] | None:
     return None
 
 
-def _split_blocks(story: str) -> list[tuple[float, str, list[str]]] | None:
-    """Return ordered (sort_key, header_title, body_lines) or None when not clearly pre-split."""
+def _split_blocks(story: str) -> list[tuple[float, str, list[str], str]] | None:
+    """Return ordered (sort_key, header_title, body_lines, scene_name) or None when not clearly pre-split."""
     lines = story.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    blocks: list[tuple[float, str, list[str]]] = []
+    blocks: list[tuple[float, str, list[str], str]] = []
     cur_key: float | None = None
     cur_title = ""
     cur_body: list[str] = []
+    cur_scene = "Scene 1"
     headers = 0
     list_headers = 0
 
     def flush() -> None:
-        nonlocal cur_key, cur_title, cur_body
+        nonlocal cur_key, cur_title, cur_body, cur_scene
         if cur_key is None:
             return
-        blocks.append((cur_key, cur_title, cur_body))
+        blocks.append((cur_key, cur_title, cur_body, cur_scene))
         cur_key = None
         cur_title = ""
         cur_body = []
@@ -88,6 +90,10 @@ def _split_blocks(story: str) -> list[tuple[float, str, list[str]]] | None:
         if not line.strip():
             if cur_body or cur_title:
                 cur_body.append("")
+            continue
+        sm = _RE_SCENE_ONLY.match(line.strip())
+        if sm:
+            cur_scene = f"Scene {int(sm.group(1))}"
             continue
         hm = _header_match(line)
         if hm:
@@ -210,7 +216,7 @@ def presplit_story(story: str, captions_mode: Any = DEFAULT_CAPTION_MODE) -> lis
         return None
     mode = normalize_caption_mode(captions_mode)
     entries: list[dict] = []
-    for n, (_key, header, body) in enumerate(blocks, 1):
+    for n, (_key, header, body, scene) in enumerate(blocks, 1):
         body_text = "\n".join(body)
         dur = _parse_duration(header) or _parse_duration(body_text) or DEFAULT_DURATION
         title = _short_title(header, body)
@@ -224,6 +230,7 @@ def presplit_story(story: str, captions_mode: Any = DEFAULT_CAPTION_MODE) -> lis
             "description": prompt,
             "notes": info,
             "caption": cap,
+            "scene": scene,
         })
     return entries
 

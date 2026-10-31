@@ -64,6 +64,19 @@
 .gg-shots .gg-grp-fold, .gg-shots .gg-grp-ren, .gg-shots .gg-grp-del { background: transparent; border: none; color: var(--gg-dim); cursor: pointer; padding: 0 4px; }
 .gg-shots .gg-grp-fold:hover, .gg-shots .gg-grp-ren:hover, .gg-shots .gg-grp-del:hover { color: var(--gg-acc); }
 .gg-shots .gg-grp-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.gg-shots .gg-grp-head.gg-grp-renaming .gg-grp-title-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 18px;
+  padding: 0 4px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--gg-fg);
+  background: var(--gg-bg);
+  border: 1px solid var(--gg-acc, #f2b84b);
+  border-radius: 3px;
+  outline: none;
+}
 .gg-shots .gg-grp-meta { color: var(--gg-dim); font-variant-numeric: tabular-nums; }
 .gg-shots .gg-grp-loose > .gg-grp-head .gg-grp-title { color: var(--gg-dim); font-weight: 500; }
 /* Bottom bar and status panel: always present at fixed heights so the cut list never shifts; actions dim with nothing selected. */
@@ -81,8 +94,14 @@
 .gg-shots .gg-iconrow .gg-version { position: static; flex-shrink: 0; margin-right: auto; }
 .gg-shots.gg-cutpanel-off .gg-cutpanel { display: none; }
 /* Status card for the selection with the Queue row (under the selection bar, above the Timeline bar). */
-.gg-shots.gg-cutpanel-status .gg-cutpanel { border-top: none; padding: 6px 10px 8px; height: 108px; max-height: none; overflow: hidden; display: flex; flex-direction: column; gap: 6px; }
+.gg-shots.gg-cutpanel-status .gg-cutpanel { border-top: none; padding: 6px 10px 8px; height: 108px; max-height: none; overflow: hidden; display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
 .gg-shots .gg-cutpanel .gg-sp-info { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 3px; }
+.gg-shots .gg-cutpanel .gg-job-queue { flex: 0 1 auto; min-height: 0; max-height: 52px; overflow: hidden; display: flex; flex-direction: column; }
+.gg-shots .gg-cutpanel .gg-job-queue[hidden] { display: none !important; }
+.gg-shots .gg-cutpanel .gg-job-queue-list { list-style: none; margin: 0; padding: 0 2px 0 0; overflow-y: auto; flex: 1 1 auto; min-height: 0; max-height: 52px; scrollbar-width: thin; }
+.gg-shots .gg-cutpanel .gg-job-row { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; font-size: 10px; line-height: 13px; color: var(--gg-dim); font-variant-numeric: tabular-nums; }
+.gg-shots .gg-cutpanel .gg-job-cut { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gg-fg); }
+.gg-shots .gg-cutpanel .gg-job-st { flex: 0 0 auto; white-space: nowrap; }
 .gg-shots .gg-cutpanel .gg-sp-actions { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; }
 .gg-shots .gg-queue-btn { flex: 0 0 auto; font-size: 14px; font-weight: 600; padding: 4px 20px; }
 .gg-shots .gg-queue-btn.gg-queue-stop { color: #ffc4c4; border-color: #7a3a3a; }
@@ -437,7 +456,22 @@
 .gg-shots .gg-cut-fields textarea[readonly] { opacity: 0.92; cursor: default; }
 
 /* Timeline bottom panel: viewer (left) + editor (right) */
-.gg-timeline { display: flex; flex-direction: row; background: var(--gg-bg); outline: none; min-height: 220px; }
+.gg-timeline { display: flex; flex-direction: column; background: var(--gg-bg); outline: none; min-height: 220px; height: 100%; max-height: 100%; overflow: hidden; box-sizing: border-box; }
+.gg-timeline .gg-tl-resize {
+  flex: 0 0 8px;
+  min-height: 8px;
+  cursor: ns-resize;
+  background: linear-gradient(var(--gg-line), var(--gg-line)) center/100% 1px no-repeat;
+  touch-action: none;
+  user-select: none;
+}
+.gg-timeline .gg-tl-resize:hover { background-color: rgba(110, 224, 122, 0.12); }
+.gg-timeline .gg-tl-main { display: flex; flex-direction: row; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.gg-tl-scrub-overlay,
+.gg-tl-drag-overlay { position: fixed; inset: 0; z-index: 100000; touch-action: none; }
+.gg-tl-scrub-overlay { cursor: col-resize; }
+.gg-tl-drag-overlay { cursor: ns-resize; }
+.gg-shots .gg-new-project-head { min-width: 28px; padding: 2px 8px; font-size: 16px; line-height: 1; font-weight: 600; }
 .gg-timeline .gg-viewer { flex: 0 0 auto; display: flex; flex-direction: column; padding: 6px; border-right: 1px solid var(--gg-line); }
 .gg-timeline .gg-screen { position: relative; flex: 0 0 auto; min-height: 112px; aspect-ratio: 16 / 9; background: #000; border-radius: 4px; overflow: hidden; }
 .gg-timeline .gg-screen img, .gg-timeline .gg-screen video, .gg-timeline .gg-screen canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
@@ -467,11 +501,11 @@
 .gg-timeline .gg-zb-l { left: 1px; }
 .gg-timeline .gg-zb-r { right: 1px; }
 .gg-timeline .gg-zb-handle:hover { background: var(--gg-acc); }
-.gg-timeline .gg-tl-inner { position: relative; height: 100%; }
-.gg-timeline .gg-ruler { position: relative; height: 20px; border-bottom: 1px solid var(--gg-line); cursor: col-resize; }
+.gg-timeline .gg-tl-inner { position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.gg-timeline .gg-ruler { position: relative; flex: 0 0 20px; height: 20px; border-bottom: 1px solid var(--gg-line); cursor: col-resize; box-sizing: border-box; }
 .gg-timeline .gg-tick { position: absolute; top: 12px; width: 1px; height: 8px; background: var(--gg-line); font-size: 9px; color: var(--gg-dim); text-indent: 3px; white-space: nowrap; line-height: 10px; pointer-events: none; }
 .gg-timeline .gg-tick.gg-major { top: 0; height: 20px; background: #555c68; }
-.gg-timeline .gg-track { display: flex; height: clamp(84px, calc(100% - 40px), 150px); margin-top: 6px; }
+.gg-timeline .gg-track { display: flex; flex: 1 1 auto; min-height: 84px; max-height: 150px; height: auto; margin-top: 6px; }
 .gg-timeline .gg-clip { position: relative; flex: 0 0 auto; box-sizing: border-box; height: 100%; overflow: hidden; border: 1px solid #0b0c0e; border-radius: 4px; background: #2b3d55; cursor: grab; user-select: none; touch-action: none; }
 .gg-timeline .gg-clip-video { background: #3b2b55; }
 .gg-timeline .gg-clip.gg-in-scene { box-shadow: inset 0 3px 0 hsl(var(--gg-grp, 200) 50% 42% / .85); }
@@ -524,7 +558,8 @@
 .gg-root .gg-sdk-ok { color: #6ee07a; border-color: #3d6b42; }
 .gg-root .gg-sdk-bad { color: #ff8a8a; border-color: #6b3d3d; }
 .gg-root .gg-sdk-wait { color: var(--gg-dim); }
-.gg-shots .gg-cutpanel { border-top: 1px solid var(--gg-line); padding: 4px 6px 6px; flex: 0 0 auto; max-height: 36%; overflow-y: auto; background: #1f2228; }
+.gg-shots .gg-cutpanel { border-top: 1px solid var(--gg-line); padding: 4px 6px 6px; flex: 0 0 auto; flex-shrink: 0; max-height: 36%; min-height: 0; overflow: hidden; background: #1f2228; }
+.gg-shots.gg-cutpanel-status .gg-cutpanel { max-height: none; overflow: hidden; }
 .gg-shots .gg-panel-empty, .gg-root .gg-dim { color: var(--gg-dim); font-size: 11px; }
 .gg-shots .gg-panel-head { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 11px; margin-bottom: 2px; }
 .gg-shots .gg-panel-fold { background: transparent; border: none; color: var(--gg-dim); cursor: pointer; padding: 0 2px; font-size: 10px; line-height: 1; flex-shrink: 0; }

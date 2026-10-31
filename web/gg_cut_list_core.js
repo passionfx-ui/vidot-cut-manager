@@ -274,6 +274,7 @@ export function cutListPayload(pid, cuts, workflow, after) {
       title: c.title ?? cutNameOf(c),
       caption: c.caption ?? "",
       notes: c.notes ?? "",
+      ...(c.scene ? { scene: c.scene } : {}),
     })),
   };
   if (workflow) body.workflow = workflow;
@@ -320,6 +321,80 @@ export function aiMakeCutErrorText(err) {
   if (err?.name === "AbortError") return AI_MAKE_CUT_TIMEOUT_TEXT;
   if (err?.status === 404 && !err?.code) return "Restart ComfyUI to use AI Make Cut (new server route).";
   return err?.message || "AI Make Cut failed.";
+}
+
+/** Per-project: last finished AI Make Cut job id still waiting to be applied. */
+export const AI_MAKE_CUT_JOB_STORE = "gonggan-cut.aiMakeCutJobByProject";
+export const AI_MAKE_CUT_USED_KEY = "gonggan-cut.aiMakeCutUsed";
+export const AI_MAKE_CUT_OFFERED_KEY = "gonggan-cut.aiMakeCutOffered";
+
+export function aiMakeCutUsedStorageKey(pid) {
+  return pid ? `${AI_MAKE_CUT_USED_KEY}.${pid}` : AI_MAKE_CUT_USED_KEY;
+}
+
+export function aiMakeCutOfferedStorageKey(pid) {
+  return pid ? `${AI_MAKE_CUT_OFFERED_KEY}.${pid}` : AI_MAKE_CUT_OFFERED_KEY;
+}
+
+/** @param {Storage|null|undefined} storage @param {string} pid @param {string} jobId */
+export function markAiMakeCutOffered(storage, pid, jobId) {
+  if (!pid || !jobId) return;
+  try {
+    storage?.setItem(aiMakeCutOfferedStorageKey(pid), String(jobId));
+  } catch (_) {}
+}
+
+/**
+ * Whether loadTimeline should toast a finished stored job for this project.
+ * @param {Storage|null|undefined} storage
+ * @param {string} pid
+ * @param {{ id?: string, pid?: string|null, state?: string, cuts?: unknown[] }|null|undefined} job
+ * @param {string} storedId job id saved for this pid when the run started
+ * @param {string} usedId job id whose cuts were already created
+ */
+export function shouldOfferStoredAiMakeCut(storage, pid, job, storedId, usedId) {
+  if (!pid || !storedId || !job?.id || job.id !== storedId) return false;
+  if (job.pid && job.pid !== pid) return false;
+  if (!aiMakeCutResumable(job, usedId)) return false;
+  const offered = storage?.getItem(aiMakeCutOfferedStorageKey(pid)) || "";
+  if (offered && offered === job.id) return false;
+  return true;
+}
+
+/** @param {Storage|null|undefined} storage @param {string} pid @param {string} jobId */
+export function saveAiMakeCutJob(storage, pid, jobId) {
+  if (!pid || !jobId) return;
+  try {
+    const raw = storage?.getItem(AI_MAKE_CUT_JOB_STORE) || "{}";
+    const map = JSON.parse(raw);
+    if (!map || typeof map !== "object" || Array.isArray(map)) return;
+    map[pid] = String(jobId);
+    storage?.setItem(AI_MAKE_CUT_JOB_STORE, JSON.stringify(map));
+  } catch (_) {}
+}
+
+/** @param {Storage|null|undefined} storage @param {string} pid */
+export function loadAiMakeCutJob(storage, pid) {
+  if (!pid) return "";
+  try {
+    const raw = storage?.getItem(AI_MAKE_CUT_JOB_STORE) || "{}";
+    const map = JSON.parse(raw);
+    return map && typeof map === "object" && !Array.isArray(map) ? String(map[pid] || "") : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+/** @param {Storage|null|undefined} storage @param {string} pid */
+export function clearAiMakeCutJob(storage, pid) {
+  if (!pid) return;
+  try {
+    const raw = storage?.getItem(AI_MAKE_CUT_JOB_STORE) || "{}";
+    const map = JSON.parse(raw);
+    if (!map || typeof map !== "object" || Array.isArray(map)) return;
+    delete map[pid];
+    storage?.setItem(AI_MAKE_CUT_JOB_STORE, JSON.stringify(map));
+  } catch (_) {}
 }
 
 /** A finished run that the dialog should offer again: done, has cuts, and its cuts were not created yet. */

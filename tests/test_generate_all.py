@@ -142,7 +142,7 @@ class GenerateAllBase(unittest.TestCase):
         return _run
 
     def start(self, order, *, new_seed=False, **runner_kw):
-        cap = lambda pid, cut, job, wait_sec=0: {"ok": True, "version": {"id": f"v-{cut}"}}  # noqa: E731
+        cap = lambda pid, cut, job, wait_sec=0, api_workflow=None, poll_sec=0.25: {"ok": True, "version": {"id": f"v-{cut}"}}  # noqa: E731
         with mock.patch.object(gg_sdk, "_runner", self.runner(**runner_kw)), \
                 mock.patch.object(na, "native_capture_prompt_output", cap):
             return gg_sdk.start_generate_all(self.pid, order, new_seed=new_seed)

@@ -16,7 +16,14 @@ import {
   timelineShortcutAllowed,
   isTimelineShortcutKey,
   firstShowTimelineHeight,
+  capMeasuredTimelineForFirstShow,
   bottomPanelPercent,
+  bottomPanelSplitterTotal,
+  timelineHeightFromDrag,
+  timelineHeightFromPointer,
+  timelinePanelChrome,
+  timelineLayoutChrome,
+  panelHeightForTimelineHeight,
 } from "../../web/gg_timeline_toggle_core.js";
 
 describe("firstShowTimelineHeight", () => {
@@ -31,12 +38,30 @@ describe("firstShowTimelineHeight", () => {
   });
 });
 
+describe("capMeasuredTimelineForFirstShow", () => {
+  it("passes through when nested room is unknown", () => {
+    assert.equal(capMeasuredTimelineForFirstShow(880, 0), 880);
+  });
+  it("caps inflated measure to nested pane room", () => {
+    assert.equal(capMeasuredTimelineForFirstShow(880, 420), 420);
+    assert.equal(capMeasuredTimelineForFirstShow(100, 420), 100);
+    assert.equal(capMeasuredTimelineForFirstShow(100, 50), 50);
+  });
+});
+
 describe("bottomPanelPercent", () => {
-  it("maps height to splitter percent with min and 70% cap", () => {
+  it("maps height to splitter percent with a floor", () => {
     assert.equal(bottomPanelPercent(250, 1000), 25);
     assert.equal(bottomPanelPercent(100, 1000), 22);
-    assert.equal(bottomPanelPercent(900, 1000), 70);
+    assert.equal(bottomPanelPercent(900, 1000), 90);
     assert.equal(bottomPanelPercent(250, 0), 0);
+  });
+});
+
+describe("bottomPanelSplitterTotal", () => {
+  it("prefers nested pane height over overlay splitter", () => {
+    assert.equal(bottomPanelSplitterTotal(962, 308), 962);
+    assert.equal(bottomPanelSplitterTotal(0, 770), 770);
   });
 });
 
@@ -78,6 +103,55 @@ describe("clampHeight", () => {
     assert.equal(clampHeight(100, 900, TIMELINE_MIN_HEIGHT), TIMELINE_MIN_HEIGHT);
     assert.equal(clampHeight(900, 900, TIMELINE_MIN_HEIGHT), 630);
     assert.equal(clampHeight(400, 900, TIMELINE_MIN_HEIGHT), 400);
+  });
+});
+
+describe("timelineHeightFromDrag", () => {
+  it("grows the panel when the handle moves up", () => {
+    assert.equal(timelineHeightFromDrag(300, -40, 1200), 340);
+    assert.equal(timelineHeightFromDrag(300, 50, 1200), 250);
+    assert.equal(timelineHeightFromDrag(300, -900, 1200), clampHeight(1200, 1200));
+  });
+  it("tracks pointer delta 1:1 from start height before clamp", () => {
+    assert.equal(timelineHeightFromDrag(220, -150, 1000), 370);
+    assert.equal(timelineHeightFromDrag(220, 80, 1000), TIMELINE_MIN_HEIGHT);
+    assert.equal(timelineHeightFromDrag(633, 999 - 200, 1000), TIMELINE_MIN_HEIGHT);
+    assert.equal(timelineHeightFromDrag(390, 400, 1000), TIMELINE_MIN_HEIGHT);
+  });
+  it("clamps to 70% viewport max symmetrically", () => {
+    assert.equal(timelineHeightFromDrag(500, -500, 1000), 700);
+    assert.equal(timelineHeightFromDrag(700, 600, 1000), TIMELINE_MIN_HEIGHT);
+  });
+});
+
+describe("timelineHeightFromPointer", () => {
+  it("snaps to min/max near viewport edges", () => {
+    assert.equal(timelineHeightFromPointer(500, 400, 999, 1000), TIMELINE_MIN_HEIGHT);
+    assert.equal(timelineHeightFromPointer(300, 400, 0, 1000), 700);
+    assert.equal(timelineHeightFromPointer(378, 900, 980, 1000), 298);
+  });
+  it("snaps to min when the pointer hits the viewport bottom before delta reaches min", () => {
+    assert.equal(timelineHeightFromPointer(700, 756, 999, 1000), TIMELINE_MIN_HEIGHT);
+  });
+});
+
+describe("timelinePanelChrome / panelHeightForTimelineHeight", () => {
+  it("derives panel target from timeline height + chrome", () => {
+    assert.equal(timelinePanelChrome(280, 220), 60);
+    assert.equal(timelinePanelChrome(220, 220), 0);
+    assert.equal(timelinePanelChrome(200, 220), 0);
+    assert.equal(panelHeightForTimelineHeight(370, 60), 430);
+    assert.equal(panelHeightForTimelineHeight(220, 0), 220);
+  });
+});
+
+describe("timelineLayoutChrome", () => {
+  it("uses tab strip gap even when panel and timeline heights match", () => {
+    assert.equal(
+      timelineLayoutChrome({ top: 100, bottom: 320 }, { top: 165, bottom: 385 }),
+      65,
+    );
+    assert.equal(timelineLayoutChrome({ top: 0, bottom: 220 }, { top: 65, bottom: 285 }), 65);
   });
 });
 

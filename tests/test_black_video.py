@@ -113,9 +113,9 @@ class RetryTests(unittest.TestCase):
             workflows.append(json.loads(Path(args[args.index("--workflow") + 1]).read_text(encoding="utf-8")))
             return {"ok": True, "job_id": f"job-{len(workflows)}", "seconds": 1.0}
 
-        def capture(pid, cut_id, job_id, wait_sec=0):
+        def capture(pid, cut_id, job_id, wait_sec=0, api_workflow=None, poll_sec=0.25):
             src = _webp(self.tmp / f"{job_id}.webp", next(runs))
-            return {"ok": True, "version": self.store.add_version(pid, cut_id, src, prompt_id=job_id)}
+            return {"ok": True, "version": self.store.add_version(pid, cut_id, src, workflow=api_workflow, prompt_id=job_id)}
 
         with mock.patch.object(gg_sdk, "_runner", side_effect=runner), \
                 mock.patch.object(na, "native_capture_prompt_output", side_effect=capture):

@@ -428,8 +428,12 @@ def validate_cut_list(entries: Any) -> list[dict]:
             elif len(notes) > DESCRIPTION_MAX_LEN:
                 errors.append(f'{where}: "notes" is too long ({len(notes)} characters, max {DESCRIPTION_MAX_LEN}).')
         if len(errors) == bad:
-            rows.append({"order": float(num), "sec": round(float(sec), 2), "description": desc, "title": title or "",
-                         "caption": caption if isinstance(caption, str) else "", "notes": notes if isinstance(notes, str) else ""})
+            row = {"order": float(num), "sec": round(float(sec), 2), "description": desc, "title": title or "",
+                   "caption": caption if isinstance(caption, str) else "", "notes": notes if isinstance(notes, str) else ""}
+            sc = e.get("scene")
+            if isinstance(sc, str) and sc.strip():
+                row["scene"] = sc.strip()
+            rows.append(row)
     if errors:
         raise CutListError(errors)
     rows.sort(key=lambda r: r["order"])
@@ -441,12 +445,18 @@ def validate_cut_list(entries: Any) -> list[dict]:
         if cap is None:
             cap = ""
         out.append({"cut": n, "duration": r["sec"], "description": d, "title": name, "name": name,
-                    "caption": cap, "notes": r.get("notes") or "", "sec": r["sec"], "prompt": d})
+                    "caption": cap, "notes": r.get("notes") or "", "sec": r["sec"], "prompt": d,
+                    **({"scene": r["scene"]} if isinstance(r.get("scene"), str) and r.get("scene") else {})})
     return out
 
 
 def public_cuts(rows: list[dict]) -> list[dict]:
     """Validated rows in the paste/API schema [{cut, duration, title, description, caption}]."""
-    return [{"cut": r["cut"], "duration": r["duration"], "title": r.get("title") or r.get("name") or "",
-             "description": r["description"], "caption": r.get("caption") if r.get("caption") is not None else ""}
-            for r in rows]
+    out = []
+    for r in rows:
+        item = {"cut": r["cut"], "duration": r["duration"], "title": r.get("title") or r.get("name") or "",
+                "description": r["description"], "caption": r.get("caption") if r.get("caption") is not None else ""}
+        if isinstance(r.get("scene"), str) and r.get("scene"):
+            item["scene"] = r["scene"]
+        out.append(item)
+    return out

@@ -31,8 +31,10 @@ describe("Shots header layout", () => {
 
   it("puts Reload right after the Project settings gear, inside the Project row", () => {
     const buttons = [...projRow.matchAll(/<button[^>]*class="([^"]+)"/g)].map((m) => m[1]);
-    assert.deepEqual(buttons, ["gg-btn gg-proj-settings", "gg-btn gg-reload"]);
+    assert.deepEqual(buttons, ["gg-btn gg-proj-settings", "gg-btn gg-new-project-head", "gg-btn gg-reload"]);
     assert.equal(head.split("gg-reload").length, 2, "only one Reload in the header");
+    assert.match(projRow, /gg-new-project-head[^>]*aria-label="New Project"/);
+    assert.match(projRow, /gg-new-project-head[^>]*>\+<\/button>/);
   });
 
   it("keeps the Reload click handler", () => {

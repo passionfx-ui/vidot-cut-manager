@@ -12,6 +12,7 @@ import {
   missingLoadImageReport,
   formatMissingImageToast,
   formatQueueBlockedToast,
+  shouldReportMissingLoadImage,
   LOAD_IMAGE_NODE_TYPES,
 } from "./gg_loadimage_core.js";
 
@@ -77,12 +78,15 @@ async function computeMissing() {
     if (ref.empty || ref.folderType !== "input") continue;
     const inCombo = comboValuesInclude(ref, widget.options?.values);
     if (inCombo === true) continue;
+    let existsOnServer = null;
     if (inCombo === false) {
+      existsOnServer = await fileExistsOnServer(ref);
+      if (!shouldReportMissingLoadImage(inCombo, existsOnServer)) continue;
       missing.push({ node, ref, widget });
       continue;
     }
     const ok = await fileExistsOnServer(ref);
-    if (!ok) missing.push({ node, ref, widget });
+    if (shouldReportMissingLoadImage(inCombo, ok)) missing.push({ node, ref, widget });
   }
   return missing;
 }

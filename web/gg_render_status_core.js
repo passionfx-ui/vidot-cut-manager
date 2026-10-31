@@ -332,7 +332,46 @@ export function createRenderStatus(opts = {}) {
     return { state: rendering ? "rendering" : queuedN ? "queued" : null, rendering, queued: queuedN };
   }
 
-  return { link, queued, removed, handle, syncQueue, cutView, globalView, queuedPromptIds, isFailed, startBatch, addToBatch, batchView };
+  /** Active ComfyUI queue jobs for cuts in `projectId` (running first, then queue order). */
+  function listProjectJobs(projectId) {
+    const pid = String(projectId || "");
+    if (!pid) return [];
+    const rows = [];
+    for (const [promptId, j] of jobs) {
+      const l = links.get(promptId);
+      if (!l || l.projectId !== pid) continue;
+      if (j.state !== "queued" && j.state !== "rendering") continue;
+      rows.push({
+        promptId,
+        cutId: l.cutId,
+        state: j.state,
+        percent: j.percent,
+        position: j.state === "queued" ? positionOf(promptId) : null,
+      });
+    }
+    rows.sort((a, b) => {
+      if (a.state === "rendering" && b.state !== "rendering") return -1;
+      if (b.state === "rendering" && a.state !== "rendering") return 1;
+      return (a.position ?? 9999) - (b.position ?? 9999);
+    });
+    return rows;
+  }
+
+  return {
+    link,
+    queued,
+    removed,
+    handle,
+    syncQueue,
+    cutView,
+    globalView,
+    listProjectJobs,
+    queuedPromptIds,
+    isFailed,
+    startBatch,
+    addToBatch,
+    batchView,
+  };
 }
 
 /** Badge text for a cut view (null = hidden). `pos` (`#N`) is the queue place, shown only on cut cards. */

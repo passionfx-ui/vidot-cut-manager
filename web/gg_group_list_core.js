@@ -43,6 +43,16 @@ export function nextSceneName(groups) {
   return `Scene ${n}`;
 }
 
+/**
+ * Scene name from the dialog: empty or whitespace uses the next free `Scene N`.
+ * @param {{ name?: string }[]} groups
+ * @param {string} typed
+ */
+export function resolveSceneName(groups, typed) {
+  const name = String(typed ?? "").trim();
+  return name || nextSceneName(groups);
+}
+
 let sceneIdSeq = 0;
 
 /** Scene group id that stays unique within one page even for several clicks in the same millisecond. */
@@ -128,7 +138,7 @@ export function groupedListHtml(sections, { cutHtml, groupHue = () => 200, group
     const g = sec.group;
     const collapsed = !!g.collapsed;
     return `<section class="gg-grp-sec" data-group-id="${escHtml(g.id)}" style="--gg-grp:${groupHue(g.id)}">
-        <header class="gg-grp-head">
+        <header class="gg-grp-head" title="Double-click to rename">
           <button type="button" class="gg-grp-fold" title="Collapse or expand">${collapsed ? "▸" : "▾"}</button>
           <span class="gg-grp-title">${escHtml(g.name)}</span>
           <span class="gg-grp-prog">${escHtml(groupProgress(sec.cuts))}</span>

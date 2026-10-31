@@ -82,9 +82,12 @@ describe("New Project: project folder path", () => {
 });
 
 describe("New Project: request", () => {
-  it("needs a name, then a location", () => {
+  it("needs a name; empty location uses server default", () => {
     assert.deepEqual(newProjectRequest({ name: " ", location: "D:\\A" }), { error: "Enter a project name", field: "name" });
-    assert.deepEqual(newProjectRequest({ name: "A", location: "  " }), { error: "Choose a location", field: "location" });
+    assert.deepEqual(newProjectRequest({ name: "A", location: "  " }).body, {
+      name: "A",
+      settings: { image_template: "builtin:image", video_template: "builtin:video-ltx" },
+    });
   });
   const DEFAULT_TEMPLATES = { image_template: "builtin:image", video_template: "builtin:video-ltx" };
   it("body carries name, location and the Default template only when one is picked", () => {

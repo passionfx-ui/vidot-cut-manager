@@ -367,6 +367,57 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
     }
 
 
+def _is_pristine_seed_cut(store: LocalStore, pid: str, cut_id: str, cut: dict) -> bool:
+    if cut.get("name") != NEW_CUT_NAME:
+        return False
+    if store.list_versions(pid, cut_id):
+        return False
+    for key in ("prompt", "caption", "notes"):
+        if str(cut.get(key) or "").strip():
+            return False
+    if cut.get("end_card") or cut.get("needs_redo"):
+        return False
+    return True
+
+
+def _remove_pristine_seed_cuts(store: LocalStore, pid: str, keep_cut_id: str | None = None) -> None:
+    doc = store.get_project(pid)
+    if not doc:
+        return
+    drop = [
+        cid for cid, c in (doc.get("cuts") or {}).items()
+        if isinstance(c, dict) and not c.get("deleted_at") and cid != keep_cut_id
+        and _is_pristine_seed_cut(store, pid, cid, c)
+    ]
+    if drop:
+        store.delete_cuts(pid, drop)
+
+
+def _assign_scene_groups(store: LocalStore, pid: str, pairs: list[tuple[str, str]]) -> None:
+    if not pairs:
+        return
+    tl = store.to_timeline(pid) or {}
+    groups = [dict(g) for g in tl.get("groups") or []]
+    for g in groups:
+        g["cut_ids"] = list(g.get("cut_ids") or [])
+    by_name = {str(g.get("name") or "").strip().lower(): g for g in groups}
+    for cut_id, scene_name in pairs:
+        sn = str(scene_name or "").strip()
+        if not sn:
+            continue
+        key = sn.lower()
+        g = by_name.get(key)
+        if not g:
+            g = {"id": f"s{int(time.time() * 1000)}{len(groups)}", "name": sn, "cut_ids": [], "collapsed": False}
+            groups.append(g)
+            by_name[key] = g
+        for og in groups:
+            og["cut_ids"] = [x for x in og.get("cut_ids") or [] if x != cut_id]
+        if cut_id not in g["cut_ids"]:
+            g["cut_ids"].append(cut_id)
+    store.sync_scene_groups(pid, groups)
+
+
 def native_add_cut_list(pid: str, cuts, workflow: str | None = None, after: str | None = None) -> dict:
     """AI Cut Split / AI Make Cut: one cut per entry, each with a copy of the project's Image template with the
     description in its prompt node. `workflow` is ignored (every cut starts as an image cut)."""
@@ -390,7 +441,14 @@ def native_add_cut_list(pid: str, cuts, workflow: str | None = None, after: str 
             entries.append({**r, "graph": g})
     except gg_wfnodes.NodeNotFound as ex:
         raise ValueError(f"Image template: {ex}") from None
+    _remove_pristine_seed_cuts(store, pid, after if isinstance(after, str) and after else None)
     _doc, ids = store.add_cuts(pid, entries, after=after if isinstance(after, str) and after else None)
+    scene_pairs = [
+        (cid, entries[i].get("scene"))
+        for i, cid in enumerate(ids)
+        if i < len(entries) and isinstance(entries[i].get("scene"), str) and entries[i].get("scene")
+    ]
+    _assign_scene_groups(store, pid, scene_pairs)
     return {"ok": True, "cut_ids": ids, "timeline": store.to_timeline(pid)}
 
 
@@ -1012,13 +1070,15 @@ def native_send_last_output(pid: str, cut_id: str) -> dict:
     return {"ok": True, "version": _add_output_version(pid, cut_id, lo), "output": lo}
 
 
-def _add_output_version(pid: str, cut_id: str, lo: dict) -> dict:
+def _add_output_version(pid: str, cut_id: str, lo: dict, api_workflow: dict | None = None) -> dict:
     path = Path(lo["path"])
     meta = gg_wfstore.extract_png_meta(path) if path.suffix.lower() == ".png" else {}
     ui = meta.get("workflow") if isinstance(meta.get("workflow"), dict) else None
     api = meta.get("prompt") if isinstance(meta.get("prompt"), dict) else None
+    if api_workflow is not None and isinstance(api_workflow, dict):
+        api = api_workflow
     workflow = ui or api
-    return native_store().add_version(
+    ver = native_store().add_version(
         pid,
         cut_id,
         path,
@@ -1026,6 +1086,7 @@ def _add_output_version(pid: str, cut_id: str, lo: dict) -> dict:
         prompt_id=lo.get("prompt_id") if isinstance(lo.get("prompt_id"), str) else None,
         animated=lo.get("animated") is True,
     )
+    return ver
 
 
 def native_import_version(pid: str, cut_id: str, src: Path | str) -> dict:
@@ -1047,7 +1108,8 @@ _CAPTURE_LOCK = threading.Lock()
 
 
 def native_capture_prompt_output(
-    pid: str, cut_id: str, prompt_id: str, wait_sec: float = 5.0, poll_sec: float = 0.25
+    pid: str, cut_id: str, prompt_id: str, wait_sec: float = 5.0, poll_sec: float = 0.25,
+    api_workflow: dict | None = None,
 ) -> dict:
     """A finished run queued from a cut becomes a version of that cut (once per prompt id).
 
@@ -1081,4 +1143,4 @@ def native_capture_prompt_output(
             run = ver.get("run") if isinstance(ver.get("run"), dict) else {}
             if run.get("prompt_id") == prompt_id:
                 return {"ok": True, "version": ver, "output": lo, "duplicate": True}
-        return {"ok": True, "version": _add_output_version(pid, cut_id, lo), "output": lo, "duplicate": False}
+        return {"ok": True, "version": _add_output_version(pid, cut_id, lo, api_workflow), "output": lo, "duplicate": False}

@@ -96,6 +96,25 @@ describe("createRenderStatus: cut lifecycle", () => {
     assert.equal(rs.cutView("p", "c1").state, "rendering");
     assert.equal(rs.globalView("p").state, null);
   });
+  it("listProjectJobs returns running then queued rows for the project only", () => {
+    const rs = createRenderStatus();
+    rs.queued("a", { cutId: "c1", projectId: "p" });
+    rs.queued("b", { cutId: "c2", projectId: "p" });
+    rs.queued("x", { cutId: "c9", projectId: "other" });
+    rs.syncQueue({
+      queue_running: [[1, "b", {}, {}, []]],
+      queue_pending: [[2, "a", {}, {}, []]],
+    });
+    rs.handle("execution_start", { prompt_id: "b" });
+    const rows = rs.listProjectJobs("p");
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].promptId, "b");
+    assert.equal(rows[0].state, "rendering");
+    assert.equal(rows[1].promptId, "a");
+    assert.equal(rows[1].state, "queued");
+    assert.equal(rows[1].position, 1);
+    assert.deepEqual(rs.listProjectJobs("other").map((r) => r.promptId), ["x"]);
+  });
 });
 
 describe("createRenderStatus: failed, remove from queue, batch", () => {

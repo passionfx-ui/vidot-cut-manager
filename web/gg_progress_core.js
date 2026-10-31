@@ -164,6 +164,23 @@ export function sceneBestProgress(sceneCuts) {
   return { best, total: arr.length };
 }
 
+/** @param {{ state?: string, percent?: number|null, queuePos?: number|null, error?: string|null }} evt */
+export function cutProgressStatusView(evt) {
+  if (!evt || !evt.state) return null;
+  if (evt.state === "queued") {
+    const at = evt.queuePos != null && evt.queuePos > 0 ? `, position ${evt.queuePos}` : "";
+    return { mode: "queued", text: "Queued", title: `Waiting in the ComfyUI queue${at}` };
+  }
+  if (evt.state === "running") {
+    const pct = Number.isFinite(evt.percent) ? ` ${Math.round(evt.percent)}%` : "";
+    return { mode: "rendering", text: `Generating${pct}`, title: `Generating in ComfyUI${pct}` };
+  }
+  if (evt.state === "failed") {
+    return { mode: "failed", text: "Failed", title: evt.error || "Render failed" };
+  }
+  return null;
+}
+
 export function createProgressTracker() {
   /** @type {Set<(evt: ProgressEvent) => void>} */
   const listeners = new Set();

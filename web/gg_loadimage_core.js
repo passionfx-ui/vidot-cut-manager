@@ -167,15 +167,30 @@ export function missingLoadImageReport(missing) {
 
 export function formatMissingImageToast(first) {
   if (!first) return "";
-  const file = first.subfolder ? `${first.subfolder}/${first.filename}` : first.filename;
+  const raw = first.subfolder ? `${first.subfolder}/${first.filename}` : first.filename;
+  const file = raw.replace(/(^|\/)gonggan\//gi, "$1").replace(/^gonggan\//i, "");
   return `Missing image: ${file} (node ${first.nodeLabel})`;
 }
 
 export function formatQueueBlockedToast(report) {
   if (!report?.first) return "";
   const f = report.first;
-  const file = f.subfolder ? `${f.subfolder}/${f.filename}` : f.filename;
+  const raw = f.subfolder ? `${f.subfolder}/${f.filename}` : f.filename;
+  const file = raw.replace(/(^|\/)gonggan\//gi, "$1").replace(/^gonggan\//i, "");
   let msg = `Cannot queue: missing image ${file} in node ${f.nodeLabel}`;
   if (report.count > 1) msg += ` (+${report.count - 1} more)`;
   return msg;
+}
+
+/**
+ * Whether a Load Image reference should be reported missing. When the combo list omits a file that still
+ * exists on the server (common for plugin-staged start images), do not warn.
+ * @param {boolean|null} inCombo result of comboValuesInclude
+ * @param {boolean|null} existsOnServer result of server check, or null when not checked
+ */
+export function shouldReportMissingLoadImage(inCombo, existsOnServer) {
+  if (inCombo === true) return false;
+  if (inCombo === false && existsOnServer === true) return false;
+  if (inCombo === false && existsOnServer !== true) return true;
+  return existsOnServer === false;
 }

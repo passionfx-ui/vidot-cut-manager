@@ -68,13 +68,14 @@ export function newProjectRequest(v = {}) {
   const name = String(v.name ?? "").trim();
   if (!name) return { error: "Enter a project name", field: "name" };
   const location = clampPath(v.location);
-  if (!location) return { error: "Choose a location", field: "location" };
   const template = String(v.template ?? "").trim();
   const settings = {
     image_template: String(v.imageTemplate ?? "").trim() || DEFAULT_IMAGE_TEMPLATE,
     video_template: String(v.videoTemplate ?? "").trim() || DEFAULT_VIDEO_TEMPLATE,
   };
-  return { body: { name, location, ...(template ? { template_ref: template } : {}), settings } };
+  const body = { name, settings, ...(template ? { template_ref: template } : {}) };
+  if (location) body.location = location;
+  return { body };
 }
 
 /** True when the server created the project without its folder (route from before 0.9.99, ComfyUI not restarted). */

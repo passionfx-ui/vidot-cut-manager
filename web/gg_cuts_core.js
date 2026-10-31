@@ -155,24 +155,70 @@ export function formatCutInfoLengthField(cut) {
 }
 
 /**
+ * Version row used for status labels: Best pick when set, otherwise the newest non-failed version (not
+ * display_version / timeline media, which can lag behind a newer version).
+ * @param {object} cut
+ * @returns {{ id: string, kind: string, width?: number, height?: number, model?: string, best: boolean } | null}
+ */
+export function statusVersionRow(cut) {
+  const list = Array.isArray(cut?.versions_list) ? cut.versions_list.filter((v) => v && v.id) : [];
+  if (cut?.pick) {
+    const hit = list.find((v) => v.id === cut.pick);
+    if (hit) {
+      const m = cut?.media?.id === hit.id ? cut.media : null;
+      return {
+        id: hit.id,
+        kind: hit.kind || m?.kind || "image",
+        width: hit.width ?? m?.width,
+        height: hit.height ?? m?.height,
+        model: hit.model ?? m?.model,
+        best: true,
+      };
+    }
+  }
+  // versions_list is newest-first (see gg_version_strip_core.js)
+  const newest = list.find((v) => !v.failed) || null;
+  if (newest) {
+    const m = cut?.media?.id === newest.id ? cut.media : null;
+    return {
+      id: newest.id,
+      kind: newest.kind || m?.kind || "image",
+      width: newest.width ?? m?.width,
+      height: newest.height ?? m?.height,
+      model: newest.model ?? m?.model,
+      best: false,
+    };
+  }
+  const media = cut?.media;
+  if (!media || typeof media !== "object" || !media.id) return null;
+  return {
+    id: media.id,
+    kind: media.kind || "image",
+    width: media.width,
+    height: media.height,
+    model: media.model,
+    best: !!cut.pick,
+  };
+}
+
+/**
  * Current version for the cut card status line: `Best vN` (manual pick) or `Latest vN` (no pick), plus
  * the media kind / size.
  * @param {object} cut
  * @returns {{ text: string, detail: string, title: string }}
  */
 export function formatCutVersionStatus(cut) {
-  const media = cut?.media;
-  if (!media || typeof media !== "object" || !media.id) return { text: "", detail: "", title: "No versions yet" };
-  const best = !!cut.pick;
-  const v = versionLabel(cut.versions_list, cut.pick || media.id);
-  const parts = [media.kind || "image"];
-  if (media.width && media.height) parts.push(`${media.width}x${media.height}`);
-  else if (media.model) parts.push(String(media.model));
+  const row = statusVersionRow(cut);
+  if (!row) return { text: "", detail: "", title: "No versions yet" };
+  const v = versionLabel(cut.versions_list, row.id);
+  const parts = [row.kind || "image"];
+  if (row.width && row.height) parts.push(`${row.width}x${row.height}`);
+  else if (row.model) parts.push(String(row.model));
   const detail = parts.join(" · ");
   return {
-    text: `${best ? "Best" : "Latest"} ${v}`,
+    text: `${row.best ? "Best" : "Latest"} ${v}`,
     detail,
-    title: `${best ? "Best (picked)" : "Latest (no Best picked)"} ${v} · ${detail}`,
+    title: `${row.best ? "Best (picked)" : "Latest (no Best picked)"} ${v} · ${detail}`,
   };
 }
 
@@ -206,7 +252,8 @@ export function formatPickedVersionInfo(cut) {
 export function versionRepState(cut, versionId) {
   if (!cut || !versionId) return "";
   if (cut.pick) return cut.pick === versionId ? "manual" : "";
-  return cut.media?.id === versionId ? "implicit" : "";
+  const row = statusVersionRow(cut);
+  return row && !row.best && row.id === versionId ? "implicit" : "";
 }
 
 /** Default name for a newly added cut (matches server NEW_CUT_NAME). */

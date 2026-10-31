@@ -1,6 +1,6 @@
 """Vidot Studio – Cut Manager - shot list + rough-cut timeline tab for ComfyUI, reading legacy imported project data."""
 
-__version__ = "0.9.135"
+__version__ = "0.9.136"
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}

@@ -3,7 +3,18 @@
 /** Clip media for a versions_list row; null when there is no row or its file is missing. */
 export function versionMedia(v) {
   if (!v || v.missing) return null;
-  return { id: v.id, kind: v.kind, animated: !!v.animated, width: v.width, height: v.height, seconds: v.seconds, model: v.model, source: v.source };
+  const out = {
+    id: v.id,
+    kind: v.kind,
+    animated: !!v.animated,
+    width: v.width,
+    height: v.height,
+    seconds: v.seconds,
+    model: v.model,
+    source: v.source,
+  };
+  if (v.frames != null && Number(v.frames) > 0) out.frames = Number(v.frames);
+  return out;
 }
 
 /** Animated WebP / GIF / APNG: kind "video" (length, ▶ badge, never a start image) but drawn with <img>, not <video>. */

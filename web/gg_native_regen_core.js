@@ -80,6 +80,19 @@ export function sdkJobToast(job = {}, cutText = "") {
 }
 
 /**
+ * Status panel chip while a native SDK job (Queue / Make Video / Generate All item) runs for this cut.
+ * @param {{ native?: boolean, status?: string, pid?: string, cut_id?: string, batch?: string }} job
+ * @param {{ projectId?: string, cutId?: string }} ctx
+ */
+export function sdkCutStatusView(job, ctx = {}) {
+  if (!job?.native || job.batch) return null;
+  if (job.status !== "running") return null;
+  if (ctx.projectId && job.pid && String(job.pid) !== String(ctx.projectId)) return null;
+  if (ctx.cutId && job.cut_id && String(job.cut_id) !== String(ctx.cutId)) return null;
+  return { mode: "rendering", text: "Generating", title: "Generating through the Comfy SDK" };
+}
+
+/**
  * Node count to judge an empty cut by: the live graph when the cut is open, else the count seen
  * when it was last opened or left; null when unknown.
  * @param {{ live?: number | null, remembered?: number | null }} s

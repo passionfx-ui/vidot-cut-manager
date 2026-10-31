@@ -396,12 +396,15 @@ def _retry_plan_file(wf_file: Path) -> Path:
 
 
 def _run_native_worker(wf_file: Path, pid: str, cut_id: str, retry_black: bool = True) -> None:
+    wf = json.loads(Path(wf_file).read_text(encoding="utf-8"))
     res = _runner(["run", "--workflow", str(wf_file), "--confirm"], timeout=1800)
     if not res.get("ok"):
         _set(status="error", error=res.get("error") or res.get("message"), finished_at=time.time())
         return
     try:
-        cap = _native_api().native_capture_prompt_output(pid, cut_id, str(res.get("job_id") or ""), wait_sec=15)
+        cap = _native_api().native_capture_prompt_output(
+            pid, cut_id, str(res.get("job_id") or ""), wait_sec=15, api_workflow=wf,
+        )
     except Exception as ex:  # noqa: BLE001
         cap = {"ok": False, "message": str(ex)}
     if not cap.get("ok"):

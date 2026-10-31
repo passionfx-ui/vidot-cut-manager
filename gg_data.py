@@ -201,7 +201,7 @@ def clip_seconds(cut: dict, job: dict | None) -> float:
 def _media_view(job: dict | None) -> dict | None:
     if not job:
         return None
-    return {k: job.get(k) for k in ("id", "kind", "animated", "width", "height", "seconds", "model", "source")}
+    return {k: job.get(k) for k in ("id", "kind", "animated", "width", "height", "seconds", "frames", "model", "source")}
 
 
 def list_projects() -> dict:

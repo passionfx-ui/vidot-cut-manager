@@ -208,7 +208,7 @@ class JobRouteTests(unittest.TestCase):
         with mock.patch.object(self.cut_split, "start_job", return_value=job) as start, \
                 mock.patch.object(self.cut_split, "ai_cut_split") as sync_run:
             res = self.call("POST", "/gonggan/ai-cut-split", {"story": "S", "background": True})
-        start.assert_called_once_with("S", None)
+        start.assert_called_once_with("S", None, start_thread=True, pid=None)
         sync_run.assert_not_called()
         self.assertEqual((res.status, res.body), (202, {"ok": True, "job": job}))
 

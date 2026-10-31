@@ -27,9 +27,14 @@ describe("Shots bottom stack keeps fixed heights", () => {
     assert.match(prop(panel, "height") || "", /^\d+px$/);
     assert.equal(prop(panel, "max-height"), "none");
     assert.equal(prop(panel, "overflow"), "hidden");
+    assert.equal(prop(panel, "flex-shrink"), "0");
     const info = ruleFor(".gg-shots .gg-cutpanel .gg-sp-info");
     assert.equal(prop(info, "min-height"), "0");
     assert.equal(prop(info, "overflow"), "hidden");
+    const jq = ruleFor(".gg-shots .gg-cutpanel .gg-job-queue-list");
+    assert.equal(prop(jq, "overflow-y"), "auto");
+    assert.equal(prop(jq, "min-height"), "0");
+    assert.match(prop(jq, "max-height") || "", /^\d+px$/);
   });
 
   it("the empty selection never hides or restyles the bar", () => {
@@ -110,6 +115,7 @@ describe("Queue button in the status panel", () => {
   it("status panel shell has the queue status, batch counter, Random seed checkbox, and Queue button last", () => {
     assert.ok(shellStart >= 0);
     assert.match(shell, /class="gg-sp-info"/);
+    assert.match(shell, /class="gg-job-queue-list"/);
     assert.match(shell, /class="gg-random-seed-cb"/);
     assert.match(shell, /esc\(RANDOM_SEED_LABEL\)/);
     assert.match(shell, /<button[^>]*class="gg-btn gg-primary gg-queue-btn"[^>]*>Queue<\/button>\s*<\/div>/);

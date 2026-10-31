@@ -7,6 +7,7 @@ import {
   groupedListHtml,
   shotsSections,
   nextSceneName,
+  resolveSceneName,
   newSceneGroupId,
   withNewEmptyScene,
   stripCutsFromGroups,
@@ -62,6 +63,11 @@ describe("groupedListHtml", () => {
     assert.equal(strip(info), strip(cap));
     assert.equal(count(cap, 'class="gg-cut gg-cut-caption'), 4);
     assert.equal(count(info, "gg-cut-caption"), 0);
+  });
+
+  it("scene group headers invite double-click rename", () => {
+    const html = groupedListHtml([{ type: "group", group: { id: "g1", name: "Intro", collapsed: false }, cuts: [{ id: "a" }] }], { cutHtml: () => "" });
+    assert.match(html, /class="gg-grp-head" title="Double-click to rename"/);
   });
 
   it("escapes scene names", () => {
@@ -123,6 +129,12 @@ describe("New scene (empty scene stack)", () => {
     assert.equal(nextSceneName([{ name: "Scene 2" }]), "Scene 1");
     assert.equal(nextSceneName([{ name: "Scene 1" }, { name: "Scene 3" }]), "Scene 2");
     assert.equal(nextSceneName([{ name: "Scene 10" }, { name: "Scene 1" }]), "Scene 2");
+  });
+
+  it("resolveSceneName: empty typed name picks next free Scene N", () => {
+    assert.equal(resolveSceneName([{ name: "Scene 1" }], ""), "Scene 2");
+    assert.equal(resolveSceneName([{ name: "Scene 1" }], "  "), "Scene 2");
+    assert.equal(resolveSceneName([], "Custom"), "Custom");
   });
 
   it("withNewEmptyScene: each call stacks one more empty scene at the end with a new name", () => {

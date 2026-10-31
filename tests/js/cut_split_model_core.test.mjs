@@ -276,7 +276,7 @@ describe("AI Make Cut visible again behind the one flag (0.9.125)", () => {
   it("nothing calls the AI routes when the flag is off; the toolbar button and two menu entries open the dialog", () => {
     assert.match(fnBody("refreshCutSplitUseAi"), /if \(!AI_CUT_SPLIT_VISIBLE\) return;/);
     assert.match(fnBody("openAiCutSplitModal"), /if \(!AI_CUT_SPLIT_VISIBLE \|\| !isNativeProject\(\)/);
-    assert.equal(GONGGAN_JS.match(/=> openAiCutSplitModal\(\)/g)?.length, 3, "toolbar button, cut card menu, list menu");
+    assert.equal(GONGGAN_JS.match(/=> openAiCutSplitModal\(\)/g)?.length, 4, "toolbar, cut card menu, list menu, stored-result offer");
     assert.match(GONGGAN_JS, /querySelector\("\.gg-ai-split"\)\?\.addEventListener\("click", \(\) => openAiCutSplitModal\(\)\)/);
     assert.match(GONGGAN_JS, /title: AI_CUT_SPLIT_VISIBLE \? "Workflow for AI Make Cut cuts and Image to Video" : "Workflow for Image to Video"/);
   });

@@ -83,6 +83,7 @@ import {
   sdkRegenErrorMessage,
   sdkPlanSummary,
   sdkJobToast,
+  sdkCutStatusView,
   i2vConfirmMessage,
   i2vErrorMessage,
 } from "./gg_native_regen_core.js";
@@ -106,6 +107,7 @@ import {
   workflowLabel,
 } from "./gg_autosave_core.js";
 import { sentence } from "./gg_text_core.js";
+import { sanitizeUserMessage } from "./gg_ui_text_core.js";
 import {
   filterTabsNeedingAutosave,
   workflowTabNeedsAutosave,
@@ -183,6 +185,12 @@ import {
   shouldDeferListPaint,
 } from "./gg_cut_rename_core.js";
 import {
+  SCENE_NAME_MAX_LEN as SCENE_RENAME_MAX,
+  canInlineRenameScene,
+  inlineSceneRenameCommitName,
+  SCENE_HEADER_INPUT_CLASS,
+} from "./gg_scene_rename_core.js";
+import {
   loadListMode,
   saveListMode,
   normalizeListMode,
@@ -212,6 +220,7 @@ import {
   groupedListHtml,
   shotsSections,
   nextSceneName,
+  resolveSceneName,
   newSceneGroupId,
   withNewEmptyScene,
   stripCutsFromGroups,
@@ -220,14 +229,22 @@ import {
   bumpPlaybackGen,
   decideVideoSync,
   guardResolvedPlay,
-  animatedStillMode,
   pauseAllTimelineMedia,
   scheduleVideoPlay,
   registerTimelineMedia,
   guardMediaWithTransport,
   tickIsCurrent,
 } from "./gg_playback_core.js";
-import { noMediaText, noMediaThumbClass, playsAsVideo, versionMedia } from "./gg_missing_media_core.js";
+import {
+  animatedScrubFrameIndex,
+  animatedViewerMode,
+  decideVideoSyncScrub,
+  previewFrameAttr,
+  timelineSecFromClientX,
+  videoPreviewFrameIndex,
+} from "./gg_timeline_scrub_core.js";
+import { animatedWebpFrameBytes, parseAnimatedWebp } from "./gg_webp_anim_core.js";
+import { noMediaText, noMediaThumbClass, playsAsVideo, isAnimatedImage, versionMedia } from "./gg_missing_media_core.js";
 import {
   needsDurationProbe,
   formatClipDuration,
@@ -300,7 +317,14 @@ import {
   saveTimelineHeight,
   clampHeight,
   firstShowTimelineHeight,
+  capMeasuredTimelineForFirstShow,
   bottomPanelPercent,
+  bottomPanelSplitterTotal,
+  timelineHeightFromDrag,
+  timelineHeightFromPointer,
+  timelinePanelChrome,
+  timelineLayoutChrome,
+  panelHeightForTimelineHeight,
   shouldIgnoreShortcut,
   pluginKeyScopeActive,
   timelineShortcutAllowed,
@@ -358,6 +382,12 @@ import {
   aiMakeCutProgressText,
   aiMakeCutErrorText,
   aiMakeCutResumable,
+  aiMakeCutUsedStorageKey,
+  saveAiMakeCutJob,
+  loadAiMakeCutJob,
+  clearAiMakeCutJob,
+  markAiMakeCutOffered,
+  shouldOfferStoredAiMakeCut,
   AI_MAKE_CUT_LABEL,
   AI_MAKE_CUT_WAIT_MS,
   AI_MAKE_CUT_TIMEOUT_TEXT,
@@ -422,8 +452,10 @@ const shotsUi = {
   playCutId: "",
   composing: false,
   paintDeferred: false,
-  /** Open inline cut title field: { cutId, input } or null. */
+  /** Open inline cut title field: { cutId, input, finish } or null. */
   inlineRename: null,
+  /** Open inline scene header field: { groupId, input, finish } or null. */
+  inlineSceneRename: null,
   cutWfKind: null,
   cutWfKindCutId: "",
 };
@@ -572,6 +604,27 @@ async function loadTimeline() {
   bus.dispatchEvent(new Event("timeline"));
   refreshTrashCount();
   await reloadOpenCutWorkflowIfRepChanged();
+  void offerStoredAiMakeCutResult();
+}
+
+async function offerStoredAiMakeCutResult() {
+  if (!state.pid || !isNativeProject() || !AI_CUT_SPLIT_VISIBLE) return;
+  const storedId = loadAiMakeCutJob(localStorage, state.pid);
+  if (!storedId) return;
+  const usedId = localStorage.getItem(aiMakeCutUsedStorageKey(state.pid)) || "";
+  let job = null;
+  try {
+    job = (await getJson(`/gonggan/ai-cut-split/status?job=${encodeURIComponent(storedId)}`)).job;
+  } catch (_) {
+    return;
+  }
+  if (!shouldOfferStoredAiMakeCut(localStorage, state.pid, job, storedId, usedId)) return;
+  markAiMakeCutOffered(localStorage, state.pid, job.id);
+  const n = job.cuts?.length || 0;
+  ggToast(AI_MAKE_CUT_LABEL, `Finished with ${n} cut${n === 1 ? "" : "s"}. Open AI Make Cut to review and create them.`, "ok", {
+    actionLabel: "Open",
+    onAction: () => openAiCutSplitModal(),
+  });
 }
 
 function refreshTrashCount() {
@@ -2550,6 +2603,8 @@ async function loadShotApiIntoDedicatedTab(apiJson, cut) {
 }
 
 function ggToast(summary, detail, kind = "info", opts = null) {
+  summary = sanitizeUserMessage(summary);
+  detail = sanitizeUserMessage(detail);
   let host = document.getElementById("gg-toast-host");
   if (!host) {
     host = document.createElement("div");
@@ -3107,9 +3162,6 @@ async function createCutsFromList(reqPid, cuts, wf) {
 
 const AI_SPLIT_IDLE_HINT = "Runs a local text model (TextGenerate) in ComfyUI through the Comfy SDK, then unloads it so the VRAM is free for video.";
 
-/** Id of the last background run whose cuts were created (so reopening the dialog does not offer it again). */
-const AI_MAKE_CUT_USED_KEY = "gonggan-cut.aiMakeCutUsed";
-
 /**
  * AI Make Cut: story -> POST /gonggan/ai-cut-split {background: true} (TextGenerate in ComfyUI through the Comfy SDK)
  * -> poll GET /gonggan/ai-cut-split/status until the validated cuts are ready -> `Create N cuts?` -> new cuts with the
@@ -3214,13 +3266,21 @@ function openAiCutSplitModal() {
     const parsed = parseCutList(JSON.stringify(job.cuts || []));
     if (!parsed.ok) throw new Error(parsed.errors.slice(0, 4).join("\n"));
     result = { id: job.id || "", cuts: parsed.cuts };
+    if (job.id && state.pid) saveAiMakeCutJob(localStorage, state.pid, job.id);
     status.textContent = prefix + aiCutSplitStatusText(parsed, { model: job.model, attempts: job.attempts });
   };
   /** Start (`start`) or resume (`job`) a background run and wait for it; true = `result` is set. */
   const follow = async ({ start = null, job = null }) => {
+    const wrappedStart = start
+      ? async () => {
+          const d = await start();
+          if (d?.job?.id && state.pid) saveAiMakeCutJob(localStorage, state.pid, d.job.id);
+          return d;
+        }
+      : null;
     try {
       const out = await runAiMakeCutJob({
-        start,
+        start: wrappedStart,
         job,
         poll: (id) => getJson(`/gonggan/ai-cut-split/status?job=${encodeURIComponent(id)}`),
         onProgress: (j) => {
@@ -3254,7 +3314,8 @@ function openAiCutSplitModal() {
     }
     try {
       if (await createCutsFromList(state.pid, result.cuts, cutListWorkflow(state.timeline?.project?.settings))) {
-        if (result.id) localStorage.setItem(AI_MAKE_CUT_USED_KEY, result.id);
+        if (result.id) localStorage.setItem(aiMakeCutUsedStorageKey(state.pid), result.id);
+        clearAiMakeCutJob(localStorage, state.pid);
         result = null;
         close();
       }
@@ -3283,6 +3344,7 @@ function openAiCutSplitModal() {
             story: story.value,
             captions: captionsSel.value,
             background: true,
+            pid: state.pid,
           }, { timeoutMs: AI_MAKE_CUT_WAIT_MS }),
         });
       } else {
@@ -3298,11 +3360,14 @@ function openAiCutSplitModal() {
   /** On open: follow a run that is still going, or offer a finished one whose cuts were not created yet. */
   const resume = async () => {
     let job = null;
+    const storedId = loadAiMakeCutJob(localStorage, state.pid);
+    const q = storedId ? `/gonggan/ai-cut-split/status?job=${encodeURIComponent(storedId)}` : "/gonggan/ai-cut-split/status";
     try {
-      job = (await getJson("/gonggan/ai-cut-split/status")).job;
+      job = (await getJson(q)).job;
     } catch (_) {
       return; // older server: nothing to resume
     }
+    if (!job || (job.pid && job.pid !== state.pid)) return;
     if (!job || busy || result || !wrap.isConnected || story.value.trim()) return;
     if (job.state === "running") {
       story.value = job.story || "";
@@ -3317,7 +3382,7 @@ function openAiCutSplitModal() {
         if (wrap.isConnected) sync();
       }
       if (ok) await createFromResult();
-    } else if (aiMakeCutResumable(job, localStorage.getItem(AI_MAKE_CUT_USED_KEY) || "")) {
+    } else if (aiMakeCutResumable(job, localStorage.getItem(aiMakeCutUsedStorageKey(state.pid)) || "")) {
       story.value = job.story || "";
       try {
         takeResult(job, "Finished earlier: ");
@@ -4064,7 +4129,7 @@ async function createSceneGroup(cutIds) {
   });
   if (title === null) return;
   let groups = stripCutsFromGroups(groupsClone(), ids);
-  groups.push({ id: newSceneGroupId(), name: title, cut_ids: ids, collapsed: false });
+  groups.push({ id: newSceneGroupId(), name: resolveSceneName(state.timeline?.groups, title), cut_ids: ids, collapsed: false });
   state.cutSel.clear();
   cutSelAnchor = "";
   recordShotsUndo();
@@ -4155,6 +4220,21 @@ async function saveCutName(cutId, name) {
   }
 }
 
+async function saveSceneGroupName(groupId, name) {
+  const g = (state.timeline?.groups || []).find((x) => x.id === groupId);
+  if (!g || !state.pid || name === g.name) return;
+  const groups = groupsClone();
+  const hit = groups.find((x) => x.id === groupId);
+  if (!hit) return;
+  hit.name = name;
+  recordShotsUndo();
+  try {
+    await persistGroups(groups);
+  } catch (err) {
+    ggToast("Scene", err.message, "warn");
+  }
+}
+
 async function renameSceneGroup(groupId) {
   const g = (state.timeline?.groups || []).find((x) => x.id === groupId);
   if (!g) return;
@@ -4166,11 +4246,7 @@ async function renameSceneGroup(groupId) {
     maxLength: SCENE_NAME_MAX_LEN,
   });
   if (title === null || title === g.name) return;
-  const groups = groupsClone();
-  const hit = groups.find((x) => x.id === groupId);
-  if (hit) hit.name = title;
-  recordShotsUndo();
-  await persistGroups(groups);
+  await saveSceneGroupName(groupId, title);
 }
 
 async function deleteSceneGroup(groupId) {
@@ -4214,13 +4290,14 @@ async function splitSceneHere(cutId) {
     maxLength: SCENE_NAME_MAX_LEN,
   });
   if (title === null) return;
+  const sceneName = resolveSceneName(state.timeline?.groups, title);
   const moveIds = [];
   for (let i = idx; i < cuts.length; i++) {
     if (!gid || cuts[i].group_id === gid) moveIds.push(cuts[i].id);
     else break;
   }
   let groups = stripCutsFromGroups(groupsClone(), moveIds);
-  groups.push({ id: "s" + Date.now(), name: title, cut_ids: moveIds, collapsed: false });
+  groups.push({ id: "s" + Date.now(), name: sceneName, cut_ids: moveIds, collapsed: false });
   recordShotsUndo();
   await persistGroups(groups);
 }
@@ -4467,6 +4544,7 @@ function paintRenderGlobal() {
     el.textContent = b.text;
     el.title = b.title;
   });
+  document.querySelectorAll(".gg-shots").forEach(paintJobQueue);
 }
 
 /** A cut's render state: its ComfyUI queue prompts first, else its Generate All item. */
@@ -4590,6 +4668,9 @@ function onProgressStatusEvent(e) {
 
 progressTracker.on((evt) => {
   if (progUi.wired) onProgressTrackerEvent(evt);
+  if (SHOW_STATUS_PANEL && evt?.cutId) {
+    document.querySelectorAll(".gg-shots .gg-cutpanel").forEach(paintStatusPanel);
+  }
 });
 
 function wireProgressListeners() {
@@ -4600,6 +4681,7 @@ function wireProgressListeners() {
       if (typ === "status" || typ === "promptQueued") onProgressStatusEvent(e);
       else progressTracker.handleEvent(typ, e.detail);
       paintRenderStatus(renderStatus.handle(typ, e.detail));
+      if (SHOW_STATUS_PANEL) document.querySelectorAll(".gg-shots .gg-cutpanel").forEach(paintStatusPanel);
     };
     api.addEventListener(typ, progUi.handlers[typ]);
   }
@@ -5420,31 +5502,90 @@ function comfyPromptDialogOpen() {
   return !!document.querySelector(".p-dialog-mask, .p-dialog-enter-active, .p-dialog-visible");
 }
 
-function measureBottomPanelHeight() {
+function measureTimelineHeight() {
+  const el = document.querySelector(".gg-timeline");
   const panel = document.querySelector(".bottom-panel");
-  if (!panel || !isTimelinePanelOpen()) return 0;
-  return panel.getBoundingClientRect().height;
+  if (!el || !el.isConnected || !isTimelinePanelOpen()) return 0;
+  const cap = clampHeight(1e9, window.innerHeight, TIMELINE_MIN_HEIGHT);
+  const styled = parseInt(el.style.height, 10);
+  if (Number.isFinite(styled) && styled > 0) return styled;
+  if (panel) {
+    const chrome = measureTimelinePanelChrome(panel, el);
+    const fromPanel = panel.getBoundingClientRect().height - chrome;
+    if (fromPanel > TIMELINE_MIN_HEIGHT - 1) return Math.min(fromPanel, cap);
+  }
+  return Math.min(el.getBoundingClientRect().height, cap);
+}
+
+function measureTimelinePanelChrome(panel, timelineEl) {
+  if (!panel || !timelineEl) return 0;
+  const pr = panel.getBoundingClientRect();
+  const tr = timelineEl.getBoundingClientRect();
+  const layout = timelineLayoutChrome(
+    { top: pr.top, bottom: pr.bottom },
+    { top: tr.top, bottom: tr.bottom },
+  );
+  return Math.max(layout, timelinePanelChrome(pr.height, tr.height));
+}
+
+/** @param {number|null|undefined} fixedChrome px from drag start; omit to measure live chrome */
+function applyTimelinePanelHeight(panel, timelineEl, timelineWant, fixedChrome = undefined, forceExact = false) {
+  if (!panel || !timelineEl) return TIMELINE_MIN_HEIGHT;
+  const wantT = clampHeight(timelineWant, window.innerHeight, TIMELINE_MIN_HEIGHT);
+  const chrome =
+    fixedChrome != null && Number.isFinite(Number(fixedChrome))
+      ? Math.max(0, Number(fixedChrome))
+      : measureTimelinePanelChrome(panel, timelineEl);
+  const nestedPane = panel.closest(".p-splitterpanel-nested");
+  const nestedH = nestedPane?.getBoundingClientRect().height || 0;
+  let fitT = wantT;
+  if (nestedH > 0) fitT = Math.min(fitT, Math.max(TIMELINE_MIN_HEIGHT, nestedH - chrome));
+  let panelWant = Math.min(
+    panelHeightForTimelineHeight(fitT, chrome),
+    nestedH > 0 ? nestedH : panelHeightForTimelineHeight(fitT, chrome),
+  );
+  shrinkBottomPanelTo(panel, panelWant);
+  panel.style.minHeight = "";
+  const panelH = panel.getBoundingClientRect().height;
+  const liveChrome = measureTimelinePanelChrome(panel, timelineEl);
+  const syncT = forceExact
+    ? fitT
+    : Math.min(fitT, Math.max(TIMELINE_MIN_HEIGHT, panelH - liveChrome));
+  timelineEl.style.height = `${syncT}px`;
+  timelineEl.style.minHeight = `${syncT}px`;
+  timelineEl.style.flex = "0 0 auto";
+  return syncT;
 }
 
 let timelineHeightRestoreRaf = 0;
+let timelineRestoreFrames = 0;
 let timelineHeightObserver = null;
 // No saved height yet: the first Timeline show shrinks ComfyUI's default bottom panel height by half.
 let timelineFirstShowPending = loadTimelineHeight(localStorage) == null;
 
 function canvasSplitter() {
+  const panel = document.querySelector(".bottom-panel");
+  const fromPanel = panel?.closest(".p-splitter");
+  if (fromPanel) return fromPanel;
   const gutter = document.querySelector('[data-testid="graph-canvas-gutter"]');
   return gutter?.closest(".p-splitter") || null;
 }
 
-/** Shrink the bottom panel to `want` px: same flex-basis form PrimeVue's Splitter writes, plus its saved state. */
+/** Resize bottom panel to `want` px (splitter % within nested canvas pane). */
 function shrinkBottomPanelTo(panel, want) {
   const splitter = canvasSplitter();
-  const total = splitter ? splitter.getBoundingClientRect().height : 0;
-  if (!splitter || total <= want + 40) return;
+  const nestedPane = panel?.closest(".p-splitterpanel-nested");
+  const total = bottomPanelSplitterTotal(
+    nestedPane?.getBoundingClientRect().height,
+    splitter?.getBoundingClientRect().height,
+  );
+  if (!splitter || total <= 40) return;
+  const cappedWant = Math.min(Number(want) || 0, total - 40);
+  if (cappedWant < TIMELINE_MIN_HEIGHT - 1) return;
   const panes = [...splitter.children].filter((x) => x.getAttribute("data-pc-name") === "splitterpanel");
   const bi = panes.indexOf(panel);
   if (panes.length !== 2 || bi < 0) return;
-  const bottomPct = bottomPanelPercent(want, total);
+  const bottomPct = bottomPanelPercent(cappedWant, total);
   const basis = (el, pct) => {
     const cur = el.style.flexBasis || "";
     el.style.flexBasis = /^calc\(\s*[\d.]+%/.test(cur) ? cur.replace(/^calc\(\s*[\d.]+%/, `calc(${pct}%`) : `${pct}%`;
@@ -5459,42 +5600,41 @@ function shrinkBottomPanelTo(panel, want) {
 function applyStoredTimelinePanelHeight() {
   if (!isTimelinePanelOpen()) return;
   const panel = document.querySelector(".bottom-panel");
-  if (!panel) return;
-  const cur = panel.getBoundingClientRect().height;
+  const timelineEl = document.querySelector(".gg-timeline");
+  if (!panel || !timelineEl) return;
+  const curT = measureTimelineHeight();
   if (timelineFirstShowPending) {
-    if (cur < 60) return;  // not laid out yet
+    if (curT < 60) return;  // not laid out yet
+    const nestedPane = panel.closest(".p-splitterpanel-nested");
+    const nestedH = nestedPane?.getBoundingClientRect().height || 0;
+    if (nestedH < 80) return;
+    const chrome = measureTimelinePanelChrome(panel, timelineEl);
+    const nestedAvail = Math.max(0, nestedH - chrome);
+    const baseT = capMeasuredTimelineForFirstShow(curT, nestedAvail);
+    const wantT = firstShowTimelineHeight(baseT, window.innerHeight);
     timelineFirstShowPending = false;
-    const want = firstShowTimelineHeight(cur, window.innerHeight);
-    if (want < cur - 8) shrinkBottomPanelTo(panel, want);
-    panel.style.minHeight = `${want}px`;
-    saveTimelineHeight(localStorage, want);
+    if (wantT < baseT - 8) applyTimelinePanelHeight(panel, timelineEl, wantT);
+    else applyTimelinePanelHeight(panel, timelineEl, baseT);
+    saveTimelineHeight(localStorage, measureTimelineHeight() || wantT);
     window.dispatchEvent(new Event("resize"));
     return;
   }
   const stored = loadTimelineHeight(localStorage);
-  const want = clampHeight(stored || TIMELINE_MIN_HEIGHT, window.innerHeight, TIMELINE_MIN_HEIGHT);
-  if (cur >= want - 8 && cur >= TIMELINE_MIN_HEIGHT) return;
-  const splitter = canvasSplitter();
-  if (splitter) {
-    const total = splitter.getBoundingClientRect().height;
-    if (total > want + 40) {
-      const bottomPct = bottomPanelPercent(want, total);
-      try {
-        localStorage.setItem("bottom-panel-splitter", JSON.stringify([100 - bottomPct, bottomPct]));
-      } catch (_) {}
-    }
-  }
-  panel.style.minHeight = `${want}px`;
+  const wantT = clampHeight(stored || TIMELINE_MIN_HEIGHT, window.innerHeight, TIMELINE_MIN_HEIGHT);
+  if (Math.abs(curT - wantT) <= 8) return;
+  applyTimelinePanelHeight(panel, timelineEl, wantT, undefined, true);
   window.dispatchEvent(new Event("resize"));
 }
 
 function scheduleRestoreTimelinePanelHeight() {
   cancelAnimationFrame(timelineHeightRestoreRaf);
   let frames = 0;
+  timelineRestoreFrames = 12;
   const step = () => {
     applyStoredTimelinePanelHeight();
     frames += 1;
-    if (frames < 10) timelineHeightRestoreRaf = requestAnimationFrame(step);
+    timelineRestoreFrames = Math.max(0, 12 - frames);
+    if (frames < 12) timelineHeightRestoreRaf = requestAnimationFrame(step);
   };
   timelineHeightRestoreRaf = requestAnimationFrame(step);
 }
@@ -5504,8 +5644,12 @@ function startTimelineHeightObserver() {
   const panel = document.querySelector(".bottom-panel");
   if (!panel || !window.ResizeObserver) return;
   timelineHeightObserver = new ResizeObserver(() => {
-    if (!isTimelinePanelOpen() || timelineFirstShowPending) return;
-    const h = measureBottomPanelHeight();
+    if (!isTimelinePanelOpen() || timelineFirstShowPending || ed.tlResizing || timelineRestoreFrames > 0) return;
+    const timelineEl = document.querySelector(".gg-timeline");
+    if (!timelineEl) return;
+    const h = measureTimelineHeight();
+    const styled = parseInt(timelineEl.style.height, 10);
+    if (Number.isFinite(styled) && styled > 0 && h < styled - 12) return;
     if (h >= TIMELINE_MIN_HEIGHT) {
       saveTimelineHeight(localStorage, clampHeight(h, window.innerHeight, TIMELINE_MIN_HEIGHT));
     }
@@ -5543,7 +5687,7 @@ function closeTimelinePanel() {
   const cmd = app.extensionManager?.command;
   if (!cmd?.execute) return;
   if (!isTimelinePanelOpen()) return;
-  const h = measureBottomPanelHeight();
+  const h = measureTimelineHeight();
   if (h >= TIMELINE_MIN_HEIGHT && !timelineFirstShowPending) {
     saveTimelineHeight(localStorage, clampHeight(h, window.innerHeight, TIMELINE_MIN_HEIGHT));
   }
@@ -5778,7 +5922,7 @@ function paintSelection(root) {
 
 // ---------------- Shots (sidebar) ----------------
 // ---- SDK status / versions / regen (Shots tab) ----
-const sdk = { st: null, busy: "", msg: "" };
+const sdk = { st: null, busy: "", msg: "", lastJob: null };
 
 async function refreshSdk(force) {
   try { sdk.st = await (await api.fetchApi("/gonggan/sdk/status" + (force ? "?force=1" : ""))).json(); }
@@ -6422,6 +6566,7 @@ async function captureFinishedPrompt(promptId) {
 
 api.addEventListener("gonggan.regen", (e) => {
   const j = e.detail || {};
+  sdk.lastJob = j;
   const shown = !j.native || state.pid === j.pid;
   if (j.status === "done") { sdk.msg = `New version from SDK job ${j.sdk_job_id || ""}`; if (shown) loadTimeline(); }
   else if (j.status === "error") sdk.msg = "SDK job failed: " + (j.error || "");
@@ -6658,6 +6803,10 @@ function statusPanelHtml() {
     cutLabel: head?.cutLabel,
     name: head?.name,
     render: cut ? cutRenderView(cut.id) : null,
+    progress: cut && state.pid ? progressTracker.getCutStatus(state.pid, cut.id) : null,
+    sdkJob: sdk.lastJob,
+    projectId: state.pid,
+    cutId: cut?.id,
   });
   if (v.kind === "multi") return `<div class="gg-sp-title gg-sp-count">${esc(v.text)}</div>`;
   if (v.kind !== "cut") return `<div class="gg-sp-empty">${esc(v.text)}</div>`;
@@ -6696,6 +6845,9 @@ async function confirmDeleteSelectedCuts() {
 function statusPanelShellHtml() {
   return `
         <div class="gg-sp-info"></div>
+        <div class="gg-job-queue" hidden aria-label="Job queue">
+          <ul class="gg-job-queue-list"></ul>
+        </div>
         <div class="gg-sp-actions">
           <span class="gg-render-badge gg-render-global" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
           <span class="gg-batch-prog" hidden></span>
@@ -6714,6 +6866,31 @@ function paintStatusPanel(panel) {
   if (info.dataset.sp === html) return;
   info.dataset.sp = html;
   info.innerHTML = html;
+  paintJobQueue(panel.closest(".gg-shots") || panel);
+}
+
+function jobQueueRowHtml(row) {
+  const cut = row.cutId ? cutById(row.cutId) : null;
+  const label = cut ? shotTitle(cut) : String(row.cutId || "Cut");
+  const st =
+    row.state === "rendering"
+      ? `Rendering${Number.isFinite(row.percent) ? ` ${Math.round(row.percent)}%` : ""}`
+      : `Queued${row.position ? ` #${row.position}` : ""}`;
+  return `<li class="gg-job-row" data-prompt-id="${esc(row.promptId)}"><span class="gg-job-cut">${esc(label)}</span><span class="gg-job-st">${esc(st)}</span></li>`;
+}
+
+/** Scrollable list of active ComfyUI jobs for this project; fixed outer panel height. */
+function paintJobQueue(shotsRoot) {
+  const root = shotsRoot?.classList?.contains("gg-shots") ? shotsRoot : shotsRoot?.querySelector?.(".gg-shots") || shotsRoot;
+  const wrap = root?.querySelector?.(".gg-job-queue");
+  const list = root?.querySelector?.(".gg-job-queue-list");
+  if (!wrap || !list) return;
+  const rows = state.pid ? renderStatus.listProjectJobs(state.pid) : [];
+  wrap.hidden = rows.length === 0;
+  const html = rows.map(jobQueueRowHtml).join("");
+  if (list.dataset.jq === html) return;
+  list.dataset.jq = html;
+  list.innerHTML = html;
 }
 
 function mountShots(el) {
@@ -7121,7 +7298,7 @@ function mountShots(el) {
 
   const paint = () => {
     if (shotsUi.dragSession) return;
-    if (shouldDeferListPaint({ composing: shotsUi.composing, inlineRenaming: !!shotsUi.inlineRename })) {
+    if (shouldDeferListPaint({ composing: shotsUi.composing, inlineRenaming: !!shotsUi.inlineRename || !!shotsUi.inlineSceneRename })) {
       shotsUi.paintDeferred = true;
       return;
     }
@@ -7163,6 +7340,7 @@ function mountShots(el) {
             <select class="gg-proj" title="Project">${opts}</select>
           </label>
           <button type="button" class="gg-btn gg-proj-settings" title="Project settings" aria-label="Project settings"${state.pid ? "" : " disabled"}>⚙</button>
+          <button type="button" class="gg-btn gg-new-project-head" title="New Project" aria-label="New Project">+</button>
           <button class="gg-btn gg-reload" title="Reload">⟳</button>
         </div>
       </div>
@@ -7216,6 +7394,7 @@ function mountShots(el) {
       if (e.target.closest(".gg-proj") || e.target.closest(".gg-head")) openProjectContextMenu(e);
     });
     root.querySelector(".gg-proj-settings")?.addEventListener("click", () => openProjectSettingsModal());
+    root.querySelector(".gg-new-project-head")?.addEventListener("click", () => openNewProjectModal());
     root.querySelector(".gg-new-project-btn")?.addEventListener("click", () => openNewProjectModal());
     root.querySelector(".gg-cut-add")?.addEventListener("click", () => addLocalCut());
     root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); refreshProjectTemplateFlag(); refreshCutSplitUseAi(); });
@@ -7365,6 +7544,55 @@ function mountShots(el) {
       }
     }, 0);
   };
+  const startInlineSceneRename = (titleEl) => {
+    const head = titleEl.closest(".gg-grp-head");
+    const groupId = titleEl.closest(".gg-grp-sec")?.dataset?.groupId || "";
+    if (shotsUi.inlineSceneRename || shotsUi.inlineRename || !head || !canInlineRenameScene({ native: isNativeProject(), groupId })) return;
+    const g = (state.timeline?.groups || []).find((x) => x.id === groupId);
+    if (!g) return;
+    const pid = state.pid;
+    const current = g.name || "";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = SCENE_HEADER_INPUT_CLASS;
+    input.maxLength = SCENE_RENAME_MAX;
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.value = current;
+    input.title = "Enter to save, Esc to cancel";
+    input.setAttribute("aria-label", "Scene name");
+    input.dataset.editing = "1";
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      const name = commit && state.pid === pid ? inlineSceneRenameCommitName(current, input.value) : null;
+      shotsUi.inlineSceneRename = null;
+      if (name !== null) titleEl.textContent = name;
+      input.remove();
+      titleEl.hidden = false;
+      head.classList.remove("gg-grp-renaming");
+      if (name !== null) void saveSceneGroupName(groupId, name);
+      repaintAfterCompose();
+    };
+    shotsUi.inlineSceneRename = { groupId, input, finish };
+    for (const type of ["mousedown", "pointerdown", "click", "dblclick", "contextmenu"]) {
+      input.addEventListener(type, (e) => e.stopPropagation());
+    }
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      const action = inlineRenameKeyAction({ key: e.key, isComposing: e.isComposing || shotsUi.composing });
+      if (action === "none") return;
+      e.preventDefault();
+      finish(action === "commit");
+    });
+    input.addEventListener("blur", () => finish(true));
+    titleEl.hidden = true;
+    head.classList.add("gg-grp-renaming");
+    titleEl.after(input);
+    input.focus({ preventScroll: true });
+    input.select();
+  };
   const startInlineCutRename = (titleEl) => {
     const head = titleEl.closest(".gg-cut-head");
     const cutId = titleEl.closest(".gg-cut")?.dataset?.cutId || "";
@@ -7415,6 +7643,13 @@ function mountShots(el) {
     input.select();
   };
   const onShotsTitleDblClick = (e) => {
+    const sceneTitle = e.target.closest?.(".gg-grp-sec[data-group-id] .gg-grp-title");
+    if (sceneTitle && root.contains(sceneTitle) && isNativeProject()) {
+      e.preventDefault();
+      e.stopPropagation();
+      startInlineSceneRename(sceneTitle);
+      return;
+    }
     const title = e.target.closest?.(".gg-cut-title");
     if (!title || !root.contains(title) || !isNativeProject()) return;
     e.preventDefault();
@@ -7590,6 +7825,7 @@ function mountShots(el) {
   window.addEventListener("keydown", onShotsSelectAllKey, true);
   return () => {
     shotsUi.inlineRename?.finish(true);
+    shotsUi.inlineSceneRename?.finish(true);
     shotsUi.composing = false;
     shotsUi.paintDeferred = false;
     listSizeRo?.disconnect();
@@ -7627,6 +7863,9 @@ const ed = {
   saveTimer: 0,
   saving: false,
   dragging: false,
+  scrubbing: false,
+  scrubResumePlay: false,
+  tlResizing: false,
 };
 const play = { on: false, t: 0, idx: -1, raf: 0, last: 0, gen: 0, tickGen: 0 };
 
@@ -7846,7 +8085,7 @@ function showFrame(force) {
     const want = c.in + local;
     try {
       if (vid.readyState >= 1) {
-        const sync = decideVideoSync({
+        const baseSync = {
           want,
           current: vid.currentTime || 0,
           duration: vid.duration,
@@ -7856,13 +8095,19 @@ function showFrame(force) {
           readyState: vid.readyState,
           lastSeekAt: vid._ggSeekAt || 0,
           now: performance.now(),
-        });
+        };
+        const sync = ed.scrubbing
+          ? (decideVideoSyncScrub({ ...baseSync, scrubbing: true }) || decideVideoSync(baseSync))
+          : decideVideoSync(baseSync);
         if (sync.seekTo != null) {
           vid.currentTime = sync.seekTo;
           vid._ggSeekAt = performance.now();
         }
         if (sync.pause) vid.pause();
         if (sync.play) scheduleVideoPlay(vid, play.gen, play);
+        if ((!play.on || ed.scrubbing) && !vid.seeking && vid.readyState >= 2) {
+          setPreviewFrameIndex(videoPreviewFrameIndex(vid.currentTime));
+        }
       } else if (!vid._ggWait) {
         // One wait listener per src; cleared on error/emptied/abort (wireViewerMedia).
         vid._ggWait = true;
@@ -7875,41 +8120,155 @@ function showFrame(force) {
         vid.addEventListener("loadedmetadata", onMeta, { once: true });
       }
     } catch (_) {}
+    if (play.on && !ed.scrubbing && viewer?.box) viewer.box.dataset.ggFrame = "";
   }
-  syncAnimatedStill(c);
+  syncAnimatedStill(c, local);
+  if (ed.scrubbing && c && isAnimatedImage(c.media)) {
+    const cache = animScrubBytesCache.get(mediaUrl(c.media.id));
+    const idx = computeScrubFrameIndex(c, local, cache?.ready ? cache : null);
+    if (idx != null) setPreviewFrameIndex(idx);
+  }
   paintHead();
 }
 
+const animScrubBytesCache = new Map();
+let animScrubPaintGen = 0;
+
+function setPreviewFrameIndex(frameIndex) {
+  if (!viewer?.box) return;
+  viewer.box.dataset.ggFrame = previewFrameAttr(frameIndex);
+}
+
+function scrubFrameCount(c) {
+  const n = Number(c?.media?.frames);
+  if (n > 0) return n | 0;
+  return 0;
+}
+
+function scrubMetaForFrameIndex(c, local, cache) {
+  return {
+    localSec: local,
+    clipIn: c.in,
+    clipSec: c.sec,
+    sourceSeconds: c.media?.seconds,
+    srcDur: c.src_dur,
+    mediaFrames: scrubFrameCount(c),
+    cacheFrameCount: cache?.frameCount,
+    durationsMs: cache?.durationsMs ?? cache?.parsed?.durationsMs,
+  };
+}
+
+function computeScrubFrameIndex(c, local, cache) {
+  if (!c || !isAnimatedImage(c.media)) return null;
+  return animatedScrubFrameIndex(scrubMetaForFrameIndex(c, local, cache));
+}
+
+async function ensureAnimScrubCache(url, c) {
+  let cache = animScrubBytesCache.get(url);
+  if (cache?.ready) return cache;
+  if (!cache) {
+    cache = {
+      buf: null,
+      parsed: null,
+      decoder: null,
+      frameCount: scrubFrameCount(c),
+      durationsMs: null,
+      ready: false,
+      loading: null,
+    };
+    animScrubBytesCache.set(url, cache);
+  }
+  if (!cache.loading) {
+    cache.loading = (async () => {
+      const res = await fetch(url);
+      const buf = await res.arrayBuffer();
+      cache.buf = buf;
+      cache.parsed = parseAnimatedWebp(buf);
+      if (cache.parsed) {
+        cache.durationsMs = cache.parsed.durationsMs;
+        if (!cache.frameCount) cache.frameCount = cache.parsed.frames;
+      }
+      if (typeof ImageDecoder !== "undefined") {
+        try {
+          cache.decoder = new ImageDecoder({ data: buf, type: "image/webp" });
+          await cache.decoder.completed;
+          const n = cache.decoder.tracks?.selectedTrack?.frameCount;
+          if (n > 0) cache.frameCount = n;
+        } catch (_) {
+          cache.decoder = null;
+        }
+      }
+      if (!cache.frameCount && cache.parsed) cache.frameCount = cache.parsed.frames;
+      cache.ready = true;
+    })();
+  }
+  await cache.loading;
+  return cache;
+}
+
+async function decodeAnimatedScrubFrame(cache, frameIdx) {
+  const frameCount = Math.max(1, cache.frameCount || cache.parsed?.frames || 1);
+  const idx = Math.min(frameCount - 1, Math.max(0, frameIdx | 0));
+  if (cache.decoder) {
+    const result = await cache.decoder.decode({ frameIndex: idx });
+    try {
+      return { bmp: await createImageBitmap(result.image), frameIdx: idx };
+    } finally {
+      result.image.close?.();
+    }
+  }
+  const bytes = cache.parsed?.frameWebps?.[idx] ?? animatedWebpFrameBytes(cache.buf, idx);
+  if (!bytes) throw new Error("frame unavailable");
+  const bmp = await createImageBitmap(new Blob([bytes], { type: "image/webp" }));
+  return { bmp, frameIdx: idx };
+}
+
+async function paintAnimatedScrubFrame(c, local) {
+  if (!viewer?.still || !c?.media || !isAnimatedImage(c.media)) return;
+  const url = mediaUrl(c.media.id);
+  const gen = ++animScrubPaintGen;
+  const { still } = viewer;
+  try {
+    const cache = await ensureAnimScrubCache(url, c);
+    if (gen !== animScrubPaintGen || !viewer) return;
+    const idx = computeScrubFrameIndex(c, local, cache);
+    if (idx == null) return;
+    const { bmp, frameIdx } = await decodeAnimatedScrubFrame(cache, idx);
+    if (gen !== animScrubPaintGen || !viewer) {
+      bmp.close?.();
+      return;
+    }
+    still.width = bmp.width;
+    still.height = bmp.height;
+    still.getContext("2d").drawImage(bmp, 0, 0);
+    still.hidden = false;
+    bmp.close?.();
+    setPreviewFrameIndex(frameIdx);
+  } catch (_) {}
+}
+
 /**
- * Animated WebP/GIF "video" versions are drawn with <img>, which has no pause():
- * the browser keeps animating it no matter what the transport does. While stopped,
- * show a frozen canvas copy of the current frame instead of the live <img>.
+ * Animated WebP/GIF clips: live <img> while playing; decoded frame on canvas while paused/scrubbing.
  */
-function syncAnimatedStill(c) {
+function syncAnimatedStill(c, local) {
   if (!viewer || !viewer.still) return;
   const { img, still } = viewer;
-  const mode = animatedStillMode(c && c.media, play.on, viewer.mode === "export");
-  if (mode !== "freeze") {
-    if (!still.hidden) still.hidden = true;
+  const mode = animatedViewerMode(c && c.media, play.on, viewer.mode === "export", ed.scrubbing);
+  if (mode === "animate") {
+    still.hidden = true;
     still._ggKey = "";
-    if (mode === "animate" && img.dataset.src) img.hidden = false;
+    if (img.dataset.src) img.hidden = false;
+    setPreviewFrameIndex(null);
     return;
   }
-  const key = img.dataset.src + "|" + play.gen;
-  if (still._ggKey === key && !still.hidden) { img.hidden = true; return; }
-  const draw = () => {
-    if (!img.naturalWidth) return false;
-    still.width = img.naturalWidth;
-    still.height = img.naturalHeight;
-    try { still.getContext("2d").drawImage(img, 0, 0); } catch (_) { return false; }
-    still._ggKey = key;
-    still.hidden = false;
-    img.hidden = true;
-    return true;
-  };
-  if (!(img.complete && draw())) {
-    img.addEventListener("load", () => { if (!play.on) syncAnimatedStill(trackClips()[play.idx]); }, { once: true });
+  if (mode !== "canvas") {
+    if (!still.hidden) still.hidden = true;
+    still._ggKey = "";
+    setPreviewFrameIndex(null);
+    return;
   }
+  img.hidden = true;
+  paintAnimatedScrubFrame(c, local);
 }
 
 function preloadNext(i) {
@@ -7960,6 +8319,16 @@ function wireViewerMedia(vid, next, blank, img) {
   img?.addEventListener("error", () => showViewerNoMedia(img));
   vid.addEventListener("emptied", clearWait);
   vid.addEventListener("abort", clearWait);
+  vid.addEventListener("seeked", () => {
+    if (!viewer || viewer.vid !== vid) return;
+    const cuts = trackClips();
+    const { i } = itemAt(play.t);
+    const c = cuts[i];
+    if (c && playsAsVideo(c.media)) {
+      setPreviewFrameIndex(videoPreviewFrameIndex(vid.currentTime));
+    }
+    showFrame();
+  });
   if (next && !next._ggMediaWired) {
     next._ggMediaWired = true;
     next.addEventListener("error", () => { next._ggWait = false; });
@@ -7968,13 +8337,20 @@ function wireViewerMedia(vid, next, blank, img) {
   }
 }
 
+function paintPlayTransport() {
+  document.querySelectorAll(".gg-timeline .gg-play-btn").forEach((b) => {
+    b.textContent = play.on ? "❚❚" : "▶";
+    b.title = play.on ? "Pause (Space)" : "Play (Space)";
+  });
+}
+
 function paintHead() {
   if (!document.querySelector(".gg-timeline")?.isConnected) return;
   const total = totalSec();
   document.querySelectorAll(".gg-timeline .gg-head-line").forEach((h) => { h.style.left = play.t * ed.px + "px"; });
   document.querySelectorAll(".gg-timeline .gg-clock").forEach((el) => { el.textContent = `${fmtClock(play.t)} / ${fmtClock(total)}`; });
-  document.querySelectorAll(".gg-timeline .gg-play-btn").forEach((b) => { b.textContent = play.on ? "❚❚" : "▶"; b.title = play.on ? "Pause (Space)" : "Play (Space)"; });
-  if (play.on) {
+  if (!ed.scrubbing) paintPlayTransport();
+  if (play.on && !ed.scrubbing) {
     const wrap = document.querySelector(".gg-timeline .gg-tl-scroll");
     if (wrap) {
       const x = play.t * ed.px, sl = wrap.scrollLeft, vw = wrap.clientWidth;
@@ -7985,7 +8361,7 @@ function paintHead() {
 }
 
 function tick(now) {
-  if (!tickIsCurrent(play, play.tickGen)) return;
+  if (!tickIsCurrent(play, play.tickGen) || ed.scrubbing) return;
   const dt = Math.min(0.25, (now - play.last) / 1000);
   play.last = now;
   play.t += dt;
@@ -8031,9 +8407,10 @@ function stopPlay() {
 
 function togglePlay() { play.on ? stopPlay() : startPlay(); }
 
-function seek(t) {
+function seek(t, opts) {
   leaveExportView();
-  if (play.on) stopPlay();
+  const scrubbing = !!opts?.scrubbing;
+  if (play.on && !scrubbing) stopPlay();
   play.t = Math.max(0, Math.min(totalSec(), t));
   play.last = performance.now();
   showFrame();
@@ -8299,8 +8676,13 @@ function mountTimeline(el) {
   const root = document.createElement("div");
   root.className = "gg-root gg-timeline";
   root.tabIndex = -1;
+  root.style.height = `${TIMELINE_MIN_HEIGHT}px`;
+  root.style.minHeight = `${TIMELINE_MIN_HEIGHT}px`;
+  root.style.flex = "0 0 auto";
   el.appendChild(root);
   root.innerHTML = `
+    <div class="gg-tl-resize" title="Drag to resize timeline" role="separator" aria-label="Drag to resize timeline"></div>
+    <div class="gg-tl-main">
     <div class="gg-viewer">
       <div class="gg-screen">
         <img class="gg-v-img" alt="" hidden />
@@ -8353,6 +8735,7 @@ function mountTimeline(el) {
       <div class="gg-zoombar" title="Drag to scroll · drag an end to zoom · double-click to fit (Alt+wheel, = / -)">
         <div class="gg-zb-thumb"><span class="gg-zb-handle gg-zb-l" data-side="l"></span><span class="gg-zb-handle gg-zb-r" data-side="r"></span></div>
       </div>
+    </div>
     </div>`;
   viewer = {
     box: root,
@@ -8481,25 +8864,131 @@ function mountTimeline(el) {
   $r(".gg-ex-close").addEventListener("click", () => { exp.hidden = true; paintExport(); });
   $r(".gg-ex-path").addEventListener("click", (e) => { navigator.clipboard?.writeText(e.target.textContent).catch(() => {}); });
   $r(".gg-reload").addEventListener("click", () => loadProjects());
-  $r(".gg-ruler").addEventListener("pointerdown", (e) => {
-    const rect = $r(".gg-track").getBoundingClientRect();
-    const go = (x) => seek((x - rect.left) / ed.px);
+  const bindTimelineResize = () => {
+    const handle = $r(".gg-tl-resize");
+    if (!handle || handle._ggResizeBound) return;
+    handle._ggResizeBound = true;
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.button) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const panel = document.querySelector(".bottom-panel");
+      const timelineEl = handle.closest(".gg-timeline");
+      if (!panel || !timelineEl) return;
+      const startY = e.clientY;
+      const startTimelineH = Math.max(
+        timelineEl.getBoundingClientRect().height,
+        measureTimelineHeight() || 0,
+      );
+      const startChrome = measureTimelinePanelChrome(panel, timelineEl);
+      const overlay = document.createElement("div");
+      overlay.className = "gg-tl-drag-overlay";
+      document.body.appendChild(overlay);
+      ed.tlResizing = true;
+      let raf = 0;
+      let pendingY = startY;
+      let lastDragWant = startTimelineH;
+      const apply = (y) => {
+        let wantT = timelineHeightFromPointer(startTimelineH, startY, y, window.innerHeight);
+        lastDragWant = wantT;
+        applyTimelinePanelHeight(panel, timelineEl, wantT, startChrome, true);
+        fit();
+      };
+      const move = (ev) => {
+        pendingY = ev.clientY;
+        if (raf) return;
+        raf = requestAnimationFrame(() => { raf = 0; apply(pendingY); });
+      };
+      const up = (ev) => {
+        overlay.removeEventListener("pointermove", move);
+        overlay.removeEventListener("pointerup", up);
+        overlay.removeEventListener("pointercancel", up);
+        window.removeEventListener("pointermove", move, true);
+        window.removeEventListener("mousemove", move, true);
+        window.removeEventListener("pointerup", up, true);
+        window.removeEventListener("mouseup", up, true);
+        window.removeEventListener("pointercancel", up, true);
+        try { overlay.releasePointerCapture(ev.pointerId); } catch (_) {}
+        overlay.remove();
+        if (raf) cancelAnimationFrame(raf);
+        apply(ev.clientY ?? pendingY);
+        const h = measureTimelineHeight();
+        saveTimelineHeight(
+          localStorage,
+          clampHeight(h || lastDragWant, window.innerHeight, TIMELINE_MIN_HEIGHT),
+        );
+        window.dispatchEvent(new Event("resize"));
+        ed.tlResizing = false;
+      };
+      try { overlay.setPointerCapture(e.pointerId); } catch (_) {}
+      overlay.addEventListener("pointermove", move);
+      overlay.addEventListener("pointerup", up);
+      overlay.addEventListener("pointercancel", up);
+      window.addEventListener("pointermove", move, true);
+      window.addEventListener("mousemove", move, true);
+      window.addEventListener("pointerup", up, true);
+      window.addEventListener("mouseup", up, true);
+      window.addEventListener("pointercancel", up, true);
+      apply(startY);
+    });
+  };
+  bindTimelineResize();
+  scheduleRestoreTimelinePanelHeight();
+  const beginTimelineScrub = (e) => {
+    if (e.button) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const ruler = $r(".gg-ruler");
+    if (!ruler) return;
+    ed.scrubbing = true;
+    ed.scrubResumePlay = play.on;
+    if (play.on) {
+      bumpPlaybackGen(play);
+      play.on = false;
+      if (play.raf) cancelAnimationFrame(play.raf);
+      play.raf = 0;
+      pauseAllTimelineMedia(viewer, viewer?.box);
+    }
+    const overlay = document.createElement("div");
+    overlay.className = "gg-tl-scrub-overlay";
+    document.body.appendChild(overlay);
+    const secAt = (clientX) => {
+      const inner = root.querySelector(".gg-tl-inner");
+      return Math.max(0, Math.min(totalSec(), timelineSecFromClientX(clientX, inner, ed.px)));
+    };
+    const go = (clientX) => {
+      seek(secAt(clientX), { scrubbing: true });
+      paintHead();
+    };
     go(e.clientX);
     const move = (ev) => go(ev.clientX);
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  });
+    const end = (ev) => {
+      ed.scrubbing = false;
+      overlay.removeEventListener("pointermove", move);
+      overlay.removeEventListener("pointerup", end);
+      overlay.removeEventListener("pointercancel", end);
+      try { overlay.releasePointerCapture(ev.pointerId); } catch (_) {}
+      overlay.remove();
+      const resume = ed.scrubResumePlay;
+      ed.scrubResumePlay = false;
+      go(ev.clientX || e.clientX);
+      paintPlayTransport();
+      showFrame(true);
+      if (resume) startPlay();
+    };
+    try { overlay.setPointerCapture(e.pointerId); } catch (_) {}
+    overlay.addEventListener("pointermove", move);
+    overlay.addEventListener("pointerup", end);
+    overlay.addEventListener("pointercancel", end);
+  };
+  $r(".gg-ruler").addEventListener("pointerdown", beginTimelineScrub);
   $r(".gg-track").addEventListener("contextmenu", (e) => {
     const clip = e.target.closest(".gg-clip");
     if (clip) openClipContextMenu(e, clip.dataset.cutId);
   });
-  // The panel host has no definite height; size the root from it so the viewer can fill the panel.
   const host = el.parentElement || el;
   const fit = () => {
-    const raw = host.clientHeight || el.clientHeight;
-    const h = raw > 60 ? Math.max(raw, TIMELINE_MIN_HEIGHT) : raw;
-    if (h > 60) root.style.height = h + "px";
+    const h = root.getBoundingClientRect().height || host.clientHeight || TIMELINE_MIN_HEIGHT;
     const scr = root.querySelector(".gg-screen");
     const w = Math.max(200, Math.min(host.clientWidth * 0.4, ((h || TIMELINE_MIN_HEIGHT) - 46) * 16 / 9));
     if (scr) { scr.style.width = Math.round(w) + "px"; scr.style.height = Math.round(w * 9 / 16) + "px"; }
@@ -8553,7 +9042,7 @@ function mountTimeline(el) {
     play.idx = -1;
     showFrame(true);
   };
-  const onTimeline = () => { if (!ed.dragging) paintTrack(); };
+  const onTimeline = () => { if (!ed.dragging && !ed.scrubbing && !ed.tlResizing) paintTrack(); };
   const onDirty = () => paintRuler(root);
   const onSel = () => {
     paintSelection(root);
@@ -8815,6 +9304,9 @@ app.registerExtension({
       });
     } else {
       syncTimelineToggleButtons();
+      queueMicrotask(() => {
+        if (loadTimelineOpen(localStorage) && isTimelinePanelOpen()) scheduleRestoreTimelinePanelHeight();
+      });
     }
     requestAnimationFrame(startTimelineHeightObserver);
     let lastShotTabActive = isGongganShotTabOpenAndActive();

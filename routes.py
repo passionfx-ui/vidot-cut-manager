@@ -914,7 +914,13 @@ async def gg_ai_cut_split(request):
     background = data.get("background") is True
     try:
         if background:
-            job = await asyncio.to_thread(gg_cut_split.start_job, data.get("story"), data.get("captions"))
+            job = await asyncio.to_thread(
+                gg_cut_split.start_job,
+                data.get("story"),
+                data.get("captions"),
+                start_thread=True,
+                pid=data.get("pid"),
+            )
             return web.json_response({"ok": True, "job": job}, status=202)
         res = await asyncio.to_thread(gg_cut_split.ai_cut_split, data.get("story"), data.get("captions"))
     except gg_cut_split.CutSplitError as ex:
