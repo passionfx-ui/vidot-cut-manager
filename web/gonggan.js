@@ -221,6 +221,9 @@ import {
   guardResolvedPlay,
   pauseAllTimelineMedia,
   scheduleVideoPlay,
+  registerTimelineMedia,
+  guardMediaWithTransport,
+  tickIsCurrent,
 } from "./gg_playback_core.js";
 import { noMediaText, noMediaThumbClass, playsAsVideo, versionMedia } from "./gg_missing_media_core.js";
 import {
@@ -7621,7 +7624,7 @@ const ed = {
   saving: false,
   dragging: false,
 };
-const play = { on: false, t: 0, idx: -1, raf: 0, last: 0, gen: 0 };
+const play = { on: false, t: 0, idx: -1, raf: 0, last: 0, gen: 0, tickGen: 0 };
 
 const IMG_MIN = 0.5, IMG_MAX = 60, VID_MIN = 0.2;
 const r2 = (x) => Math.round(x * 100 + 1e-6) / 100;
@@ -7945,7 +7948,7 @@ function paintHead() {
 }
 
 function tick(now) {
-  if (!play.on) return;
+  if (!tickIsCurrent(play, play.tickGen)) return;
   const dt = Math.min(0.25, (now - play.last) / 1000);
   play.last = now;
   play.t += dt;
@@ -7969,7 +7972,9 @@ function startPlay() {
   if (!cutsNow().length) return;
   leaveExportView();
   if (play.t >= totalSec() - 0.05) play.t = 0;
+  if (play.raf) cancelAnimationFrame(play.raf);
   bumpPlaybackGen(play);
+  play.tickGen = play.gen;
   play.on = true;
   play.last = performance.now();
   showFrame(true);
@@ -7981,7 +7986,8 @@ function stopPlay() {
   play.on = false;
   if (play.raf) cancelAnimationFrame(play.raf);
   play.raf = 0;
-  pauseAllTimelineMedia(viewer, document.querySelector(".gg-timeline"));
+  pauseAllTimelineMedia(viewer, null);
+  document.querySelectorAll(".gg-timeline").forEach((r) => pauseAllTimelineMedia(null, r));
   showFrame(true);
   paintHead();
 }
@@ -8320,6 +8326,13 @@ function mountTimeline(el) {
     caption: root.querySelector(".gg-v-cap"),
   };
   wireViewerMedia(viewer.vid, viewer.next, viewer.blank, viewer.img);
+  {
+    const v = viewer;
+    registerTimelineMedia(v.vid);
+    registerTimelineMedia(v.next);
+    guardMediaWithTransport(v.vid, play, () => viewer === v && v.mode === "export");
+    guardMediaWithTransport(v.next, play, () => false);
+  }
   const $r = (q) => root.querySelector(q);
   const paintButtons = () => {
     $r(".gg-snap").classList.toggle("gg-on", ed.snap);
@@ -8698,6 +8711,16 @@ window.addEventListener("keydown", (e) => {
   e.preventDefault();
   e.stopPropagation();
   togglePlay();
+}, true);
+// A focused button (e.g. Play) is "clicked" by Space on keyup, which toggled playback right back on.
+window.addEventListener("keyup", (e) => {
+  if (e.code !== "Space") return;
+  const root = document.querySelector(".gg-timeline");
+  if (!root || !root.isConnected || !(root._ggHover || root.contains(document.activeElement))) return;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+  e.preventDefault();
+  e.stopPropagation();
 }, true);
 
 function bindHoverPlay(root) {

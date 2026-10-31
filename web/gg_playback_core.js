@@ -128,4 +128,53 @@ export function pauseAllTimelineMedia(viewer, scope) {
     if (viewer.box) viewer.box.querySelectorAll("video, audio").forEach(pause);
   }
   scope?.querySelectorAll?.("video, audio")?.forEach(pause);
+  for (const el of TIMELINE_MEDIA) pause(el);
+}
+
+/** Every viewer/preload element ever mounted (old, detached timeline mounts keep playing audio otherwise). */
+const TIMELINE_MEDIA = new Set();
+
+/** @param {HTMLMediaElement|null|undefined} el */
+export function registerTimelineMedia(el) {
+  if (el) TIMELINE_MEDIA.add(el);
+}
+
+/** For tests. */
+export function registeredTimelineMediaCount() {
+  return TIMELINE_MEDIA.size;
+}
+
+/**
+ * Whether a `play` event on a timeline element must be undone right away.
+ *
+ * @param {{ on?: boolean }} playState
+ * @param {boolean} [exempt] e.g. export preview with its own controls
+ */
+export function shouldBlockMediaPlay(playState, exempt) {
+  return !exempt && !playState.on;
+}
+
+/**
+ * Safety net: any `play` on this element while the transport is stopped is paused at once
+ * (late play() resolves, autoplay after src change, stray handlers).
+ *
+ * @param {{ addEventListener?: Function, pause?: () => void, _ggTransportGuard?: boolean }|null|undefined} media
+ * @param {{ on?: boolean }} playState
+ * @param {() => boolean} [isExempt]
+ */
+export function guardMediaWithTransport(media, playState, isExempt) {
+  if (!media || media._ggTransportGuard || typeof media.addEventListener !== "function") return;
+  media._ggTransportGuard = true;
+  const check = () => {
+    if (shouldBlockMediaPlay(playState, isExempt ? isExempt() : false)) {
+      try { media.pause?.(); } catch (_) {}
+    }
+  };
+  media.addEventListener("play", check);
+  media.addEventListener("playing", check);
+}
+
+/** rAF loop guard: a frame scheduled for an older play session must not advance the playhead. */
+export function tickIsCurrent(playState, tickGen) {
+  return !!playState.on && playState.gen === tickGen;
 }

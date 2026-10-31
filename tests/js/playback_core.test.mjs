@@ -198,3 +198,65 @@ describe("timeline playback generation", () => {
     assert.equal(paused, true);
   });
 });
+
+import {
+  registerTimelineMedia,
+  registeredTimelineMediaCount,
+  shouldBlockMediaPlay,
+  guardMediaWithTransport,
+  tickIsCurrent,
+} from "../../web/gg_playback_core.js";
+
+function fakeMedia() {
+  const ls = {};
+  return {
+    paused: false,
+    pauses: 0,
+    pause() { this.paused = true; this.pauses++; },
+    addEventListener(t, f) { (ls[t] ||= []).push(f); },
+    fire(t) { (ls[t] || []).forEach((f) => f()); },
+  };
+}
+
+describe("0.9.133 pause reliability", () => {
+  it("stop pauses registered media from an old (detached) mount", () => {
+    const old = fakeMedia();
+    registerTimelineMedia(old);
+    assert.ok(registeredTimelineMediaCount() >= 1);
+    pauseAllTimelineMedia(null, null);
+    assert.equal(old.paused, true);
+  });
+  it("blocks play while the transport is stopped, not when exempt or playing", () => {
+    assert.equal(shouldBlockMediaPlay({ on: false }), true);
+    assert.equal(shouldBlockMediaPlay({ on: false }, true), false);
+    assert.equal(shouldBlockMediaPlay({ on: true }), false);
+  });
+  it("play/playing events are undone while stopped", () => {
+    const st = { on: true };
+    const m = fakeMedia();
+    guardMediaWithTransport(m, st);
+    guardMediaWithTransport(m, st); // idempotent
+    m.fire("play");
+    assert.equal(m.pauses, 0);
+    st.on = false;
+    m.fire("play");
+    m.fire("playing");
+    assert.equal(m.pauses, 2);
+  });
+  it("export exemption keeps its own controls working", () => {
+    const m = fakeMedia();
+    guardMediaWithTransport(m, { on: false }, () => true);
+    m.fire("play");
+    assert.equal(m.pauses, 0);
+  });
+  it("stale rAF tick from an older session does not advance", () => {
+    const st = { on: true, gen: 0 };
+    const g = bumpPlaybackGen(st);
+    assert.equal(tickIsCurrent(st, g), true);
+    bumpPlaybackGen(st); // stop
+    st.on = false;
+    assert.equal(tickIsCurrent(st, g), false);
+    st.on = true;
+    assert.equal(tickIsCurrent(st, g), false);
+  });
+});
