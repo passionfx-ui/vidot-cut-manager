@@ -28,6 +28,17 @@ PAPER_BOAT_STORY = (
     "She follows the gutter stream to the harbor. At the end of the pier, an old lighthouse keeper waves at her. "
     "She smiles and hands him the boat."
 )
+HANA_STORY = (
+    "Scene 1. Night, a small rooftop garden in Seoul. A girl named Hana waters a single sunflower under a street lamp.\n"
+    'Hana looks up at the moon and says: "Please bloom before morning."\n'
+    "Scene 2. Dawn, the same rooftop. The sunflower has opened. Hana smiles and takes a photo with her phone."
+)
+HANA_LLM_ANSWER = (
+    '[{"cut":1,"duration":2.5,"description":"Night rooftop Hana waters sunflower under street lamp"},'
+    '{"cut":2,"duration":2.5,"description":"Hana looks up at the moon speaking"},'
+    '{"cut":3,"duration":2.5,"description":"Dawn same rooftop sunflower has opened"},'
+    '{"cut":4,"duration":2.5,"description":"Hana smiles takes photo with phone"}]'
+)
 # What the compact prompt asks for: one line, short descriptions, no prose.
 PAPER_BOAT_ANSWER = (
     '[{"cut":1,"duration":3,"description":"Wide shot, a girl finds a paper boat on a rainy street"},'
@@ -184,6 +195,19 @@ class JobTests(CutSplitTestBase):
                     break
                 time.sleep(0.01)
         self.assertEqual(gg_cut_split.job_status(first["id"])["state"], "done")
+
+    def test_llm_job_status_assigns_scenes_for_scene_dot_headings(self):
+        """Same path as UI: POST background job + poll status; LLM JSON has no scene fields."""
+        fake = FakeComfy(answers=[HANA_LLM_ANSWER])
+        with mock.patch.object(gg_cut_split.gg_sdk, "run_api_workflow", fake.run), \
+                mock.patch.object(gg_cut_split, "_http", fake.http_call):
+            first = gg_cut_split.start_job(HANA_STORY, start_thread=False)
+            mode = first.get("captions") or gg_script_presplit.DEFAULT_CAPTION_MODE
+            gg_cut_split._job_main(first["id"], HANA_STORY, gg_cut_split.model_settings(), mode)
+        done = gg_cut_split.job_status(first["id"])
+        self.assertEqual(done["state"], "done")
+        scenes = [c.get("scene") for c in done["cuts"]]
+        self.assertEqual(scenes, ["Scene 1", "Scene 1", "Scene 2", "Scene 2"])
 
 
 class QueryRequest(FakeRequest):

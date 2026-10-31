@@ -379,6 +379,7 @@ import {
   cutListWorkflow,
   parseCutList,
   aiCutSplitStatusText,
+  aiMakeCutResultPreview,
   createCutsConfirmMessage,
   cutListPayload,
   runAiMakeCutJob,
@@ -3213,6 +3214,7 @@ function openAiCutSplitModal() {
         <span class="gg-modal-hint">Cut caption field when creating cuts. Pre-split scripts keep dialogue verbatim.</span>
       </label>
       <span class="gg-modal-hint gg-aisplit-status" aria-live="polite">${esc(AI_SPLIT_IDLE_HINT)}</span>
+      <div class="gg-split-preview gg-aisplit-preview" aria-live="polite"></div>
       <span class="gg-modal-hint gg-split-err gg-aisplit-err" aria-live="polite"></span>
       <div class="gg-mm-notice" role="alert" hidden></div>
       <div class="gg-modal-actions">
@@ -3228,6 +3230,7 @@ function openAiCutSplitModal() {
     localStorage.setItem(AI_MAKE_CUT_CAPTIONS_KEY, captionsSel.value);
   });
   const status = wrap.querySelector(".gg-aisplit-status");
+  const preview = wrap.querySelector(".gg-aisplit-preview");
   const err = wrap.querySelector(".gg-aisplit-err");
   const notice = wrap.querySelector(".gg-mm-notice");
   const runBtn = wrap.querySelector(".gg-aisplit-run");
@@ -3280,6 +3283,7 @@ function openAiCutSplitModal() {
     if (result) {
       result = null;
       status.textContent = AI_SPLIT_IDLE_HINT;
+      if (preview) preview.textContent = "";
     }
     sync();
   });
@@ -3294,6 +3298,7 @@ function openAiCutSplitModal() {
     result = { id: job.id || "", cuts: parsed.cuts };
     if (job.id && state.pid) saveAiMakeCutJob(localStorage, state.pid, job.id);
     status.textContent = prefix + aiCutSplitStatusText(parsed, { model: job.model, attempts: job.attempts });
+    if (preview) preview.textContent = aiMakeCutResultPreview(parsed.cuts);
   };
   /** Start (`start`) or resume (`job`) a background run and wait for it; true = `result` is set. */
   const follow = async ({ start = null, job = null }) => {

@@ -238,6 +238,30 @@ export function cutNameOf(cut) {
   return String(cut || "").slice(0, NAME_MAX_LEN).trim();
 }
 
+/** Grouped cut preview after AI Make Cut (dialog `.gg-split-preview`). */
+export function aiMakeCutResultPreview(cuts) {
+  if (!Array.isArray(cuts) || !cuts.length) return "";
+  const order = [];
+  const byScene = new Map();
+  for (const c of cuts) {
+    const sc = typeof c.scene === "string" && c.scene.trim() ? c.scene.trim() : "Ungrouped";
+    if (!byScene.has(sc)) {
+      byScene.set(sc, []);
+      order.push(sc);
+    }
+    byScene.get(sc).push(c);
+  }
+  const lines = [];
+  for (const sc of order) {
+    lines.push(sc);
+    for (const c of byScene.get(sc) || []) {
+      const name = cutNameOf(c);
+      lines.push(`  ${c.cut}. ${name.slice(0, 72)} (${c.duration}s)`);
+    }
+  }
+  return lines.join("\n");
+}
+
 /** One-line preview under the textarea, e.g. "6 cuts · 15.5 s total". */
 export function cutListSummary(parsed) {
   if (!parsed?.ok) return "";

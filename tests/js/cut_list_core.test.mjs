@@ -14,6 +14,7 @@ import {
   cutListPayload,
   cutListWorkflow,
   aiCutSplitStatusText,
+  aiMakeCutResultPreview,
   readCaptionMode,
   CAPTION_MODE_DEFAULT,
   AI_MAKE_CUT_CAPTIONS_KEY,
@@ -112,6 +113,19 @@ describe("validateCutItems (strict, same messages as gg_ltx.validate_cut_list)",
     assert.deepEqual(payload.cuts.map((c) => c.scene), ["Scene 1", "Scene 1", "Scene 2", "Scene 2"]);
     assert.equal(payload.pid, "pid-137");
     assert.equal(payload.after, "seed-cut-id");
+  });
+
+  it("aiMakeCutResultPreview groups cuts under scene headings", () => {
+    const cuts = [
+      { cut: 1, duration: 2, title: "Roof", description: "x", scene: "Scene 1" },
+      { cut: 2, duration: 2, title: "Moon", description: "y", scene: "Scene 1" },
+      { cut: 3, duration: 2, title: "Dawn", description: "z", scene: "Scene 2" },
+    ];
+    const text = aiMakeCutResultPreview(cuts);
+    assert.match(text, /^Scene 1\n/m);
+    assert.match(text, /Scene 2\n/);
+    assert.match(text, /1\. Roof/);
+    assert.match(text, /3\. Dawn/);
   });
 
   it("names the item and the field for every problem", () => {
