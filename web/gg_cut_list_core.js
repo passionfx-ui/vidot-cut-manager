@@ -228,6 +228,21 @@ export function parseCutList(text) {
   return validateCutItems(x.items);
 }
 
+/** Order cuts by scene for preview / confirm text. */
+function cutsGroupedByScene(cuts) {
+  const order = [];
+  const byScene = new Map();
+  for (const c of cuts) {
+    const sc = typeof c.scene === "string" && c.scene.trim() ? c.scene.trim() : "Ungrouped";
+    if (!byScene.has(sc)) {
+      byScene.set(sc, []);
+      order.push(sc);
+    }
+    byScene.get(sc).push(c);
+  }
+  return { order, byScene };
+}
+
 /** Cut name shown in Shots (short title, not the full video prompt). */
 export function cutNameOf(cut) {
   if (cut && typeof cut === "object") {
@@ -241,16 +256,7 @@ export function cutNameOf(cut) {
 /** Grouped cut preview after AI Make Cut (dialog `.gg-split-preview`). */
 export function aiMakeCutResultPreview(cuts) {
   if (!Array.isArray(cuts) || !cuts.length) return "";
-  const order = [];
-  const byScene = new Map();
-  for (const c of cuts) {
-    const sc = typeof c.scene === "string" && c.scene.trim() ? c.scene.trim() : "Ungrouped";
-    if (!byScene.has(sc)) {
-      byScene.set(sc, []);
-      order.push(sc);
-    }
-    byScene.get(sc).push(c);
-  }
+  const { order, byScene } = cutsGroupedByScene(cuts);
   const lines = [];
   for (const sc of order) {
     lines.push(sc);
@@ -273,11 +279,29 @@ export function cutListSummary(parsed) {
 /** Confirm text: title line, then the first cuts. */
 export function createCutsConfirmMessage(cuts, workflowLabel) {
   const n = cuts.length;
-  const lines = cuts.slice(0, 8).map((c) => {
-    const name = cutNameOf(c);
-    return `${c.cut}. ${name.slice(0, 60)} (${c.duration}s)`;
-  });
-  if (n > 8) lines.push(`… and ${n - 8} more`);
+  const hasScenes = cuts.some((c) => typeof c.scene === "string" && c.scene.trim());
+  const lines = [];
+  if (hasScenes) {
+    const { order, byScene } = cutsGroupedByScene(cuts);
+    let shown = 0;
+    for (const sc of order) {
+      if (shown >= 8) break;
+      lines.push(sc);
+      for (const c of byScene.get(sc) || []) {
+        if (shown >= 8) break;
+        const name = cutNameOf(c);
+        lines.push(`  ${c.cut}. ${name.slice(0, 60)} (${c.duration}s)`);
+        shown += 1;
+      }
+    }
+    if (n > 8) lines.push(`… and ${n - 8} more`);
+  } else {
+    cuts.slice(0, 8).forEach((c) => {
+      const name = cutNameOf(c);
+      lines.push(`${c.cut}. ${name.slice(0, 60)} (${c.duration}s)`);
+    });
+    if (n > 8) lines.push(`… and ${n - 8} more`);
+  }
   return `Create ${n} cut${n === 1 ? "" : "s"}?\n\nWorkflow: ${workflowLabel}\n${lines.join("\n")}\n\nNothing is queued. Select the cuts and press Queue to render.`;
 }
 

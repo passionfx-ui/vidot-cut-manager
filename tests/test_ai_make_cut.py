@@ -39,6 +39,14 @@ HANA_LLM_ANSWER = (
     '{"cut":3,"duration":2.5,"description":"Dawn same rooftop sunflower has opened"},'
     '{"cut":4,"duration":2.5,"description":"Hana smiles takes photo with phone"}]'
 )
+HANA_SCENE1_LLM = (
+    '[{"cut":1,"duration":2.5,"description":"Night rooftop Hana waters sunflower under street lamp"},'
+    '{"cut":2,"duration":2.5,"description":"Hana looks up at the moon speaking"}]'
+)
+HANA_SCENE2_LLM = (
+    '[{"cut":1,"duration":2.5,"description":"Dawn same rooftop sunflower has opened"},'
+    '{"cut":2,"duration":2.5,"description":"Hana smiles takes photo with phone"}]'
+)
 # What the compact prompt asks for: one line, short descriptions, no prose.
 PAPER_BOAT_ANSWER = (
     '[{"cut":1,"duration":3,"description":"Wide shot, a girl finds a paper boat on a rainy street"},'
@@ -198,7 +206,7 @@ class JobTests(CutSplitTestBase):
 
     def test_llm_job_status_assigns_scenes_for_scene_dot_headings(self):
         """Same path as UI: POST background job + poll status; LLM JSON has no scene fields."""
-        fake = FakeComfy(answers=[HANA_LLM_ANSWER])
+        fake = FakeComfy(answers=[HANA_SCENE1_LLM, HANA_SCENE2_LLM])
         with mock.patch.object(gg_cut_split.gg_sdk, "run_api_workflow", fake.run), \
                 mock.patch.object(gg_cut_split, "_http", fake.http_call):
             first = gg_cut_split.start_job(HANA_STORY, start_thread=False)
@@ -206,8 +214,11 @@ class JobTests(CutSplitTestBase):
             gg_cut_split._job_main(first["id"], HANA_STORY, gg_cut_split.model_settings(), mode)
         done = gg_cut_split.job_status(first["id"])
         self.assertEqual(done["state"], "done")
+        self.assertEqual(fake.runs, 2, "one TextGenerate run per scene block")
         scenes = [c.get("scene") for c in done["cuts"]]
         self.assertEqual(scenes, ["Scene 1", "Scene 1", "Scene 2", "Scene 2"])
+        self.assertNotIn("Scene 2", fake.workflows[0]["2"]["inputs"]["prompt"])
+        self.assertNotIn("Scene 1", fake.workflows[1]["2"]["inputs"]["prompt"])
 
 
 class QueryRequest(FakeRequest):

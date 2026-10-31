@@ -78,8 +78,17 @@ def _scene_for_cut_content(cut: dict[str, Any], sections: list[tuple[str, str]])
     return best_name if best_score > 0 else None
 
 
+def story_uses_per_scene_llm(story: str) -> bool:
+    """True when the story has multiple scene-heading blocks (run TextGenerate once per block)."""
+    if not _RE_SCENE_MARKER.search(story or ""):
+        return False
+    return len(story_scene_sections(story)) > 1
+
+
 def assign_scene_names(story: str, cuts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return cuts with a `scene` field when the story has scene markers."""
+    """Return cuts with a `scene` field when the story has scene markers (single LLM call path only)."""
+    if story_uses_per_scene_llm(story):
+        return cuts
     sections = story_scene_sections(story)
     if not cuts:
         return cuts

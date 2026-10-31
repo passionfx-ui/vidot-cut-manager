@@ -209,6 +209,19 @@ describe("confirm + payload", () => {
     assert.match(createCutsConfirmMessage(cuts, "W"), /and 2 more/);
   });
 
+  it("createCutsConfirmMessage groups cut lines under scene headings", () => {
+    const cuts = [
+      { cut: 1, duration: 2, title: "Girl Waters Flower", description: "x", scene: "Scene 1" },
+      { cut: 2, duration: 2, title: "Moon Dialogue", description: "y", scene: "Scene 1" },
+      { cut: 3, duration: 2, title: "Sunflower Opens", description: "z", scene: "Scene 2" },
+      { cut: 4, duration: 2, title: "Photo", description: "w", scene: "Scene 2" },
+    ];
+    const msg = createCutsConfirmMessage(cuts, "Project Video template");
+    assert.match(msg, /Workflow: Project Video template/);
+    assert.match(msg, /Scene 1\n  1\. Girl Waters Flower/);
+    assert.match(msg, /Scene 2\n  3\. Sunflower Opens/);
+  });
+
   it("payload sends cut fields and passes after only when set", () => {
     const cuts = parseCutList(json([item(1, 3)])).cuts;
     assert.deepEqual(cutListPayload("p", cuts, "t2v", ""), {

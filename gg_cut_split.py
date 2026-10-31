@@ -413,35 +413,69 @@ def _begin(story) -> dict:
     return model_settings()
 
 
+def _generate_validated_cuts(
+    story: str,
+    model: dict,
+    mode: str,
+    on_attempt=None,
+) -> tuple[list[dict], int]:
+    """One story chunk -> validated cuts and the attempt count that succeeded."""
+    problems: list[str] = []
+    for attempt in range(1, RETRIES + 2):
+        if on_attempt:
+            on_attempt(attempt)
+        raw = _generate(build_prompt(story, mode, problems), model)
+        try:
+            cuts = parse_answer(raw)
+        except gg_ltx.CutListError as ex:
+            problems = ex.errors
+            log.info("[gonggan-cut] AI Cut Split attempt %d: invalid answer (%s)", attempt, problems[:3])
+            continue
+        except CutSplitError:
+            log.info("[gonggan-cut] AI Cut Split attempt %d: answer cut off at max_length %d (%d chars)",
+                     attempt, MAX_LENGTH, len(raw))
+            raise
+        return cuts, attempt
+    raise CutSplitError("invalid", f"The model's answer is not a valid cut list (tried {RETRIES + 1} times):\n"
+                        + "\n".join(problems[:6]))
+
+
 def _split(story: str, model: dict, captions_mode: str | None = None, on_attempt=None) -> dict:
-    """The TextGenerate runs (at most RETRIES + 1); releases _run_lock and frees the models at the end."""
+    """The TextGenerate runs (at most RETRIES + 1 per chunk); releases _run_lock and frees the models at the end."""
     mode = gg_script_presplit.normalize_caption_mode(captions_mode)
     t0 = time.time()
     try:
-        problems: list[str] = []
-        for attempt in range(1, RETRIES + 2):
-            if on_attempt:
-                on_attempt(attempt)
-            raw = _generate(build_prompt(story, mode, problems), model)
-            try:
-                cuts = parse_answer(raw)
-            except gg_ltx.CutListError as ex:
-                problems = ex.errors
-                log.info("[gonggan-cut] AI Cut Split attempt %d: invalid answer (%s)", attempt, problems[:3])
-                continue
-            except CutSplitError:
-                log.info("[gonggan-cut] AI Cut Split attempt %d: answer cut off at max_length %d (%d chars)",
-                         attempt, MAX_LENGTH, len(raw))
-                raise
-            try:
-                from . import gg_story_scenes
-            except ImportError:
-                import gg_story_scenes  # type: ignore
-            cuts = gg_story_scenes.assign_scene_names(story, cuts)
-            return {"model": model["clip_name"], "attempts": attempt, "seconds": round(time.time() - t0, 1),
-                    "cuts": cuts}
-        raise CutSplitError("invalid", f"The model's answer is not a valid cut list (tried {RETRIES + 1} times):\n"
-                            + "\n".join(problems[:6]))
+        try:
+            from . import gg_story_scenes
+        except ImportError:
+            import gg_story_scenes  # type: ignore
+
+        if gg_story_scenes.story_uses_per_scene_llm(story):
+            sections = gg_story_scenes.story_scene_sections(story)
+            all_cuts: list[dict] = []
+            total_attempts = 0
+            cut_no = 1
+            for scene_name, body in sections:
+                chunk = (body or "").strip()
+                if not chunk:
+                    continue
+                cuts, attempts = _generate_validated_cuts(chunk, model, mode, on_attempt)
+                total_attempts += attempts
+                for cut in cuts:
+                    row = dict(cut)
+                    row["cut"] = cut_no
+                    cut_no += 1
+                    row["scene"] = scene_name
+                    all_cuts.append(row)
+            if not all_cuts:
+                raise CutSplitError("bad_request", "Write or paste a story first.")
+            return {"model": model["clip_name"], "attempts": total_attempts or 1,
+                    "seconds": round(time.time() - t0, 1), "cuts": all_cuts}
+
+        cuts, attempt = _generate_validated_cuts(story, model, mode, on_attempt)
+        cuts = gg_story_scenes.assign_scene_names(story, cuts)
+        return {"model": model["clip_name"], "attempts": attempt, "seconds": round(time.time() - t0, 1),
+                "cuts": cuts}
     finally:
         free_models()
         _run_lock.release()
