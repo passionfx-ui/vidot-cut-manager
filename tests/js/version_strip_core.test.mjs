@@ -271,7 +271,7 @@ describe("version row header wiring (0.9.125)", () => {
   };
 
   it("header sits above the scrolling body inside the row; Best, Make Video, Import in that order", () => {
-    assert.match(js, /<div class="gg-vstrip"[^>]*>\s*\$\{versionStripHeadHtml\(\)\}\s*<div class="gg-vs-body">\s*<div class="gg-vs-list"><\/div>/);
+    assert.match(js, /\$\{iconRowHtml\(\)\}\s*<div class="gg-vstrip"[^>]*>\s*\$\{versionStripHeadHtml\(\)\}\s*<div class="gg-vs-body">\s*<div class="gg-vs-list"><\/div>/);
     const head = fnBody("versionStripHeadHtml");
     const order = ["gg-vs-best-btn", "gg-vs-video-btn", "gg-vs-import-btn"].map((c) => head.indexOf(c));
     assert.ok(order.every((i, n) => i > 0 && (n === 0 || i > order[n - 1])), String(order));
@@ -308,8 +308,8 @@ describe("gonggan.js wiring (0.9.118)", () => {
     return js.slice(at, js.indexOf("\n}\n", at));
   };
 
-  it("the row sits directly above the icon row (New scene / New cut), then the status panel (0.9.135)", () => {
-    assert.match(js, /<div class="gg-vstrip"[^>]*>\s*\$\{versionStripHeadHtml\(\)\}\s*<div class="gg-vs-body">\s*<div class="gg-vs-list"><\/div>\s*<button[^>]*class="gg-btn gg-vs-newest"[^>]*>[^<]*<\/button>\s*<\/div>\s*<\/div>\s*\$\{iconRowHtml\(\)\}\s*<div class="gg-cutpanel">/);
+  it("the row sits directly below the icon row (New scene / New cut), then the status panel (2026-10-31 decision)", () => {
+    assert.match(js, /\$\{iconRowHtml\(\)\}\s*<div class="gg-vstrip"[^>]*>\s*\$\{versionStripHeadHtml\(\)\}\s*<div class="gg-vs-body">\s*<div class="gg-vs-list"><\/div>\s*<button[^>]*class="gg-btn gg-vs-newest"[^>]*>[^<]*<\/button>\s*<\/div>\s*<\/div>\s*<div class="gg-cutpanel">/);
     assert.match(js, /^const SHOW_SEL_BAR = false;$/m);
     assert.ok(!js.includes("gg-list-row") && !css.includes("gg-list-row"), "vertical strip layout removed");
   });

@@ -7200,6 +7200,7 @@ function mountShots(el) {
         <button type="button" class="gg-btn gg-sel-ungroup" disabled title="${esc(REMOVE_FROM_SCENE_TIP)}">${esc(REMOVE_FROM_SCENE_LABEL)}</button>
         <button type="button" class="gg-btn gg-sel-x" disabled title="Clear selection">×</button>
       </div>` : ""}
+      ${iconRowHtml()}
       <div class="gg-vstrip" role="group" aria-label="Versions"${tl && !viewFinal ? "" : " hidden"}>
         ${versionStripHeadHtml()}
         <div class="gg-vs-body">
@@ -7207,7 +7208,6 @@ function mountShots(el) {
           <button type="button" class="gg-btn gg-vs-newest" hidden title="Back to newest" aria-label="Back to newest">‹</button>
         </div>
       </div>
-      ${iconRowHtml()}
       <div class="gg-cutpanel">${!SHOW_CUT_PANEL && SHOW_STATUS_PANEL ? statusPanelShellHtml() : ""}</div>
       <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>`;
     const projSel = root.querySelector(".gg-proj");
