@@ -93,11 +93,15 @@ import { REFERENCE_CATEGORIES } from "./gg_import_core.js";
 import {
   folderNotCreated,
   loadLastLocation,
+  newProjectFolderPreviewText,
   newProjectRequest,
   NO_FOLDER_ROUTE_HINT,
+  defaultProjectLocationPlaceholder,
   defaultProjectStorageHint,
+  projectCreatedFolderToastDetail,
   projectFolderPath,
   saveLastLocation,
+  userVisiblePathTooltip,
 } from "./gg_new_project_core.js";
 import {
   autosaveModifiedTabs,
@@ -106,6 +110,7 @@ import {
   pickFreeWorkflowPath,
   pathCollides,
   autosaveStatusMessage,
+  savedCutHumanLabel,
   savedShotWorkflowToastDetail,
   workflowLabel,
 } from "./gg_autosave_core.js";
@@ -886,11 +891,15 @@ function openNewProjectModal() {
   const syncPath = () => {
     const p = projectFolderPath(locIn.value, nameIn.value);
     if (p) {
-      pathHint.textContent = `Project folder: ${p}`;
-      pathHint.title = p;
-    } else if (!locIn.value.trim() && defaultStorageHint) {
+      pathHint.textContent = newProjectFolderPreviewText(p);
+      const tip = userVisiblePathTooltip(p);
+      if (tip) pathHint.title = tip;
+      else pathHint.removeAttribute("title");
+    } else if (!locIn.value.trim()) {
       pathHint.textContent = defaultProjectStorageHint(defaultStorageHint);
-      pathHint.title = defaultStorageHint;
+      const tip = userVisiblePathTooltip(defaultStorageHint);
+      if (tip) pathHint.title = tip;
+      else pathHint.removeAttribute("title");
     } else {
       pathHint.textContent = "";
       pathHint.removeAttribute("title");
@@ -899,8 +908,7 @@ function openNewProjectModal() {
   let defaultStorageHint = "";
   const applyDefaultStorageHint = (dir) => {
     defaultStorageHint = String(dir || "").trim();
-    const ph = defaultProjectStorageHint(defaultStorageHint);
-    locIn.placeholder = ph.startsWith("Default: ") ? ph.slice(9) : ph;
+    locIn.placeholder = defaultProjectLocationPlaceholder(defaultStorageHint);
     syncPath();
   };
   getJson("/gonggan/settings")
@@ -951,7 +959,7 @@ function openNewProjectModal() {
       await loadProjects();
       if (d.project?.id) selectProject(d.project.id);
       if (folderNotCreated(d.project)) ggToast("Project", `Created "${name}". ${NO_FOLDER_ROUTE_HINT}`, "warn");
-      else ggToast("Project", `Created "${name}" in ${d.project.folder}`, "ok");
+      else ggToast("Project", `Created "${name}" ${projectCreatedFolderToastDetail(d.project.folder)}`, "ok");
     } catch (err) {
       if (err.status === 400 && !/template/i.test(err.message || "")) showLocErr(err.message);
       else ggToast("Project", err.message, "warn");
@@ -2172,7 +2180,7 @@ async function runGongganWipAutosave(opts = {}) {
     // Saved content is the new baseline: a later switch must not re-stamp it with a newer version key.
     if (resolved?.cutId && savedSnap) ggWorkflowBaselines.set(resolved.cutId, savedSnap);
     ggWipLastAutosaveAt = Date.now();
-    const okMsg = autosaveStatusMessage({ failing: false, wasFailing: ggWipAutosaveFailing, label: workflowLabel(wf) });
+    const okMsg = autosaveStatusMessage({ failing: false, wasFailing: ggWipAutosaveFailing, label: autosaveStatusLabelForWorkflow(wf) });
     ggWipAutosaveFailing = false;
     if (okMsg) {
       sdk.msg = okMsg;
@@ -2181,7 +2189,7 @@ async function runGongganWipAutosave(opts = {}) {
   } catch (e) {
     console.warn("[gonggan] periodic wip autosave failed", e);
     ggWipAutosaveFailing = true;
-    sdk.msg = autosaveStatusMessage({ failing: true, error: e?.message || String(e), label: workflowLabel(wf) });
+    sdk.msg = autosaveStatusMessage({ failing: true, error: e?.message || String(e), label: autosaveStatusLabelForWorkflow(wf) });
     bus.dispatchEvent(new Event("sdk"));
     if (Date.now() - ggWipLastFailToastAt >= 60000) {
       ggWipLastFailToastAt = Date.now();
@@ -2248,7 +2256,19 @@ function autosaveToastDetail(saved, cutId) {
   const cut = cutId ? cutById(cutId) : null;
   const labels = state.timeline ? computeCutLabels(state.timeline) : null;
   const cutLabel = cut && labels ? cutDisplayLabel(cut, labels) : "";
-  return savedShotWorkflowToastDetail(saved, { cutLabel });
+  const cutName = cut?.name ? String(cut.name).trim() : "";
+  return savedShotWorkflowToastDetail(saved, { cutLabel, cutName });
+}
+
+function autosaveStatusLabelForWorkflow(wf) {
+  const resolved = resolveWorkflowCutForWip(wf);
+  if (!resolved?.cut) return workflowLabel(wf);
+  const labels = state.timeline ? computeCutLabels(state.timeline) : null;
+  const human = savedCutHumanLabel(
+    labels ? cutDisplayLabel(resolved.cut, labels) : "",
+    resolved.cut.name ? String(resolved.cut.name).trim() : "",
+  );
+  return human || "workflow";
 }
 
 async function prepareGongganShotTabReplace() {

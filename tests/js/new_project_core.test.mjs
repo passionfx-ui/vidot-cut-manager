@@ -3,12 +3,15 @@ import { describe, it } from "node:test";
 import {
   LAST_LOCATION_KEY,
   folderNotCreated,
+  defaultProjectLocationPlaceholder,
   defaultProjectStorageHint,
   loadLastLocation,
   newProjectRequest,
+  projectCreatedFolderToastDetail,
   projectFolderName,
   projectFolderPath,
   saveLastLocation,
+  userVisiblePathTooltip,
 } from "../../web/gg_new_project_core.js";
 
 function memStorage(init = {}) {
@@ -119,10 +122,18 @@ describe("New Project: server without folder support", () => {
 });
 
 describe("default project storage hint", () => {
-  it("shows the server native projects path when known", () => {
+  it("shows a safe path when it has no forbidden words", () => {
     assert.match(defaultProjectStorageHint("C:\\pack\\projects"), /^Default: C:\\pack\\projects$/);
+    assert.match(defaultProjectLocationPlaceholder("C:\\pack\\projects"), /^C:\\pack\\projects$/);
   });
-  it("falls back to a short hint when the path is unknown", () => {
+  it("falls back to generic text when the path is unknown or forbidden", () => {
     assert.match(defaultProjectStorageHint(""), /plugin projects folder/);
+    assert.match(defaultProjectStorageHint("C:\\dev\\comfyui-gonggan-cut\\projects"), /plugin projects folder/);
+    assert.match(defaultProjectLocationPlaceholder("C:\\dev\\comfyui-gonggan-cut\\projects"), /plugin projects folder \(default\)/i);
+    assert.equal(userVisiblePathTooltip("C:\\dev\\comfyui-gonggan-cut\\projects"), "");
+  });
+  it("project create toast detail hides forbidden folder paths", () => {
+    assert.equal(projectCreatedFolderToastDetail("C:\\dev\\comfyui-gonggan-cut\\projects\\id"), "using the default storage folder");
+    assert.equal(projectCreatedFolderToastDetail("D:\\Films\\A"), "in D:\\Films\\A");
   });
 });

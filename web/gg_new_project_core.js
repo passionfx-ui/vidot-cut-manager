@@ -1,6 +1,7 @@
 /** Pure helpers for the New Project window: name, location, Default / Image / Video template (no DOM). */
 
 import { DEFAULT_IMAGE_TEMPLATE, DEFAULT_VIDEO_TEMPLATE } from "./gg_template_pick_core.js";
+import { containsForbiddenUserText } from "./gg_ui_text_core.js";
 
 export const LAST_LOCATION_KEY = "gonggan-cut.lastProjectLocation";
 export const NO_FOLDER_ROUTE_HINT = "Restart ComfyUI to create project folders. This project uses the default storage.";
@@ -78,11 +79,46 @@ export function newProjectRequest(v = {}) {
   return { body };
 }
 
+export const DEFAULT_PROJECTS_FOLDER_HINT = "Default: plugin projects folder";
+export const DEFAULT_PROJECTS_FOLDER_PLACEHOLDER = "Plugin projects folder (default)";
+
 /** Hint for an empty Location field (default plugin project storage). */
 export function defaultProjectStorageHint(nativeProjectsDir) {
   const dir = String(nativeProjectsDir ?? "").trim();
-  if (dir) return `Default: ${dir}`;
-  return "Leave empty to use the plugin projects folder";
+  if (dir && !containsForbiddenUserText(dir)) return `Default: ${dir}`;
+  return DEFAULT_PROJECTS_FOLDER_HINT;
+}
+
+/** Placeholder for the Location input when empty. */
+export function defaultProjectLocationPlaceholder(nativeProjectsDir) {
+  const dir = String(nativeProjectsDir ?? "").trim();
+  if (dir && !containsForbiddenUserText(dir)) {
+    const hint = defaultProjectStorageHint(dir);
+    return hint.startsWith("Default: ") ? hint.slice(9) : hint;
+  }
+  return DEFAULT_PROJECTS_FOLDER_PLACEHOLDER;
+}
+
+/** Title attribute for a server path; omitted when the path must not be shown. */
+export function userVisiblePathTooltip(path) {
+  const p = String(path ?? "").trim();
+  if (!p || containsForbiddenUserText(p)) return "";
+  return p;
+}
+
+/** Visible preview when name + location resolve to a folder path. */
+export function newProjectFolderPreviewText(resolvedPath) {
+  const p = String(resolvedPath ?? "").trim();
+  if (!p) return "";
+  if (containsForbiddenUserText(p)) return "Project folder: under your chosen location";
+  return `Project folder: ${p}`;
+}
+
+/** Short detail for a project-create toast when a folder was created. */
+export function projectCreatedFolderToastDetail(folder) {
+  const f = String(folder ?? "").trim();
+  if (!f || containsForbiddenUserText(f)) return "using the default storage folder";
+  return `in ${f}`;
 }
 
 /** True when the server created the project without its folder (route from before 0.9.99, ComfyUI not restarted). */

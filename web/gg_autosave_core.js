@@ -65,13 +65,37 @@ export function workflowLabel(wf) {
   return slash >= 0 ? p.slice(slash + 1) : p || "workflow";
 }
 
+const RAW_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/** @param {string} text */
+export function looksLikeRawIdText(text) {
+  const s = String(text ?? "").trim();
+  if (!s) return false;
+  if (RAW_ID_RE.test(s)) return true;
+  const stem = s.replace(/\.json$/i, "");
+  return RAW_ID_RE.test(stem);
+}
+
+/** @param {string} cutLabel @param {string} cutName */
+export function savedCutHumanLabel(cutLabel, cutName) {
+  const label = String(cutLabel ?? "").trim();
+  const name = String(cutName ?? "").trim();
+  if (label && name) return `${label} ${name}`;
+  if (label) return label;
+  if (name) return name;
+  return "";
+}
+
 /** Toast detail when a shot workflow file was saved (avoid raw cut ids in the filename). */
 export function savedShotWorkflowToastDetail(saved, ctx = {}) {
-  const cutLabel = String(ctx.cutLabel ?? "").trim();
+  const human = savedCutHumanLabel(ctx.cutLabel, ctx.cutName);
   const versionLabel = String(ctx.versionLabel ?? "").trim();
-  if (cutLabel && versionLabel) return `${versionLabel} to cut ${cutLabel}`;
-  if (cutLabel) return `cut ${cutLabel}`;
-  return workflowLabel(saved);
+  if (versionLabel && human) return `${versionLabel} · ${human}`;
+  if (human) return human;
+  if (versionLabel) return versionLabel;
+  const fallback = workflowLabel(saved);
+  if (looksLikeRawIdText(fallback)) return "workflow saved";
+  return fallback;
 }
 
 /** @param {{ filename?: string, path?: string }} wf */

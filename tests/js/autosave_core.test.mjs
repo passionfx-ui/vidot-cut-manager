@@ -226,16 +226,22 @@ describe("autosaveModifiedTabs", () => {
 });
 
 describe("savedShotWorkflowToastDetail", () => {
-  it("uses cut label instead of a raw workflow filename", () => {
+  it("uses cut label and name instead of a raw workflow filename", () => {
     assert.equal(
-      savedShotWorkflowToastDetail({ path: "workflows/gonggan/p/cut-uuid.json" }, { cutLabel: "1-2" }),
-      "cut 1-2",
+      savedShotWorkflowToastDetail({ path: "workflows/gonggan/p/cut-uuid.json" }, { cutLabel: "1-2", cutName: "Girl Looks Up" }),
+      "1-2 Girl Looks Up",
     );
   });
   it("includes version label when provided", () => {
     assert.equal(
-      savedShotWorkflowToastDetail({ path: "x.json" }, { cutLabel: "1-2", versionLabel: "v03" }),
-      "v03 to cut 1-2",
+      savedShotWorkflowToastDetail({ path: "x.json" }, { cutLabel: "1-2", cutName: "A", versionLabel: "v03" }),
+      "v03 · 1-2 A",
+    );
+  });
+  it("does not expose a cut-id filename when metadata is missing", () => {
+    assert.equal(
+      savedShotWorkflowToastDetail({ filename: "01a19099-085a-4f2a-9c1d-abcdef012345.json" }, {}),
+      "workflow saved",
     );
   });
 });
