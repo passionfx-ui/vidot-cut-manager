@@ -67,6 +67,64 @@ describe("cutCardRenderView (SDK Queue path)", () => {
     );
   });
 
+  it("E2E136 3c: no Idle when Comfy left /queue but regen/status still running", () => {
+    const projectId = RUNNING_REGEN_JOB.pid;
+    const cutId = RUNNING_REGEN_JOB.cut_id;
+    const tracker = createProgressTracker({ graceMs: 0 });
+    tracker.registerPrompt("p-sdk", cutId, projectId);
+    tracker.syncQueue({
+      queue_running: [[1, "p-sdk", {}, {}, []]],
+      queue_pending: [],
+    });
+
+    const snap = (extra = {}) => {
+      const progressCut = tracker.getCutStatus(projectId, cutId);
+      const view = cutCardRenderView({
+        projectId,
+        cutId,
+        comfyCutView: extra.comfyCutView ?? null,
+        regenJob: extra.regenJob ?? RUNNING_REGEN_JOB,
+        progressCut,
+      });
+      const badge = renderBadgeView(view);
+      return cutCardIdleWord({
+        hasMedia: !!extra.hasMedia,
+        badge,
+        regenJob: extra.regenJob ?? RUNNING_REGEN_JOB,
+        projectId,
+        cutId,
+      }).text;
+    };
+
+    const w0 = snap({
+      comfyCutView: { state: "rendering", percent: 40, count: 1, position: null },
+    });
+    tracker.syncQueue({ queue_running: [], queue_pending: [] });
+    const w1 = snap();
+    const w2 = cutCardIdleWord({
+      hasMedia: true,
+      badge: { show: false, text: "", title: "" },
+      regenJob: { ...RUNNING_REGEN_JOB, status: "done" },
+      projectId,
+      cutId,
+    }).text;
+
+    assert.ok(w0 === "Rendering" || w0 === "Generating", w0);
+    assert.notEqual(w1, "Idle", `sequence: ${[w0, w1, w2].join(" -> ")}`);
+    assert.equal(w2, "Done");
+  });
+
+  it("E2E136 3c: idle line follows regen job when render badge is hidden", () => {
+    const idle = cutCardIdleWord({
+      hasMedia: false,
+      badge: { show: false, text: "", title: "" },
+      regenJob: RUNNING_REGEN_JOB,
+      projectId: RUNNING_REGEN_JOB.pid,
+      cutId: RUNNING_REGEN_JOB.cut_id,
+    });
+    assert.equal(idle.text, "Generating");
+  });
+
   it("E2E136 3b: after SDK regen completes, cut card is Done not stuck Queued", () => {
     const projectId = RUNNING_REGEN_JOB.pid;
     const cutId = RUNNING_REGEN_JOB.cut_id;

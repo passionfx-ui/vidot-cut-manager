@@ -18,7 +18,6 @@ import { sdkCutStatusView } from "./gg_native_regen_core.js";
  */
 export function cutCardRenderView(ctx = {}) {
   const { projectId, cutId } = ctx;
-  if (ctx.comfyCutView) return ctx.comfyCutView;
   const ga = generateAllCutView(ctx.generateAllBatch, projectId, cutId);
   if (ga) return ga;
   if (sdkCutStatusView(ctx.regenJob, { projectId, cutId })) {
@@ -39,6 +38,7 @@ export function cutCardRenderView(ctx = {}) {
       source: "sdk",
     };
   }
+  if (ctx.comfyCutView) return ctx.comfyCutView;
   const prog = cutProgressStatusView(ctx.progressCut || null);
   if (prog) {
     if (prog.mode === "queued") {
@@ -60,10 +60,27 @@ export function cutCardRenderView(ctx = {}) {
 
 /**
  * Visible status word on `.gg-cut-idle` (E2E reads this while the job runs).
- * @param {{ hasMedia?: boolean, badge?: { show?: boolean, text?: string } }} s
+ * @param {{
+ *   hasMedia?: boolean,
+ *   badge?: { show?: boolean, text?: string, title?: string },
+ *   projectId?: string,
+ *   cutId?: string,
+ *   regenJob?: object|null,
+ *   sdkBusyCutId?: string|null,
+ * }} s
  */
 export function cutCardIdleWord(s = {}) {
   if (s.badge?.show && s.badge.text) return { text: s.badge.text, title: s.badge.title || s.badge.text };
+  if (
+    s.sdkBusyCutId &&
+    s.projectId &&
+    s.cutId &&
+    String(s.sdkBusyCutId) === String(s.cutId)
+  ) {
+    return { text: "Queued", title: "Queued through the Comfy SDK" };
+  }
+  const sdk = sdkCutStatusView(s.regenJob, { projectId: s.projectId, cutId: s.cutId });
+  if (sdk) return { text: sdk.text, title: sdk.title };
   const hasMedia = !!s.hasMedia;
   return hasMedia
     ? { text: "Done", title: "Not queued or rendering; the cut has a version" }

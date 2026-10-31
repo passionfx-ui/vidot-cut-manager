@@ -273,7 +273,7 @@ import {
   MAKE_VIDEO_OLD_SERVER,
 } from "./gg_version_strip_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
-import { batchProgressView, createRenderStatus, idleStateView, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
+import { batchProgressView, createRenderStatus, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
 import { captureRouteMissing, captureToast, createAutoCapture } from "./gg_auto_capture_core.js";
 import { selectionBarView, iconRowView, statusPanelView } from "./gg_status_panel_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
@@ -4689,7 +4689,14 @@ function paintRenderStatus(cutIds) {
       const idle = badge.closest(".gg-cut-state")?.querySelector(".gg-cut-idle");
       if (idle) {
         const cut = cutByIdTimeline(id);
-        const word = cutCardIdleWord({ hasMedia: !!cut?.media?.id, badge: v });
+        const word = cutCardIdleWord({
+          hasMedia: !!cut?.media?.id,
+          badge: v,
+          regenJob: sdk.lastJob,
+          sdkBusyCutId: sdk.busy === "regen" ? sdk.regenCutId : null,
+          projectId: state.pid,
+          cutId: id,
+        });
         idle.textContent = word.text;
         idle.title = word.title;
       }
@@ -4762,13 +4769,26 @@ function scheduleTimelineReload() {
   }, 600);
 }
 
+function sdkRegenStillRunningForCut(projectId, cutId) {
+  const j = sdk.lastJob;
+  return !!(
+    j?.native &&
+    j.status === "running" &&
+    j.cut_id &&
+    j.pid &&
+    String(j.cut_id) === String(cutId) &&
+    String(j.pid) === String(projectId)
+  );
+}
+
 function onProgressTrackerEvent(evt) {
   if (!progressPanelsActive()) return;
   if (evt.cutId && evt.projectId) {
     if (evt.state === "done" || evt.state === "failed" || evt.state === "interrupted") {
-      scheduleTimelineReload();
+      if (!sdkRegenStillRunningForCut(evt.projectId, evt.cutId)) scheduleTimelineReload();
     }
     scheduleProgressPaint(evt.cutId);
+    paintRenderStatus([evt.cutId]);
   }
 }
 
@@ -5567,7 +5587,16 @@ function infoRowContent(c, labels) {
   const lenInfo = formatCutListLength(c);
   const verInfo = formatCutVersionStatus(c);
   const head = cutHeaderParts(c, state.timeline, labels);
-  const idle = idleStateView(!!c.media?.id);
+  const rv = cutRenderView(c.id);
+  const badgeInit = renderBadgeView(rv);
+  const idle = cutCardIdleWord({
+    hasMedia: !!c.media?.id,
+    badge: badgeInit,
+    regenJob: sdk.lastJob,
+    sdkBusyCutId: sdk.busy === "regen" ? sdk.regenCutId : null,
+    projectId: state.pid,
+    cutId: c.id,
+  });
   const nameTitle = `${c.story || c.prompt || c.name || ""}`.trim();
   const headName = head.name && cutShowsEditedMarker(c) ? `${head.name} *` : head.name;
   const headerBadges = [
