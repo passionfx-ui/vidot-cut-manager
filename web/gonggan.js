@@ -246,6 +246,7 @@ import {
   timelineSecFromClientX,
   videoPreviewFrameIndex,
 } from "./gg_timeline_scrub_core.js";
+import { routeTimelineClipPointerDown } from "./gg_timeline_pointer_core.js";
 import { animatedWebpFrameBytes, parseAnimatedWebp } from "./gg_webp_anim_core.js";
 import { noMediaText, noMediaThumbClass, playsAsVideo, isAnimatedImage, versionMedia } from "./gg_missing_media_core.js";
 import {
@@ -8548,6 +8549,22 @@ function seek(t, opts) {
   showFrame();
 }
 
+function timelineInnerLeft(root) {
+  const inner = root.querySelector(".gg-tl-inner");
+  return inner?.getBoundingClientRect().left ?? 0;
+}
+
+function clipPointerIsPlayheadScrub(root, clientX) {
+  return (
+    routeTimelineClipPointerDown({
+      clientX,
+      innerLeft: timelineInnerLeft(root),
+      playheadSec: play.t,
+      px: ed.px,
+    }) === "scrub"
+  );
+}
+
 // ---- trim (port of app.js bindTlTrim) ----
 function bindTrim(root) {
   root.querySelectorAll(".gg-edge").forEach((edge) => {
@@ -8655,6 +8672,7 @@ function bindReorder(root) {
   root.querySelectorAll(".gg-clip").forEach((el) => {
     el.addEventListener("pointerdown", (e) => {
       if (e.button || e.target.closest(".gg-edge")) return;
+      if (clipPointerIsPlayheadScrub(root, e.clientX)) return;
       const startX = e.clientX, startY = e.clientY;
       let active = false, target = -1;
       const cuts = cutsNow();
@@ -8708,6 +8726,7 @@ function bindMove(root) {
   root.querySelectorAll(".gg-clip").forEach((el) => {
     el.addEventListener("pointerdown", (e) => {
       if (e.button || e.target.closest(".gg-edge")) return;
+      if (clipPointerIsPlayheadScrub(root, e.clientX)) return;
       const startX = e.clientX, startY = e.clientY;
       const clips = trackClips();
       const idx = clips.findIndex((x) => x.id === el.dataset.cutId);
@@ -9114,7 +9133,9 @@ function mountTimeline(el) {
     overlay.addEventListener("pointercancel", end);
   };
   $r(".gg-ruler").addEventListener("pointerdown", beginTimelineScrub);
-  $r(".gg-head-line")?.addEventListener("pointerdown", beginTimelineScrub);
+  const headLine = $r(".gg-head-line");
+  headLine?.addEventListener("pointerdown", beginTimelineScrub, true);
+  headLine?.addEventListener("pointerdown", beginTimelineScrub);
   $r(".gg-track").addEventListener("contextmenu", (e) => {
     const clip = e.target.closest(".gg-clip");
     if (clip) openClipContextMenu(e, clip.dataset.cutId);
