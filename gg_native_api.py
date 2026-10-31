@@ -441,7 +441,7 @@ def native_add_cut_list(pid: str, cuts, workflow: str | None = None, after: str 
             entries.append({**r, "graph": g})
     except gg_wfnodes.NodeNotFound as ex:
         raise ValueError(f"Image template: {ex}") from None
-    _remove_pristine_seed_cuts(store, pid, after if isinstance(after, str) and after else None)
+    _remove_pristine_seed_cuts(store, pid, None)
     _doc, ids = store.add_cuts(pid, entries, after=after if isinstance(after, str) and after else None)
     scene_pairs = [
         (cid, entries[i].get("scene"))

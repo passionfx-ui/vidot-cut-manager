@@ -42,6 +42,22 @@ Jin: Wait up!
         self.assertEqual(cuts[0]["title"], "Scene 1 Shot 2 Alley")
         self.assertEqual(cuts[0]["caption"], "Jin: Wait up!")
 
+    def test_scene_markers_assign_following_cuts_only(self):
+        story = """Scene 1
+Cut 1: Rooftop
+Girl on the roof.
+Cut 2: Paper boat
+She finds a boat.
+Scene 2
+Cut 3: Harbor
+Moon over water.
+Cut 4: Keeper
+An old keeper waves.
+"""
+        cuts = presplit.presplit_public(story)
+        assert cuts is not None
+        self.assertEqual([c.get("scene") for c in cuts], ["Scene 1", "Scene 1", "Scene 2", "Scene 2"])
+
     def test_no_captions_mode(self):
         story = """Cut 1: Park
 Sam: Hello there.

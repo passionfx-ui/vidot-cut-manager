@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   LAST_LOCATION_KEY,
   folderNotCreated,
+  defaultProjectStorageHint,
   loadLastLocation,
   newProjectRequest,
   projectFolderName,
@@ -114,5 +115,14 @@ describe("New Project: server without folder support", () => {
     assert.equal(folderNotCreated({ id: "p", name: "A", native: true }), true);
     assert.equal(folderNotCreated({ id: "p", folder: "D:\\F\\A" }), false);
     assert.equal(folderNotCreated(null), false);
+  });
+});
+
+describe("default project storage hint", () => {
+  it("shows the server native projects path when known", () => {
+    assert.match(defaultProjectStorageHint("C:\\pack\\projects"), /^Default: C:\\pack\\projects$/);
+  });
+  it("falls back to a short hint when the path is unknown", () => {
+    assert.match(defaultProjectStorageHint(""), /plugin projects folder/);
   });
 });

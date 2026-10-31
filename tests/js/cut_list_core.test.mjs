@@ -82,6 +82,38 @@ describe("validateCutItems (strict, same messages as gg_ltx.validate_cut_list)",
     assert.equal(r.cuts[0].description, "line one line two");
   });
 
+  it("keeps scene through validateCutItems and parseCutList (AI Make Cut create path)", () => {
+    const rows = [
+      { cut: 1, duration: 2, description: "Roof", scene: "Scene 1" },
+      { cut: 2, duration: 2, description: "Moon", scene: "Scene 2" },
+    ];
+    const v = validateCutItems(rows);
+    assert.equal(v.ok, true);
+    assert.deepEqual(v.cuts.map((c) => c.scene), ["Scene 1", "Scene 2"]);
+    const parsed = parseCutList(JSON.stringify(rows));
+    assert.equal(parsed.ok, true);
+    assert.deepEqual(parsed.cuts.map((c) => c.scene), ["Scene 1", "Scene 2"]);
+    const payload = cutListPayload("pid", parsed.cuts, "", "after");
+    assert.deepEqual(payload.cuts.map((c) => c.scene), ["Scene 1", "Scene 2"]);
+  });
+
+  it("takeResult path: JSON.stringify(job.cuts) re-parse keeps Scene 1 / Scene 2 (E2E story shape)", () => {
+    /** Same shape as GET /gonggan/ai-cut-split/status job.cuts after gg_script_presplit presplit_public. */
+    const jobCuts = [
+      { cut: 1, duration: 2.5, title: "Rooftop", description: "Girl on the roof", caption: "", scene: "Scene 1" },
+      { cut: 2, duration: 2.5, title: "Paper Boat", description: "She finds a boat", caption: "", scene: "Scene 1" },
+      { cut: 3, duration: 2.5, title: "Harbor", description: "Moon over water", caption: "", scene: "Scene 2" },
+      { cut: 4, duration: 2.5, title: "Keeper", description: "An old keeper waves", caption: "", scene: "Scene 2" },
+    ];
+    const parsed = parseCutList(JSON.stringify(jobCuts));
+    assert.equal(parsed.ok, true);
+    assert.deepEqual(parsed.cuts.map((c) => c.scene), ["Scene 1", "Scene 1", "Scene 2", "Scene 2"]);
+    const payload = cutListPayload("pid-137", parsed.cuts, "", "seed-cut-id");
+    assert.deepEqual(payload.cuts.map((c) => c.scene), ["Scene 1", "Scene 1", "Scene 2", "Scene 2"]);
+    assert.equal(payload.pid, "pid-137");
+    assert.equal(payload.after, "seed-cut-id");
+  });
+
   it("names the item and the field for every problem", () => {
     const r = validateCutItems([
       item(1, 2),

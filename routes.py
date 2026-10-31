@@ -39,7 +39,17 @@ async def gg_settings(request):
         ok, where = True, str(d)
     except Exception as ex:  # noqa: BLE001
         ok, where = False, str(ex)
-    return web.json_response({"ok": ok, "data_root": s.get("data_root"), "uid": s.get("uid"), "user_dir": where})
+    try:
+        native_projects = str(gg_native_api.native_store().projects_dir)
+    except Exception:  # noqa: BLE001
+        native_projects = ""
+    return web.json_response({
+        "ok": ok,
+        "data_root": s.get("data_root"),
+        "uid": s.get("uid"),
+        "user_dir": where,
+        "native_projects_dir": native_projects,
+    })
 
 
 @routes.get("/gonggan/projects")

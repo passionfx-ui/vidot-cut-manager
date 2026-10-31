@@ -87,6 +87,7 @@ import {
   i2vConfirmMessage,
   i2vErrorMessage,
 } from "./gg_native_regen_core.js";
+import { cutCardIdleWord, cutCardRenderView } from "./gg_cut_card_status_core.js";
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import { REFERENCE_CATEGORIES } from "./gg_import_core.js";
 import {
@@ -94,6 +95,7 @@ import {
   loadLastLocation,
   newProjectRequest,
   NO_FOLDER_ROUTE_HINT,
+  defaultProjectStorageHint,
   projectFolderPath,
   saveLastLocation,
 } from "./gg_new_project_core.js";
@@ -104,6 +106,7 @@ import {
   pickFreeWorkflowPath,
   pathCollides,
   autosaveStatusMessage,
+  savedShotWorkflowToastDetail,
   workflowLabel,
 } from "./gg_autosave_core.js";
 import { sentence } from "./gg_text_core.js";
@@ -879,9 +882,27 @@ function openNewProjectModal() {
   });
   const syncPath = () => {
     const p = projectFolderPath(locIn.value, nameIn.value);
-    pathHint.textContent = p ? `Project folder: ${p}` : "";
-    pathHint.title = p;
+    if (p) {
+      pathHint.textContent = `Project folder: ${p}`;
+      pathHint.title = p;
+    } else if (!locIn.value.trim() && defaultStorageHint) {
+      pathHint.textContent = defaultProjectStorageHint(defaultStorageHint);
+      pathHint.title = defaultStorageHint;
+    } else {
+      pathHint.textContent = "";
+      pathHint.removeAttribute("title");
+    }
   };
+  let defaultStorageHint = "";
+  const applyDefaultStorageHint = (dir) => {
+    defaultStorageHint = String(dir || "").trim();
+    const ph = defaultProjectStorageHint(defaultStorageHint);
+    locIn.placeholder = ph.startsWith("Default: ") ? ph.slice(9) : ph;
+    syncPath();
+  };
+  getJson("/gonggan/settings")
+    .then((d) => applyDefaultStorageHint(d.native_projects_dir))
+    .catch(() => applyDefaultStorageHint(""));
   const showLocErr = (msg) => {
     locErr.textContent = msg;
     locIn.focus();
@@ -2217,6 +2238,13 @@ async function tryRestoreCutWorkingCopy(cutId, cutRec, loadToken) {
   }
 }
 
+function autosaveToastDetail(saved, cutId) {
+  const cut = cutId ? cutById(cutId) : null;
+  const labels = state.timeline ? computeCutLabels(state.timeline) : null;
+  const cutLabel = cut && labels ? cutDisplayLabel(cut, labels) : "";
+  return savedShotWorkflowToastDetail(saved, { cutLabel });
+}
+
 async function prepareGongganShotTabReplace() {
   const tabs = collectGongganShotTabs();
   const dirtyTabs = filterTabsNeedingAutosave(tabs, autosaveContextForWorkflow);
@@ -2245,8 +2273,7 @@ async function prepareGongganShotTabReplace() {
     // Saved content is the new baseline: such a tab is clean now and may be closed/replaced.
     for (const s of savedSnaps) if (s.cutId && s.snap) ggWorkflowBaselines.set(s.cutId, s.snap);
     for (const s of result.saved) {
-      const detail = s.name || s.path.replace(/^.*\//, "") || "workflow";
-      ggToast("Saved", detail, "ok");
+      ggToast("Saved", autosaveToastDetail(s, s.cutId), "ok");
     }
   }
   ensureWorkflowManagerActive();
@@ -2563,8 +2590,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
             if (result.ok) {
               prevDirty = false;
               for (const s of result.saved) {
-                const detail = s.name || s.path.replace(/^.*\//, "") || "workflow";
-                ggToast("Saved", detail, "ok");
+                ggToast("Saved", autosaveToastDetail(s, resolveWorkflowCutForWip(previous)?.cutId || ""), "ok");
               }
             }
           } catch (e) {
@@ -4285,7 +4311,7 @@ async function splitSceneHere(cutId) {
   const title = await askText({
     title: "Scene name",
     label: "Name",
-    value: cuts[idx].group_name || "Scene",
+    value: nextSceneName(state.timeline?.groups),
     okLabel: "Create scene",
     maxLength: SCENE_NAME_MAX_LEN,
   });
@@ -4547,9 +4573,72 @@ function paintRenderGlobal() {
   document.querySelectorAll(".gg-shots").forEach(paintJobQueue);
 }
 
-/** A cut's render state: its ComfyUI queue prompts first, else its Generate All item. */
+/** A cut's render state: ComfyUI queue, Generate All, GET /gonggan/regen/status job, or Comfy progress on the cut. */
 function cutRenderView(cutId) {
-  return renderStatus.cutView(state.pid, cutId) || generateAllCutView(genAll.batch, state.pid, cutId);
+  return cutCardRenderView({
+    projectId: state.pid,
+    cutId,
+    comfyCutView: renderStatus.cutView(state.pid, cutId),
+    generateAllBatch: genAll.batch,
+    regenJob: sdk.lastJob,
+    sdkBusyCutId: sdk.busy === "regen" ? sdk.regenCutId : null,
+    progressCut: state.pid && cutId ? progressTracker.getCutStatus(state.pid, cutId) : null,
+  });
+}
+
+function linkRunningQueueToSdkCut(queueJson) {
+  const j = sdk.lastJob;
+  if (!j || j.status !== "running" || !j.native || !j.cut_id || !j.pid) return;
+  const running = queueJson?.queue_running;
+  if (!Array.isArray(running) || running.length !== 1) return;
+  const entry = running[0];
+  if (!Array.isArray(entry) || entry[1] == null) return;
+  const promptId = String(entry[1]);
+  renderStatus.link(promptId, j.cut_id, j.pid);
+  progressTracker.registerPrompt(promptId, j.cut_id, j.pid);
+  paintRenderStatus([j.cut_id]);
+}
+
+let regenPollTimer = 0;
+
+function syncRegenJobFromServer(job) {
+  if (!job || typeof job !== "object") return;
+  const prev = sdk.lastJob;
+  sdk.lastJob = job;
+  const cutId = job.cut_id;
+  if (cutId && job.pid === state.pid) {
+    paintRenderStatus([cutId]);
+  }
+  if (job.status === "running" && job.native && cutId) scheduleRegenPoll();
+  else if (regenPollTimer) {
+    clearInterval(regenPollTimer);
+    regenPollTimer = 0;
+  }
+  if (prev?.status === "running" && job.status !== "running" && cutId && job.pid === state.pid) {
+    bus.dispatchEvent(new Event("sdk"));
+  }
+}
+
+function scheduleRegenPoll() {
+  if (regenPollTimer) return;
+  regenPollTimer = setInterval(() => {
+    void refreshRegenJob();
+  }, 1500);
+}
+
+async function refreshRegenJob() {
+  try {
+    const d = await getJson("/gonggan/regen/status");
+    const job = d.job;
+    if (!job || job.status === "idle") {
+      if (regenPollTimer) {
+        clearInterval(regenPollTimer);
+        regenPollTimer = 0;
+      }
+      return;
+    }
+    syncRegenJobFromServer(job);
+  } catch (_) {}
 }
 
 /** Badge-only update for the given cuts (cut cards + timeline clips) and the header indicator. */
@@ -4557,7 +4646,16 @@ function paintRenderStatus(cutIds) {
   for (const id of cutIds || []) {
     const v = renderBadgeView(cutRenderView(id));
     const sel = `.gg-cut[data-cut-id="${CSS.escape(id)}"] .gg-render-badge, .gg-clip[data-cut-id="${CSS.escape(id)}"] .gg-render-badge`;
-    document.querySelectorAll(sel).forEach((el) => paintRenderBadge(el, v));
+    document.querySelectorAll(sel).forEach((badge) => {
+      paintRenderBadge(badge, v);
+      const idle = badge.closest(".gg-cut-state")?.querySelector(".gg-cut-idle");
+      if (idle) {
+        const cut = cutByIdTimeline(id);
+        const word = cutCardIdleWord({ hasMedia: !!cut?.media?.id, badge: v });
+        idle.textContent = word.text;
+        idle.title = word.title;
+      }
+    });
   }
   if (!SHOW_CUT_PANEL && SHOW_STATUS_PANEL) document.querySelectorAll(".gg-shots .gg-cutpanel").forEach(paintStatusPanel);
   paintRenderGlobal();
@@ -4642,6 +4740,7 @@ async function syncProgressQueue() {
     const data = await res.json().catch(() => ({}));
     progressTracker.syncQueue(data);
     renderStatus.syncQueue(data);
+    linkRunningQueueToSdkCut(data);
     scheduleProgressPaint();
     paintAllCutProgress();
   } catch (_) {}
@@ -5922,7 +6021,7 @@ function paintSelection(root) {
 
 // ---------------- Shots (sidebar) ----------------
 // ---- SDK status / versions / regen (Shots tab) ----
-const sdk = { st: null, busy: "", msg: "", lastJob: null };
+const sdk = { st: null, busy: "", msg: "", lastJob: null, regenCutId: null };
 
 async function refreshSdk(force) {
   try { sdk.st = await (await api.fetchApi("/gonggan/sdk/status" + (force ? "?force=1" : ""))).json(); }
@@ -6188,6 +6287,7 @@ async function sdkGenerateNativeCut(cutId, { newSeed }) {
   const title = shotTitle(cut);
   const pid = state.pid;
   sdk.busy = "regen";
+  sdk.regenCutId = cutId;
   sdk.msg = `Preparing ${title}…`;
   bus.dispatchEvent(new Event("sdk"));
   try {
@@ -6200,6 +6300,9 @@ async function sdkGenerateNativeCut(cutId, { newSeed }) {
       return;
     }
     await postJson("/gonggan/regen", { pid, cut_id: cutId, dry_run: false, confirm: true, plan: plan.plan });
+    syncRegenJobFromServer({ native: true, status: "running", pid, cut_id: cutId });
+    scheduleRegenPoll();
+    void refreshRegenJob();
     sdk.msg = `Queued through Comfy SDK: ${title}`;
     ggToast("Queued", `${title} (Comfy SDK)`, "ok");
   } catch (e) {
@@ -6207,6 +6310,7 @@ async function sdkGenerateNativeCut(cutId, { newSeed }) {
     ggToast(newSeed ? "Regen" : "Queue", `${title} — ${sdkRegenErrorMessage(e?.message || e)}`, "warn");
   } finally {
     sdk.busy = "";
+    sdk.regenCutId = null;
     bus.dispatchEvent(new Event("sdk"));
   }
 }
@@ -6234,6 +6338,7 @@ async function imageToVideoCut(cutId, { startVid = "" } = {}) {
   const selectedVid = startVid || (open && open.projectId === pid && open.cutId === cutId ? open.vid : "");
   const what = startVid ? MAKE_VIDEO_LABEL : "Image to Video";
   sdk.busy = "regen";
+  sdk.regenCutId = cutId;
   sdk.msg = `Preparing ${what} for ${title}…`;
   bus.dispatchEvent(new Event("sdk"));
   try {
@@ -6251,6 +6356,9 @@ async function imageToVideoCut(cutId, { startVid = "" } = {}) {
       return;
     }
     await postJson("/gonggan/regen", { pid, cut_id: cutId, dry_run: false, confirm: true, plan: plan.plan });
+    syncRegenJobFromServer({ native: true, status: "running", pid, cut_id: cutId });
+    scheduleRegenPoll();
+    void refreshRegenJob();
     sdk.msg = `Queued through Comfy SDK: ${title} (${what})`;
     ggToast("Queued", `${title}: ${what} (Comfy SDK)`, "ok");
     if (wfLastLoadedCutId === cutId && wfLastLoadedProjectId === pid && isGongganShotTabOpenAndActive()) {
@@ -6264,6 +6372,7 @@ async function imageToVideoCut(cutId, { startVid = "" } = {}) {
     ggToast(what, `${title} — ${i2vErrorMessage(e)}`, "warn");
   } finally {
     sdk.busy = "";
+    sdk.regenCutId = null;
     bus.dispatchEvent(new Event("sdk"));
   }
 }
@@ -6566,7 +6675,7 @@ async function captureFinishedPrompt(promptId) {
 
 api.addEventListener("gonggan.regen", (e) => {
   const j = e.detail || {};
-  sdk.lastJob = j;
+  syncRegenJobFromServer(j);
   const shown = !j.native || state.pid === j.pid;
   if (j.status === "done") { sdk.msg = `New version from SDK job ${j.sdk_job_id || ""}`; if (shown) loadTimeline(); }
   else if (j.status === "error") sdk.msg = "SDK job failed: " + (j.error || "");
@@ -7660,7 +7769,10 @@ function mountShots(el) {
   const onOpenTab = () => paintSelection(root);
   const onTemplate = () => paint();
   bus.addEventListener("projects", paint);
-  bus.addEventListener("timeline", paint);
+  bus.addEventListener("timeline", () => {
+    paint();
+    paintAllRenderStatus();
+  });
   bus.addEventListener("trash", () => syncTrashButton(root));
   const onUseAi = () => syncAiSplitButton(root);
   bus.addEventListener("cut-split-use-ai", onUseAi);
@@ -7668,7 +7780,10 @@ function mountShots(el) {
   bus.addEventListener("select", onSel);
   bus.addEventListener("gg-opentab", onOpenTab);
   bus.addEventListener("gg-playcut", onPlayCut);
-  bus.addEventListener("sdk", paintPanel);
+  bus.addEventListener("sdk", () => {
+    paintPanel();
+    paintAllRenderStatus();
+  });
   paint();
   if (!state.projects.length) loadProjects();
   refreshProjectTemplateFlag();
@@ -8982,6 +9097,7 @@ function mountTimeline(el) {
     overlay.addEventListener("pointercancel", end);
   };
   $r(".gg-ruler").addEventListener("pointerdown", beginTimelineScrub);
+  $r(".gg-head-line")?.addEventListener("pointerdown", beginTimelineScrub);
   $r(".gg-track").addEventListener("contextmenu", (e) => {
     const clip = e.target.closest(".gg-clip");
     if (clip) openClipContextMenu(e, clip.dataset.cutId);
@@ -9321,6 +9437,7 @@ app.registerExtension({
     installLoadImageQueueGuard();
     loadPersistedJobs();
     void refreshGenerateAll();
+    void refreshRegenJob();
     if (!api._ggQueuePatched) {
       api._ggQueuePatched = true;
       const origQueue = api.queuePrompt.bind(api);

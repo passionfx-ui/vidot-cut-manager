@@ -78,6 +78,13 @@ export function newProjectRequest(v = {}) {
   return { body };
 }
 
+/** Hint for an empty Location field (default plugin project storage). */
+export function defaultProjectStorageHint(nativeProjectsDir) {
+  const dir = String(nativeProjectsDir ?? "").trim();
+  if (dir) return `Default: ${dir}`;
+  return "Leave empty to use the plugin projects folder";
+}
+
 /** True when the server created the project without its folder (route from before 0.9.99, ComfyUI not restarted). */
 export function folderNotCreated(project) {
   return !!project && typeof project.folder !== "string";

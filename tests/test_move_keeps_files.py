@@ -147,7 +147,9 @@ class NativeMoveKeepsFilesTests(unittest.TestCase):
             path = na.native_media_path(vid)
             self.assertEqual(path, self.paths[vid])
             self.assertTrue(path.is_file())
-            self.assertEqual(path.parent.name, self.c2)
+            rel = path.relative_to(self.pdir / "assets")
+            top = rel.parts[0] if rel.parts else ""
+            self.assertIn(top, (self.c2, "images", "videos"), msg=str(path))
             self.assertTrue((self.pdir / "versions" / self.c2 / f"{vid}.json").is_file())
             self.assertEqual(na.native_version_workflow(self.pid, self.c2, vid)["workflow"], wf)
         src = na.native_cut_source_workflow(self.pid, self.c2)
@@ -252,7 +254,9 @@ class NativeMoveKeepsFilesTests(unittest.TestCase):
             res = na.native_send_last_output(self.pid, self.c2)
         new_vid = res["version"]["id"]
         path = na.native_media_path(new_vid)
-        self.assertEqual(path.parent.name, self.c2)
+        rel = path.relative_to(self.pdir / "assets")
+        top = rel.parts[0] if rel.parts else ""
+        self.assertIn(top, (self.c2, "images", "videos"), msg=str(path))
         tl = self.store.to_timeline(self.pid)
         row = self._row(tl, self.c2)
         self.assertEqual(row["versions"], 3)

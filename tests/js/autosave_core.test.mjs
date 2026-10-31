@@ -5,6 +5,7 @@ import {
   pathCollides,
   autosaveModifiedTabs,
   autosaveWorkflow,
+  savedShotWorkflowToastDetail,
   normalizeWorkflowPath,
 } from "../../web/gg_autosave_core.js";
 
@@ -221,6 +222,21 @@ describe("autosaveModifiedTabs", () => {
     const r = await autosaveModifiedTabs([wf], deps);
     assert.equal(r.ok, false);
     assert.match(r.failed?.error || "", /listExistingPaths failed/);
+  });
+});
+
+describe("savedShotWorkflowToastDetail", () => {
+  it("uses cut label instead of a raw workflow filename", () => {
+    assert.equal(
+      savedShotWorkflowToastDetail({ path: "workflows/gonggan/p/cut-uuid.json" }, { cutLabel: "1-2" }),
+      "cut 1-2",
+    );
+  });
+  it("includes version label when provided", () => {
+    assert.equal(
+      savedShotWorkflowToastDetail({ path: "x.json" }, { cutLabel: "1-2", versionLabel: "v03" }),
+      "v03 to cut 1-2",
+    );
   });
 });
 

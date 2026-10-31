@@ -532,8 +532,9 @@
 .gg-timeline .gg-drop[hidden] { display: none; }
 .gg-timeline .gg-drop.gg-snap-hit { top: 0; width: 1px; margin-left: 0; background: #f2c84b; box-shadow: 0 0 4px #f2c84b; z-index: 6; }
 .gg-timeline .gg-trim-tip { position: absolute; top: 2px; transform: translateX(10px); z-index: 7; padding: 1px 6px; border-radius: 3px; background: rgba(13,13,13,.9); border: 1px solid #f2c84b; color: #f2c84b; font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; pointer-events: none; }
-.gg-timeline .gg-head-line { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #ff5a5a; pointer-events: none; z-index: 5; left: 0; }
-.gg-timeline .gg-head-line::before { content: ""; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top: 8px solid #ff5a5a; }
+.gg-timeline .gg-head-line { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #ff5a5a; pointer-events: auto; cursor: ew-resize; z-index: 25; left: 0; }
+.gg-timeline .gg-head-line::before { content: ""; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top: 8px solid #ff5a5a; pointer-events: none; }
+.gg-timeline .gg-head-line::after { content: ""; position: absolute; top: 0; bottom: 0; left: -7px; width: 16px; }
 
 /* export */
 .gg-timeline .gg-sep { width: 1px; align-self: stretch; background: var(--gg-line); margin: 0 2px; }

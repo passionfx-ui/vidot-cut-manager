@@ -191,6 +191,7 @@ export function validateCutItems(items) {
       }
     }
     if (errors.length === bad) {
+      const sc = e.scene;
       rows.push({
         order: num,
         duration: Math.round(sec * 100) / 100,
@@ -198,6 +199,7 @@ export function validateCutItems(items) {
         title: title || "",
         caption: typeof caption === "string" ? caption : "",
         notes: typeof notes === "string" ? notes : "",
+        ...(typeof sc === "string" && sc.trim() ? { scene: sc.trim() } : {}),
       });
     }
   });
@@ -212,6 +214,7 @@ export function validateCutItems(items) {
       description: r.description,
       caption: r.caption ?? "",
       notes: r.notes ?? "",
+      ...(r.scene ? { scene: r.scene } : {}),
     })),
     errors: [],
   };

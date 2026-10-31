@@ -73,14 +73,15 @@ def _split_blocks(story: str) -> list[tuple[float, str, list[str], str]] | None:
     cur_title = ""
     cur_body: list[str] = []
     cur_scene = "Scene 1"
+    block_scene = "Scene 1"
     headers = 0
     list_headers = 0
 
     def flush() -> None:
-        nonlocal cur_key, cur_title, cur_body, cur_scene
+        nonlocal cur_key, cur_title, cur_body
         if cur_key is None:
             return
-        blocks.append((cur_key, cur_title, cur_body, cur_scene))
+        blocks.append((cur_key, cur_title, cur_body, block_scene))
         cur_key = None
         cur_title = ""
         cur_body = []
@@ -98,6 +99,7 @@ def _split_blocks(story: str) -> list[tuple[float, str, list[str], str]] | None:
         hm = _header_match(line)
         if hm:
             flush()
+            block_scene = cur_scene
             cur_key, kind, title = hm
             cur_title = title
             if kind == "list":

@@ -65,6 +65,15 @@ export function workflowLabel(wf) {
   return slash >= 0 ? p.slice(slash + 1) : p || "workflow";
 }
 
+/** Toast detail when a shot workflow file was saved (avoid raw cut ids in the filename). */
+export function savedShotWorkflowToastDetail(saved, ctx = {}) {
+  const cutLabel = String(ctx.cutLabel ?? "").trim();
+  const versionLabel = String(ctx.versionLabel ?? "").trim();
+  if (cutLabel && versionLabel) return `${versionLabel} to cut ${cutLabel}`;
+  if (cutLabel) return `cut ${cutLabel}`;
+  return workflowLabel(saved);
+}
+
 /** @param {{ filename?: string, path?: string }} wf */
 export function defaultDesiredPath(wf) {
   const p = normalizeWorkflowPath(wf.path);

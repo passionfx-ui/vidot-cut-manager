@@ -21,7 +21,13 @@ from .entities import (
 from .errors import ConflictError
 from .ids import is_uuid_id, now_iso, uuid7
 from .media_anim import animation_info
-from .project_settings import PROJECT_ASSETS_DIR, ensure_project_assets_dir, merge_settings_patch, normalize_settings
+from .project_settings import (
+    PROJECT_ASSETS_DIR,
+    ensure_project_assets_dir,
+    merge_settings_patch,
+    normalize_settings,
+    project_assets_type_subdir,
+)
 from .timeline import (
     build_timeline,
     clip_start,
@@ -955,13 +961,14 @@ class LocalStore:
                     raise ValueError(f"Cannot save to the project folder {folder}: {ex}") from None
                 asset_path = str(dest)
             else:
-                rel_dir = Path(PROJECT_ASSETS_DIR) / cut_id
-                dest = self._project_dir(pid) / rel_dir / dest_name
+                pdir = self._project_dir(pid)
+                dest_dir = ensure_project_assets_dir(pdir, ext, kind)
+                dest = dest_dir / dest_name
                 if dest.exists():
                     raise ValueError(f"{dest} already exists")
-                dest.parent.mkdir(parents=True, exist_ok=True)
+                rel_sub = Path(PROJECT_ASSETS_DIR) / project_assets_type_subdir(ext, kind)
+                asset_path = str(rel_sub / dest_name).replace("\\", "/")
                 shutil.copy2(src, dest)
-                asset_path = str(rel_dir / dest_name).replace("\\", "/")
             digest = hashlib.sha256(dest.read_bytes()).hexdigest()
             asset = {
                 "path": asset_path,

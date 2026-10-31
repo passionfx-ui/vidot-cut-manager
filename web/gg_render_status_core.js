@@ -377,6 +377,14 @@ export function createRenderStatus(opts = {}) {
 /** Badge text for a cut view (null = hidden). `pos` (`#N`) is the queue place, shown only on cut cards. */
 export function renderBadgeView(v) {
   if (!v) return { show: false, mode: "", text: "", pos: "", title: "" };
+  if (v.source === "sdk") {
+    if (v.state === "rendering") {
+      return { show: true, mode: "rendering", text: "Generating", pos: "", title: "Generating through the Comfy SDK" };
+    }
+    if (v.state === "queued") {
+      return { show: true, mode: "queued", text: "Queued", pos: "", title: "Queued through the Comfy SDK" };
+    }
+  }
   if (v.source === "generate-all") {
     if (v.state === "waiting") return { show: true, mode: "queued", text: "Waiting", pos: "", title: "Waiting for its turn in Generate All" };
     if (v.state === "generating") return { show: true, mode: "rendering", text: "Generating", pos: "", title: "Generating through the Comfy SDK (Generate All)" };

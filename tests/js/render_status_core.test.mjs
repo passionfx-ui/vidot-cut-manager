@@ -273,6 +273,14 @@ describe("badge views", () => {
     assert.equal(idleStateView(true).text, "Done");
     assert.equal(idleStateView(false).text, "Idle");
   });
+  it("SDK source badge while Generate All uses its own labels", () => {
+    const gen = renderBadgeView({ source: "generate-all", state: "generating", count: 0, position: null });
+    assert.equal(gen.text, "Generating");
+    const sdk = renderBadgeView({ source: "sdk", state: "rendering", count: 1, position: null });
+    assert.equal(sdk.text, "Generating");
+    const queued = renderBadgeView({ source: "sdk", state: "queued", count: 1, position: null });
+    assert.equal(queued.text, "Queued");
+  });
   it("global indicator text", () => {
     assert.equal(renderGlobalView({ state: null }).show, false);
     assert.equal(renderGlobalView({ state: "rendering", rendering: 1, queued: 2 }).text, "Rendering\u2026");

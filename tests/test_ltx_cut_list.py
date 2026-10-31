@@ -252,8 +252,9 @@ class AddCutListTests(unittest.TestCase):
         ids = res["cut_ids"]
         self.assertEqual(len(ids), 2)
         doc = self.store.get_project(self.pid)
-        order = doc["scenes"][0]["cut_order"]
-        self.assertEqual(order, [self.first, *ids])
+        self.assertTrue(doc["cuts"][self.first].get("deleted_at"))
+        order = doc.get("loose_order") or []
+        self.assertEqual(order, ids)
         c1, c2 = (doc["cuts"][i] for i in ids)
         self.assertEqual((c1["name"], c1["caption"], c1["planned_sec"], c1["sec"], c1["prompt"]),
                          ("First Shot", "First shot", 3.0, 3.0, "First shot"))
