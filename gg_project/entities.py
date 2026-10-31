@@ -55,6 +55,15 @@ def new_scene(name: str) -> dict[str, Any]:
     return s
 
 
+def next_free_scene_name(existing: list[str] | None = None) -> str:
+    """Lowest N ≥ 1 such that `Scene N` is not in existing (case-insensitive, trimmed)."""
+    used = {str(n or "").strip().lower() for n in (existing or [])}
+    n = 1
+    while f"scene {n}" in used:
+        n += 1
+    return f"Scene {n}"
+
+
 def is_reference(c: Any) -> bool:
     """A reference (Character/Place/...) is stored like a cut but never appears on the timeline."""
     return isinstance(c, dict) and c.get("kind") == "reference"

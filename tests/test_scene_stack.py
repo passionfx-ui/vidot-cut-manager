@@ -36,6 +36,15 @@ class SceneStackTests(unittest.TestCase):
         """What the New scene button sends: the current groups plus one empty group at the end."""
         return native_save_groups(self.pid, self._groups() + [{"id": gid, "name": name, "cut_ids": [], "collapsed": False}])
 
+    def test_empty_scene_name_on_save_becomes_next_free_scene_n(self):
+        """UI may POST groups with a blank name; server must not store Scene or duplicates."""
+        tl = native_save_groups(
+            self.pid,
+            self._groups()
+            + [{"id": "new1", "name": "", "cut_ids": [], "collapsed": False}],
+        )
+        self.assertEqual(tl["groups"][-1]["name"], "Scene 2")
+
     def test_each_click_stacks_one_more_empty_scene(self):
         for i, name in enumerate(["Scene 2", "Scene 3", "Scene 4"], start=1):
             tl = self._new_scene(f"new{i}", name)

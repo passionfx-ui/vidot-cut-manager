@@ -16,6 +16,7 @@ from .entities import (
     is_reference,
     new_cut,
     new_scene,
+    next_free_scene_name,
     new_version,
 )
 from .errors import ConflictError
@@ -1144,6 +1145,7 @@ class LocalStore:
             seen_gids: set[str] = set()
             assigned: set[str] = set()
             parsed: list[dict] = []
+            reserved_names: list[str] = [str(s.get("name") or "") for s in old_scenes.values()]
             for g in groups or []:
                 if not isinstance(g, dict):
                     continue
@@ -1151,7 +1153,10 @@ class LocalStore:
                 if not gid or gid in seen_gids:
                     continue
                 seen_gids.add(gid)
-                name = str(g.get("name") or "").strip()[:40] or "Scene"
+                name = str(g.get("name") or "").strip()[:40]
+                if not name:
+                    name = next_free_scene_name(reserved_names)
+                reserved_names.append(name)
                 cut_ids = []
                 for cid in g.get("cut_ids") or []:
                     if isinstance(cid, str) and cid in active and cid not in assigned:

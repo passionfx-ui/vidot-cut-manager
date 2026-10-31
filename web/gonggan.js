@@ -309,6 +309,7 @@ import {
 } from "./gg_empty_cut_core.js";
 import {
   normalizeNameInput,
+  normalizeSceneCreateDialogInput,
   SCENE_NAME_MAX_LEN,
   PROJECT_NAME_MAX_LEN,
 } from "./gg_ask_text_core.js";
@@ -1619,7 +1620,7 @@ function openReferencesModal() {
 let askTextEl = null;
 
 /**
- * @param {{ title: string, label?: string, value?: string, okLabel?: string, maxLength?: number }} opts
+ * @param {{ title: string, label?: string, value?: string, okLabel?: string, maxLength?: number, allowEmpty?: boolean }} opts
  * @returns {Promise<string|null>}
  */
 function askText(opts) {
@@ -1629,6 +1630,9 @@ function askText(opts) {
   const initial = String(opts?.value ?? "");
   const okLabel = String(opts?.okLabel ?? "OK");
   const maxLength = Number(opts?.maxLength) > 0 ? Math.floor(Number(opts.maxLength)) : SCENE_NAME_MAX_LEN;
+  const allowEmpty = !!opts?.allowEmpty;
+  const normInput = (raw) =>
+    allowEmpty ? normalizeSceneCreateDialogInput(raw, maxLength) : normalizeNameInput(raw, maxLength);
 
   return new Promise((resolve) => {
     const wrap = document.createElement("div");
@@ -1660,7 +1664,7 @@ function askText(opts) {
     input.select();
 
     const syncOk = () => {
-      const norm = normalizeNameInput(input.value, maxLength);
+      const norm = normInput(input.value);
       okBtn.disabled = !norm.ok;
     };
     syncOk();
@@ -1674,7 +1678,7 @@ function askText(opts) {
     };
 
     const trySubmit = () => {
-      const norm = normalizeNameInput(input.value, maxLength);
+      const norm = normInput(input.value);
       if (!norm.ok) {
         syncOk();
         input.focus();
@@ -4154,9 +4158,10 @@ async function createSceneGroup(cutIds) {
   const title = await askText({
     title: "Scene name",
     label: "Name",
-    value: isNativeProject() ? nextSceneName(state.timeline?.groups) : "Scene " + ((state.timeline?.groups?.length || 0) + 1),
+    value: nextSceneName(state.timeline?.groups),
     okLabel: "Create scene",
     maxLength: SCENE_NAME_MAX_LEN,
+    allowEmpty: true,
   });
   if (title === null) return;
   let groups = stripCutsFromGroups(groupsClone(), ids);
@@ -4319,6 +4324,7 @@ async function splitSceneHere(cutId) {
     value: nextSceneName(state.timeline?.groups),
     okLabel: "Create scene",
     maxLength: SCENE_NAME_MAX_LEN,
+    allowEmpty: true,
   });
   if (title === null) return;
   const sceneName = resolveSceneName(state.timeline?.groups, title);
