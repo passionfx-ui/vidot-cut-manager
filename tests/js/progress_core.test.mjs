@@ -178,6 +178,15 @@ describe("gg_progress_core", () => {
     assert.equal(t.getCutStatus("p", "c2").error, "bad node");
   });
 
+  it("prompt gone from /queue after SDK link marks cut done (not stuck queued)", () => {
+    const t = createProgressTracker({ graceMs: 0 });
+    t.registerPrompt("late-link", "cut-sdk", "proj");
+    t.syncQueue({ queue_running: [], queue_pending: [] });
+    const st = t.getCutStatus("proj", "cut-sdk");
+    assert.equal(st.state, "done");
+    assert.equal(st.percent, 100);
+  });
+
   it("emit accepts cloud-style events", () => {
     const t = createProgressTracker();
     const events = [];

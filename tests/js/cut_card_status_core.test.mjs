@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { cutCardIdleWord, cutCardRenderView } from "../../web/gg_cut_card_status_core.js";
+import { createProgressTracker } from "../../web/gg_progress_core.js";
 import { renderBadgeView } from "../../web/gg_render_status_core.js";
 
 /** Shape from GET /gonggan/regen/status while sdk_runner is in ComfyUI (E2E 136). */
@@ -64,5 +65,31 @@ describe("cutCardRenderView (SDK Queue path)", () => {
       }),
       null,
     );
+  });
+
+  it("E2E136 3b: after SDK regen completes, cut card is Done not stuck Queued", () => {
+    const projectId = RUNNING_REGEN_JOB.pid;
+    const cutId = RUNNING_REGEN_JOB.cut_id;
+    const tracker = createProgressTracker({ graceMs: 0 });
+    tracker.registerPrompt("sdk-comfy-prompt", cutId, projectId);
+    tracker.syncQueue({ queue_running: [], queue_pending: [] });
+    const progressCut = tracker.getCutStatus(projectId, cutId);
+    const doneJob = {
+      status: "done",
+      native: true,
+      pid: projectId,
+      cut_id: cutId,
+      versions: ["v-new"],
+    };
+    const view = cutCardRenderView({
+      projectId,
+      cutId,
+      regenJob: doneJob,
+      progressCut,
+    });
+    const badge = renderBadgeView(view);
+    assert.equal(badge.show, false, `expected no badge, got ${badge.text}`);
+    const idle = cutCardIdleWord({ hasMedia: true, badge });
+    assert.equal(idle.text, "Done");
   });
 });

@@ -186,6 +186,26 @@ class RegenStatusUiPathTests(unittest.TestCase):
         for name in [n for n in list(sys.modules) if n.startswith("gg_routes_pkg.")]:
             del sys.modules[name]
 
+    def test_regen_status_done_after_native_job(self):
+        pid = "01a19098-3f60-77be-a648-dffead1ac5b0"
+        cut_id = "01a19099-a656-722b-81f4-e2f056fdca99"
+        routes_mod, _cs, handlers = load_routes()
+        routes_mod.gg_sdk._job.clear()
+        routes_mod.gg_sdk._job.update(
+            status="done",
+            native=True,
+            pid=pid,
+            cut_id=cut_id,
+            versions=["01a19099-085a-722b-81f4-e2f056fdca99"],
+            finished_at=1730360100.0,
+        )
+        res = asyncio.run(handlers[("GET", "/gonggan/regen/status")](FakeRequest()))
+        job = res.body["job"]
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(job["cut_id"], cut_id)
+        for name in [n for n in list(sys.modules) if n.startswith("gg_routes_pkg.")]:
+            del sys.modules[name]
+
 
 class SettingsNativeProjectsDirTests(unittest.TestCase):
     def test_settings_includes_native_projects_dir(self):

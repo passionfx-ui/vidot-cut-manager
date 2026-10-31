@@ -181,7 +181,8 @@ export function cutProgressStatusView(evt) {
   return null;
 }
 
-export function createProgressTracker() {
+export function createProgressTracker(opts = {}) {
+  const graceMs = Number.isFinite(opts.graceMs) ? opts.graceMs : 2000;
   /** @type {Set<(evt: ProgressEvent) => void>} */
   const listeners = new Set();
   /** @type {Map<string, object>} */
@@ -210,6 +211,7 @@ export function createProgressTracker() {
         currentValue: 0,
         currentMax: 1,
         maxPercent: 0,
+        at: Date.now(),
       };
       byPrompt.set(promptId, p);
     }
@@ -499,19 +501,23 @@ export function createProgressTracker() {
         for (const id of it.outputsToExecute) p.executed.delete(String(id));
       }
       p.state = it.running ? "running" : "queued";
+      if (p.state === "queued") p.at = Date.now();
       p.queuePos = pos;
       p.percent = applyMonotonicPercent(p, computePercent(p));
       deliver(p);
     }
 
+    const now = Date.now();
     for (const p of byPrompt.values()) {
       if (seen.has(p.promptId)) continue;
-      if (p.state === "queued" || p.state === "running") {
-        if (p.cutId != null && p.projectId != null) {
-          p.queuePos = null;
-          deliver(p);
-        }
+      if (p.state !== "queued" && p.state !== "running") continue;
+      if (p.cutId == null || p.projectId == null) continue;
+      if (p.state === "queued" && now - (p.at || 0) < graceMs) {
+        p.queuePos = null;
+        deliver(p);
+        continue;
       }
+      handleTerminal(p.promptId, "done", null);
     }
 
     return { otherRunning, otherPending };

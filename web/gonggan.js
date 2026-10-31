@@ -4621,6 +4621,7 @@ function syncRegenJobFromServer(job) {
   }
   if (prev?.status === "running" && job.status !== "running" && cutId && job.pid === state.pid) {
     bus.dispatchEvent(new Event("sdk"));
+    void syncProgressQueue();
   }
 }
 
@@ -4639,6 +4640,11 @@ async function refreshRegenJob() {
       if (regenPollTimer) {
         clearInterval(regenPollTimer);
         regenPollTimer = 0;
+      }
+      const prev = sdk.lastJob;
+      if (prev?.status === "running" && prev.cut_id && prev.pid === state.pid) {
+        syncRegenJobFromServer({ ...prev, status: "idle" });
+        void syncProgressQueue();
       }
       return;
     }
