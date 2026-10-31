@@ -5,7 +5,7 @@ import { versionRepState } from "./gg_cuts_core.js";
 
 export const SET_BEST_LABEL = "Set as Best";
 export const IMPORT_TILE_TIP = "Import image or video";
-export const IMPORT_MENU_LABEL = "Import image or video…";
+export const IMPORT_MENU_LABEL = "Import Media…";
 export const IMPORT_ACCEPT = "image/*,video/*";
 /** Back-to-newest arrow appears once the row is scrolled right past this many pixels. */
 export const NEWEST_BUTTON_MIN_SCROLL = 4;

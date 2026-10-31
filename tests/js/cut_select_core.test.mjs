@@ -327,9 +327,11 @@ describe("0.9.125: no visible All button; Ctrl+A and Select All share one select
     assert.ok(!/toggle/i.test(body));
   });
 
-  it("cut card menu and empty list menu offer Select All", () => {
-    assert.match(fnBody("openCutContextMenu"), /selectAll: \(\) => selectAllListCuts\(\)/);
-    assert.match(fnBody("openShotsPanelContextMenu"), /label: SELECT_ALL_LABEL, action: \(\) => selectAllListCuts\(\)/);
+  it("cut card and empty list menus do not offer Select All (Ctrl+A still works)", () => {
+    assert.ok(!fnBody("openCutContextMenu").includes("selectAll:"));
+    const panelMenu = fnBody("openShotsPanelContextMenu");
+    assert.ok(!panelMenu.includes("SELECT_ALL_LABEL"));
+    assert.ok(!panelMenu.includes("selectAllListCuts"));
   });
 
   it("click / Shift / Ctrl selection and the empty Queue rule are kept", () => {

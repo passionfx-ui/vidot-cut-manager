@@ -6,6 +6,12 @@ export function trashButtonLabel(count) {
   return `Trash (${n})`;
 }
 
+/** Cut list context menu: opens the trash / restore list. */
+export function restoreDeletedCutsMenuLabel(count) {
+  const n = Math.max(0, Math.floor(Number(count)) || 0);
+  return `Restore Deleted Cuts (${n})…`;
+}
+
 /** Toast summary after soft-deleting cuts (Undo available). */
 export function movedToTrashToastMessage(count) {
   const n = Math.floor(Number(count));

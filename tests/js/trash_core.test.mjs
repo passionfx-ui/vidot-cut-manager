@@ -4,6 +4,7 @@ import {
   trashButtonLabel,
   movedToTrashToastMessage,
   deleteCutsConfirmMessage,
+  restoreDeletedCutsMenuLabel,
   normalizeTrashItems,
   formatTrashItem,
 } from "../../web/gg_trash_core.js";
@@ -17,6 +18,13 @@ describe("deleteCutsConfirmMessage", () => {
   it("invalid counts read as one cut", () => {
     assert.equal(deleteCutsConfirmMessage(0), deleteCutsConfirmMessage(1));
     assert.equal(deleteCutsConfirmMessage("x"), deleteCutsConfirmMessage(1));
+  });
+});
+
+describe("restoreDeletedCutsMenuLabel", () => {
+  it("formats count for the cut list menu", () => {
+    assert.equal(restoreDeletedCutsMenuLabel(0), "Restore Deleted Cuts (0)…");
+    assert.equal(restoreDeletedCutsMenuLabel(3), "Restore Deleted Cuts (3)…");
   });
 });
 

@@ -3,6 +3,7 @@
 import { queueButtonState } from "./gg_batch_render_core.js";
 import { importButtonState, IMPORT_MENU_LABEL } from "./gg_version_strip_core.js";
 import { aiCutSplitButtonState } from "./gg_cut_split_model_core.js";
+import { restoreDeletedCutsMenuLabel } from "./gg_trash_core.js";
 
 export const SINGLE_CUT_TIP = "Select a single cut";
 export const SDK_BUSY_TIP = "Comfy SDK is busy";
@@ -11,9 +12,23 @@ export const BUSY_TIP = "Busy, try again in a moment";
 export const REGEN_EMPTY_TIP = "Empty cut: no workflow to queue";
 export const TRASH_TIP = "Deleted cuts – click to restore";
 export const I2V_NO_IMAGE_TIP = "This cut has no image version yet";
-export const SELECT_ALL_LABEL = "Select All (Ctrl+A)";
+export const MAKE_SCENE_LABEL = "Make Scene from Selection";
+export const REMOVE_FROM_SCENE_LABEL = "Remove from Scene";
+export const REMOVE_FROM_SCENE_TIP = "Take the selected cuts out of their scene";
+export const START_NEW_SCENE_LABEL = "Start New Scene Here";
+export const START_NEW_SCENE_TIP = "This cut and the ones after it in this scene become a new scene";
 export const MENU_SEPARATOR = Object.freeze({ key: "sep", separator: true });
 export const AI_MAKE_CUT_MENU_LABEL = "AI Make Cut…";
+
+/** Right-column shortcut hints (only keys that exist in shotsKeyAction). */
+const CUT_MENU_SHORTCUTS = Object.freeze({
+  rename: "F2",
+  del: "Del",
+});
+
+export function cutMenuShortcut(key) {
+  return CUT_MENU_SHORTCUTS[key] || "";
+}
 
 export function aiMakeCutMenuItem(useAi) {
   const s = aiCutSplitButtonState(useAi !== false);
@@ -34,8 +49,14 @@ export function cutActionItems(ctx = {}) {
       disabled: !nat,
       title: tip,
     },
-    rename: { key: "rename", label: "Rename…", disabled: !nat || !!ctx.multi, title: tip },
-    del: { key: "del", label: "Delete", danger: true },
+    rename: {
+      key: "rename",
+      label: "Rename…",
+      disabled: !nat || !!ctx.multi,
+      title: tip,
+      shortcut: cutMenuShortcut("rename"),
+    },
+    del: { key: "del", label: "Delete", shortcut: cutMenuShortcut("del") },
   };
 }
 
@@ -63,10 +84,12 @@ export function cutCardMenuItems(ctx = {}) {
     ? [
         { key: "moveUp", label: "Move Up", disabled: !ctx.canMoveUp },
         { key: "moveDown", label: "Move Down", disabled: !ctx.canMoveDown },
-        { key: "moveToScene", label: "Move to Scene \u25B8", disabled: false },
+        { key: "moveToScene", label: "Move to Scene", disabled: false },
       ]
     : [];
   return [
+    { key: "group", label: MAKE_SCENE_LABEL },
+    MENU_SEPARATOR,
     { key: "addCut", label: "Add Cut" },
     ...(nat && ctx.aiMakeCut ? [aiMakeCutMenuItem(ctx.useAi)] : []),
     importItem,
@@ -79,20 +102,28 @@ export function cutCardMenuItems(ctx = {}) {
       disabled: !nat || !!setBestTitle,
       title: setBestTitle,
     },
+    a.redo,
     ...queueItems,
     MENU_SEPARATOR,
     ...moveItems,
-    { key: "group", label: "Group" },
-    { key: "ungroup", label: "Ungroup", disabled: !ctx.inScene && !ctx.anyInScene },
-    { key: "split", label: "Split Scene", disabled: !ctx.inScene },
-    a.redo,
+    {
+      key: "ungroup",
+      label: REMOVE_FROM_SCENE_LABEL,
+      disabled: !ctx.inScene && !ctx.anyInScene,
+      title: ctx.inScene || ctx.anyInScene ? REMOVE_FROM_SCENE_TIP : "",
+    },
+    {
+      key: "split",
+      label: START_NEW_SCENE_LABEL,
+      disabled: !ctx.inScene,
+      title: ctx.inScene ? START_NEW_SCENE_TIP : "",
+    },
     MENU_SEPARATOR,
-    { key: "selectAll", label: SELECT_ALL_LABEL, disabled: !ctx.hasListCuts },
     a.rename,
     a.del,
     {
       key: "trash",
-      label: ctx.trashLabel || "Trash…",
+      label: ctx.trashLabel || restoreDeletedCutsMenuLabel(0),
       disabled: !nat || !((ctx.trashCount || 0) > 0),
       title: nat ? TRASH_TIP : ctx.readonlyTip || "",
     },
@@ -120,7 +151,7 @@ export function sceneMenuItems(ctx = {}) {
     { key: "selectCuts", label: "Select Cuts", disabled: empty },
     { key: "toggleCollapse", label: ctx.collapsed ? "Expand" : "Collapse" },
     { key: "rename", label: "Rename" },
-    { key: "ungroup", label: "Ungroup" },
+    { key: "ungroup", label: REMOVE_FROM_SCENE_LABEL },
   ];
 }
 

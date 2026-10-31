@@ -540,13 +540,17 @@
 .gg-toast-host .gg-toast { pointer-events: auto; }
 .gg-toast-host[hidden] { display: none !important; }
 
-.gg-ctx { position: fixed; z-index: 10050; min-width: 7rem; padding: 3px 0; border-radius: 4px; border: 1px solid var(--gg-line); background: var(--comfy-menu-bg, #2b2b2b); box-shadow: 0 6px 17px rgba(0,0,0,.45); font-size: 0.7em; }
-.gg-ctx-item { display: block; width: 100%; text-align: left; padding: 4px 8px; border: none; background: transparent; color: var(--gg-fg); font: inherit; cursor: pointer; line-height: 1.35; }
-.gg-ctx-item:hover:not(:disabled) { background: #2c2f38; color: var(--gg-acc); }
-.gg-ctx-item:disabled { opacity: 0.45; cursor: default; }
-.gg-ctx-item.gg-ctx-danger { color: #ffb4b4; }
-.gg-ctx-item.gg-ctx-parent::after { content: ""; }
-.gg-ctx-sep { height: 1px; margin: 3px 0; background: var(--gg-line); }
+.gg-ctx { position: fixed; z-index: 10050; min-width: 11rem; padding: 4px 0; border-radius: 0; border: 1px solid #3c3c3c; background: #232323; box-shadow: 0 4px 12px rgba(0,0,0,.55); font-size: 12px; color: #e8e8e8; }
+.gg-ctx-item { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 22px; height: 22px; box-sizing: border-box; text-align: left; padding: 0 10px; border: none; background: transparent; color: inherit; font: inherit; cursor: pointer; line-height: 22px; white-space: nowrap; }
+.gg-ctx-label { flex: 1 1 auto; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; }
+.gg-ctx-kbd { flex: 0 0 auto; margin-left: auto; padding-left: 16px; color: #7a7a7a; font-size: 12px; letter-spacing: 0.02em; }
+.gg-ctx-item:hover:not(:disabled) { background: #3f5f7f; color: #eef4fa; }
+.gg-ctx-item:hover:not(:disabled) .gg-ctx-kbd { color: #a8b8c8; }
+.gg-ctx-item:disabled { opacity: 0.42; cursor: default; }
+.gg-ctx-item.gg-ctx-danger { color: inherit; }
+.gg-ctx-item.gg-ctx-parent::after { content: "\25B8"; flex: 0 0 auto; margin-left: auto; padding-left: 8px; color: #8a8a8a; font-size: 11px; line-height: 1; }
+.gg-ctx-item.gg-ctx-parent:hover:not(:disabled)::after { color: #c0d0e0; }
+.gg-ctx-sep { height: 1px; margin: 4px 0; background: #3a3a3a; border: none; padding: 0; }
 .gg-ctx-sub { z-index: 10051; }
 .gg-toast { padding: 10px 12px; border-radius: 6px; background: #2a2f38; border: 1px solid var(--gg-line); color: var(--gg-fg); font: 12px/1.35 system-ui, "Segoe UI", "Malgun Gothic", sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.45); }
 .gg-toast-sum { display: block; font-weight: 600; color: var(--gg-acc); margin-bottom: 2px; }

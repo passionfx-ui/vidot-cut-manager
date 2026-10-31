@@ -52,6 +52,7 @@ import {
 import { GAP, layoutTrack, clipAtTime, edgeSnapTargets, snapMoveStart, placeClip, prevClipEnd } from "./gg_tl_place_core.js";
 import {
   trashButtonLabel,
+  restoreDeletedCutsMenuLabel,
   normalizeTrashItems,
   formatTrashItem,
   movedToTrashToastMessage,
@@ -69,7 +70,9 @@ import {
   sceneCutIds,
   attachMenuActions,
   aiMakeCutMenuItem,
-  SELECT_ALL_LABEL,
+  MAKE_SCENE_LABEL,
+  REMOVE_FROM_SCENE_LABEL,
+  REMOVE_FROM_SCENE_TIP,
 } from "./gg_ctx_menu_core.js";
 import {
   regenConfirmMessage,
@@ -377,7 +380,7 @@ const SHOW_CUT_PANEL = false;
 /** With SHOW_CUT_PANEL off: the same slot shows a status card for the selection with the Queue button. */
 const SHOW_STATUS_PANEL = true;
 const CUT_PANEL_ROOT_CLASS = SHOW_CUT_PANEL ? "" : SHOW_STATUS_PANEL ? " gg-cutpanel-status" : " gg-cutpanel-off";
-/** Large `N selected · Group · Ungroup · ×` bar. Off = not rendered; the icon row takes its place. */
+/** Large selection bar (Make Scene / Remove from Scene). Off = not rendered; the icon row takes its place. */
 const SHOW_SEL_BAR = false;
 /** "Show redo cuts only" option in the Shots toolbar. Off = not shown and the filter is forced off. */
 const SHOW_REDO_FILTER = false;
@@ -593,8 +596,7 @@ function syncTrashButton(root) {
 }
 
 function trashMenuLabel() {
-  const n = trashCount > 0 ? trashCount : 0;
-  return `Trash (${n})…`;
+  return restoreDeletedCutsMenuLabel(trashCount);
 }
 
 async function restoreCutsByIds(ids, { selectFirst = false } = {}) {
@@ -3439,6 +3441,26 @@ function closeCtxMenu() {
   }
 }
 
+function fillCtxMenuItem(btn, it) {
+  btn.className =
+    "gg-ctx-item" +
+    (it.danger ? " gg-ctx-danger" : "") +
+    (it.submenu ? " gg-ctx-parent" : "");
+  btn.replaceChildren();
+  const label = document.createElement("span");
+  label.className = "gg-ctx-label";
+  label.textContent = it.label;
+  btn.appendChild(label);
+  if (it.shortcut) {
+    const kbd = document.createElement("span");
+    kbd.className = "gg-ctx-kbd";
+    kbd.textContent = it.shortcut;
+    btn.appendChild(kbd);
+  }
+  btn.disabled = !!it.disabled;
+  if (it.title) btn.title = it.title;
+}
+
 function openCtxSubmenu(anchorBtn, subItems) {
   if (ctxUi.sub) {
     ctxUi.sub.remove();
@@ -3450,10 +3472,7 @@ function openCtxSubmenu(anchorBtn, subItems) {
   subItems.forEach((it) => {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "gg-ctx-item" + (it.danger ? " gg-ctx-danger" : "");
-    btn.textContent = it.label;
-    btn.disabled = !!it.disabled;
-    if (it.title) btn.title = it.title;
+    fillCtxMenuItem(btn, it);
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       closeCtxMenu();
@@ -3489,10 +3508,7 @@ function showCtxMenu(x, y, items) {
     }
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "gg-ctx-item" + (it.danger ? " gg-ctx-danger" : "") + (it.submenu ? " gg-ctx-parent" : "");
-    btn.textContent = it.label;
-    btn.disabled = !!it.disabled;
-    if (it.title) btn.title = it.title;
+    fillCtxMenuItem(btn, it);
     if (it.submenu) {
       const openSub = () => {
         if (!it.disabled) openCtxSubmenu(btn, it.submenu);
@@ -3854,7 +3870,6 @@ function openCutContextMenu(e, cutId) {
       items,
       {
         ...cutMenuActions(cutId),
-        selectAll: () => selectAllListCuts(),
         importVer: () => pickVersionImportFiles(cutId),
         i2v: () => imageToVideoCut(cutId),
         setBest: () => {
@@ -3962,10 +3977,7 @@ function openShotsPanelContextMenu(e) {
   const nat = isNativeProject();
   const items = [{ label: "Add Cut", action: () => addLocalCut() }];
   const ids = cutSelIds();
-  if (ids.length) items.push({ label: "New Scene", action: () => createSceneGroup(ids) });
-  const { order, hidden } = shotsNavOrder();
-  const visible = selectAllCutIds(order, hidden);
-  if (visible.length) items.unshift({ label: SELECT_ALL_LABEL, action: () => selectAllListCuts() });
+  if (ids.length) items.push({ label: MAKE_SCENE_LABEL, action: () => createSceneGroup(ids) });
   if (nat && AI_CUT_SPLIT_VISIBLE) {
     const { key: _k, ...ai } = aiMakeCutMenuItem(cutSplitUseAiOn);
     items.push({ ...ai, action: () => openAiCutSplitModal() });
@@ -4002,7 +4014,7 @@ function timelineSelectedCutIds() {
   return selectedInDisplayOrder(order, tl.cuts.map((c) => c.id), state.cutSel);
 }
 
-/** Ctrl/Cmd+A and the list menu's Select All: every cut shown in the list. */
+/** Ctrl/Cmd+A: every cut shown in the list (not offered in the right-click menu). */
 function selectAllListCuts() {
   const { order, hidden } = shotsNavOrder();
   const ids = selectAllCutIds(order, hidden);
@@ -5669,6 +5681,13 @@ function updateSelectionBar(root) {
     bar.className = v.className;
     const countEl = bar.querySelector(".gg-sel-count");
     if (countEl) countEl.textContent = v.countText;
+    const groupBtn = bar.querySelector(".gg-sel-group");
+    if (groupBtn) groupBtn.textContent = MAKE_SCENE_LABEL;
+    const ungroupBtn = bar.querySelector(".gg-sel-ungroup");
+    if (ungroupBtn) {
+      ungroupBtn.textContent = REMOVE_FROM_SCENE_LABEL;
+      ungroupBtn.title = REMOVE_FROM_SCENE_TIP;
+    }
     setBtn(bar, ".gg-sel-group", v.group.disabled);
     setBtn(bar, ".gg-sel-ungroup", v.ungroup.disabled);
     setBtn(bar, ".gg-sel-x", v.clear.disabled);
@@ -7170,8 +7189,8 @@ function mountShots(el) {
       <div class="gg-final-wrap"${viewFinal ? "" : " hidden"}>${viewFinal && tl ? finalCutListHtml(tl) : ""}</div>
       ${SHOW_SEL_BAR ? `<div class="gg-selbar">
         <span class="gg-sel-label"><span class="gg-sel-count">0</span> selected</span>
-        <button type="button" class="gg-btn gg-sel-group" disabled>Group</button>
-        <button type="button" class="gg-btn gg-sel-ungroup" disabled>Ungroup</button>
+        <button type="button" class="gg-btn gg-sel-group" disabled>${esc(MAKE_SCENE_LABEL)}</button>
+        <button type="button" class="gg-btn gg-sel-ungroup" disabled title="${esc(REMOVE_FROM_SCENE_TIP)}">${esc(REMOVE_FROM_SCENE_LABEL)}</button>
         <button type="button" class="gg-btn gg-sel-x" disabled title="Clear selection">×</button>
       </div>` : ""}
       ${iconRowHtml()}
