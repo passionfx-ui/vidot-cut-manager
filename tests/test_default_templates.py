@@ -152,8 +152,12 @@ class StartImageNodeTests(unittest.TestCase):
         with self.assertRaises(wn.NodeNotFound):
             wn.find_start_image_node(g, titled_only=True)
 
-    def test_none_or_two_load_images_is_an_error(self):
-        for g in (_ui([{"id": 1, "type": "LoadImage"}, {"id": 2, "type": "LoadImage"}]), _ui([{"id": 1, "type": "KSampler"}]), {}):
+    def test_two_load_images_use_the_first(self):
+        """0.9.135: several untitled Load Image nodes -> the first one (lowest id) gets the start image."""
+        self.assertEqual(wn.find_start_image_node(_ui([{"id": 7, "type": "LoadImage"}, {"id": 3, "type": "LoadImage"}]))[0], "3")
+
+    def test_no_load_image_is_an_error(self):
+        for g in (_ui([{"id": 1, "type": "KSampler"}]), {}):
             with self.assertRaises(wn.NodeNotFound) as cm:
                 wn.find_start_image_node(g)
             self.assertEqual(str(cm.exception), "Start image node not found. Rename the input node to Start Image.")
@@ -237,7 +241,13 @@ class ProjectDefaultsTests(ProjectDefaultsBase):
         linked = self.user_workflow("linked.json", {"nodes": [{"id": 9, "type": "X"}], "links": []})
         na.native_set_template_ref(pid, linked)
         res = na.native_add_cut(pid, None, None)
-        self.assertEqual(self.cut_graph(pid, res["cut"]["id"])["nodes"][0]["id"], 9, "Default template overrides")
+        self.assertEqual(self.cut_graph(pid, res["cut"]["id"])["nodes"][0]["id"], 1,
+                         "0.9.135: an explicit Image template wins over a linked Default template")
+        pid2 = self.new_project({})
+        na.native_set_template_ref(pid2, linked)
+        res = na.native_add_cut(pid2, None, None)
+        self.assertEqual(self.cut_graph(pid2, res["cut"]["id"])["nodes"][0]["id"], 9,
+                         "a project with only the old Default template keeps using it")
 
     def test_cut_list_uses_image_template(self):
         """0.9.125: AI Make Cut cuts start from the Image template, even with workflow="i2v"."""
@@ -349,17 +359,16 @@ class ImageToVideoTests(ProjectDefaultsBase):
         with self.assertRaisesRegex(ValueError, "no still image version"):
             gg_sdk.image_to_video_plan(self.pid, self.cut)
 
-    def test_start_image_node_rule_errors(self):
+    def test_start_image_two_load_images_uses_first(self):
+        """0.9.135: two untitled Load Image nodes -> the first (lowest id) gets the start image, no error."""
         self.add("still.png")
         two = gg_template.read_workflow_ref("builtin:video-ltx")
         loader = next(n for n in two["nodes"] if n["type"] == "LoadImage")
         loader.pop("title")
         two["nodes"].append({**loader, "id": 999})
         na.native_update_project(self.pid, {"settings": {"video_template": self.user_workflow("two.json", two)}})
-        with self.assertRaises(ValueError) as cm:
-            gg_sdk.image_to_video_plan(self.pid, self.cut)
-        self.assertEqual(str(cm.exception), "Start image node not found. Rename the input node to Start Image.")
-        self.assertFalse(self.regen_dir.exists(), "no plan written")
+        plan = gg_sdk.image_to_video_plan(self.pid, self.cut)
+        self.assertEqual(str(plan["start_node"]), str(loader["id"]))
 
     def test_prompt_from_the_image_when_the_cut_has_no_description(self):
         self.store.update_cut(self.pid, self.cut, {"prompt": "", "notes": ""})
@@ -375,7 +384,7 @@ class ImageToVideoTests(ProjectDefaultsBase):
         self.store.update_cut(self.pid, self.cut, {"prompt": "Wide shot", "caption": "Where are you?"})
         self.add("still.png")
         plan = gg_sdk.image_to_video_plan(self.pid, self.cut)
-        self.assertEqual(plan["prompt"], "Wide shot Dialogue: Where are you?")
+        self.assertEqual(plan["prompt"], 'Wide shot Dialogue: "Where are you?"')
         wf = json.loads((self.regen_dir / f"{plan['plan']}.json").read_text(encoding="utf-8"))
         import gg_wfnodes as wn
         self.assertIn("Where are you?", wn.prompt_text(wf))

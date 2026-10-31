@@ -241,7 +241,7 @@ export function cutVideoGenerationPromptText(cut) {
   if (!base) return "";
   const cap = cutCaptionText(cut);
   if (!cap) return base;
-  return `${base} Dialogue: ${cap}`;
+  return `${base} Dialogue: "${cap}"`;
 }
 
 export const WRITE_PROMPT_FIRST = "Write a prompt for this cut first.";

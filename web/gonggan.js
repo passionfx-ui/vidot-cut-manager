@@ -1,5 +1,6 @@
 // comfyui-gonggan-cut — "Shots" sidebar tab + "Timeline" bottom panel tab.
 // Day 1: static render of real Gonggan projects/cuts (read-only). Trim/reorder come next.
+import { effectiveImageTemplate } from "./gg_project_settings_core.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import {
@@ -1227,10 +1228,10 @@ function openProjectSettingsModal() {
           <input type="text" class="gg-modal-folder" maxlength="260" spellcheck="false" autocomplete="off" placeholder="e.g. D:\\Films\\My Film" />
           <button type="button" class="gg-btn gg-modal-folder-browse">Browse…</button>
         </span>
-        <span class="gg-modal-hint">Generated outputs are saved in its assets folder. Empty = default: the plugin's own projects folder (custom_nodes/comfyui-gonggan-cut/projects).</span>
+        <span class="gg-modal-hint">Generated outputs are saved in its assets folder. Empty = default: the plugin's projects folder.</span>
         <span class="gg-modal-hint gg-split-err gg-modal-folder-err" aria-live="polite"></span>
       </label>` : ""}
-      ${templateFieldHtml()}
+      ${nat ? "" : templateFieldHtml()}
       ${nat ? `${templateFieldHtml("image")}${templateFieldHtml("video")}` : ""}
       ${nat && AI_CUT_SPLIT_VISIBLE ? `<label class="gg-modal-field gg-use-ai-field">
         <span class="gg-switch-row">Use AI
@@ -1250,7 +1251,8 @@ function openProjectSettingsModal() {
   projectModalEl = wrap;
   const form = wrap.querySelector("form");
   wireProjectTemplateField(wrap.querySelector('[data-tpl="default"]'));
-  const kindTemplates = { image: curSettings.image_template, video: curSettings.video_template };
+  // 0.9.135: no Default template field; an old project-level template shows (and saves) as its Image template.
+  const kindTemplates = { image: effectiveImageTemplate(curSettings.image_template, projectTemplateRef), video: curSettings.video_template };
   for (const kind of ["image", "video"]) {
     wireProjectTemplateField(wrap.querySelector(`[data-tpl="${kind}"]`), {
       get: () => kindTemplates[kind],
@@ -5334,7 +5336,7 @@ function captionRowContent(c) {
 }
 
 function cutThumbHtml(c) {
-  return `<div class="gg-cut-thumb">${thumbHtml(c.media, "gg-thumb")}${c.media && c.media.kind === "video" ? '<span class="gg-badge">▶</span>' : ""}${c.media && c.media.source && c.media.source !== "gonggan" ? `<span class="gg-badge gg-badge-l gg-src-${esc(c.media.source)}">${esc(fmtSrc(c.media.source))}</span>` : ""}</div>`;
+  return `<div class="gg-cut-thumb">${thumbHtml(c.media, "gg-thumb")}${c.media && c.media.kind === "video" ? '<span class="gg-badge">▶</span>' : ""}${c.media && c.media.source && fmtSrc(c.media.source) && c.media.source !== "gonggan" ? `<span class="gg-badge gg-badge-l gg-src-${esc(c.media.source)}">${esc(fmtSrc(c.media.source))}</span>` : ""}</div>`;
 }
 
 function infoRowContent(c, labels) {
@@ -5793,7 +5795,7 @@ function sdkBadge() {
   return `<span class="gg-sdk ${st.ok ? "gg-sdk-ok" : "gg-sdk-bad"}" title="${esc(tip)}">● SDK${st.ok ? "" : " off"}</span>`;
 }
 
-const fmtSrc = (s) => ({ gonggan: "Import", "local-sdk": "SDK", "comfy-history": "Comfy", "comfy-output-folder": "Comfy" }[s] || s || "");
+const fmtSrc = (s) => ({ gonggan: "Import", "local-sdk": "SDK", "comfy-history": "Comfy", "comfy-output-folder": "Comfy" }[s] || "");
 
 /** `timeoutMs`: abort the request after that long (the error's name is "AbortError"); default = no limit. */
 async function postJson(route, body, { timeoutMs = 0 } = {}) {
@@ -6442,7 +6444,7 @@ function versionThumbParts(c, v, tabOpen) {
   return {
     on: repState === "manual",
     wrapCls: `gg-ver-wrap${repState === "manual" ? " gg-rep" : repState === "implicit" ? " gg-implicit" : ""}${open ? " gg-ver-open" : ""}`,
-    tip: `${fmtSrc(v.source)} · ${v.model || ""} · ${new Date(v.created * 1000).toLocaleString()}`,
+    tip: [v.failed ? `Failed: ${v.error || "black video"}` : "", fmtSrc(v.source), v.model || "", new Date(v.created * 1000).toLocaleString()].filter(Boolean).join(" · "),
     img: v.missing ? thumbHtml(null, "gg-ver-img") : `<img class="gg-ver-img gg-thumb-img" draggable="false" src="${esc(posterUrl(v.id))}" loading="lazy" alt="" />`,
   };
 }
@@ -6462,7 +6464,7 @@ function cutPanelHtml(c, labels) {
     <div class="${wrapCls}" data-vid="${esc(v.id)}">
       <div class="gg-ver" title="${esc(tip)}">
         ${img}
-        <span class="gg-ver-src gg-src-${esc(v.source)}">${esc(fmtSrc(v.source))}</span>
+        ${fmtSrc(v.source) ? `<span class="gg-ver-src gg-src-${esc(v.source)}">${esc(fmtSrc(v.source))}</span>` : ""}
         ${on ? '<span class="gg-ver-rep">Rep</span>' : ""}
       </div>
       <button type="button" class="gg-btn gg-promote${on ? " gg-on" : ""}" ${on ? "disabled" : ""} title="${on ? "Timeline representative version" : "Set as timeline representative"}">${on ? "Rep" : "Set rep"}</button>
@@ -6634,7 +6636,8 @@ function versionStripHtml(c, selVid) {
     const { wrapCls, tip, img } = versionThumbParts(c, byId.get(r.id), tabOpen);
     const title = r.state ? `${r.state} · ${tip}` : tip;
     const sel = r.id === selVid;
-    return `<div class="${wrapCls} gg-vs-item${r.best ? " gg-vs-best" : ""}${sel && !r.best ? " gg-vs-sel" : ""}" data-vid="${esc(r.id)}"${sel ? ' aria-selected="true"' : ""}>
+    const failed = !!byId.get(r.id)?.failed;
+    return `<div class="${wrapCls} gg-vs-item${failed ? " gg-vs-failed" : ""}${r.best ? " gg-vs-best" : ""}${sel && !r.best ? " gg-vs-sel" : ""}" data-vid="${esc(r.id)}"${sel ? ' aria-selected="true"' : ""}>
       <div class="gg-ver" title="${esc(title)}">
         ${img}
         ${r.video ? `<span class="gg-vs-dur"${r.duration ? "" : " hidden"}>${esc(r.duration)}</span>` : ""}
@@ -7197,7 +7200,6 @@ function mountShots(el) {
         <button type="button" class="gg-btn gg-sel-ungroup" disabled title="${esc(REMOVE_FROM_SCENE_TIP)}">${esc(REMOVE_FROM_SCENE_LABEL)}</button>
         <button type="button" class="gg-btn gg-sel-x" disabled title="Clear selection">×</button>
       </div>` : ""}
-      ${iconRowHtml()}
       <div class="gg-vstrip" role="group" aria-label="Versions"${tl && !viewFinal ? "" : " hidden"}>
         ${versionStripHeadHtml()}
         <div class="gg-vs-body">
@@ -7205,6 +7207,7 @@ function mountShots(el) {
           <button type="button" class="gg-btn gg-vs-newest" hidden title="Back to newest" aria-label="Back to newest">‹</button>
         </div>
       </div>
+      ${iconRowHtml()}
       <div class="gg-cutpanel">${!SHOW_CUT_PANEL && SHOW_STATUS_PANEL ? statusPanelShellHtml() : ""}</div>
       <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>`;
     const projSel = root.querySelector(".gg-proj");
@@ -7823,7 +7826,7 @@ function showFrame(force) {
       return;
     }
     const dispNum = cutDisplayLabel(c, computeCutLabels(state.timeline));
-    label.textContent = c.group_name ? `Scene · ${c.group_name} — ${dispNum}. ${c.name}` : `${dispNum}. ${c.name}`;
+    label.textContent = `${dispNum} ${c.name}`;
     if (playsAsVideo(c.media)) {
       img.hidden = true; blank.hidden = true; vid.hidden = false;
       const url = mediaUrl(c.media.id);
@@ -8518,7 +8521,7 @@ function mountTimeline(el) {
     $r(".gg-track").innerHTML = cuts.map((c, i) => {
       const run = c.group_id && (i === 0 || cuts[i - 1].group_id !== c.group_id);
       const hue = c.group_id ? groupColor(c.group_id) : 0;
-      const tip = `${c.group_name ? `Scene · ${c.group_name}\n` : ""}${cutDisplayLabel(c, cutLabels)}. ${c.name}  ${c.sec.toFixed(1)}s${c.src_dur ? ` (src ${c.src_dur}s)` : ""}${(() => {
+      const tip = `${c.group_name ? `${c.group_name}\n` : ""}${cutDisplayLabel(c, cutLabels)}. ${c.name}  ${c.sec.toFixed(1)}s${c.src_dur ? ` (src ${c.src_dur}s)` : ""}${(() => {
         const cap = effectiveCaption(c).trim();
         return cap ? `\n${cap}` : "";
       })()}`;
@@ -8526,7 +8529,7 @@ function mountTimeline(el) {
       <div class="gg-clip${c.media ? "" : " gg-clip-empty"}${kindOf(c) === "video" ? " gg-clip-video" : ""}${c.pos !== c.index ? " gg-moved" : ""}${c.group_id ? " gg-in-scene" : ""}${run ? " gg-scene-start" : ""}"
            data-cut-id="${esc(c.id)}" style="width:${c.sec * ed.px}px;${c.group_id ? `--gg-grp:${hue}` : ""}"
            title="${esc(tip)}">
-        ${run ? `<div class="gg-scene-band">Scene · ${esc(c.group_name)}</div>` : ""}
+        ${run ? `<div class="gg-scene-band">${esc(c.group_name)}</div>` : ""}
         ${thumbHtml(c.media, "gg-clip-thumb")}
         <span class="gg-clip-dot gg-dot-empty"></span>
         <div class="gg-clip-label"><span class="gg-no">${esc(cutDisplayLabel(c, cutLabels))}</span>${esc(displayCutName(c))}</div>
@@ -8863,7 +8866,7 @@ app.registerExtension({
       id: SHOTS_TAB,
       icon: "pi pi-images",
       title: "Shots",
-      tooltip: "Vidot Cut Manager",
+      tooltip: "Vidot Studio – Cut Manager",
       type: "custom",
       render: (el) => mountShots(el),
     });

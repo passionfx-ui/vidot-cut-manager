@@ -13,7 +13,7 @@ try:
     from .gg_project.local_store import NEW_CUT_NAME
     from .gg_project.timeline import timeline_order
     from .gg_project.ids import is_uuid_id
-    from .gg_project.project_settings import TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings, project_mp4_export_dir
+    from .gg_project.project_settings import DEFAULT_IMAGE_TEMPLATE, TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings, project_mp4_export_dir
     from .gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids
     from .gg_project.media_anim import animation_info
 except ImportError:  # unittest / plain script
@@ -22,7 +22,7 @@ except ImportError:  # unittest / plain script
     from gg_project.local_store import NEW_CUT_NAME  # type: ignore
     from gg_project.timeline import timeline_order  # type: ignore
     from gg_project.ids import is_uuid_id  # type: ignore
-    from gg_project.project_settings import TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings, project_mp4_export_dir  # type: ignore
+    from gg_project.project_settings import DEFAULT_IMAGE_TEMPLATE, TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings, project_mp4_export_dir  # type: ignore
     from gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids  # type: ignore
     from gg_project.media_anim import animation_info  # type: ignore
 
@@ -130,6 +130,11 @@ def project_template_graph(doc: dict, kind: str = "image") -> dict | None:
     """Workflow a new cut starts from. Image cuts: the linked Default template (an explicit pick wins), else the
     project's Image template. "video" (cut-list cuts, Image to Video): the project's Video template."""
     if kind != "video":
+        explicit = project_template_ref(doc, "image")
+        if explicit and explicit != DEFAULT_IMAGE_TEMPLATE:  # 0.9.135: the Image template field wins
+            graph = resolve_template_graph(explicit)
+            if graph is not None:
+                return graph
         ref = doc.get("template_ref")
         if isinstance(ref, str) and ref:
             graph = resolve_template_graph(ref)
@@ -741,7 +746,7 @@ def cut_video_prompt_text(cut: dict) -> str:
     cap = cut_caption_text(cut)
     if not cap:
         return base
-    return f"{base} Dialogue: {cap}"
+    return f'{base} Dialogue: "{cap}"'
 
 
 def cut_generation_seconds(doc: dict, cut_id: str) -> float:

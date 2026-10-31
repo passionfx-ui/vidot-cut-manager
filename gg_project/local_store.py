@@ -1203,6 +1203,24 @@ class LocalStore:
             self._save_project_doc(pid, doc, "sync_groups", pid)
             return doc
 
+    def mark_version_failed(self, pid: str, cut_id: str, version_id: str, message: str) -> dict[str, Any]:
+        """Flag one version as Failed with a message (0.9.135 black video). Its media file is kept as is."""
+        if not is_uuid_id(pid) or not is_uuid_id(cut_id) or not isinstance(version_id, str) or not version_id:
+            raise ValueError("bad version")
+        with self._lock:
+            vpath = self._project_dir(pid) / "versions" / cut_id / f"{version_id}.json"
+            ver = _read_json(vpath)
+            if not isinstance(ver, dict):
+                raise ValueError("version not found")
+            ver["failed"] = True
+            ver["error"] = str(message or "Failed")[:300]
+            _atomic_write_json(vpath, ver)
+            doc = self._load_project_doc(pid)
+            if doc:
+                self._bump_project(doc)
+                self._save_project_doc(pid, doc, "version_failed", version_id)
+            return ver
+
     def version_file(self, pid: str, ver: dict[str, Any]) -> Path | None:
         """Absolute media path of a version of this project (None when its file is gone)."""
         return version_asset_file(self._project_dir(pid), ver.get("asset") if isinstance(ver, dict) else None)

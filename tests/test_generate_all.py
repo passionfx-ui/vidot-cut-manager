@@ -155,7 +155,7 @@ class NativeConvertTests(GenerateAllBase):
         self.assertEqual(cm.exception.code, "ui_only")
         res = na.native_cut_api_workflow(self.pid, self.ids[0], convert=True)
         self.assertEqual(res["source"], "converted")
-        self.assertEqual(res["workflow"]["6"]["inputs"]["text"], "Shot 1 Dialogue: Shot 1")
+        self.assertEqual(res["workflow"]["6"]["inputs"]["text"], 'Shot 1 Dialogue: "Shot 1"')
 
     def test_queue_plan_with_convert(self):
         plan = gg_sdk.native_plan(self.pid, self.ids[1], new_seed=False, convert=True)
@@ -184,7 +184,7 @@ class GenerateAllTests(GenerateAllBase):
         texts = []
         for f in sorted(self.regen_dir.glob("native_*.json"), key=lambda p: p.stat().st_mtime_ns):
             texts.append(json.loads(f.read_text(encoding="utf-8"))["6"]["inputs"]["text"])
-        self.assertEqual(sorted(texts), ["Shot 1 Dialogue: Shot 1", "Shot 2 Dialogue: Shot 2", "Shot 3 Dialogue: Shot 3"])
+        self.assertEqual(sorted(texts), ['Shot 1 Dialogue: "Shot 1"', 'Shot 2 Dialogue: "Shot 2"', 'Shot 3 Dialogue: "Shot 3"'])
 
     def test_failure_does_not_stop_the_rest(self):
         self.start(self.ids, fail_cut=self.ids[1])

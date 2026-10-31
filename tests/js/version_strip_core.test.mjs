@@ -152,8 +152,8 @@ describe("importButtonState", () => {
 describe("version row header: Best, Make Video, Import (0.9.125)", () => {
   const vers = () => cut().versions_list;
 
-  it("labels are English and plain", () => {
-    assert.deepEqual([BEST_BUTTON_LABEL, MAKE_VIDEO_LABEL, IMPORT_BUTTON_LABEL], ["Best", "Make Video", "Import"]);
+  it("labels are English: ★ Best, ▶ Make Video, Import (0.9.135)", () => {
+    assert.deepEqual([BEST_BUTTON_LABEL, MAKE_VIDEO_LABEL, IMPORT_BUTTON_LABEL], ["★ Best", "▶ Make Video", "Import"]);
     assert.match(MAKE_VIDEO_TIP, /selected image/);
   });
 
@@ -308,8 +308,8 @@ describe("gonggan.js wiring (0.9.118)", () => {
     return js.slice(at, js.indexOf("\n}\n", at));
   };
 
-  it("the row sits directly below the icon row, above the status panel", () => {
-    assert.match(js, /\$\{iconRowHtml\(\)\}\s*<div class="gg-vstrip"[^>]*>\s*\$\{versionStripHeadHtml\(\)\}\s*<div class="gg-vs-body">\s*<div class="gg-vs-list"><\/div>\s*<button[^>]*class="gg-btn gg-vs-newest"[^>]*>‹<\/button>\s*<\/div>\s*<\/div>\s*<div class="gg-cutpanel">/);
+  it("the row sits directly above the icon row (New scene / New cut), then the status panel (0.9.135)", () => {
+    assert.match(js, /<div class="gg-vstrip"[^>]*>\s*\$\{versionStripHeadHtml\(\)\}\s*<div class="gg-vs-body">\s*<div class="gg-vs-list"><\/div>\s*<button[^>]*class="gg-btn gg-vs-newest"[^>]*>[^<]*<\/button>\s*<\/div>\s*<\/div>\s*\$\{iconRowHtml\(\)\}\s*<div class="gg-cutpanel">/);
     assert.match(js, /^const SHOW_SEL_BAR = false;$/m);
     assert.ok(!js.includes("gg-list-row") && !css.includes("gg-list-row"), "vertical strip layout removed");
   });

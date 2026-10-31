@@ -202,3 +202,15 @@ export function readSettingsFromFormValues(presetValue, fpsValue, cutSecondsValu
   });
   return s;
 }
+
+/**
+ * Image template shown in Project Settings (0.9.135: the Default template field is gone). An explicit Image
+ * template wins; a project that only had a Default template linked shows that one, so nothing changes for it.
+ * @param {string} imageTemplate @param {string} defaultRef
+ */
+export function effectiveImageTemplate(imageTemplate, defaultRef) {
+  const img = typeof imageTemplate === "string" ? imageTemplate : "";
+  const def = typeof defaultRef === "string" ? defaultRef.trim() : "";
+  if (img && img !== DEFAULT_IMAGE_TEMPLATE) return img;
+  return def || img || DEFAULT_IMAGE_TEMPLATE;
+}

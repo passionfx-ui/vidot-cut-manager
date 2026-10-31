@@ -9,7 +9,7 @@ export function shouldClosePreviousShotTab({
 }) {
   if (!loadOk) return { close: false, reason: "load failed" };
   if (!previousOpen) return { close: false, reason: "previous not open" };
-  if (!previousOwned) return { close: false, reason: "previous not gonggan-owned" };
+  if (!previousOwned) return { close: false, reason: "previous not owned by a cut" };
   if (previousIsNew) return { close: false, reason: "same tab as new" };
   if (previousActive) return { close: false, reason: "previous still active" };
   if (previousModified) return { close: false, reason: "previous modified" };

@@ -166,7 +166,7 @@ async function openShotsTab(page) {
     return false;
   });
   if (!opened) {
-    const btn = await page.waitForSelector('[aria-label="Vidot Cut Manager"]', { timeout: 15000 });
+    const btn = await page.waitForSelector('[aria-label="Vidot Studio – Cut Manager"]', { timeout: 15000 });
     await btn.click();
   }
   await page.waitForSelector(".gg-root.gg-shots", { timeout: 60000 });
@@ -772,7 +772,7 @@ async function main() {
       await waitScenes(want, "Ctrl+Y");
       await sleep(400);
       const titles = await page.$$eval(".gg-root.gg-shots .gg-grp-sec[data-group-id] .gg-grp-title", (els) => els.map((e) => e.textContent.trim()));
-      if (titles.at(-1) !== "Scene · Scene 3") throw new Error(`after Ctrl+Y the last scene is ${titles.at(-1)}`);
+      if (titles.at(-1) !== "Scene 3") throw new Error(`after Ctrl+Y the last scene is ${titles.at(-1)}`);
     });
 
     const short = { [c1]: "c1", [c2]: "c2", [c3]: "c3", [c4]: "c4" };

@@ -1,6 +1,6 @@
-# Vidot Cut Manager
+# Vidot Studio – Cut Manager
 
-**Vidot Cut Manager: a ComfyUI plugin that turns a story into cuts and manages every take per cut.**
+**Vidot Studio – Cut Manager: a ComfyUI plugin that turns a story into cuts and manages every take per cut.**
 
 Repository: https://github.com/passionfx-ui/vidot-cut-manager
 
@@ -61,7 +61,7 @@ You can pick another text model for AI Make Cut in **Project Settings**.
 
 1. Open the **Cut Manager** tab and create a project (choose a folder).
 2. Click **AI Make Cut**, paste your story, and confirm. The cuts appear in the cut list.
-3. Select cuts (click, Shift/Ctrl-click, Ctrl+A, or right-click > **Select All**) and press **Queue** to render images.
+3. Select cuts (click, Shift/Ctrl-click, or **Ctrl+A** to select all) and press **Queue** to render images.
 4. Pick a take in the version strip, mark it **Best**, or press **Make Video** to animate the selected image with LTX-Video.
 5. Use **Import** to add your own images or videos to a cut.
 

@@ -81,9 +81,9 @@ export function isStillVersion(v) {
   return !!v && !!v.id && v.kind !== "video" && !v.animated && !v.missing;
 }
 
-export const BEST_BUTTON_LABEL = "Best";
+export const BEST_BUTTON_LABEL = "★ Best";
 export const BEST_THUMB_BORDER = "#e8c547";
-export const MAKE_VIDEO_LABEL = "Make Video";
+export const MAKE_VIDEO_LABEL = "▶ Make Video";
 export const IMPORT_BUTTON_LABEL = "Import";
 export const MAKE_VIDEO_TIP = "Make Video: the selected image is the start image of the project's Video template; the video is added as a new version";
 

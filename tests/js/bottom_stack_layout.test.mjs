@@ -45,7 +45,7 @@ const rowHtml = js.slice(rowStart, js.indexOf("\n}\n", rowStart));
 describe("Shots icon row replaces the selection bar", () => {
   it("selection bar is hidden by a flag, its code kept", () => {
     assert.match(js, /^const SHOW_SEL_BAR = false;$/m);
-    assert.match(js, /\$\{SHOW_SEL_BAR \? `<div class="gg-selbar">[\s\S]*gg-sel-group[\s\S]*gg-sel-ungroup[\s\S]*` : ""\}\s*\$\{iconRowHtml\(\)\}/);
+    assert.match(js, /\$\{SHOW_SEL_BAR \? `<div class="gg-selbar">[\s\S]*gg-sel-group[\s\S]*gg-sel-ungroup[\s\S]*` : ""\}\s*<div class="gg-vstrip"[\s\S]*?\$\{iconRowHtml\(\)\}/);
   });
 
   it("icon row: the version, then New scene, New cut, Delete buttons with English tooltips", () => {

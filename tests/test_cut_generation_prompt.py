@@ -34,7 +34,7 @@ class CutPromptTextTests(unittest.TestCase):
 
     def test_video_prompt_appends_caption(self):
         cut = {"prompt": "Fox runs", "caption": "  Hello there  "}
-        self.assertEqual(na.cut_video_prompt_text(cut), "Fox runs Dialogue: Hello there")
+        self.assertEqual(na.cut_video_prompt_text(cut), 'Fox runs Dialogue: "Hello there"')
 
     def test_video_prompt_omits_empty_caption(self):
         cut = {"prompt": "Fox runs", "caption": ""}

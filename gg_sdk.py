@@ -365,7 +365,37 @@ def image_to_video_plan(pid: str, cut_id: str, selected_vid: str | None = None,
             **{k: info[k] for k in ("template", "start_version", "start_node", "image", "prompt", "frames")}}
 
 
-def _run_native_worker(wf_file: Path, pid: str, cut_id: str) -> None:
+BLACK_VIDEO_RETRY_NOTE = "Black video. Retried once automatically with a new seed."
+BLACK_VIDEO_FAILED_MSG = ("The video came out black twice (it was retried once with a new seed). "
+                          "Marked as Failed; the files were kept.")
+
+
+def _black_video_version(pid: str, ver: dict) -> bool:
+    """The stored version is a video whose sampled frames are all (near) black. Unreadable = not black."""
+    try:
+        if ((ver or {}).get("asset") or {}).get("kind") != "video":
+            return False
+        try:
+            from . import gg_black
+        except ImportError:
+            import gg_black  # type: ignore
+        path = _native_api().native_store().version_file(pid, ver)
+        return bool(path) and gg_black.is_black_media(path) is True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _retry_plan_file(wf_file: Path) -> Path:
+    """Copy of a plan with new random sampler seeds (black video retry)."""
+    wf = json.loads(Path(wf_file).read_text(encoding="utf-8"))
+    out, _seeds = randomize_seeds(wf)
+    REGEN_DIR.mkdir(parents=True, exist_ok=True)
+    dest = REGEN_DIR / f"{Path(wf_file).stem}_retry{secrets.token_hex(2)}.json"
+    dest.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+    return dest
+
+
+def _run_native_worker(wf_file: Path, pid: str, cut_id: str, retry_black: bool = True) -> None:
     res = _runner(["run", "--workflow", str(wf_file), "--confirm"], timeout=1800)
     if not res.get("ok"):
         _set(status="error", error=res.get("error") or res.get("message"), finished_at=time.time())
@@ -376,6 +406,26 @@ def _run_native_worker(wf_file: Path, pid: str, cut_id: str) -> None:
         cap = {"ok": False, "message": str(ex)}
     if not cap.get("ok"):
         _set(status="error", error=cap.get("message"), sdk_job_id=res.get("job_id"), finished_at=time.time())
+        return
+    ver = cap.get("version") or {}
+    if not cap.get("duplicate") and _black_video_version(pid, ver):
+        store = _native_api().native_store()
+        if retry_black:
+            try:
+                store.mark_version_failed(pid, cut_id, ver["id"], BLACK_VIDEO_RETRY_NOTE)
+                retry = _retry_plan_file(wf_file)
+            except Exception as ex:  # noqa: BLE001
+                _set(status="error", error=f"Black video; the retry could not start: {ex}", finished_at=time.time())
+                return
+            _set(note="Black video. Retrying once with a new seed.")
+            _run_native_worker(retry, pid, cut_id, retry_black=False)
+            return
+        try:
+            store.mark_version_failed(pid, cut_id, ver["id"], BLACK_VIDEO_FAILED_MSG)
+        except Exception:  # noqa: BLE001
+            pass
+        _set(status="error", error=BLACK_VIDEO_FAILED_MSG, versions=[ver.get("id")], sdk_job_id=res.get("job_id"),
+             finished_at=time.time())
         return
     _set(status="done", versions=[cap["version"]["id"]], sdk_job_id=res.get("job_id"),
          render_seconds=res.get("seconds"), finished_at=time.time())

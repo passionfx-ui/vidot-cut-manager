@@ -212,7 +212,8 @@ def current_version(cut: dict[str, Any], versions: list[dict[str, Any]]) -> dict
             hit = next((v for v in versions if v.get("id") == vid), None)
             if hit:
                 return hit
-    return versions[0] if versions else None
+    ok = next((v for v in versions if not v.get("failed")), None)  # 0.9.135: skip Failed (black) versions
+    return ok or (versions[0] if versions else None)
 
 
 def _media_view(job: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -314,6 +315,8 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
                 "width": None,
                 "height": None,
                 "missing": jobs[v["id"]] is None,
+                "failed": bool(v.get("failed")),
+                "error": v.get("error") if isinstance(v.get("error"), str) else "",
             }
             for v in versions
         ]

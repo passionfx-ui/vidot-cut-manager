@@ -1,7 +1,7 @@
 """Which node of a workflow (UI graph or API prompt) gets the cut's prompt text and which gets the start image.
 
 Prompt: the node titled "Prompt", else the CLIPTextEncode feeding a sampler/conditioning "positive" input.
-Start image: the node titled "Start Image", else the only LoadImage node. Nothing else is guessed."""
+Start image: the node titled "Start Image", else the first LoadImage node (lowest id). Nothing else is guessed."""
 from __future__ import annotations
 
 from typing import Any
@@ -133,8 +133,13 @@ def set_prompt(graph: dict, text: str) -> str:
     return nid
 
 
+def _id_key(nid) -> tuple:
+    s = str(nid)
+    return (0, int(s), s) if s.isdigit() else (1, 0, s)
+
+
 def find_start_image_node(graph: dict, *, titled_only: bool = False) -> tuple[str, dict]:
-    """(id, node) that gets the start image: titled "Start Image", else the only LoadImage node.
+    """(id, node) that gets the start image: titled "Start Image", else the first LoadImage node (lowest id).
     `titled_only` skips the LoadImage fallback. Raises NodeNotFound."""
     if not isinstance(graph, dict):
         raise NodeNotFound(START_IMAGE_MISSING)
@@ -146,8 +151,8 @@ def find_start_image_node(graph: dict, *, titled_only: bool = False) -> tuple[st
     if not titled_only:
         ui = is_ui(graph)
         loaders = [(nid, n) for nid, n in _nodes(graph) if _type(n, ui) == "LoadImage"]
-        if len(loaders) == 1:
-            return loaders[0]
+        if loaders:  # several Load Image nodes: the first one (lowest node id) is the start image
+            return min(loaders, key=lambda it: _id_key(it[0]))
     raise NodeNotFound(START_IMAGE_MISSING)
 
 

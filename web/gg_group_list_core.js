@@ -130,7 +130,7 @@ export function groupedListHtml(sections, { cutHtml, groupHue = () => 200, group
     return `<section class="gg-grp-sec" data-group-id="${escHtml(g.id)}" style="--gg-grp:${groupHue(g.id)}">
         <header class="gg-grp-head">
           <button type="button" class="gg-grp-fold" title="Collapse or expand">${collapsed ? "▸" : "▾"}</button>
-          <span class="gg-grp-title">Scene · ${escHtml(g.name)}</span>
+          <span class="gg-grp-title">${escHtml(g.name)}</span>
           <span class="gg-grp-prog">${escHtml(groupProgress(sec.cuts))}</span>
           <span class="gg-grp-meta">${sec.cuts.length}</span>
           <button type="button" class="gg-grp-ren" title="Rename scene">✎</button>

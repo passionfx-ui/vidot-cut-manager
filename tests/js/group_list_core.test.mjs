@@ -41,7 +41,7 @@ describe("groupedListHtml", () => {
     const html = render("info");
     assert.equal(count(html, 'data-group-id="g1"'), 1);
     assert.equal(count(html, 'data-group-id="g2"'), 1);
-    assert.equal(count(html, "Scene · Intro"), 1);
+    assert.equal(count(html, ">Intro<"), 1);
     assert.equal(count(html, "gg-grp-loose"), 1);
     assert.equal(count(html, 'class="gg-grp-head"'), 3);
     for (const id of ["a", "b", "c", "d"]) assert.equal(count(html, `data-cut-id="${id}"`), 1);
@@ -66,7 +66,7 @@ describe("groupedListHtml", () => {
 
   it("escapes scene names", () => {
     const html = groupedListHtml([{ type: "group", group: { id: "x", name: "<b>&" }, cuts: [{ id: "a" }] }], { cutHtml: () => "" });
-    assert.match(html, /Scene · &lt;b&gt;&amp;/);
+    assert.match(html, /gg-grp-title">&lt;b&gt;&amp;/);
   });
 
   it("empty sections render nothing", () => {
@@ -95,7 +95,7 @@ describe("shotsSections (one Ungrouped section at the bottom)", () => {
     const loose = html.slice(html.indexOf("gg-grp-loose"));
     assert.equal(html.lastIndexOf("<section"), html.indexOf('<section class="gg-grp-sec gg-grp-loose"'));
     assert.match(loose, /<span class="gg-grp-title">Ungrouped<\/span><span class="gg-grp-meta">3<\/span>/);
-    assert.doesNotMatch(loose, /data-group-id|gg-grp-ren|gg-grp-del|gg-grp-fold|Scene ·/);
+    assert.doesNotMatch(loose, /data-group-id|gg-grp-ren|gg-grp-del|gg-grp-fold|gg-grp-title">Scene/);
   });
   it("keeps empty scenes (New scene): appended ones stack at the end, above Ungrouped", () => {
     const g = [...groups, { id: "e1", cut_ids: [] }, { id: "e2", cut_ids: [] }];
@@ -110,7 +110,7 @@ describe("shotsSections (one Ungrouped section at the bottom)", () => {
   });
   it("an empty scene renders its header with count 0 and an empty cut list", () => {
     const html = groupedListHtml(shotsSections([], [{ id: "e1", name: "Scene 2", cut_ids: [] }]), { cutHtml: () => "" });
-    assert.match(html, /data-group-id="e1"[\s\S]*Scene · Scene 2[\s\S]*gg-grp-meta">0<[\s\S]*<ol class="gg-cutlist"><\/ol>/);
+    assert.match(html, /data-group-id="e1"[\s\S]*gg-grp-title">Scene 2<[\s\S]*gg-grp-meta">0<[\s\S]*<ol class="gg-cutlist"><\/ol>/);
   });
 });
 

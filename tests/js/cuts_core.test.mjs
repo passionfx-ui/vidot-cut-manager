@@ -207,7 +207,7 @@ describe("cutVideoGenerationPromptText", () => {
   it("appends Dialogue caption for video", () => {
     assert.equal(
       cutVideoGenerationPromptText({ prompt: "Fox runs", caption: "  Hi  " }),
-      "Fox runs Dialogue: Hi",
+      'Fox runs Dialogue: "Hi"',
     );
     assert.equal(cutVideoGenerationPromptText({ prompt: "Fox runs", caption: "" }), "Fox runs");
     assert.equal(cutVideoGenerationPromptText({ prompt: "", caption: "Hi" }), "");
