@@ -168,14 +168,17 @@ _MEDIA_IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
 _MEDIA_VIDEO_EXTS = frozenset({".mp4", ".webm"})
 
 
-def project_assets_type_subdir(ext: str) -> str:
-    """Subfolder under `assets/` for plugin project outputs (images or videos)."""
-    return PROJECT_ASSETS_VIDEOS if str(ext or "").lower() in _MEDIA_VIDEO_EXTS else PROJECT_ASSETS_IMAGES
+def project_assets_type_subdir(ext: str, kind: str | None = None) -> str:
+    """Subfolder under `assets/` for plugin project outputs (images or videos).
+    `kind` is the stored version kind: an animated WebP/GIF/APNG is kind "video" and goes to `videos/`."""
+    if kind == "video" or str(ext or "").lower() in _MEDIA_VIDEO_EXTS:
+        return PROJECT_ASSETS_VIDEOS
+    return PROJECT_ASSETS_IMAGES
 
 
-def ensure_project_assets_dir(project_folder: Path, ext: str) -> Path:
+def ensure_project_assets_dir(project_folder: Path, ext: str, kind: str | None = None) -> Path:
     """Directory for a new asset file; creates `assets/images` or `assets/videos` lazily."""
-    dest = Path(project_folder) / PROJECT_ASSETS_DIR / project_assets_type_subdir(ext)
+    dest = Path(project_folder) / PROJECT_ASSETS_DIR / project_assets_type_subdir(ext, kind)
     dest.mkdir(parents=True, exist_ok=True)
     return dest
 

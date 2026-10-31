@@ -214,6 +214,27 @@ class CreateNativeProjectLocationTests(unittest.TestCase):
         self.assertEqual(saved.parent, folder / "assets" / "videos")
         self.assertTrue(saved.is_file())
 
+    def test_animated_webp_output_in_assets_videos(self):
+        """0.9.134: an animated WebP/GIF render is a "video" version and must land in assets/videos."""
+        pid = na.create_native_project("Film", None, None, str(self.loc))["project"]["id"]
+        folder = self.loc / "Film"
+        cut_id = next(iter(self.store.get_project(pid)["cuts"]))
+        src = self.root / "out.webp"
+        src.write_bytes(b"RIFF" + b"\x00" * 60)
+        ver = self.store.add_version(pid, cut_id, src, animated=True)
+        saved = Path(ver["asset"]["path"])
+        self.assertEqual(ver["asset"]["kind"], "video")
+        self.assertEqual(saved.parent, folder / "assets" / "videos")
+        self.assertEqual(self.store.find_version_asset(ver["id"]), (pid, saved))
+
+    def test_still_webp_output_stays_in_assets_images(self):
+        pid = na.create_native_project("Film", None, None, str(self.loc))["project"]["id"]
+        cut_id = next(iter(self.store.get_project(pid)["cuts"]))
+        src = self.root / "still.webp"
+        src.write_bytes(b"RIFF" + b"\x00" * 60)
+        ver = self.store.add_version(pid, cut_id, src)
+        self.assertEqual(Path(ver["asset"]["path"]).parent, self.loc / "Film" / "assets" / "images")
+
     def test_unreachable_project_folder_is_a_clear_error(self):
         pid = na.create_native_project("Film", None, None, str(self.loc))["project"]["id"]
         cut_id = next(iter(self.store.get_project(pid)["cuts"]))

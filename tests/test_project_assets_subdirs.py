@@ -25,6 +25,10 @@ class ProjectAssetsSubdirTests(unittest.TestCase):
         self.assertEqual(project_assets_type_subdir(".png"), "images")
         self.assertEqual(project_assets_type_subdir(".MP4"), "videos")
         self.assertEqual(project_assets_type_subdir(".webm"), "videos")
+        # animated WebP/GIF stored as kind "video" -> videos/ (0.9.134)
+        self.assertEqual(project_assets_type_subdir(".webp", "video"), "videos")
+        self.assertEqual(project_assets_type_subdir(".gif", "video"), "videos")
+        self.assertEqual(project_assets_type_subdir(".webp", "image"), "images")
 
     def test_ensure_creates_typed_folder(self):
         with tempfile.TemporaryDirectory() as tmp:

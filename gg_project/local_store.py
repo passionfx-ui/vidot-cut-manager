@@ -946,7 +946,7 @@ class LocalStore:
             folder = normalize_settings(doc.get("settings")).get("project_folder")
             if folder:
                 try:
-                    dest_dir = ensure_project_assets_dir(Path(folder), ext)
+                    dest_dir = ensure_project_assets_dir(Path(folder), ext, kind)
                     dest = dest_dir / dest_name
                     if dest.exists():
                         raise ValueError(f"{dest} already exists")

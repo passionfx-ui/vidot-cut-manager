@@ -219,6 +219,7 @@ import {
   bumpPlaybackGen,
   decideVideoSync,
   guardResolvedPlay,
+  animatedStillMode,
   pauseAllTimelineMedia,
   scheduleVideoPlay,
   registerTimelineMedia,
@@ -7872,7 +7873,40 @@ function showFrame(force) {
       }
     } catch (_) {}
   }
+  syncAnimatedStill(c);
   paintHead();
+}
+
+/**
+ * Animated WebP/GIF "video" versions are drawn with <img>, which has no pause():
+ * the browser keeps animating it no matter what the transport does. While stopped,
+ * show a frozen canvas copy of the current frame instead of the live <img>.
+ */
+function syncAnimatedStill(c) {
+  if (!viewer || !viewer.still) return;
+  const { img, still } = viewer;
+  const mode = animatedStillMode(c && c.media, play.on, viewer.mode === "export");
+  if (mode !== "freeze") {
+    if (!still.hidden) still.hidden = true;
+    still._ggKey = "";
+    if (mode === "animate" && img.dataset.src) img.hidden = false;
+    return;
+  }
+  const key = img.dataset.src + "|" + play.gen;
+  if (still._ggKey === key && !still.hidden) { img.hidden = true; return; }
+  const draw = () => {
+    if (!img.naturalWidth) return false;
+    still.width = img.naturalWidth;
+    still.height = img.naturalHeight;
+    try { still.getContext("2d").drawImage(img, 0, 0); } catch (_) { return false; }
+    still._ggKey = key;
+    still.hidden = false;
+    img.hidden = true;
+    return true;
+  };
+  if (!(img.complete && draw())) {
+    img.addEventListener("load", () => { if (!play.on) syncAnimatedStill(trackClips()[play.idx]); }, { once: true });
+  }
 }
 
 function preloadNext(i) {
@@ -8267,6 +8301,7 @@ function mountTimeline(el) {
     <div class="gg-viewer">
       <div class="gg-screen">
         <img class="gg-v-img" alt="" hidden />
+        <canvas class="gg-v-still" hidden></canvas>
         <video class="gg-v-vid" playsinline preload="auto" hidden></video>
         <video class="gg-v-next" muted preload="auto" hidden></video>
         <div class="gg-v-blank"></div>
@@ -8319,6 +8354,7 @@ function mountTimeline(el) {
   viewer = {
     box: root,
     img: root.querySelector(".gg-v-img"),
+    still: root.querySelector(".gg-v-still"),
     vid: root.querySelector(".gg-v-vid"),
     next: root.querySelector(".gg-v-next"),
     blank: root.querySelector(".gg-v-blank"),

@@ -65,7 +65,7 @@ export function snapMoveStart(want, sec, targets, thresholdSec) {
  * Move clip `idx` to `want` seconds without overlapping:
  * - free spot: it goes there (a gap stays behind);
  * - its middle is over a gap that is too small or it only touches a neighbour: clamped to the gap edge;
- * - its middle is over another clip: dropped before/after that clip, later clips pushed right.
+ * - its middle is over another clip: reordered before/after that clip and the track is packed (no gaps).
  * @returns {{ order: string[], starts: Record<string, number>, start: number }}
  */
 export function placeClip(items, idx, want) {
@@ -81,7 +81,14 @@ export function placeClip(items, idx, want) {
   if (overlaps(start)) {
     const hit = others.find((o) => mid >= o.s && mid < o.e);
     if (hit) {
-      start = mid <= (hit.s + hit.e) / 2 ? hit.s : hit.e;
+      // Dropped onto another clip: reorder and ripple-pack the whole track (no gap left behind).
+      const seq = others.slice();
+      const k = seq.indexOf(hit) + (mid <= (hit.s + hit.e) / 2 ? 0 : 1);
+      seq.splice(k, 0, { id: me.id, sec });
+      const { starts } = layoutTrack(seq.map((x) => ({ sec: x.sec })), false);
+      const out = {};
+      seq.forEach((x, j) => { out[x.id] = starts[j]; });
+      return { order: seq.map((x) => x.id), starts: out, start: out[me.id], packed: true };
     } else {
       const k = others.findIndex((o) => o.s > mid);
       const lo = k <= 0 ? 0 : others[k - 1].e;

@@ -178,3 +178,12 @@ export function guardMediaWithTransport(media, playState, isExempt) {
 export function tickIsCurrent(playState, tickGen) {
   return !!playState.on && playState.gen === tickGen;
 }
+
+/**
+ * Animated-image clips (<img>, no pause()) must be swapped for a frozen still while stopped.
+ * @returns {"freeze"|"animate"|"none"}
+ */
+export function animatedStillMode(media, playing, exportView) {
+  if (exportView || !media || media.kind !== "video" || !media.animated) return "none";
+  return playing ? "animate" : "freeze";
+}

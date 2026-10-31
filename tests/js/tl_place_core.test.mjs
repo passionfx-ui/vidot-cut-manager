@@ -72,7 +72,7 @@ describe("placeClip", () => {
     assert.deepEqual(r.starts, { a: 0, b: 2, c: 6 });
     assert.equal(placeClip(items, 1, 5.3).start, 5);
   });
-  it("over another clip: inserted before/after it, later clips pushed, never overlapping", () => {
+  it("over another clip: reordered before/after it and the track is packed, never overlapping", () => {
     const items = clips(["a", 0, 2], ["b", 2, 1], ["c", 3, 2]);
     const before = placeClip(items, 2, 0);
     assert.deepEqual(before.order, ["c", "a", "b"]);
@@ -80,7 +80,7 @@ describe("placeClip", () => {
     noOverlap(before.order, before.starts, secs);
     const after = placeClip(items, 0, 2.6);
     assert.deepEqual(after.order, ["b", "a", "c"]);
-    assert.deepEqual(after.starts, { b: 2, a: 3, c: 5 });
+    assert.deepEqual(after.starts, { b: 0, a: 1, c: 3 });  // packed: no gap where a was
     noOverlap(after.order, after.starts, secs);
   });
   it("gap too small: goes to the nearer side and pushes", () => {
