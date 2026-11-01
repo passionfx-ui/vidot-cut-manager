@@ -18,8 +18,23 @@
 .gg-shots .gg-proj-wrap { display: inline-flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; }
 .gg-shots .gg-proj-label { flex-shrink: 0; font-size: 11px; color: var(--gg-muted, #888); }
 .gg-shots .gg-proj { flex: 1 1 auto; min-width: 0; background: var(--gg-panel); color: var(--gg-fg); border: 1px solid var(--gg-line); border-radius: 4px; padding: 3px 4px; }
-.gg-shots .gg-proj-settings { flex-shrink: 0; padding: 2px 6px; line-height: 1; }
 .gg-shots .gg-proj-settings:disabled { opacity: 0.45; cursor: not-allowed; }
+.gg-shots .gg-proj-row > .gg-new-project-head,
+.gg-shots .gg-proj-row > .gg-proj-settings {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  max-width: 28px;
+  padding: 0;
+  line-height: 1;
+  font-size: 16px;
+}
+.gg-shots .gg-proj-row > .gg-new-project-head { font-weight: 600; }
 .gg-modal .gg-tpl-wrap { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .gg-tpl-box { flex: 1 1 auto; min-width: 0; display: flex; align-items: stretch; border: 1px solid var(--gg-line, #353a44); border-radius: 4px; background: #1b1d22; }
 .gg-tpl-box:focus-within { border-color: var(--gg-acc, #f2b84b); }
@@ -460,7 +475,6 @@
 .gg-tl-drag-overlay { position: fixed; inset: 0; z-index: 100000; touch-action: none; }
 .gg-tl-scrub-overlay { cursor: col-resize; }
 .gg-tl-drag-overlay { cursor: ns-resize; }
-.gg-shots .gg-new-project-head { min-width: 28px; padding: 2px 8px; font-size: 16px; line-height: 1; font-weight: 600; }
 .gg-timeline .gg-viewer { flex: 0 0 auto; display: flex; flex-direction: column; padding: 6px; border-right: 1px solid var(--gg-line); }
 .gg-timeline .gg-screen { position: relative; flex: 0 0 auto; min-height: 112px; aspect-ratio: 16 / 9; background: #000; border-radius: 4px; overflow: hidden; }
 .gg-timeline .gg-screen img, .gg-timeline .gg-screen video, .gg-timeline .gg-screen canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
