@@ -1,6 +1,10 @@
 // comfyui-gonggan-cut — "Shots" sidebar tab + "Timeline" bottom panel tab.
 // Day 1: static render of real Gonggan projects/cuts (read-only). Trim/reorder come next.
 import { effectiveImageTemplate } from "./gg_project_settings_core.js";
+import {
+  projectSelectOptionsHtml,
+  shouldRefreshProjectList,
+} from "./gg_proj_list_refresh_core.js";
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import {
@@ -574,6 +578,58 @@ async function loadProjects() {
   }
   bus.dispatchEvent(new Event("projects"));
   await loadTimeline();
+}
+
+let projectListRefreshLastAt = 0;
+let projectListRefreshInFlight = null;
+
+function syncProjectSelectElements(selectedId = state.pid) {
+  const pid = selectedId || "";
+  const html = projectSelectOptionsHtml(state.projects, pid, esc, projectOptionLabel);
+  document.querySelectorAll("select.gg-proj").forEach((sel) => {
+    const focused = document.activeElement === sel;
+    sel.innerHTML = html;
+    if (pid && state.projects.some((p) => p.id === pid)) sel.value = pid;
+    if (focused) sel.focus();
+  });
+}
+
+async function refreshProjectListForDropdown() {
+  if (projectListRefreshInFlight) return projectListRefreshInFlight;
+  const now = Date.now();
+  if (!shouldRefreshProjectList(now, projectListRefreshLastAt)) return;
+  projectListRefreshLastAt = now;
+  const keepPid = state.pid;
+  projectListRefreshInFlight = (async () => {
+    try {
+      const data = await getJson("/gonggan/projects");
+      state.projects = data.projects || [];
+      state.projectsLoaded = true;
+      state.error = "";
+      if (!state.projects.some((p) => p.id === keepPid)) {
+        const pick = state.projects.find((p) => p.id === data.active_project_id) || state.projects[0];
+        state.pid = pick ? pick.id : "";
+        bus.dispatchEvent(new Event("projects"));
+        await loadTimeline();
+      } else {
+        syncProjectSelectElements(keepPid);
+      }
+    } catch (e) {
+      state.error = sentence(`Could not load projects: ${e.message}`, "Check that ComfyUI is running, then reload the page.");
+    }
+    refreshSdk(true);
+    refreshProjectTemplateFlag();
+    refreshCutSplitUseAi();
+  })();
+  try {
+    await projectListRefreshInFlight;
+  } finally {
+    projectListRefreshInFlight = null;
+  }
+}
+
+function onProjectSelectOpenIntent() {
+  void refreshProjectListForDropdown();
 }
 
 function mergeFieldOverrides() {
@@ -7062,6 +7118,15 @@ function mountShots(el) {
   el.appendChild(root);
   const extraCleanup = [];
   bindShotsTabActivated(el, extraCleanup);
+  if (!root._ggProjOpenRefresh) {
+    root._ggProjOpenRefresh = true;
+    const onProjOpen = (e) => {
+      if (e.target.matches?.(".gg-proj")) onProjectSelectOpenIntent();
+    };
+    root.addEventListener("mousedown", onProjOpen, true);
+    root.addEventListener("pointerdown", onProjOpen, true);
+    root.addEventListener("focusin", onProjOpen, true);
+  }
   // The sidebar host has no definite height; pin the root to the visible viewport so the
   // cut list scrolls and the cut panel stays at the bottom.
   const scroller = () => {
@@ -7501,9 +7566,8 @@ function mountShots(el) {
             <span class="gg-proj-label">Project:</span>
             <select class="gg-proj" title="Project">${opts}</select>
           </label>
-          <button type="button" class="gg-btn gg-proj-settings" title="Project settings" aria-label="Project settings"${state.pid ? "" : " disabled"}>⚙</button>
           <button type="button" class="gg-btn gg-new-project-head" title="New Project" aria-label="New Project">+</button>
-          <button class="gg-btn gg-reload" title="Reload">⟳</button>
+          <button type="button" class="gg-btn gg-proj-settings" title="Project settings" aria-label="Project settings"${state.pid ? "" : " disabled"}>⚙</button>
         </div>
       </div>
       ${state.error ? `<div class="gg-error">${esc(state.error)}</div>` : ""}
@@ -7558,7 +7622,6 @@ function mountShots(el) {
     root.querySelector(".gg-new-project-head")?.addEventListener("click", () => openNewProjectModal());
     root.querySelector(".gg-new-project-btn")?.addEventListener("click", () => openNewProjectModal());
     root.querySelector(".gg-cut-add")?.addEventListener("click", () => addLocalCut());
-    root.querySelector(".gg-reload")?.addEventListener("click", () => { loadProjects(); refreshSdk(true); refreshProjectTemplateFlag(); refreshCutSplitUseAi(); });
     root.querySelectorAll(".gg-view-toggle .gg-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         shotsUi.view = btn.dataset.view === "final" ? "final" : "cuts";
@@ -8886,7 +8949,6 @@ function mountTimeline(el) {
         <span class="gg-tip"></span>
         <button class="gg-btn gg-snap" title="Snap: 1 s steps (off = 0.1 s)">Snap</button>
         <button class="gg-btn gg-reset" title="Reset to original order and lengths">Reset</button>
-        <button class="gg-btn gg-reload" title="Reload">⟳</button>
         <span class="gg-sep"></span>
         <select class="gg-ex-preset" title="Export size">
           <option value="480p">480p</option><option value="720p" selected>720p</option><option value="1080p">1080p</option>
@@ -9043,7 +9105,6 @@ function mountTimeline(el) {
   $r(".gg-ex-folder").addEventListener("click", () => revealExportFolder());
   $r(".gg-ex-close").addEventListener("click", () => { exp.hidden = true; paintExport(); });
   $r(".gg-ex-path").addEventListener("click", (e) => { navigator.clipboard?.writeText(e.target.textContent).catch(() => {}); });
-  $r(".gg-reload").addEventListener("click", () => loadProjects());
   const bindTimelineResize = () => {
     const handle = $r(".gg-tl-resize");
     if (!handle || handle._ggResizeBound) return;

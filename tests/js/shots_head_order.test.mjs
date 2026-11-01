@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
+import { projectRowButtonsOrderedPlusBeforeGear } from "../../web/gg_proj_list_refresh_core.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const js = readFileSync(join(__dirname, "../../web/gonggan.js"), "utf8");
@@ -29,15 +30,18 @@ describe("Shots header layout", () => {
     assert.equal(pos("gg-batch-prog"), -1);
   });
 
-  it("puts Reload right after the Project settings gear, inside the Project row", () => {
+  it("puts New project (+) before Project settings gear, with no Reload button", () => {
     const buttons = [...projRow.matchAll(/<button[^>]*class="([^"]+)"/g)].map((m) => m[1]);
-    assert.deepEqual(buttons, ["gg-btn gg-proj-settings", "gg-btn gg-new-project-head", "gg-btn gg-reload"]);
-    assert.equal(head.split("gg-reload").length, 2, "only one Reload in the header");
+    assert.deepEqual(buttons, ["gg-btn gg-new-project-head", "gg-btn gg-proj-settings"]);
+    assert.equal(head.indexOf("gg-reload"), -1);
+    assert.equal(js.indexOf("gg-reload"), -1);
+    assert.ok(projectRowButtonsOrderedPlusBeforeGear(buttons));
     assert.match(projRow, /gg-new-project-head[^>]*aria-label="New Project"/);
     assert.match(projRow, /gg-new-project-head[^>]*>\+<\/button>/);
   });
 
-  it("keeps the Reload click handler", () => {
-    assert.match(js, /root\.querySelector\("\.gg-reload"\)\?\.addEventListener\("click"/);
+  it("refreshes project list when opening the project select", () => {
+    assert.match(js, /onProjectSelectOpenIntent/);
+    assert.match(js, /refreshProjectListForDropdown/);
   });
 });
