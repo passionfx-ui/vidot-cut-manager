@@ -43,6 +43,7 @@ import {
   versionRepState,
   plannedLenInputPlaceholder,
   addCutTarget,
+  addCutTargetAtListEnd,
 } from "./gg_cuts_core.js";
 import { videoTooLongMessage } from "./gg_ltx_duration_core.js";
 import {
@@ -3214,7 +3215,8 @@ async function addLocalCut() {
     return;
   }
   const cuts = state.timeline ? state.timeline.cuts : [];
-  const { after, group } = addCutTarget({ timelineCuts: cuts, activeCutId: state.cutId, looseWhenNone: isNativeProject() });
+  const groups = state.timeline ? state.timeline.groups || [] : [];
+  const { after, group } = addCutTargetAtListEnd({ timelineCuts: cuts, groups });
   const body = { pid: state.pid };
   if (group) body.group = group;
   if (after) body.after = after;
@@ -3232,6 +3234,11 @@ async function addLocalCut() {
       wfLastLoadedCutId = "";
       wfLastLoadedProjectId = "";
       selectCut(d.cut.id);
+      requestAnimationFrame(() => {
+        document
+          .querySelector(`.gg-shots .gg-cut[data-cut-id="${CSS.escape(d.cut.id)}"]`)
+          ?.scrollIntoView({ block: "nearest" });
+      });
     }
     if (d.template_copied) {
       ggToast("Cut", `Added ${d.cut.name}`, "ok");
@@ -7989,7 +7996,7 @@ function mountShots(el) {
       case "add":
         if (!state.pid) return;
         handled();
-        void (state.cutId && cutById(state.cutId) ? addCutAfter(state.cutId) : addLocalCut());
+        void addLocalCut();
         return;
     }
   };

@@ -39,6 +39,7 @@ import {
   versionRepState,
   plannedLenInputPlaceholder,
   addCutTarget,
+  addCutTargetAtListEnd,
 } from "../../web/gg_cuts_core.js";
 
 describe("versionRepState (Best is manual only)", () => {
@@ -524,5 +525,25 @@ describe("addCutTarget", () => {
 
   it("looseWhenNone keeps the active cut's scene when a cut is active", () => {
     assert.deepEqual(addCutTarget({ timelineCuts: cuts, activeCutId: "b", looseWhenNone: true }), { after: "b", group: "g1" });
+  });
+});
+
+describe("addCutTargetAtListEnd", () => {
+  const groups = [
+    { id: "g1", name: "Scene 1", cut_ids: ["a", "b"], collapsed: false },
+    { id: "g2", name: "Scene 2", cut_ids: ["c"], collapsed: false },
+  ];
+  const cuts = [
+    { id: "a", group_id: "g1" },
+    { id: "b", group_id: "g1" },
+    { id: "c", group_id: "g2" },
+  ];
+
+  it("always uses the last cut in list order regardless of selection", () => {
+    assert.deepEqual(addCutTargetAtListEnd({ timelineCuts: cuts, groups }), { after: "c", group: "g2" });
+  });
+
+  it("empty project", () => {
+    assert.deepEqual(addCutTargetAtListEnd({ timelineCuts: [], groups: [] }), { after: null, group: null });
   });
 });

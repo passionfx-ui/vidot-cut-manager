@@ -2,6 +2,7 @@
  * Cut management helpers (pure logic, no DOM).
  */
 
+import { shotsSections } from "./gg_group_list_core.js";
 import { cutStage } from "./gg_progress_core.js";
 
 /** @param {number} n */
@@ -600,6 +601,30 @@ export function addCutTarget({ timelineCuts, activeCutId, looseWhenNone = false 
   const group =
     rawGroup != null && String(rawGroup).trim() !== "" ? String(rawGroup).trim() : null;
   return { after: refId, group };
+}
+
+/**
+ * Insert at the end of the Shots list (after the last cut in the last scene / ungrouped tail).
+ * Ignores the active cut selection (icon row **New cut**).
+ * @param {{ timelineCuts: object[], groups?: object[] }} args
+ * @returns {{ after: string|null, group: string|null }}
+ */
+export function addCutTargetAtListEnd({ timelineCuts, groups }) {
+  const cuts = Array.isArray(timelineCuts) ? timelineCuts : [];
+  const gr = Array.isArray(groups) ? groups : [];
+  const order = [];
+  for (const sec of shotsSections(cuts, gr)) {
+    for (const c of sec.cuts) {
+      if (c?.id) order.push(String(c.id));
+    }
+  }
+  const lastId = order.length ? order[order.length - 1] : null;
+  if (!lastId) return { after: null, group: null };
+  const ref = cuts.find((c) => c && c.id === lastId);
+  const rawGroup = ref?.group_id;
+  const group =
+    rawGroup != null && String(rawGroup).trim() !== "" ? String(rawGroup).trim() : null;
+  return { after: lastId, group };
 }
 
 /**
