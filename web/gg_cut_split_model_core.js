@@ -1,5 +1,7 @@
 /** Pure helpers for the Project Settings "AI Make Cut model" dropdown (GET/POST /gonggan/cut-split/model). No DOM. */
 
+import { AI_MAKE_CUT_LABEL } from "./gg_cut_list_core.js";
+
 /**
  * Dropdown options: the listed text model files, with the current setting (else the default) preselected and
  * added on top when it is not in the list.
@@ -53,6 +55,16 @@ export function cutSplitUseAi(data) {
 /** Shots toolbar AI Make Cut button (and its right-click entry). @param {boolean} useAi */
 export function aiCutSplitButtonState(useAi) {
   return useAi ? { disabled: false, title: AI_SPLIT_TIP } : { disabled: true, title: USE_AI_OFF_TIP };
+}
+
+/** Icon-row AI Make Cut wand: fixed label when enabled, same disable rules as the old toolbar button. */
+export function aiMakeCutIconButtonState(useAi) {
+  const s = aiCutSplitButtonState(useAi);
+  return {
+    disabled: s.disabled,
+    title: s.disabled ? s.title : AI_MAKE_CUT_LABEL,
+    ariaLabel: AI_MAKE_CUT_LABEL,
+  };
 }
 
 /**

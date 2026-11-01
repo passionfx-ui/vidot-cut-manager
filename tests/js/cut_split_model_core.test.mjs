@@ -10,6 +10,7 @@ import {
   cutSplitModelLoadErrorText,
   cutSplitUseAi,
   aiCutSplitButtonState,
+  aiMakeCutIconButtonState,
   cutSplitSettingsPatch,
   cutSplitMissingModel,
   cutSplitMissingModelHtml,
@@ -19,6 +20,7 @@ import {
   USE_AI_OFF_TIP,
   AI_SPLIT_TIP,
 } from "../../web/gg_cut_split_model_core.js";
+import { AI_MAKE_CUT_LABEL } from "../../web/gg_cut_list_core.js";
 
 const DEFAULT = "qwen3vl_4b_int8_convrot.safetensors";
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -249,6 +251,21 @@ describe("Project Settings dialog wiring (gonggan.js)", () => {
   });
 });
 
+describe("aiMakeCutIconButtonState", () => {
+  it("uses AI Make Cut label when enabled and the Use AI off tip when disabled", () => {
+    assert.deepEqual(aiMakeCutIconButtonState(true), {
+      disabled: false,
+      title: AI_MAKE_CUT_LABEL,
+      ariaLabel: AI_MAKE_CUT_LABEL,
+    });
+    assert.deepEqual(aiMakeCutIconButtonState(false), {
+      disabled: true,
+      title: USE_AI_OFF_TIP,
+      ariaLabel: AI_MAKE_CUT_LABEL,
+    });
+  });
+});
+
 describe("AI Make Cut visible again behind the one flag (0.9.125)", () => {
   const fnBody = (name) => {
     const s = GONGGAN_JS.slice(GONGGAN_JS.indexOf(`function ${name}(`));
@@ -260,9 +277,13 @@ describe("AI Make Cut visible again behind the one flag (0.9.125)", () => {
     assert.match(GONGGAN_JS, /^const AI_CUT_SPLIT_VISIBLE = true;$/m);
   });
 
-  it("the toolbar button is rendered only when the flag is on", () => {
-    assert.match(GONGGAN_JS, /\$\{AI_CUT_SPLIT_VISIBLE && tl && isNativeProject\(\) \? `<div class="gg-cutlist-btns">\$\{aiSplitButtonHtml\(\)\}<\/div>` : ""\}/);
-    assert.equal(GONGGAN_JS.match(/\$\{aiSplitButtonHtml\(\)\}/g)?.length, 1, "no other place shows the button");
+  it("the wand icon is in the icon row when native and the flag is on (not the old toolbar button)", () => {
+    assert.doesNotMatch(GONGGAN_JS, /gg-cutlist-btns">\$\{aiSplitButtonHtml\(\)\}/);
+    assert.doesNotMatch(GONGGAN_JS, /function aiSplitButtonHtml\(/);
+    assert.match(fnBody("iconRowHtml"), /AI_CUT_SPLIT_VISIBLE && isNativeProject\(\)/);
+    assert.match(fnBody("iconRowHtml"), /gg-ir-aicut gg-ai-split/);
+    assert.match(fnBody("iconRowHtml"), /aiMakeCutIconButtonState\(cutSplitUseAiOn\)/);
+    assert.match(GONGGAN_JS, /gg-ir-aicut[\s\S]*gg-ir-scene/);
   });
 
   it("the Project Settings AI section (Use AI, model, pre-check) is rendered only when the flag is on", () => {
@@ -273,7 +294,7 @@ describe("AI Make Cut visible again behind the one flag (0.9.125)", () => {
     assert.match(body, /if \(modelSel\) void getJson\("\/gonggan\/cut-split\/model"\)/, "no model list request when hidden");
   });
 
-  it("nothing calls the AI routes when the flag is off; the toolbar button and two menu entries open the dialog", () => {
+  it("nothing calls the AI routes when the flag is off; the icon wand and two menu entries open the dialog", () => {
     assert.match(fnBody("refreshCutSplitUseAi"), /if \(!AI_CUT_SPLIT_VISIBLE\) return;/);
     assert.match(fnBody("openAiCutSplitModal"), /if \(!AI_CUT_SPLIT_VISIBLE \|\| !isNativeProject\(\)/);
     assert.equal(GONGGAN_JS.match(/=> openAiCutSplitModal\(\)/g)?.length, 4, "toolbar, cut card menu, list menu, stored-result offer");
@@ -301,8 +322,9 @@ describe("AI Make Cut name in the UI (internal names stay)", () => {
     }
   });
 
-  it("toolbar button and dialog use the AI Make Cut label", () => {
-    assert.match(GONGGAN_JS, />\$\{esc\(AI_MAKE_CUT_LABEL\)\}<\/button><\/span>`/);
+  it("icon wand and dialog use the AI Make Cut label", () => {
+    assert.match(GONGGAN_JS, /gg-ir-aicut gg-ai-split/);
+    assert.match(GONGGAN_JS, /aria-label="\$\{esc\(s\.ariaLabel\)\}"/);
     assert.match(GONGGAN_JS, /<h3 class="gg-modal-title">\$\{esc\(AI_MAKE_CUT_LABEL\)\}<\/h3>/);
     assert.match(GONGGAN_JS, /ggToast\(AI_MAKE_CUT_LABEL, USE_AI_OFF_TIP, "warn"\)/);
     assert.equal(USE_AI_OFF_TIP, "Turn on Use AI in Project Settings");
@@ -320,10 +342,10 @@ describe("AI Cut Split wiring (gonggan.js, kept behind the flag)", () => {
     return s.slice(0, s.indexOf("\n}\n"));
   };
 
-  it("toolbar button follows Use AI", () => {
-    assert.match(fnBody("aiSplitButtonHtml"), /aiCutSplitButtonState\(cutSplitUseAiOn\)/);
-    assert.match(fnBody("aiSplitButtonHtml"), /\$\{s\.disabled \? " disabled" : ""\}/);
-    assert.match(GONGGAN_JS, /<div class="gg-cutlist-btns">\$\{aiSplitButtonHtml\(\)\}<\/div>/);
+  it("icon wand follows Use AI", () => {
+    assert.match(fnBody("syncAiSplitButton"), /aiMakeCutIconButtonState\(cutSplitUseAiOn\)/);
+    assert.match(fnBody("iconRowHtml"), /aiMakeCutIconButtonState\(cutSplitUseAiOn\)/);
+    assert.doesNotMatch(GONGGAN_JS, /gg-cutlist-btns.*gg-ai-split/);
     assert.match(GONGGAN_JS, /bus\.addEventListener\("cut-split-use-ai", onUseAi\)/);
   });
 

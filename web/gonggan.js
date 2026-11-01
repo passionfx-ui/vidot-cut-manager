@@ -363,6 +363,7 @@ import {
   cutSplitModelLoadErrorText,
   cutSplitUseAi,
   aiCutSplitButtonState,
+  aiMakeCutIconButtonState,
   cutSplitSettingsPatch,
   cutSplitMissingModel,
   cutSplitMissingModelHtml,
@@ -3125,18 +3126,13 @@ function setCutSplitUseAi(on) {
   bus.dispatchEvent(new Event("cut-split-use-ai"));
 }
 
-function aiSplitButtonHtml() {
-  const s = aiCutSplitButtonState(cutSplitUseAiOn);
-  return `<span class="gg-ai-split-wrap" title="${esc(s.title)}"><button type="button" class="gg-btn gg-primary gg-ai-split" title="${esc(s.title)}"${s.disabled ? " disabled" : ""}>${esc(AI_MAKE_CUT_LABEL)}</button></span>`;
-}
-
 function syncAiSplitButton(root) {
   const btn = root?.querySelector(".gg-ai-split");
   if (!btn) return;
-  const s = aiCutSplitButtonState(cutSplitUseAiOn);
+  const s = aiMakeCutIconButtonState(cutSplitUseAiOn);
   btn.disabled = s.disabled;
   btn.title = s.title;
-  if (btn.parentElement?.classList.contains("gg-ai-split-wrap")) btn.parentElement.title = s.title;
+  btn.setAttribute("aria-label", s.ariaLabel);
 }
 
 async function setProjectTemplateRef(ref) {
@@ -6977,13 +6973,22 @@ const ICON_SVG_ATTRS = 'width="19" height="19" viewBox="0 0 24 24" fill="none" s
 const ICON_FOLDER = `<svg ${ICON_SVG_ATTRS}><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10v6M9 13h6"/></svg>`;
 const ICON_NEW_PAGE = `<svg ${ICON_SVG_ATTRS}><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M12 12v6M9 15h6"/></svg>`;
 const ICON_TRASH = `<svg ${ICON_SVG_ATTRS}><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg>`;
+const ICON_WAND = `<svg ${ICON_SVG_ATTRS}><path d="M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8 19 13M17.8 6.2 19 5M3 21l9-9"/></svg>`;
 
-/** Lower-left icon row of the Shots sidebar (fixed height, above the version row): plugin version on the left; New scene, New cut, Delete on the right. */
+/** Lower-left icon row of the Shots sidebar (fixed height, above the version row): plugin version on the left; AI Make Cut, New scene, New cut, Delete on the right. */
 function iconRowHtml() {
   const btn = (cls, tip, icon) =>
-    `<button type="button" class="gg-btn gg-ir-btn ${cls}" title="${tip}" aria-label="${tip}" disabled>${icon}</button>`;
+    `<button type="button" class="gg-btn gg-ir-btn ${cls}" title="${esc(tip)}" aria-label="${esc(tip)}" disabled>${icon}</button>`;
+  const aiWand =
+    AI_CUT_SPLIT_VISIBLE && isNativeProject()
+      ? (() => {
+          const s = aiMakeCutIconButtonState(cutSplitUseAiOn);
+          return `<button type="button" class="gg-btn gg-ir-btn gg-ir-aicut gg-ai-split" title="${esc(s.title)}" aria-label="${esc(s.ariaLabel)}"${s.disabled ? " disabled" : ""}>${ICON_WAND}</button>`;
+        })()
+      : "";
   return `<div class="gg-iconrow">
         <span class="gg-version" title="Shots plugin version — if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>
+        ${aiWand}
         ${btn("gg-ir-scene", "New scene", ICON_FOLDER)}
         ${btn("gg-ir-cut", "New cut", ICON_NEW_PAGE)}
         ${btn("gg-ir-del", "Delete", ICON_TRASH)}
@@ -7521,7 +7526,6 @@ function mountShots(el) {
           <button type="button" class="gg-btn${listCaption ? " gg-on" : ""}" data-mode="caption" title="Edit dialogue per cut">Caption</button>
         </div>
         ${SHOW_REDO_FILTER ? `<label class="gg-filter-redo" title="Show only cuts marked for redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Show redo cuts only</label>` : ""}
-        ${AI_CUT_SPLIT_VISIBLE && tl && isNativeProject() ? `<div class="gg-cutlist-btns">${aiSplitButtonHtml()}</div>` : ""}
       </div>
       <div class="gg-meta">
         <span class="gg-meta-text">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</span>
