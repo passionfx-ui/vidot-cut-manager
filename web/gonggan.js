@@ -258,6 +258,8 @@ import {
   animatedScrubFrameIndex,
   animatedViewerMode,
   decideVideoSyncScrub,
+  edgeScrollSpeed,
+  followPlayheadScroll,
   previewFrameAttr,
   timelineSecFromClientX,
   videoPreviewFrameIndex,
@@ -8667,9 +8669,13 @@ function paintHead() {
   if (play.on && !ed.scrubbing) {
     const wrap = document.querySelector(".gg-timeline .gg-tl-scroll");
     if (wrap) {
-      const x = play.t * ed.px, sl = wrap.scrollLeft, vw = wrap.clientWidth;
-      if (x < sl + 16) wrap.scrollLeft = Math.max(0, x - 16);
-      else if (x > sl + vw - 40) wrap.scrollLeft = x - 40;
+      const next = followPlayheadScroll({
+        headX: play.t * ed.px + (parseFloat(getComputedStyle(wrap).paddingLeft) || 0),
+        scrollLeft: wrap.scrollLeft,
+        viewW: wrap.clientWidth,
+        maxScroll: wrap.scrollWidth - wrap.clientWidth,
+      });
+      if (next != null) wrap.scrollLeft = next;
     }
   }
 }
@@ -9286,14 +9292,40 @@ function mountTimeline(el) {
       const inner = root.querySelector(".gg-tl-inner");
       return Math.max(0, Math.min(totalSec(), timelineSecFromClientX(clientX, inner, ed.px)));
     };
+    // Held near / past an edge of the visible timeline: scroll that way and keep the playhead at the edge.
+    const viewX = (clientX) => {
+      const r = tlWrap.getBoundingClientRect();
+      return Math.max(r.left + tlWrap.clientLeft, Math.min(r.left + tlWrap.clientLeft + tlWrap.clientWidth - 1, clientX));
+    };
     const go = (clientX) => {
-      seek(secAt(clientX), { scrubbing: true });
+      seek(secAt(viewX(clientX)), { scrubbing: true });
       paintHead();
     };
+    let lastX = e.clientX;
+    let edgeRaf = 0;
+    let edgeLast = 0;
+    const edgeStep = (now) => {
+      edgeRaf = 0;
+      if (!ed.scrubbing) return;
+      const r = tlWrap.getBoundingClientRect();
+      const left = r.left + tlWrap.clientLeft;
+      const v = edgeScrollSpeed({ x: lastX, left, right: left + tlWrap.clientWidth });
+      if (!v) { edgeLast = 0; return; }
+      const dt = edgeLast ? Math.min(0.05, (now - edgeLast) / 1000) : 1 / 60;
+      edgeLast = now;
+      const max = tlWrap.scrollWidth - tlWrap.clientWidth;
+      const before = tlWrap.scrollLeft;
+      tlWrap.scrollLeft = Math.max(0, Math.min(max, before + v * dt));
+      if (tlWrap.scrollLeft !== before) go(lastX);
+      edgeRaf = requestAnimationFrame(edgeStep);
+    };
+    const edgeKick = () => { if (!edgeRaf) edgeRaf = requestAnimationFrame(edgeStep); };
     go(e.clientX);
-    const move = (ev) => go(ev.clientX);
+    const move = (ev) => { lastX = ev.clientX; go(lastX); edgeKick(); };
     const end = (ev) => {
       ed.scrubbing = false;
+      if (edgeRaf) cancelAnimationFrame(edgeRaf);
+      edgeRaf = 0;
       overlay.removeEventListener("pointermove", move);
       overlay.removeEventListener("pointerup", end);
       overlay.removeEventListener("pointercancel", end);

@@ -4,6 +4,8 @@ import {
   animatedScrubFrameIndex,
   animatedViewerMode,
   decideVideoSyncScrub,
+  edgeScrollSpeed,
+  followPlayheadScroll,
   previewFrameAttr,
   scrubFrameIndex,
   scrubFrameIndexFromDurations,
@@ -11,6 +13,46 @@ import {
   timelineSecFromClientX,
   videoPreviewFrameIndex,
 } from "../../web/gg_timeline_scrub_core.js";
+
+describe("edgeScrollSpeed", () => {
+  const view = { left: 100, right: 1100 };
+  it("no scroll away from the edges", () => {
+    assert.equal(edgeScrollSpeed({ ...view, x: 600 }), 0);
+    assert.equal(edgeScrollSpeed({ ...view, x: 1100 - 32 }), 0);
+  });
+  it("right edge scrolls right, faster the farther past it", () => {
+    const at = edgeScrollSpeed({ ...view, x: 1097 });
+    const past = edgeScrollSpeed({ ...view, x: 1220 });
+    assert.ok(at > 0);
+    assert.ok(past > at);
+    assert.equal(edgeScrollSpeed({ ...view, x: 99999 }), 4000);
+  });
+  it("left edge scrolls left", () => {
+    assert.ok(edgeScrollSpeed({ ...view, x: 103 }) < 0);
+    assert.ok(edgeScrollSpeed({ ...view, x: -20 }) < edgeScrollSpeed({ ...view, x: 103 }));
+  });
+  it("tiny or unknown views never scroll", () => {
+    assert.equal(edgeScrollSpeed({ x: 5, left: 0, right: 40 }), 0);
+    assert.equal(edgeScrollSpeed({ x: NaN, ...view }), 0);
+  });
+});
+
+describe("followPlayheadScroll", () => {
+  const v = { viewW: 1000, maxScroll: 5000 };
+  it("in view: no change", () => {
+    assert.equal(followPlayheadScroll({ ...v, headX: 500, scrollLeft: 0 }), null);
+  });
+  it("past the right edge: pages so the head is near the left edge", () => {
+    assert.equal(followPlayheadScroll({ ...v, headX: 990, scrollLeft: 0 }), 950);
+  });
+  it("before the left edge (seek back): brings it back", () => {
+    assert.equal(followPlayheadScroll({ ...v, headX: 100, scrollLeft: 2000 }), 60);
+  });
+  it("clamped to the scroll range", () => {
+    assert.equal(followPlayheadScroll({ ...v, headX: 6100, scrollLeft: 5000 }), null);
+    assert.equal(followPlayheadScroll({ ...v, headX: 5600, scrollLeft: 3000 }), 5000);
+  });
+});
 
 describe("timelineSecFromClientX", () => {
   it("maps clientX through the inner element rect and px scale", () => {

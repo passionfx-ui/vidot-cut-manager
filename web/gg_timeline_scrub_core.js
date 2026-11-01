@@ -175,6 +175,36 @@ export function decideVideoSyncScrub(p) {
   return { seekTo, play: false, pause: !paused };
 }
 
+/**
+ * Auto-scroll speed while the playhead is dragged near or past an edge of the visible timeline.
+ * Starts `zone` px inside the edge and grows with the distance (also past the edge), capped at `max`.
+ * @returns {number} px per second; negative = scroll left, 0 = no auto-scroll
+ */
+export function edgeScrollSpeed({ x, left, right, zone = 32, perPx = 12, max = 4000 } = {}) {
+  const px = Number(x);
+  const l = Number(left);
+  const r = Number(right);
+  if (!Number.isFinite(px) || !Number.isFinite(l) || !Number.isFinite(r) || r - l < zone * 2) return 0;
+  if (px > r - zone) return Math.min(max, (px - (r - zone)) * perPx);
+  if (px < l + zone) return -Math.min(max, (l + zone - px) * perPx);
+  return 0;
+}
+
+/**
+ * Playback follow: when the playhead (content x, padding included) leaves the visible part, page so it sits
+ * `margin` px from the left edge again. Returns the new scrollLeft, or null when it is in view.
+ */
+export function followPlayheadScroll({ headX, scrollLeft, viewW, maxScroll, margin = 40 } = {}) {
+  const x = Number(headX);
+  const sl = Number(scrollLeft) || 0;
+  const w = Number(viewW) || 0;
+  if (!Number.isFinite(x) || w <= margin * 2) return null;
+  if (x >= sl + margin / 2 && x <= sl + w - margin / 2) return null;
+  const max = Math.max(0, Number(maxScroll) || 0);
+  const next = Math.max(0, Math.min(max, x - margin));
+  return next === sl ? null : next;
+}
+
 /** Attribute value for tests (`data-gg-frame`); empty string when not applicable. */
 export function previewFrameAttr(frameIndex) {
   if (frameIndex == null || !Number.isFinite(Number(frameIndex))) return "";
