@@ -20,6 +20,7 @@ describe("list view modes (Info | Prompt | Caption)", () => {
     const html = promptRowContentHtml({ thumb: "<x/>", text: "Fox", placeholder: "P", title: "T", native: true });
     assert.match(html, /gg-prompt-text/);
     assert.match(html, />Fox</);
+    assert.match(html, /gg-prompt-expand/);
   });
 
   it("formatCutListLength shows timeline sec in orange drift state", () => {

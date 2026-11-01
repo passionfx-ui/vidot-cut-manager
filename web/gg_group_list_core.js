@@ -1,5 +1,6 @@
 /** Shared Shots scene-group list for the Info and Caption views (pure HTML strings, no DOM). */
 
+import { promptFieldRowHtml } from "./gg_prompt_expand_core.js";
 import { normalizeListMode } from "./gg_story_core.js";
 
 const escHtml = (s) =>
@@ -28,8 +29,7 @@ export function captionRowContentHtml({ thumb = "", text, placeholder, title, na
 
 /** Prompt list view: same interaction as Caption, saves to cut.prompt. */
 export function promptRowContentHtml({ thumb = "", text, placeholder, title, native }) {
-  const ro = native ? " readonly" : " disabled";
-  return `<div class="gg-cut-thumb-col">${thumb}</div><textarea class="gg-prompt-text" rows="3" placeholder="${escHtml(placeholder)}"${ro} title="${escHtml(title)}">${escHtml(text)}</textarea>`;
+  return promptFieldRowHtml({ thumb, text, placeholder, title, native });
 }
 
 /**

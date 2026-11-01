@@ -239,6 +239,11 @@ import {
   stripCutsFromGroups,
 } from "./gg_group_list_core.js";
 import {
+  promptExpandFullscreenTitle,
+  promptExpandKeyAction,
+  promptExpandModalShellHtml,
+} from "./gg_prompt_expand_core.js";
+import {
   bumpPlaybackGen,
   decideVideoSync,
   guardResolvedPlay,
@@ -5704,6 +5709,66 @@ function ggModalOpen() {
   return !!document.querySelector(".gg-modal-backdrop");
 }
 
+function openPromptExpandModal(ta, cutId) {
+  if (!ta || !cutId || ggModalOpen() || !isNativeProject()) return;
+  const initial = ta.value;
+  let fullscreen = false;
+  const wrap = document.createElement("div");
+  wrap.className = "gg-modal-backdrop gg-prompt-edit-backdrop";
+  wrap.innerHTML = promptExpandModalShellHtml();
+  document.body.appendChild(wrap);
+  const modal = wrap.querySelector(".gg-prompt-edit-modal");
+  const editor = wrap.querySelector(".gg-prompt-edit-text");
+  const fsBtn = wrap.querySelector(".gg-prompt-edit-fs");
+  if (!modal || !editor || !fsBtn) {
+    wrap.remove();
+    return;
+  }
+  editor.value = initial;
+
+  const close = (apply) => {
+    if (apply) {
+      const text = editor.value;
+      if (text !== ta.value) {
+        ta.value = text;
+        const c = cutByIdTimeline(cutId);
+        if (c) {
+          c.prompt = text;
+          scheduleCutFieldSave(cutId, { prompt: text });
+        }
+        void flushPendingCutFields();
+      }
+    }
+    wrap.remove();
+  };
+
+  fsBtn.addEventListener("click", () => {
+    fullscreen = !fullscreen;
+    modal.classList.toggle("gg-prompt-edit-fullscreen", fullscreen);
+    const t = promptExpandFullscreenTitle(fullscreen);
+    fsBtn.title = t;
+    fsBtn.setAttribute("aria-label", t);
+  });
+
+  wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", () => close(false));
+  wrap.querySelector(".gg-prompt-edit-ok")?.addEventListener("click", () => close(true));
+  editor.addEventListener("keydown", (e) => {
+    const action = promptExpandKeyAction(e);
+    if (action === "cancel") {
+      e.preventDefault();
+      close(false);
+    } else if (action === "confirm") {
+      e.preventDefault();
+      close(true);
+    }
+  });
+
+  editor.focus();
+  try {
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+  } catch (_) {}
+}
+
 function comfyPromptDialogOpen() {
   return !!document.querySelector(".p-dialog-mask, .p-dialog-enter-active, .p-dialog-visible");
 }
@@ -7328,6 +7393,7 @@ function mountShots(el) {
 
   function autoSizeFieldTextarea(ta) {
     if (!ta || !ta.isConnected) return;
+    if (ta.classList.contains("gg-prompt-text")) return;
     ta.style.height = "auto";
     const { minPx, maxPx } = fieldTextMinMaxPx(ta);
     ta.style.height = `${autoHeightPx({ scrollHeight: ta.scrollHeight, minPx, maxPx })}px`;
@@ -7405,7 +7471,12 @@ function mountShots(el) {
       });
       ta.addEventListener("dblclick", (e) => {
         e.stopPropagation();
-        if (nat) enterCardFieldEdit();
+        if (!nat) return;
+        if (fieldTextKind(ta) === "prompt") {
+          openPromptExpandModal(ta, id);
+          return;
+        }
+        enterCardFieldEdit();
       });
       ta.addEventListener("keydown", (e) => {
         if (!isCardFieldEditing(ta)) return;
@@ -7452,6 +7523,16 @@ function mountShots(el) {
           scheduleCutFieldSave(id, { prompt: ta.value });
         }
         autoSizeFieldTextarea(ta);
+      });
+    });
+    root.querySelectorAll(".gg-prompt-expand").forEach((btn) => {
+      btn.addEventListener("mousedown", (e) => e.stopPropagation());
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const li = btn.closest(".gg-cut");
+        const cutId = li?.dataset?.cutId;
+        const ta = li?.querySelector(".gg-prompt-text");
+        if (cutId && ta) openPromptExpandModal(ta, cutId);
       });
     });
     refreshFieldTextUnsavedClasses();

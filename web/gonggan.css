@@ -407,11 +407,55 @@
 .gg-shots .gg-prompt-text.gg-field-editing { cursor: text; }
 .gg-shots .gg-prompt-text:disabled { opacity: 0.55; }
 .gg-shots .gg-cut.gg-cut-prompt { align-items: flex-start; }
+.gg-shots .gg-prompt-field-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 4px;
+  align-items: flex-start;
+}
 .gg-shots .gg-cut-prompt .gg-prompt-text { flex: 1 1 auto; min-width: 0; }
+.gg-shots .gg-prompt-expand { flex: 0 0 auto; font-size: 14px; line-height: 1; padding: 2px 6px; }
 .gg-shots.gg-list-prompt .gg-prompt-text {
   min-height: 4.6em;
-  max-height: clamp(6em, 45vh, 70em);
+  max-height: 4.6em;
 }
+.gg-modal-backdrop.gg-prompt-edit-backdrop { background: rgba(0, 0, 0, 0.45); }
+.gg-modal.gg-prompt-edit-modal {
+  width: 52.5vw;
+  height: 52.5vh;
+  max-width: none;
+  min-width: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+  padding: 12px 14px;
+}
+.gg-modal.gg-prompt-edit-modal.gg-prompt-edit-fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+}
+.gg-prompt-edit-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.gg-prompt-edit-head .gg-modal-title { margin: 0; flex: 1 1 auto; }
+.gg-prompt-edit-text {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 8px;
+  border-radius: 4px;
+  border: 1px solid var(--gg-line);
+  background: #1c1f25;
+  color: inherit;
+}
+.gg-prompt-edit-text:focus { border-color: var(--gg-acc); outline: none; }
+.gg-prompt-edit-modal .gg-modal-actions { margin-top: 0; flex-shrink: 0; }
 .gg-shots .gg-cut.gg-playing {
   background: #25303f;
   border-color: #6fa8ff;
