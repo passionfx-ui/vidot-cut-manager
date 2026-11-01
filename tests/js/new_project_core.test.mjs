@@ -94,15 +94,14 @@ describe("New Project: request", () => {
     });
   });
   const DEFAULT_TEMPLATES = { image_template: "builtin:image", video_template: "builtin:video-ltx" };
-  it("body carries name, location and the Default template only when one is picked", () => {
-    assert.deepEqual(newProjectRequest({ name: " A ", location: " D:\\F ", template: "" }), {
+  it("body carries name, location and Image / Video templates in settings (0.9.138)", () => {
+    assert.deepEqual(newProjectRequest({ name: " A ", location: " D:\\F " }), {
       body: { name: "A", location: "D:\\F", settings: DEFAULT_TEMPLATES },
     });
-    assert.deepEqual(newProjectRequest({ name: "A", location: "D:\\F", template: "t.json" }).body, {
+    assert.deepEqual(newProjectRequest({ name: "A", location: "D:\\F", template: "t.json", videoTemplate: "builtin:video-ltx-t2v" }).body, {
       name: "A",
       location: "D:\\F",
-      template_ref: "t.json",
-      settings: DEFAULT_TEMPLATES,
+      settings: { image_template: "builtin:image", video_template: "builtin:video-ltx-t2v" },
     });
   });
   it("Image / Video templates go into the settings, blank = built-in defaults (0.9.117)", () => {

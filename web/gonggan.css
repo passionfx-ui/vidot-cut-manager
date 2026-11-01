@@ -43,9 +43,15 @@
 .gg-tpl-toggle { flex: 0 0 auto; width: 24px; padding: 0; border: 0; border-left: 1px solid var(--gg-line, #353a44); border-radius: 0 4px 4px 0; background: transparent; color: var(--gg-fg, #e6e8ec); font-size: 10px; line-height: 1; cursor: pointer; }
 .gg-tpl-toggle:hover { background: #2a2e36; }
 .gg-tpl-use-last { flex-shrink: 0; font-size: 10px; padding: 2px 6px; max-width: 9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Lists stay in the modal flow: an absolute dropdown would be clipped by the modal's own scroll box. */
+/* Folder lists stay in the modal flow. An open template list is a fixed overlay so the dialog does not grow. */
 .gg-tpl-list, .gg-fp-list { list-style: none; margin: 0; padding: 2px 0; overflow-y: auto; border: 1px solid var(--gg-line, #353a44); border-radius: 4px; background: #1b1d22; color: var(--gg-fg, #e6e8ec); font-size: 12px; }
 .gg-tpl-list { max-height: 200px; }
+.gg-tpl-field .gg-tpl-list:not([hidden]) {
+  position: fixed;
+  z-index: 10100;
+  box-sizing: border-box;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
 .gg-tpl-list li, .gg-fp-list li { padding: 3px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; user-select: none; }
 .gg-tpl-list .gg-combo-opt:hover, .gg-fp-list .gg-fp-item:hover { background: #2a2e36; }
 .gg-tpl-list .gg-combo-opt.gg-active, .gg-fp-list .gg-fp-item.gg-active { background: #3a4252; }

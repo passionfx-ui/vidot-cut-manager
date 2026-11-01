@@ -1,4 +1,4 @@
-/** Pure helpers for the New Project window: name, location, Default / Image / Video template (no DOM). */
+/** Pure helpers for the New Project window: name, location, Image / Video template (no DOM). */
 
 import { DEFAULT_IMAGE_TEMPLATE, DEFAULT_VIDEO_TEMPLATE } from "./gg_template_pick_core.js";
 import { containsForbiddenUserText } from "./gg_ui_text_core.js";
@@ -62,19 +62,18 @@ export function projectFolderPath(location, name) {
  * Validate the window and build the POST /gonggan/project/create body. The Image / Video templates go into the
  * project settings (blank = the built-in defaults).
  * @param {{ name?: string, location?: string, template?: string, imageTemplate?: string, videoTemplate?: string }} v
- * @returns {{ error: string, field: "name"|"location" } | { body: { name: string, location: string, template_ref?: string,
+ * @returns {{ error: string, field: "name"|"location" } | { body: { name: string, location?: string,
  *   settings: { image_template: string, video_template: string } } }}
  */
 export function newProjectRequest(v = {}) {
   const name = String(v.name ?? "").trim();
   if (!name) return { error: "Enter a project name", field: "name" };
   const location = clampPath(v.location);
-  const template = String(v.template ?? "").trim();
   const settings = {
     image_template: String(v.imageTemplate ?? "").trim() || DEFAULT_IMAGE_TEMPLATE,
     video_template: String(v.videoTemplate ?? "").trim() || DEFAULT_VIDEO_TEMPLATE,
   };
-  const body = { name, settings, ...(template ? { template_ref: template } : {}) };
+  const body = { name, settings };
   if (location) body.location = location;
   return { body };
 }

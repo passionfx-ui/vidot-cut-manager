@@ -305,7 +305,6 @@ import {
 import {
   loadLastTemplate,
   saveLastTemplate,
-  pickInitialTemplate,
   shortTemplateName,
   templateComboItems,
   templateLabel,
@@ -916,7 +915,6 @@ function openNewProjectModal() {
         <span class="gg-modal-hint gg-np-path"></span>
         <span class="gg-modal-hint gg-split-err gg-modal-folder-err" aria-live="polite"></span>
       </label>
-      ${templateFieldHtml()}
       ${templateFieldHtml("image")}
       ${templateFieldHtml("video")}
       <div class="gg-modal-actions">
@@ -932,13 +930,6 @@ function openNewProjectModal() {
   const pathHint = wrap.querySelector(".gg-np-path");
   const locErr = wrap.querySelector(".gg-modal-folder-err");
   const createBtn = wrap.querySelector(".gg-modal-create");
-  let template = "";
-  let templateTouched = false;
-  const defaultField = wrap.querySelector('[data-tpl="default"]');
-  const showTemplate = wireProjectTemplateField(defaultField, {
-    get: () => template,
-    set: (ref) => { template = ref; templateTouched = true; },
-  });
   const kindTemplates = { image: DEFAULT_PROJECT_SETTINGS.image_template, video: DEFAULT_PROJECT_SETTINGS.video_template };
   for (const kind of ["image", "video"]) {
     wireProjectTemplateField(wrap.querySelector(`[data-tpl="${kind}"]`), {
@@ -946,12 +937,6 @@ function openNewProjectModal() {
       set: (ref) => { kindTemplates[kind] = ref; },
     });
   }
-  const tplIn = defaultField?.querySelector(".gg-tpl-combo");
-  fetchUserWorkflowPaths().then(() => {
-    if (templateTouched || !wrap.isConnected || (tplIn && tplIn.value !== (template ? templateLabel(template) : ""))) return;
-    template = pickInitialTemplate(userWorkflowPaths, loadLastTemplate(localStorage));
-    showTemplate();
-  });
   const syncPath = () => {
     const locForPath = locIn.value.trim() || defaultStorageHint;
     const p = projectFolderPath(locForPath, nameIn.value);
@@ -1004,7 +989,6 @@ function openNewProjectModal() {
     const req = newProjectRequest({
       name: nameIn.value,
       location: locIn.value,
-      template,
       imageTemplate: kindTemplates.image,
       videoTemplate: kindTemplates.video,
     });
@@ -1019,7 +1003,6 @@ function openNewProjectModal() {
     try {
       const d = await postJson("/gonggan/project/create", req.body);
       saveLastLocation(localStorage, location);
-      saveLastTemplate(localStorage, template);
       closeProjectModal();
       await loadProjects();
       if (d.project?.id) selectProject(d.project.id);
@@ -1087,11 +1070,51 @@ function wireProjectTemplateField(wrap, field) {
     input.value = shown();
     input.title = current() || "(none)";
   };
+  let overlayListeners = null;
+  const clearOverlayListeners = () => {
+    if (!overlayListeners) return;
+    window.removeEventListener("scroll", overlayListeners.reposition, true);
+    window.removeEventListener("resize", overlayListeners.reposition);
+    document.removeEventListener("mousedown", overlayListeners.outside, true);
+    overlayListeners = null;
+  };
+  const syncListOverlay = () => {
+    if (!ui.open) {
+      list.style.cssText = "";
+      clearOverlayListeners();
+      return;
+    }
+    const r = input.getBoundingClientRect();
+    list.style.position = "fixed";
+    list.style.left = `${Math.round(r.left)}px`;
+    list.style.top = `${Math.round(r.bottom + 2)}px`;
+    list.style.width = `${Math.round(r.width)}px`;
+    list.style.minWidth = `${Math.round(r.width)}px`;
+    list.style.zIndex = "10100";
+    list.style.maxHeight = "200px";
+    list.style.overflowY = "auto";
+    if (!overlayListeners) {
+      const reposition = () => { if (ui.open) syncListOverlay(); };
+      const outside = (e) => {
+        if (!ui.open) return;
+        const t = e.target;
+        if (wrap.contains(t) || list.contains(t)) return;
+        close(true);
+      };
+      overlayListeners = { reposition, outside };
+      window.addEventListener("scroll", reposition, true);
+      window.addEventListener("resize", reposition);
+      document.addEventListener("mousedown", outside, true);
+    }
+  };
   const render = () => {
     input.setAttribute("aria-expanded", ui.open ? "true" : "false");
     list.hidden = !ui.open;
     input.removeAttribute("aria-activedescendant");
-    if (!ui.open) return;
+    if (!ui.open) {
+      syncListOverlay();
+      return;
+    }
     const cur = current();
     list.innerHTML = ui.items.length
       ? ui.items.map((it, i) => {
@@ -1103,6 +1126,7 @@ function wireProjectTemplateField(wrap, field) {
       input.setAttribute("aria-activedescendant", `gg-tpl-opt-${key}-${ui.active}`);
       list.children[ui.active]?.scrollIntoView({ block: "nearest" });
     }
+    syncListOverlay();
   };
   const openList = (query) => {
     ui.items = comboFilter(comboItems(), query);
