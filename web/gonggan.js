@@ -3802,18 +3802,6 @@ async function applyStepMove(dir) {
   await commitShotsReorder(r.order, r.groups);
 }
 
-async function applyCutMoveBtn(cutId, dir) {
-  const tl = state.timeline;
-  if (!tl || !isNativeProject() || !cutId) return;
-  const order = tl.cuts.map((c) => c.id);
-  const ids = [cutId];
-  if (dir < 0 && !canMoveUp(order, ids)) return;
-  if (dir > 0 && !canMoveDown(order, ids)) return;
-  const r = stepMove(order, groupsClone(), ids, dir);
-  if (!r.changed) return;
-  await commitShotsReorder(r.order, r.groups, { moveCount: 1 });
-}
-
 function scrollMovedCutsIntoView() {
   const ids = cutSelIds();
   const wrap = document.querySelector(".gg-shots .gg-grp-wrap");
@@ -5580,9 +5568,6 @@ function cutThumbHtml(c) {
 
 function infoRowContent(c, labels) {
   const nat = isNativeProject();
-  const timelineOrder = state.timeline?.cuts?.map((x) => x.id) ?? [];
-  const canUp = nat && canMoveUp(timelineOrder, [c.id]);
-  const canDown = nat && canMoveDown(timelineOrder, [c.id]);
   const warn = lengthWarning(c);
   const lenInfo = formatCutListLength(c);
   const verInfo = formatCutVersionStatus(c);
@@ -5623,11 +5608,7 @@ function infoRowContent(c, labels) {
           <span class="gg-cut-ver" title="${esc(verInfo.title)}">${esc(verInfo.detail)}</span>
           <span class="gg-cut-len${lenInfo.drift ? " gg-len-drift" : ""}" title="${esc(lenInfo.title)}">${esc(lenInfo.text)}</span>
         </div>
-      </div>
-      ${nat ? `<div class="gg-move-col">
-          <button type="button" class="gg-move-btn gg-move-up" title="Move up" aria-label="Move up"${canUp ? "" : " disabled"}>\u25B2</button>
-          <button type="button" class="gg-move-btn gg-move-down" title="Move down" aria-label="Move down"${canDown ? "" : " disabled"}>\u25BC</button>
-        </div>` : ""}`;
+      </div>`;
 }
 
 function timelinePanelVisible() {
@@ -7689,17 +7670,6 @@ function mountShots(el) {
     bindHoverPlay(root);
     bindThumbFallbacks(root);
     bindShotsReorder(root);
-    root.querySelectorAll(".gg-move-btn").forEach((btn) => {
-      const cutId = btn.closest(".gg-cut")?.dataset?.cutId;
-      const dir = btn.classList.contains("gg-move-up") ? -1 : 1;
-      btn.addEventListener("pointerdown", (e) => e.stopPropagation());
-      btn.addEventListener("mousedown", (e) => e.stopPropagation());
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (btn.disabled) return;
-        void applyCutMoveBtn(cutId, dir);
-      });
-    });
     bindCutFieldTextareas();
     restoreFieldTextFocus(storyCap);
     autoSizeAllFieldTextareas();

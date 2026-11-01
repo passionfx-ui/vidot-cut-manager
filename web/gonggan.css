@@ -283,17 +283,6 @@
   padding: 0 2px 0 0;
 }
 .gg-shots .gg-drag-handle:active { cursor: grabbing; }
-.gg-shots .gg-move-col {
-  flex: 0 0 auto; display: flex; flex-direction: column; gap: 1px; align-self: center; opacity: 0; pointer-events: none;
-}
-.gg-shots .gg-cut:hover .gg-move-col,
-.gg-shots .gg-cut.gg-sel .gg-move-col { opacity: 1; pointer-events: auto; }
-.gg-shots .gg-move-btn {
-  background: var(--gg-panel); border: 1px solid var(--gg-line); color: var(--gg-dim); border-radius: 3px;
-  font-size: 9px; line-height: 1; padding: 1px 4px; cursor: pointer; min-width: 1.4em;
-}
-.gg-shots .gg-move-btn:hover:not(:disabled) { border-color: var(--gg-acc); color: var(--gg-fg); }
-.gg-shots .gg-move-btn:disabled { opacity: 0.35; cursor: default; }
 .gg-shots .gg-version {
   position: absolute; right: 6px; bottom: 2px; font-size: 9px; color: var(--gg-dim); opacity: 0.55;
   pointer-events: none; z-index: 3; font-variant-numeric: tabular-nums;
