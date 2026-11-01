@@ -980,7 +980,7 @@ async def gg_cut_split_model_save(request):
         return _err(_CUT_SPLIT_STATUS.get(ex.code, 500), str(ex))
     except Exception as ex:  # noqa: BLE001
         log.exception("[gonggan-cut] AI Cut Split model save failed")
-        return _err(500, f"Could not save the AI Make Cut model: {ex}")
+        return _err(500, f"Could not save the AI model: {ex}")
     return web.json_response({"ok": True, **res})
 
 

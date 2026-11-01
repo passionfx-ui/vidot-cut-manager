@@ -216,12 +216,12 @@ describe("Project Settings dialog wiring (gonggan.js)", () => {
   const fn = GONGGAN_JS.slice(GONGGAN_JS.indexOf("function openProjectSettingsModal("));
   const body = fn.slice(0, fn.indexOf("\n}\n"));
 
-  it("has exactly one AI Make Cut model dropdown", () => {
-    assert.equal(body.match(/AI Make Cut model/g)?.length, 1);
+  it("has exactly one AI model dropdown", () => {
+    assert.doesNotMatch(body, /AI Make Cut model/);
     assert.doesNotMatch(body, /AI Cut Split/);
     assert.equal(body.match(/<select class="gg-modal-cut-split-model"/g)?.length, 1);
-    assert.match(body, /<label class="gg-modal-field gg-cut-split-model-field">AI Make Cut model\s*<select class="gg-modal-cut-split-model"/);
-    assert.match(body, /AI Make Cut on\/off\. Off: the text model is never loaded\./);
+    assert.match(body, /<label class="gg-modal-field gg-cut-split-model-field">AI model\s*<select class="gg-modal-cut-split-model"/);
+    assert.match(body, /Turns AI features on\/off \(AI Make Cut, reference linking, \.\.\.\)\. Off: the AI model is never loaded\./);
   });
 
   it("has one Use AI switch above the model dropdown, on by default", () => {

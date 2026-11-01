@@ -1,5 +1,6 @@
 /* comfyui-gonggan-cut — every selector is gg- prefixed and scoped under .gg-root */
 .gg-root { --gg-bg: #1b1d22; --gg-panel: #23262d; --gg-line: #353a44; --gg-fg: #e6e8ec; --gg-dim: #9aa0aa; --gg-acc: #f2b84b;
+  --gg-field-text-size: 11px; --gg-field-text-lh: 1.3;
   color: var(--gg-fg); font: 12px/1.35 system-ui, "Segoe UI", "Malgun Gothic", sans-serif; box-sizing: border-box; height: 100%; }
 .gg-root *, .gg-root *::before, .gg-root *::after { box-sizing: border-box; }
 .gg-root [hidden] { display: none !important; }
@@ -375,8 +376,9 @@
   width: 100%;
   box-sizing: border-box;
   resize: none;
-  font-size: 11px;
-  line-height: 1.3;
+  font-family: inherit;
+  font-size: var(--gg-field-text-size);
+  line-height: var(--gg-field-text-lh);
   overflow-y: auto;
   background: #1c1f25;
   color: inherit;
@@ -404,8 +406,9 @@
   width: 100%;
   box-sizing: border-box;
   resize: none;
-  font-size: 11px;
-  line-height: 1.3;
+  font-family: inherit;
+  font-size: var(--gg-field-text-size);
+  line-height: var(--gg-field-text-lh);
   overflow-y: auto;
   background: #1c1f25;
   color: inherit;
@@ -444,7 +447,7 @@
 .gg-shots .gg-final-cap { font-size: 10px; color: var(--gg-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gg-shots .gg-final-total { font-size: 10px; margin-top: 8px; color: var(--gg-fg); font-variant-numeric: tabular-nums; }
 .gg-shots .gg-final-miss { font-size: 10px; color: var(--gg-dim); margin-top: 4px; }
-.gg-shots .gg-cut-fields { display: grid; gap: 4px; margin: 4px 0 0; font-size: 11px; }
+.gg-shots .gg-cut-fields { display: grid; gap: 4px; margin: 4px 0 0; font-size: var(--gg-field-text-size); }
 .gg-shots .gg-cut-meta-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px 10px; }
 .gg-shots .gg-cut-fields label { display: flex; flex-direction: column; gap: 2px; color: var(--gg-dim); }
 .gg-shots .gg-field-end, .gg-shots .gg-field-redo { flex-direction: row; align-items: center; gap: 4px; white-space: nowrap; }

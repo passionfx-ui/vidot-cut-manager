@@ -1,4 +1,4 @@
-/** Pure helpers for the Project Settings "AI Make Cut model" dropdown (GET/POST /gonggan/cut-split/model). No DOM. */
+/** Pure helpers for the Project Settings "AI model" dropdown (GET/POST /gonggan/cut-split/model). No DOM. */
 
 import { AI_MAKE_CUT_LABEL } from "./gg_cut_list_core.js";
 

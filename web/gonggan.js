@@ -1323,9 +1323,9 @@ function openProjectSettingsModal() {
         <span class="gg-switch-row">Use AI
           <input type="checkbox" class="gg-switch gg-modal-use-ai" role="switch" checked disabled />
         </span>
-        <span class="gg-modal-hint">AI Make Cut on/off. Off: the text model is never loaded.</span>
+        <span class="gg-modal-hint">Turns AI features on/off (AI Make Cut, reference linking, ...). Off: the AI model is never loaded.</span>
       </label>
-      <label class="gg-modal-field gg-cut-split-model-field">AI Make Cut model
+      <label class="gg-modal-field gg-cut-split-model-field">AI model
         <select class="gg-modal-cut-split-model" disabled><option>Loading…</option></select>
       </label>` : ""}
       <div class="gg-modal-actions">
