@@ -953,7 +953,8 @@ function openNewProjectModal() {
     showTemplate();
   });
   const syncPath = () => {
-    const p = projectFolderPath(locIn.value, nameIn.value);
+    const locForPath = locIn.value.trim() || defaultStorageHint;
+    const p = projectFolderPath(locForPath, nameIn.value);
     if (p) {
       pathHint.textContent = newProjectFolderPreviewText(p);
       const tip = userVisiblePathTooltip(p);
@@ -976,7 +977,7 @@ function openNewProjectModal() {
     syncPath();
   };
   getJson("/gonggan/settings")
-    .then((d) => applyDefaultStorageHint(d.native_projects_dir))
+    .then((d) => applyDefaultStorageHint(d.default_project_location))
     .catch(() => applyDefaultStorageHint(""));
   const showLocErr = (msg) => {
     locErr.textContent = msg;
@@ -987,7 +988,7 @@ function openNewProjectModal() {
   nameIn.addEventListener("input", syncPath);
   locIn.addEventListener("input", () => { locErr.textContent = ""; syncPath(); });
   wrap.querySelector(".gg-modal-folder-browse")?.addEventListener("click", () => {
-    openFolderPicker(locIn.value, (path) => {
+    openFolderPicker(locIn.value.trim() || defaultStorageHint, (path) => {
       if (!wrap.isConnected) return;
       locIn.value = path;
       locIn.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1238,7 +1239,7 @@ function openFolderPicker(startValue, onSelect) {
       </div>
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-fp-cancel">Cancel</button>
-        <button type="button" class="gg-btn gg-primary gg-fp-select" disabled>Select</button>
+        <button type="button" class="gg-btn gg-primary gg-fp-select" disabled>Select this folder</button>
       </div>
     </div>`;
   document.body.appendChild(wrap);
@@ -1273,15 +1274,6 @@ function openFolderPicker(startValue, onSelect) {
         ? view.items.map((it, i) => `<li role="option" class="gg-fp-item" data-i="${i}" title="${esc(it.path)}">${esc(it.name)}</li>`).join("")
         : `<li class="gg-fp-empty">No folders</li>`;
     listEl.scrollTop = 0;
-    syncButtons();
-  };
-  const markSel = (i) => {
-    sel = i;
-    for (const li of listEl.querySelectorAll(".gg-fp-item")) {
-      const on = Number(li.dataset.i) === i;
-      li.classList.toggle("gg-active", on);
-      li.setAttribute("aria-selected", on ? "true" : "false");
-    }
     syncButtons();
   };
   const load = async (paths) => {
@@ -1334,10 +1326,6 @@ function openFolderPicker(startValue, onSelect) {
     if (li) void load([li.dataset.path]);
   });
   listEl.addEventListener("click", (e) => {
-    const li = e.target.closest?.(".gg-fp-item");
-    if (li) markSel(Number(li.dataset.i));
-  });
-  listEl.addEventListener("dblclick", (e) => {
     const li = e.target.closest?.(".gg-fp-item");
     const it = li && view?.items[Number(li.dataset.i)];
     if (it) void load([it.path]);

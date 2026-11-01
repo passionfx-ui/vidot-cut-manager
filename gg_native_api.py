@@ -13,7 +13,16 @@ try:
     from .gg_project.local_store import NEW_CUT_NAME
     from .gg_project.timeline import timeline_order
     from .gg_project.ids import is_uuid_id
-    from .gg_project.project_settings import DEFAULT_IMAGE_TEMPLATE, TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings, project_mp4_export_dir
+    from .gg_project.project_settings import (
+        DEFAULT_IMAGE_TEMPLATE,
+        TEMPLATE_SETTING_KEYS,
+        comfyui_output_directory,
+        make_project_folder,
+        make_unique_project_folder,
+        normalize_settings,
+        project_folder_path,
+        project_mp4_export_dir,
+    )
     from .gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids
     from .gg_project.media_anim import animation_info
 except ImportError:  # unittest / plain script
@@ -22,7 +31,16 @@ except ImportError:  # unittest / plain script
     from gg_project.local_store import NEW_CUT_NAME  # type: ignore
     from gg_project.timeline import timeline_order  # type: ignore
     from gg_project.ids import is_uuid_id  # type: ignore
-    from gg_project.project_settings import DEFAULT_IMAGE_TEMPLATE, TEMPLATE_SETTING_KEYS, make_project_folder, normalize_settings, project_mp4_export_dir  # type: ignore
+    from gg_project.project_settings import (  # type: ignore
+        DEFAULT_IMAGE_TEMPLATE,
+        TEMPLATE_SETTING_KEYS,
+        comfyui_output_directory,
+        make_project_folder,
+        make_unique_project_folder,
+        normalize_settings,
+        project_folder_path,
+        project_mp4_export_dir,
+    )
     from gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids  # type: ignore
     from gg_project.media_anim import animation_info  # type: ignore
 
@@ -165,8 +183,8 @@ def create_native_project(
     settings: dict | None = None,
     location: str | None = None,
 ) -> dict:
-    """With a location, the project folder <location>/<name> (only an `assets` subfolder) is created
-    first and becomes settings.project_folder; a location already ending with the name is used as is.
+    """Creates the project folder under the chosen location (or ComfyUI's output directory when omitted),
+    sets settings.project_folder, and adds only an `assets` subfolder. Name collisions get ' (2)', ' (3)', …
     The first cut starts from the Default template when given, else from the Image template."""
     name = (name or "").strip()
     if not name:
@@ -176,11 +194,15 @@ def create_native_project(
     graph = resolve_template_graph(ref) if ref else None
     if graph is None:
         graph = resolve_template_graph(normalize_settings(settings)["image_template"])
-    folder = None
     created: list[Path] = []
-    if location is not None:
-        folder = make_project_folder(location, name, created)
-        settings = {**(settings or {}), "project_folder": str(folder)}
+    explicit = location is not None and bool(str(location).strip())
+    loc = str(location).strip() if explicit else str(comfyui_output_directory())
+    loc_path = Path(loc).expanduser()
+    if explicit and project_folder_path(loc_path, name) == loc_path:
+        folder = make_project_folder(loc, name, created)
+    else:
+        folder = make_unique_project_folder(loc, name, created)
+    settings = {**(settings or {}), "project_folder": str(folder)}
     store = native_store()
     try:
         doc = store.create_project(name, template_ref=ref, template_graph=graph, settings=settings)

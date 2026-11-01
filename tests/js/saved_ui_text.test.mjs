@@ -44,8 +44,8 @@ describe("New Project default location hint (UI path)", () => {
     const ph = defaultProjectLocationPlaceholder(BAD_PATH);
     assertCleanUserText(hint);
     assertCleanUserText(ph);
-    assert.match(hint, /plugin projects folder/i);
-    assert.match(ph, /plugin projects folder/i);
+    assert.match(hint, /ComfyUI output folder/i);
+    assert.match(ph, /ComfyUI output folder/i);
   });
 
   it("omits title tooltip when the path contains forbidden words", () => {

@@ -17,11 +17,11 @@ from . import gg_wfstore
 try:
     from .gg_project import ConflictError
     from .gg_project.folder_list import folder_list_response
-    from .gg_project.project_settings import check_output_folder
+    from .gg_project.project_settings import check_output_folder, comfyui_output_directory
 except ImportError:  # unittest / plain script
     from gg_project import ConflictError  # type: ignore
     from gg_project.folder_list import folder_list_response  # type: ignore
-    from gg_project.project_settings import check_output_folder  # type: ignore
+    from gg_project.project_settings import check_output_folder, comfyui_output_directory  # type: ignore
 
 routes = PromptServer.instance.routes
 log = logging.getLogger("gonggan-cut")
@@ -43,12 +43,17 @@ async def gg_settings(request):
         native_projects = str(gg_native_api.native_store().projects_dir)
     except Exception:  # noqa: BLE001
         native_projects = ""
+    try:
+        default_project_location = str(comfyui_output_directory())
+    except Exception:  # noqa: BLE001
+        default_project_location = ""
     return web.json_response({
         "ok": ok,
         "data_root": s.get("data_root"),
         "uid": s.get("uid"),
         "user_dir": where,
         "native_projects_dir": native_projects,
+        "default_project_location": default_project_location,
     })
 
 

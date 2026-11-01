@@ -214,4 +214,12 @@ describe("folder pickers list folders only (0.9.125)", () => {
     assert.ok(!/webkitdirectory|showDirectoryPicker/.test(GONGGAN_JS));
     assert.equal(folderListUrl("D:\\x"), "/gonggan/folder/list?path=D%3A%5Cx");
   });
+
+  it("folder list single-click opens a folder; Select this folder button (0.9.138)", () => {
+    const s = GONGGAN_JS.slice(GONGGAN_JS.indexOf("function openFolderPicker("));
+    const body = s.slice(0, s.indexOf("\nfunction openProjectSettingsModal"));
+    assert.match(body, /listEl\.addEventListener\("click"[\s\S]*void load\(\[it\.path\]\)/);
+    assert.doesNotMatch(body, /listEl\.addEventListener\("dblclick"/);
+    assert.match(body, /gg-fp-select[^>]*>Select this folder</);
+  });
 });

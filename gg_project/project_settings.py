@@ -222,6 +222,64 @@ def project_folder_path(location: Path, name: Any) -> Path:
     return location if last and last == folder_name else location / project_folder_name(name)
 
 
+def comfyui_output_directory() -> Path:
+    """ComfyUI's configured output directory (folder_paths.get_output_directory())."""
+    try:
+        import folder_paths  # ComfyUI
+
+        return Path(folder_paths.get_output_directory()).resolve()
+    except Exception:  # noqa: BLE001
+        try:
+            import gg_data
+
+            return (gg_data.PACK_DIR / "output").resolve()
+        except Exception:  # noqa: BLE001
+            return Path(os.path.expanduser("~")).resolve()
+
+
+def unique_project_folder_path(location: Path, name: Any) -> Path:
+    """Pick a new project folder under `location`; suffix ' (2)', ' (3)', … when the preferred name exists."""
+    folder_name = project_folder_name(name)
+    preferred = project_folder_path(location, name)
+    if not preferred.exists():
+        return preferred
+    parent = location.parent if preferred == location else preferred.parent
+    n = 2
+    while n < 1000:
+        candidate = parent / f"{folder_name} ({n})"
+        if not candidate.exists():
+            return candidate
+        n += 1
+    raise ValueError("Too many projects with this name in this location")
+
+
+def make_unique_project_folder(location: Any, name: Any, created: list[Path] | None = None) -> Path:
+    """Create `<unique project folder>/assets` for a new project (never reuses an existing folder)."""
+    loc = _clamp_project_folder(location)
+    if not loc:
+        raise ValueError("Choose a location")
+    res = check_output_folder(loc)
+    if not res["ok"]:
+        raise ValueError(res["message"])
+    loc_path = Path(loc).expanduser()
+    folder = unique_project_folder_path(loc_path, name)
+    assets = folder / PROJECT_ASSETS_DIR
+    if len(str(assets)) > 260:
+        raise ValueError("The folder path is too long")
+    try:
+        if folder.exists() and not folder.is_dir():
+            raise ValueError(f'"{folder.name}" already exists in this location')
+        if folder.exists() and any(p for p in folder.iterdir() if p.name != PROJECT_ASSETS_DIR or not p.is_dir()):
+            raise ValueError(f'"{folder.name}" already exists in this location')
+        missing = [p for p in (*reversed(assets.parents), assets) if not p.exists()]
+        assets.mkdir(parents=True, exist_ok=True)
+    except OSError as ex:
+        raise ValueError(f"Cannot create the project folder: {ex}") from None
+    if created is not None:
+        created.extend(missing)
+    return folder
+
+
 def make_project_folder(location: Any, name: Any, created: list[Path] | None = None) -> Path:
     """Create <project folder>/assets for a new project and return the project folder
     (see project_folder_path). A new <location>/<name> must be new or empty; a location that already is

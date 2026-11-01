@@ -79,19 +79,19 @@ export function newProjectRequest(v = {}) {
   return { body };
 }
 
-export const DEFAULT_PROJECTS_FOLDER_HINT = "Default: plugin projects folder";
-export const DEFAULT_PROJECTS_FOLDER_PLACEHOLDER = "Plugin projects folder (default)";
+export const DEFAULT_PROJECTS_FOLDER_HINT = "Default: ComfyUI output folder";
+export const DEFAULT_PROJECTS_FOLDER_PLACEHOLDER = "ComfyUI output folder (default)";
 
-/** Hint for an empty Location field (default plugin project storage). */
-export function defaultProjectStorageHint(nativeProjectsDir) {
-  const dir = String(nativeProjectsDir ?? "").trim();
+/** Hint for an empty Location field (ComfyUI output directory). */
+export function defaultProjectStorageHint(outputDir) {
+  const dir = String(outputDir ?? "").trim();
   if (dir && !containsForbiddenUserText(dir)) return `Default: ${dir}`;
   return DEFAULT_PROJECTS_FOLDER_HINT;
 }
 
 /** Placeholder for the Location input when empty. */
-export function defaultProjectLocationPlaceholder(nativeProjectsDir) {
-  const dir = String(nativeProjectsDir ?? "").trim();
+export function defaultProjectLocationPlaceholder(outputDir) {
+  const dir = String(outputDir ?? "").trim();
   if (dir && !containsForbiddenUserText(dir)) {
     const hint = defaultProjectStorageHint(dir);
     return hint.startsWith("Default: ") ? hint.slice(9) : hint;

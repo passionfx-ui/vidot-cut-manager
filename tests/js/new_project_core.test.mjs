@@ -127,9 +127,9 @@ describe("default project storage hint", () => {
     assert.match(defaultProjectLocationPlaceholder("C:\\pack\\projects"), /^C:\\pack\\projects$/);
   });
   it("falls back to generic text when the path is unknown or forbidden", () => {
-    assert.match(defaultProjectStorageHint(""), /plugin projects folder/);
-    assert.match(defaultProjectStorageHint("C:\\dev\\comfyui-gonggan-cut\\projects"), /plugin projects folder/);
-    assert.match(defaultProjectLocationPlaceholder("C:\\dev\\comfyui-gonggan-cut\\projects"), /plugin projects folder \(default\)/i);
+    assert.match(defaultProjectStorageHint(""), /ComfyUI output folder/i);
+    assert.match(defaultProjectStorageHint("C:\\dev\\comfyui-gonggan-cut\\projects"), /ComfyUI output folder/i);
+    assert.match(defaultProjectLocationPlaceholder("C:\\dev\\comfyui-gonggan-cut\\projects"), /ComfyUI output folder \(default\)/i);
     assert.equal(userVisiblePathTooltip("C:\\dev\\comfyui-gonggan-cut\\projects"), "");
   });
   it("project create toast detail hides forbidden folder paths", () => {

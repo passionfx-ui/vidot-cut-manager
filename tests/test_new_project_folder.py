@@ -15,7 +15,13 @@ if str(REPO) not in sys.path:
 
 import gg_native_api as na
 from gg_project import LocalStore
-from gg_project.project_settings import make_project_folder, project_folder_name
+from gg_project.project_settings import (
+    comfyui_output_directory,
+    make_project_folder,
+    make_unique_project_folder,
+    project_folder_name,
+    unique_project_folder_path,
+)
 from gg_project.timeline import version_asset_file
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
@@ -132,6 +138,31 @@ class MakeProjectFolderTests(unittest.TestCase):
         self.assertEqual(list(self.root.iterdir()), [])
 
 
+class UniqueProjectFolderPathTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_suffix_when_preferred_exists(self):
+        out = self.root / "ComfyOutput"
+        out.mkdir()
+        (out / "Film").mkdir()
+        self.assertEqual(unique_project_folder_path(out, "Film"), out / "Film (2)")
+        (out / "Film (2)").mkdir()
+        self.assertEqual(unique_project_folder_path(out, "Film"), out / "Film (3)")
+
+    def test_make_unique_creates_assets(self):
+        out = self.root / "Out"
+        out.mkdir()
+        created: list[Path] = []
+        folder = make_unique_project_folder(str(out), "My Film", created)
+        self.assertEqual(folder, out / "My Film")
+        self.assertEqual(_tree(folder), ["assets"])
+
+
 class CreateNativeProjectLocationTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -160,10 +191,25 @@ class CreateNativeProjectLocationTests(unittest.TestCase):
         self.assertEqual(doc["settings"]["project_folder"], str(loc))
         self.assertEqual(_tree(self.loc), ["Film", "Film/assets"])
 
-    def test_without_location_keeps_default_storage(self):
-        res = na.create_native_project("Plain")
-        self.assertEqual(res["project"]["folder"], "")
-        self.assertFalse(self.loc.exists())
+    def test_without_location_uses_comfy_output_and_creates_folder(self):
+        out = self.root / "ComfyOutput"
+        out.mkdir()
+        with mock.patch("gg_native_api.comfyui_output_directory", return_value=out):
+            res = na.create_native_project("Plain")
+        folder = out / "Plain"
+        self.assertEqual(res["project"]["folder"], str(folder))
+        doc = self.store.get_project(res["project"]["id"])
+        self.assertEqual(doc["settings"]["project_folder"], str(folder))
+        self.assertEqual(_tree(folder), ["assets"])
+
+    def test_name_collision_gets_suffix_under_default_output(self):
+        out = self.root / "ComfyOutput"
+        out.mkdir()
+        with mock.patch("gg_native_api.comfyui_output_directory", return_value=out):
+            r1 = na.create_native_project("Same")
+            r2 = na.create_native_project("Same")
+        self.assertEqual(r1["project"]["folder"], str(out / "Same"))
+        self.assertEqual(r2["project"]["folder"], str(out / "Same (2)"))
 
     def test_bad_location_creates_nothing(self):
         with self.assertRaises(ValueError):

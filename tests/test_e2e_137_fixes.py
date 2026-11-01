@@ -214,6 +214,8 @@ class SettingsNativeProjectsDirTests(unittest.TestCase):
         data = res.body
         self.assertIn("native_projects_dir", data)
         self.assertTrue(str(data["native_projects_dir"]).endswith("projects"))
+        self.assertIn("default_project_location", data)
+        self.assertTrue(str(data["default_project_location"]))
         for name in [n for n in list(sys.modules) if n.startswith("gg_routes_pkg.")]:
             del sys.modules[name]
 
