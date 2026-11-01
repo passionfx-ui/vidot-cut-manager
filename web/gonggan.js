@@ -239,9 +239,10 @@ import {
   stripCutsFromGroups,
 } from "./gg_group_list_core.js";
 import {
+  fieldExpandModalShellHtml,
   promptExpandFullscreenTitle,
   promptExpandKeyAction,
-  promptExpandModalShellHtml,
+  promptTextareaCaretIndex,
 } from "./gg_prompt_expand_core.js";
 import {
   bumpPlaybackGen,
@@ -5709,13 +5710,14 @@ function ggModalOpen() {
   return !!document.querySelector(".gg-modal-backdrop");
 }
 
-function openPromptExpandModal(ta, cutId) {
+function openFieldExpandModal(ta, cutId) {
   if (!ta || !cutId || ggModalOpen() || !isNativeProject()) return;
+  const kind = ta.classList.contains("gg-caption-text") ? "caption" : "prompt";
   const initial = ta.value;
   let fullscreen = false;
   const wrap = document.createElement("div");
   wrap.className = "gg-modal-backdrop gg-prompt-edit-backdrop";
-  wrap.innerHTML = promptExpandModalShellHtml();
+  wrap.innerHTML = fieldExpandModalShellHtml(kind);
   document.body.appendChild(wrap);
   const modal = wrap.querySelector(".gg-prompt-edit-modal");
   const editor = wrap.querySelector(".gg-prompt-edit-text");
@@ -5733,8 +5735,14 @@ function openPromptExpandModal(ta, cutId) {
         ta.value = text;
         const c = cutByIdTimeline(cutId);
         if (c) {
-          c.prompt = text;
-          scheduleCutFieldSave(cutId, { prompt: text });
+          if (kind === "caption") {
+            c.caption = text;
+            scheduleCutFieldSave(cutId, { caption: text });
+            paintViewerCaption();
+          } else {
+            c.prompt = text;
+            scheduleCutFieldSave(cutId, { prompt: text });
+          }
         }
         void flushPendingCutFields();
       }
@@ -5767,6 +5775,10 @@ function openPromptExpandModal(ta, cutId) {
   try {
     editor.setSelectionRange(editor.value.length, editor.value.length);
   } catch (_) {}
+}
+
+function openPromptExpandModal(ta, cutId) {
+  openFieldExpandModal(ta, cutId);
 }
 
 function comfyPromptDialogOpen() {
@@ -7393,7 +7405,7 @@ function mountShots(el) {
 
   function autoSizeFieldTextarea(ta) {
     if (!ta || !ta.isConnected) return;
-    if (ta.classList.contains("gg-prompt-text")) return;
+    if (ta.classList.contains("gg-prompt-text") || ta.classList.contains("gg-caption-text")) return;
     ta.style.height = "auto";
     const { minPx, maxPx } = fieldTextMinMaxPx(ta);
     ta.style.height = `${autoHeightPx({ scrollHeight: ta.scrollHeight, minPx, maxPx })}px`;
@@ -7438,16 +7450,17 @@ function mountShots(el) {
         refreshFieldTextUnsavedClasses();
       };
 
-      const enterCardFieldEdit = () => {
+      const enterCardFieldEdit = (caretAt) => {
         if (!nat) return;
         ta.readOnly = false;
         ta.dataset.editing = "1";
         ta.classList.add("gg-field-editing");
         ta.title = CARD_EDIT_ACTIVE_TIP;
         ta.focus({ preventScroll: true });
-        const end = ta.value.length;
+        const pos =
+          caretAt != null && Number.isFinite(Number(caretAt)) ? Math.min(Math.max(0, Number(caretAt)), ta.value.length) : ta.value.length;
         try {
-          ta.setSelectionRange(end, end);
+          ta.setSelectionRange(pos, pos);
         } catch (_) {}
         autoSizeFieldTextarea(ta);
       };
@@ -7472,11 +7485,8 @@ function mountShots(el) {
       ta.addEventListener("dblclick", (e) => {
         e.stopPropagation();
         if (!nat) return;
-        if (fieldTextKind(ta) === "prompt") {
-          openPromptExpandModal(ta, id);
-          return;
-        }
-        enterCardFieldEdit();
+        const pos = promptTextareaCaretIndex(ta, e.clientX, e.clientY);
+        enterCardFieldEdit(pos);
       });
       ta.addEventListener("keydown", (e) => {
         if (!isCardFieldEditing(ta)) return;
@@ -7525,14 +7535,14 @@ function mountShots(el) {
         autoSizeFieldTextarea(ta);
       });
     });
-    root.querySelectorAll(".gg-prompt-expand").forEach((btn) => {
-      btn.addEventListener("mousedown", (e) => e.stopPropagation());
-      btn.addEventListener("click", (e) => {
+    root.querySelectorAll(".gg-prompt-expand-bar").forEach((bar) => {
+      bar.addEventListener("mousedown", (e) => e.stopPropagation());
+      bar.addEventListener("click", (e) => {
         e.stopPropagation();
-        const li = btn.closest(".gg-cut");
-        const cutId = li?.dataset?.cutId;
-        const ta = li?.querySelector(".gg-prompt-text");
-        if (cutId && ta) openPromptExpandModal(ta, cutId);
+        const wrap = bar.closest(".gg-prompt-field-wrap");
+        const ta = wrap?.querySelector("textarea");
+        const cutId = bar.closest(".gg-cut")?.dataset?.cutId || wrap?.dataset?.cutId;
+        if (cutId && ta) openFieldExpandModal(ta, cutId);
       });
     });
     refreshFieldTextUnsavedClasses();

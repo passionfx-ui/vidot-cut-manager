@@ -573,7 +573,7 @@ async function main() {
       const extra = await page.$$eval(".gg-root.gg-shots .gg-cut", (els) =>
         els.filter((li) => {
           const kids = [...li.children];
-          return kids.length !== 2 || !kids[0].classList.contains("gg-cut-thumb-col") || !kids[1].classList.contains("gg-caption-text");
+          return kids.length !== 2 || !kids[0].classList.contains("gg-cut-thumb-col") || !kids[1].classList.contains("gg-prompt-field-wrap");
         }).length
       );
       if (extra) throw new Error(`${extra} Caption row(s) are not thumbnail + caption field`);

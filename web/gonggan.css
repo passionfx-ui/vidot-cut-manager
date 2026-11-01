@@ -385,7 +385,7 @@
 .gg-shots .gg-cut-caption .gg-caption-text { flex: 1 1 auto; min-width: 0; }
 .gg-shots.gg-list-caption .gg-caption-text {
   min-height: 4.6em;
-  max-height: clamp(6em, 45vh, 70em);
+  max-height: 4.6em;
 }
 .gg-shots .gg-prompt-text {
   width: 100%;
@@ -411,11 +411,36 @@
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
-  gap: 4px;
-  align-items: flex-start;
+  gap: 0;
+  align-items: stretch;
 }
-.gg-shots .gg-cut-prompt .gg-prompt-text { flex: 1 1 auto; min-width: 0; }
-.gg-shots .gg-prompt-expand { flex: 0 0 auto; font-size: 14px; line-height: 1; padding: 2px 6px; }
+.gg-shots .gg-cut-prompt .gg-prompt-text,
+.gg-shots .gg-prompt-field-wrap > .gg-caption-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.gg-shots .gg-prompt-field-wrap:has(.gg-prompt-expand-bar) > textarea {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right-width: 0;
+}
+.gg-shots .gg-prompt-expand-bar {
+  flex: 0 0 9px;
+  width: 9px;
+  min-width: 9px;
+  align-self: stretch;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--gg-line);
+  border-left: 0;
+  border-radius: 0 4px 4px 0;
+  background: #252830;
+  cursor: pointer;
+}
+.gg-shots .gg-prompt-expand-bar:hover {
+  background: #3a4252;
+  border-color: #4a5568;
+}
 .gg-shots.gg-list-prompt .gg-prompt-text {
   min-height: 4.6em;
   max-height: 4.6em;

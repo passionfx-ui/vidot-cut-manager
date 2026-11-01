@@ -5,6 +5,9 @@ import {
   promptExpandFullscreenTitle,
   promptExpandKeyAction,
   promptFieldRowHtml,
+  captionFieldRowHtml,
+  PROMPT_EXPAND_BAR_WIDTH_PX,
+  promptTextareaCaretIndex,
 } from "../../web/gg_prompt_expand_core.js";
 
 describe("promptExpandKeyAction", () => {
@@ -24,11 +27,34 @@ describe("modalViewportRatioInBand", () => {
   });
 });
 
+describe("captionFieldRowHtml", () => {
+  it("includes expand bar for native cuts", () => {
+    const html = captionFieldRowHtml({ text: "line", placeholder: "Cap", title: "T", native: true, cutId: "c1" });
+    assert.match(html, /gg-prompt-expand-bar/);
+    assert.match(html, /data-cut-id="c1"/);
+    assert.match(html, /gg-caption-text/);
+    assert.doesNotMatch(html, /class="gg-btn gg-prompt-expand"/);
+  });
+});
+
 describe("promptFieldRowHtml", () => {
-  it("includes expand control for native cuts", () => {
+  it("includes expand bar for native cuts", () => {
     const html = promptFieldRowHtml({ text: "a", placeholder: "P", title: "T", native: true });
-    assert.match(html, /gg-prompt-expand/);
-    assert.match(html, /Expand prompt/);
+    assert.equal(PROMPT_EXPAND_BAR_WIDTH_PX, 9);
+    assert.match(html, /gg-prompt-expand-bar/);
+    assert.match(html, /title="Expand"/);
+    assert.doesNotMatch(html, /class="gg-btn gg-prompt-expand"/);
+    assert.doesNotMatch(html, /⤢/);
+  });
+});
+
+describe("promptTextareaCaretIndex", () => {
+  it("returns a middle index when clicking inside the field", () => {
+    const ta = { value: "0123456789abcdef" };
+    const rect = { left: 100, top: 50, right: 300, bottom: 120 };
+    ta.getBoundingClientRect = () => rect;
+    const idx = promptTextareaCaretIndex(ta, 140, 65);
+    assert.ok(idx > 2 && idx < ta.value.length - 2);
   });
 });
 
