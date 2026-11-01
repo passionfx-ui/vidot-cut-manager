@@ -388,6 +388,8 @@ import {
   cutSplitMissingModelHtml,
   cutSplitMemoryConfirm,
   cutSplitPrecheckStep,
+  USE_AI_LABEL,
+  USE_AI_FEATURES_HINT,
   USE_AI_OFF_TIP,
 } from "./gg_cut_split_model_core.js";
 import {
@@ -704,7 +706,7 @@ async function offerStoredAiMakeCutResult() {
   if (!shouldOfferStoredAiMakeCut(localStorage, state.pid, job, storedId, usedId)) return;
   markAiMakeCutOffered(localStorage, state.pid, job.id);
   const n = job.cuts?.length || 0;
-  ggToast(AI_MAKE_CUT_LABEL, `Finished with ${n} cut${n === 1 ? "" : "s"}. Open AI Make Cut to review and create them.`, "ok", {
+  ggToast(AI_MAKE_CUT_LABEL, `Finished with ${n} cut${n === 1 ? "" : "s"}. Open ${AI_MAKE_CUT_LABEL} to review and create them.`, "ok", {
     actionLabel: "Open",
     onAction: () => openAiCutSplitModal(),
   });
@@ -1033,7 +1035,7 @@ const TEMPLATE_FIELDS = {
   image: { label: "Image template", title: "Workflow for new image cuts and Generate All (a cut's own workflow wins)", none: false },
   video: {
     label: "Video template",
-    title: AI_CUT_SPLIT_VISIBLE ? "Workflow for AI Make Cut cuts and Image to Video" : "Workflow for Image to Video",
+    title: AI_CUT_SPLIT_VISIBLE ? `Workflow for ${AI_MAKE_CUT_LABEL} cuts and Image to Video` : "Workflow for Image to Video",
     none: false,
   },
 };
@@ -1404,10 +1406,10 @@ function openProjectSettingsModal() {
       ${nat ? "" : templateFieldHtml()}
       ${nat ? `${templateFieldHtml("image")}${templateFieldHtml("video")}` : ""}
       ${nat && AI_CUT_SPLIT_VISIBLE ? `<label class="gg-modal-field gg-use-ai-field">
-        <span class="gg-switch-row">Use AI
-          <input type="checkbox" class="gg-switch gg-modal-use-ai" role="switch" checked disabled />
+        <span class="gg-switch-row">${esc(USE_AI_LABEL)}
+          <input type="checkbox" class="gg-switch gg-modal-use-ai" role="switch" disabled />
         </span>
-        <span class="gg-modal-hint">Turns AI features on/off (AI Make Cut, reference linking, ...). Off: the AI model is never loaded.</span>
+        <span class="gg-modal-hint">${esc(USE_AI_FEATURES_HINT)}</span>
       </label>
       <label class="gg-modal-field gg-cut-split-model-field">AI model<span class="gg-ai-model-vl-hint"> ${esc(AI_MODEL_VL_HINT)}</span>
         <select class="gg-modal-cut-split-model" disabled><option>Loading…</option></select>
@@ -3195,15 +3197,15 @@ async function refreshProjectTemplateFlag() {
   bus.dispatchEvent(new Event("template"));
 }
 
-/** Project Settings › Use AI (global, gonggan_settings.json). Unknown (older server, error) counts as on. */
-let cutSplitUseAiOn = true;
+/** Project Settings › Use AI (global, gonggan_settings.json). Missing or unknown counts as off. */
+let cutSplitUseAiOn = false;
 
 async function refreshCutSplitUseAi() {
   if (!AI_CUT_SPLIT_VISIBLE) return;
   try {
     cutSplitUseAiOn = cutSplitUseAi(await getJson("/gonggan/cut-split/model"));
   } catch (_) {
-    cutSplitUseAiOn = true;
+    cutSplitUseAiOn = false;
   }
   bus.dispatchEvent(new Event("cut-split-use-ai"));
 }
@@ -3382,7 +3384,7 @@ function openAiCutSplitModal() {
   let result = null;
   const close = () => {
     if (running) {
-      ggToast(AI_MAKE_CUT_LABEL, "Still running in ComfyUI. Open AI Make Cut again to get the result.", "ok");
+      ggToast(AI_MAKE_CUT_LABEL, `Still running in ComfyUI. Open ${AI_MAKE_CUT_LABEL} again to get the result.`, "ok");
     }
     wrap.remove();
   };

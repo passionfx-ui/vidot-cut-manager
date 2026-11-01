@@ -45,7 +45,11 @@ export function cutSplitModelLoadErrorText(err) {
   return `Could not load the model list${err?.message ? `: ${err.message}` : ""}`;
 }
 
-export const USE_AI_OFF_TIP = "Turn on Use AI in Project Settings";
+export const USE_AI_LABEL = "Use AI (Beta)";
+export const AI_TEXT_LABEL = "AI text (Beta)";
+export const USE_AI_OFF_TIP = `Turn on ${USE_AI_LABEL} in Project Settings`;
+export const USE_AI_FEATURES_HINT =
+  `Turns AI features on/off (${AI_MAKE_CUT_LABEL}, ${AI_TEXT_LABEL}, ...). Off: the AI model is never loaded.`;
 export const AI_SPLIT_TIP = "Make cuts from a story with a local text model in ComfyUI";
 
 /** Orange hint beside the AI model label (0.9.138). */
@@ -61,9 +65,9 @@ export function cutSplitModelScanDirsText(data) {
   return "";
 }
 
-/** Use AI setting from GET /gonggan/cut-split/model: on unless the server says false (older servers have no field). */
+/** Use AI setting from GET /gonggan/cut-split/model. On only when the server says true (missing field = off). */
 export function cutSplitUseAi(data) {
-  return data?.use_ai !== false;
+  return data?.use_ai === true;
 }
 
 /** Shots toolbar AI Make Cut button (and its right-click entry). @param {boolean} useAi */
@@ -120,7 +124,7 @@ export function cutSplitMissingModelHtml(info, esc) {
     info.page ? `<a class="gg-mm-link" href="${esc(info.page)}" target="_blank" rel="noopener noreferrer">Model page</a>` : "",
   ].filter(Boolean).join("");
   return `<div class="gg-mm-title">Missing model</div>
-    <div class="gg-mm-text">AI Make Cut needs this text model, but ComfyUI cannot find it:</div>
+    <div class="gg-mm-text">${AI_MAKE_CUT_LABEL} needs this text model, but ComfyUI cannot find it:</div>
     <div class="gg-mm-row"><code class="gg-mm-name">${esc(info.name)}</code>${links ? `<span class="gg-mm-links">${links}</span>` : ""}</div>
     <div class="gg-mm-text">Put the file in <code class="gg-mm-folder">${esc(info.folder)}</code> (inside your ComfyUI folder), then click Split again.</div>`;
 }

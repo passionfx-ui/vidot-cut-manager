@@ -341,7 +341,7 @@ export function aiCutSplitStatusText(parsed, { model = "", attempts = 1 } = {}) 
 }
 
 /** Visible name of the feature (internal routes / files / settings keep "cut split"). */
-export const AI_MAKE_CUT_LABEL = "AI Make Cut";
+export const AI_MAKE_CUT_LABEL = "AI Make Cut (Beta)";
 /** How long the dialog waits for one run (a run takes about 1–4 minutes). */
 export const AI_MAKE_CUT_WAIT_MS = 10 * 60 * 1000;
 export const AI_MAKE_CUT_POLL_MS = 1500;
@@ -349,8 +349,8 @@ export const AI_MAKE_CUT_POLL_MS = 1500;
 export const AI_MAKE_CUT_POLL_ERROR_MS = 60 * 1000;
 export const STORY_TOO_LONG_MESSAGE = "Story too long for one split, try a shorter part.";
 export const AI_MAKE_CUT_TIMEOUT_TEXT =
-  "No result after 10 minutes. It may still be running in ComfyUI: close this and open AI Make Cut again later to get the result.";
-export const AI_MAKE_CUT_LOST_TEXT = "Lost contact with ComfyUI while waiting for AI Make Cut. Check that ComfyUI is running, then open AI Make Cut again.";
+  `No result after 10 minutes. It may still be running in ComfyUI: close this and open ${AI_MAKE_CUT_LABEL} again later to get the result.`;
+export const AI_MAKE_CUT_LOST_TEXT = `Lost contact with ComfyUI while waiting for ${AI_MAKE_CUT_LABEL}. Check that ComfyUI is running, then open ${AI_MAKE_CUT_LABEL} again.`;
 
 /** 75 -> "1:15". */
 export function formatElapsed(sec) {
@@ -370,8 +370,8 @@ export function aiMakeCutProgressText(job) {
 export function aiMakeCutErrorText(err) {
   if (err?.code === "too_long") return STORY_TOO_LONG_MESSAGE;
   if (err?.name === "AbortError") return AI_MAKE_CUT_TIMEOUT_TEXT;
-  if (err?.status === 404 && !err?.code) return "Restart ComfyUI to use AI Make Cut (new server route).";
-  return err?.message || "AI Make Cut failed.";
+  if (err?.status === 404 && !err?.code) return `Restart ComfyUI to use ${AI_MAKE_CUT_LABEL} (new server route).`;
+  return err?.message || `${AI_MAKE_CUT_LABEL} failed.`;
 }
 
 /** Per-project: last finished AI Make Cut job id still waiting to be applied. */
@@ -476,14 +476,14 @@ export async function runAiMakeCutJob(o) {
     const d = await o.start();
     if (Array.isArray(d?.cuts)) return { kind: "done", job: { id: "", state: "done", cuts: d.cuts, model: d.model, attempts: d.attempts } };
     job = d?.job;
-    if (!job?.id) throw new Error("ComfyUI did not start AI Make Cut. Restart ComfyUI, then try again.");
+    if (!job?.id) throw new Error(`ComfyUI did not start ${AI_MAKE_CUT_LABEL}. Restart ComfyUI, then try again.`);
   }
   const t0 = now();
   let lastOk = t0;
   for (;;) {
     if (job.state === "done") return { kind: "done", job };
     if (job.state === "error") {
-      const err = new Error(job.message || "AI Make Cut failed.");
+      const err = new Error(job.message || `${AI_MAKE_CUT_LABEL} failed.`);
       err.code = job.code;
       err.data = job;
       throw err;

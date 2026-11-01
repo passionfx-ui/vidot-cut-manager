@@ -83,7 +83,7 @@ class ChoicesTests(unittest.TestCase):
     def test_current_setting(self):
         self.assertEqual(self.choices({"cut_split_clip": "a.safetensors"}),
                          {"models": ["a.safetensors"], "current": "a.safetensors", "default": DEFAULT,
-                          "use_ai": True, "scan_dirs": []})
+                          "use_ai": False, "scan_dirs": []})
 
     def test_default_when_unset(self):
         for s in ({}, {"cut_split_clip": ""}, {"cut_split_clip": "  "}):
@@ -116,7 +116,7 @@ class SaveTests(unittest.TestCase):
                          {"data_root": "D:/data", "uid": "me", "cut_split_clip_type": "qwen_image",
                           "cut_split_clip": "other.safetensors"})
         self.assertEqual(res, {"models": ["other.safetensors", DEFAULT], "current": "other.safetensors",
-                               "default": DEFAULT, "use_ai": True, "scan_dirs": []})
+                               "default": DEFAULT, "use_ai": False, "scan_dirs": []})
         self.assertEqual(gg_cut_split.model_settings(), {"clip_name": "other.safetensors", "type": "qwen_image"})
         self.assertEqual(sorted(p.name for p in self.dir.iterdir()),
                          ["gonggan_settings.default.json", "gonggan_settings.json"])
@@ -220,7 +220,7 @@ class RouteTests(unittest.TestCase):
             res = self.call("GET")
         self.assertEqual(res.status, 200)
         self.assertEqual(res.body, {"ok": True, "models": ["a.safetensors", "b.safetensors"], "current": DEFAULT,
-                                    "default": DEFAULT, "use_ai": True, "scan_dirs": []})
+                                    "default": DEFAULT, "use_ai": False, "scan_dirs": []})
 
     def test_post_saves(self):
         want = {"models": ["a.safetensors"], "current": "a.safetensors", "default": DEFAULT, "use_ai": True,

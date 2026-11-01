@@ -73,13 +73,15 @@ DEFAULT_CLIP_PAGE = ("https://huggingface.co/Comfy-Org/Fibo-2.0/blob/main/text_e
                      "qwen3vl_4b_int8_convrot.safetensors")
 # Free VRAM below the model file size + this margin (activations, KV cache) is "clearly too little".
 VRAM_MARGIN = 1024 ** 3
-USE_AI_OFF_MESSAGE = "Turn on Use AI in Project Settings."
+USE_AI_LABEL = "Use AI (Beta)"
+AI_MAKE_CUT_LABEL = "AI Make Cut (Beta)"
+USE_AI_OFF_MESSAGE = f"Turn on {USE_AI_LABEL} in Project Settings."
 TOO_LONG_MESSAGE = "Story too long for one split, try a shorter part."
 
 
 def use_ai_enabled(settings: dict | None = None) -> bool:
-    """gonggan_settings.json "cut_split_enabled" (Project Settings › Use AI); on unless set to false."""
-    v = (settings if settings is not None else gg_data.load_settings()).get("cut_split_enabled", True)
+    """gonggan_settings.json "cut_split_enabled" (Project Settings › Use AI). Off unless explicitly on."""
+    v = (settings if settings is not None else gg_data.load_settings()).get("cut_split_enabled", False)
     if isinstance(v, str):
         return v.strip().lower() not in ("false", "0", "off", "no")
     return v is not False and v != 0
@@ -373,13 +375,13 @@ def sdk_error_message(error: str, model: dict) -> str:
     if "proxy unreachable" in low or "connect" in low or "refused" in low or "10061" in low:
         return f"Comfy SDK proxy not reachable at {proxy}. Start it with start_proxy.bat, then try again."
     if "textgenerate" in low and ("does not exist" in low or "not found" in low or "not installed" in low):
-        return "This ComfyUI has no TextGenerate node. Update ComfyUI to use AI Make Cut."
+        return f"This ComfyUI has no TextGenerate node. Update ComfyUI to use {AI_MAKE_CUT_LABEL}."
     if "not in list" in low or model["clip_name"].lower() in low:
         return (f"Text model {model['clip_name']} not found in ComfyUI (models/text_encoders). Install it or set "
                 f'"cut_split_clip" in gonggan_settings.json.')
     if "timed out" in low:
         return f"The text model did not finish within {RUN_TIMEOUT:g} s; the job was cancelled."
-    return f"AI Make Cut failed in ComfyUI: {e}"
+    return f"{AI_MAKE_CUT_LABEL} failed in ComfyUI: {e}"
 
 
 def free_models() -> None:
@@ -443,7 +445,7 @@ def _begin(story) -> dict:
     if busy:
         raise CutSplitError("busy", busy)
     if not _run_lock.acquire(blocking=False):
-        raise CutSplitError("busy", "AI Make Cut is already running.")
+        raise CutSplitError("busy", f"{AI_MAKE_CUT_LABEL} is already running.")
     return model_settings()
 
 
@@ -568,7 +570,7 @@ def _job_main(job_id: str, story: str, model: dict, captions_mode: str | None) -
         _job_update(job_id, state="error", finished=time.time(), code=ex.code, message=str(ex), **ex.extra)
     except Exception as ex:  # noqa: BLE001
         log.exception("[gonggan-cut] AI Cut Split job failed")
-        _job_update(job_id, state="error", finished=time.time(), code="sdk", message=f"AI Make Cut failed: {ex}")
+        _job_update(job_id, state="error", finished=time.time(), code="sdk", message=f"{AI_MAKE_CUT_LABEL} failed: {ex}")
     finally:
         if _run_lock.locked():
             _run_lock.release()

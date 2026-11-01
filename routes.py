@@ -943,7 +943,7 @@ async def gg_ai_cut_split(request):
                                  status=_CUT_SPLIT_STATUS.get(ex.code, 502))
     except Exception as ex:  # noqa: BLE001
         log.exception("[gonggan-cut] AI Cut Split failed")
-        return _err(500, f"AI Make Cut failed: {ex}")
+        return _err(500, f"{gg_cut_split.AI_MAKE_CUT_LABEL} failed: {ex}")
     return web.json_response({"ok": True, **res})
 
 
@@ -955,8 +955,8 @@ async def gg_ai_cut_split_status(request):
     job = gg_cut_split.job_status(job_id or None)
     if job_id and job is None:
         return web.json_response({"ok": False, "code": "no_job",
-                                  "message": "This AI Make Cut run is gone (was ComfyUI restarted?). Click Split to "
-                                             "run it again."}, status=404)
+                                  "message": f"This {gg_cut_split.AI_MAKE_CUT_LABEL} run is gone "
+                                             "(was ComfyUI restarted?). Click Split to run it again."}, status=404)
     return web.json_response({"ok": True, "job": job})
 
 

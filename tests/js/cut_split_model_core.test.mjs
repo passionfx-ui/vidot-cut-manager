@@ -126,16 +126,16 @@ describe("cutSplitModelLoadErrorText", () => {
 });
 
 describe("cutSplitUseAi / aiCutSplitButtonState", () => {
-  it("Use AI is on unless the server says false", () => {
+  it("Use AI is off unless the server says true", () => {
     assert.equal(cutSplitUseAi({ use_ai: true }), true);
-    assert.equal(cutSplitUseAi({}), true);
-    assert.equal(cutSplitUseAi(null), true);
+    assert.equal(cutSplitUseAi({}), false);
+    assert.equal(cutSplitUseAi(null), false);
     assert.equal(cutSplitUseAi({ use_ai: false }), false);
   });
 
   it("button is disabled with the Project Settings tip when off", () => {
-    assert.deepEqual(aiCutSplitButtonState(false), { disabled: true, title: "Turn on Use AI in Project Settings" });
-    assert.equal(USE_AI_OFF_TIP, "Turn on Use AI in Project Settings");
+    assert.deepEqual(aiCutSplitButtonState(false), { disabled: true, title: "Turn on Use AI (Beta) in Project Settings" });
+    assert.equal(USE_AI_OFF_TIP, "Turn on Use AI (Beta) in Project Settings");
     assert.deepEqual(aiCutSplitButtonState(true), { disabled: false, title: AI_SPLIT_TIP });
   });
 });
@@ -238,7 +238,7 @@ describe("Project Settings dialog wiring (gonggan.js)", () => {
     assert.doesNotMatch(body, /AI Cut Split/);
     assert.equal(body.match(/<select class="gg-modal-cut-split-model"/g)?.length, 1);
     assert.match(body, /<label class="gg-modal-field gg-cut-split-model-field">AI model<span class="gg-ai-model-vl-hint">[\s\S]*<select class="gg-modal-cut-split-model"/);
-    assert.match(body, /Turns AI features on\/off \(AI Make Cut, reference linking, \.\.\.\)\. Off: the AI model is never loaded\./);
+    assert.match(body, /\$\{esc\(USE_AI_FEATURES_HINT\)\}/);
   });
 
   it("shows scanned model folders under the dropdown", () => {
@@ -252,9 +252,10 @@ describe("Project Settings dialog wiring (gonggan.js)", () => {
     assert.equal(AI_MODEL_VL_HINT, "(Choose a vision-language LLM, e.g. Qwen3-VL)");
   });
 
-  it("has one Use AI switch above the model dropdown, on by default", () => {
+  it("has one Use AI (Beta) switch above the model dropdown, off by default", () => {
     assert.equal(body.match(/class="gg-switch gg-modal-use-ai"/g)?.length, 1);
-    assert.match(body, /Use AI\s*<input type="checkbox" class="gg-switch gg-modal-use-ai" role="switch" checked/);
+    assert.match(body, /\$\{esc\(USE_AI_LABEL\)\}\s*<input type="checkbox" class="gg-switch gg-modal-use-ai" role="switch" disabled/);
+    assert.doesNotMatch(body, /gg-modal-use-ai" role="switch" checked/);
     assert.ok(body.indexOf("gg-modal-use-ai") < body.indexOf("gg-modal-cut-split-model"));
   });
 
@@ -327,7 +328,7 @@ describe("AI Make Cut visible again behind the one flag (0.9.125)", () => {
     assert.match(fnBody("openAiCutSplitModal"), /if \(!AI_CUT_SPLIT_VISIBLE \|\| !isNativeProject\(\)/);
     assert.equal(GONGGAN_JS.match(/=> openAiCutSplitModal\(\)/g)?.length, 4, "toolbar, cut card menu, list menu, stored-result offer");
     assert.match(GONGGAN_JS, /querySelector\("\.gg-ai-split"\)\?\.addEventListener\("click", \(\) => openAiCutSplitModal\(\)\)/);
-    assert.match(GONGGAN_JS, /title: AI_CUT_SPLIT_VISIBLE \? "Workflow for AI Make Cut cuts and Image to Video" : "Workflow for Image to Video"/);
+    assert.match(GONGGAN_JS, /title: AI_CUT_SPLIT_VISIBLE \? `Workflow for \$\{AI_MAKE_CUT_LABEL\} cuts and Image to Video` : "Workflow for Image to Video"/);
   });
 
   it("right-click: the cut card menu and the empty list menu list AI Make Cut… (native, flag on, Use AI)", () => {
@@ -355,12 +356,12 @@ describe("AI Make Cut name in the UI (internal names stay)", () => {
     assert.match(GONGGAN_JS, /aria-label="\$\{esc\(s\.ariaLabel\)\}"/);
     assert.match(GONGGAN_JS, /<h3 class="gg-modal-title">\$\{esc\(AI_MAKE_CUT_LABEL\)\}<\/h3>/);
     assert.match(GONGGAN_JS, /ggToast\(AI_MAKE_CUT_LABEL, USE_AI_OFF_TIP, "warn"\)/);
-    assert.equal(USE_AI_OFF_TIP, "Turn on Use AI in Project Settings");
+    assert.equal(USE_AI_OFF_TIP, "Turn on Use AI (Beta) in Project Settings");
   });
 
   it("missing-model notice says AI Make Cut", () => {
     const html = cutSplitMissingModelHtml({ name: DEFAULT, folder: "models/text_encoders", url: "", page: "" }, (s) => s);
-    assert.match(html, /AI Make Cut needs this text model/);
+    assert.match(html, /AI Make Cut \(Beta\) needs this text model/);
   });
 });
 

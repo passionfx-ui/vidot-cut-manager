@@ -65,8 +65,8 @@ class FakeComfy:
 class CutSplitTestBase(unittest.TestCase):
     def setUp(self):
         patches = [
-            mock.patch.object(gg_cut_split.gg_data, "load_settings", return_value={}),
-            mock.patch.object(gg_sdk.gg_data, "load_settings", return_value={}),
+            mock.patch.object(gg_cut_split.gg_data, "load_settings", return_value={"cut_split_enabled": True}),
+            mock.patch.object(gg_sdk.gg_data, "load_settings", return_value={"cut_split_enabled": True}),
             mock.patch.object(gg_sdk, "busy_message", return_value=""),
             mock.patch.object(gg_cut_split, "HISTORY_WAIT_SEC", 0.0),
         ]
@@ -107,7 +107,8 @@ class WorkflowTests(CutSplitTestBase):
     def test_model_from_settings(self):
         fake = FakeComfy()
         with mock.patch.object(gg_cut_split.gg_data, "load_settings",
-                               return_value={"cut_split_clip": "other.safetensors", "cut_split_clip_type": "qwen_image"}):
+                               return_value={"cut_split_clip": "other.safetensors", "cut_split_clip_type": "qwen_image",
+                                             "cut_split_enabled": True}):
             res = self.split(fake)
         self.assertEqual(fake.workflows[0]["1"]["inputs"]["clip_name"], "other.safetensors")
         self.assertEqual(fake.workflows[0]["1"]["inputs"]["type"], "qwen_image")
@@ -238,11 +239,11 @@ class ErrorTests(CutSplitTestBase):
 
     def test_node_missing(self):
         err = self.run_error("ComfyError: Cannot execute because node TextGenerate does not exist.")
-        self.assertEqual(str(err), "This ComfyUI has no TextGenerate node. Update ComfyUI to use AI Make Cut.")
+        self.assertEqual(str(err), "This ComfyUI has no TextGenerate node. Update ComfyUI to use AI Make Cut (Beta).")
 
     def test_timeout_and_other(self):
         self.assertIn("did not finish within 600 s", str(self.run_error("timed out after 600 s; cancel requested")))
-        self.assertEqual(str(self.run_error("boom")), "AI Make Cut failed in ComfyUI: boom")
+        self.assertEqual(str(self.run_error("boom")), "AI Make Cut (Beta) failed in ComfyUI: boom")
 
     def test_failed_job_reads_the_comfy_error(self):
         hist = {"job-9": {"status": {"messages": [

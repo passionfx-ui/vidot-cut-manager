@@ -3,6 +3,7 @@
 import { queueButtonState } from "./gg_batch_render_core.js";
 import { importButtonState, IMPORT_MENU_LABEL } from "./gg_version_strip_core.js";
 import { aiCutSplitButtonState } from "./gg_cut_split_model_core.js";
+import { AI_MAKE_CUT_LABEL } from "./gg_cut_list_core.js";
 import { restoreDeletedCutsMenuLabel } from "./gg_trash_core.js";
 
 export const SINGLE_CUT_TIP = "Select a single cut";
@@ -18,7 +19,7 @@ export const REMOVE_FROM_SCENE_TIP = "Take the selected cuts out of their scene"
 export const START_NEW_SCENE_LABEL = "Start New Scene Here";
 export const START_NEW_SCENE_TIP = "This cut and the ones after it in this scene become a new scene";
 export const MENU_SEPARATOR = Object.freeze({ key: "sep", separator: true });
-export const AI_MAKE_CUT_MENU_LABEL = "AI Make Cut…";
+export const AI_MAKE_CUT_MENU_LABEL = `${AI_MAKE_CUT_LABEL}…`;
 
 /** Right-column shortcut hints (only keys that exist in shotsKeyAction). */
 const CUT_MENU_SHORTCUTS = Object.freeze({
@@ -31,7 +32,7 @@ export function cutMenuShortcut(key) {
 }
 
 export function aiMakeCutMenuItem(useAi) {
-  const s = aiCutSplitButtonState(useAi !== false);
+  const s = aiCutSplitButtonState(useAi === true);
   return { key: "aiMakeCut", label: AI_MAKE_CUT_MENU_LABEL, disabled: s.disabled, title: s.disabled ? s.title : "" };
 }
 

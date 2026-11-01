@@ -65,8 +65,9 @@ def fake_mm(kind="cuda", free=8 * GB, loaded=(), cpu=False, directml=False, erro
 
 
 class UseAiTests(unittest.TestCase):
-    def test_default_on(self):
-        for s in ({}, {"cut_split_enabled": True}, {"cut_split_enabled": None}, {"cut_split_enabled": "yes"}):
+    def test_default_off_when_unset(self):
+        self.assertFalse(gg_cut_split.use_ai_enabled({}))
+        for s in ({"cut_split_enabled": True}, {"cut_split_enabled": None}, {"cut_split_enabled": "yes"}):
             self.assertTrue(gg_cut_split.use_ai_enabled(s), s)
 
     def test_off_values(self):
@@ -78,9 +79,9 @@ class UseAiTests(unittest.TestCase):
             self.assertFalse(gg_cut_split.use_ai_enabled())
             self.assertFalse(gg_cut_split.model_choices(lister({}))["use_ai"])
 
-    def test_default_settings_file_has_use_ai_on(self):
+    def test_default_settings_file_has_use_ai_off(self):
         s = json.loads((REPO / "gonggan_settings.default.json").read_text(encoding="utf-8"))
-        self.assertTrue(gg_cut_split.use_ai_enabled(s))
+        self.assertFalse(gg_cut_split.use_ai_enabled(s))
 
 
 class SaveSettingsTests(unittest.TestCase):
@@ -139,14 +140,14 @@ class MissingModelTests(unittest.TestCase):
 
     def test_precheck_reports_missing_and_checks_nothing_else(self):
         mm = mock.Mock()
-        with settings({}):
+        with settings({"cut_split_enabled": True}):
             pre = gg_cut_split.precheck(lister({"text_encoders": ["other.safetensors"]}), mm=mm)
         self.assertEqual(pre, {"use_ai": True, "model": DEFAULT, "missing": gg_cut_split.missing_model_info(DEFAULT),
                                "memory": None})
         mm.get_torch_device.assert_not_called()
 
     def test_precheck_finds_model_in_clip_folder(self):
-        with settings({}):
+        with settings({"cut_split_enabled": True}):
             pre = gg_cut_split.precheck(lister({"clip": [DEFAULT]}), resolver=lambda f, n: None, mm=fake_mm())
         self.assertIsNone(pre["missing"])
 
@@ -201,7 +202,7 @@ class MemoryTests(unittest.TestCase):
             self.assertIsNone(gg_cut_split.model_file_size("m.safetensors", mock.Mock(side_effect=KeyError("x"))))
 
     def precheck(self, mm, size=4 * GB):
-        with settings({}), mock.patch.object(gg_cut_split, "model_file_size", return_value=size):
+        with settings({"cut_split_enabled": True}), mock.patch.object(gg_cut_split, "model_file_size", return_value=size):
             return gg_cut_split.precheck(lister({"text_encoders": [DEFAULT]}), mm=mm)
 
     def test_precheck_low_vram(self):
@@ -233,7 +234,7 @@ class UseAiOffTests(unittest.TestCase):
                 mock.patch.object(gg_cut_split, "_http", fake.http_call):
             with self.assertRaises(gg_cut_split.CutSplitError) as cm:
                 gg_cut_split.ai_cut_split("A fox.")
-        self.assertEqual((cm.exception.code, str(cm.exception)), ("disabled", "Turn on Use AI in Project Settings."))
+        self.assertEqual((cm.exception.code, str(cm.exception)), ("disabled", "Turn on Use AI (Beta) in Project Settings."))
         self.assertEqual((fake.runs, fake.http), (0, []))
 
 
@@ -242,7 +243,7 @@ class SplitMissingModelTests(unittest.TestCase):
         fake = FakeComfy()
         fp = types.ModuleType("folder_paths")
         fp.get_filename_list = lister({"text_encoders": ["other.safetensors"]})
-        with settings({}), mock.patch.dict(sys.modules, {"folder_paths": fp}), \
+        with settings({"cut_split_enabled": True}), mock.patch.dict(sys.modules, {"folder_paths": fp}), \
                 mock.patch.object(gg_sdk, "run_api_workflow", fake.run), \
                 mock.patch.object(gg_cut_split, "_http", fake.http_call):
             with self.assertRaises(gg_cut_split.CutSplitError) as cm:
@@ -256,7 +257,8 @@ class SplitMissingModelTests(unittest.TestCase):
         fake = FakeComfy()
         fp = types.ModuleType("folder_paths")
         fp.get_filename_list = lister({"text_encoders": [DEFAULT]})
-        with settings({}), mock.patch.object(gg_sdk.gg_data, "load_settings", return_value={}), \
+        with settings({"cut_split_enabled": True}), \
+                mock.patch.object(gg_sdk.gg_data, "load_settings", return_value={"cut_split_enabled": True}), \
                 mock.patch.object(gg_sdk, "busy_message", return_value=""), \
                 mock.patch.object(gg_cut_split, "HISTORY_WAIT_SEC", 0.0), \
                 mock.patch.dict(sys.modules, {"folder_paths": fp}), \

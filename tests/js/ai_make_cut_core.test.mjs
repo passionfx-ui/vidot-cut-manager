@@ -167,7 +167,7 @@ describe("runAiMakeCutJob", () => {
     assert.equal(out.kind, "timeout");
     assert.equal(AI_MAKE_CUT_WAIT_MS, 600_000);
     assert.ok(tm.now() >= 600_000 && tm.now() < 600_000 + 5_000);
-    assert.match(AI_MAKE_CUT_TIMEOUT_TEXT, /open AI Make Cut again later to get the result/);
+    assert.match(AI_MAKE_CUT_TIMEOUT_TEXT, /open AI Make Cut \(Beta\) again later to get the result/);
   });
 
   it("stops polling when the dialog closes", async () => {
@@ -204,7 +204,7 @@ describe("runAiMakeCutJob", () => {
 
 describe("AI Make Cut texts", () => {
   it("label", () => {
-    assert.equal(AI_MAKE_CUT_LABEL, "AI Make Cut");
+    assert.equal(AI_MAKE_CUT_LABEL, "AI Make Cut (Beta)");
   });
 
   it("progress shows the elapsed time and a retry", () => {
@@ -216,9 +216,9 @@ describe("AI Make Cut texts", () => {
 
   it("error texts", () => {
     assert.equal(aiMakeCutErrorText({ name: "AbortError", message: "aborted" }), AI_MAKE_CUT_TIMEOUT_TEXT);
-    assert.equal(aiMakeCutErrorText({ status: 404 }), "Restart ComfyUI to use AI Make Cut (new server route).");
-    assert.equal(aiMakeCutErrorText({ status: 409, code: "busy", message: "AI Make Cut is already running." }), "AI Make Cut is already running.");
-    assert.equal(aiMakeCutErrorText(null), "AI Make Cut failed.");
+    assert.equal(aiMakeCutErrorText({ status: 404 }), "Restart ComfyUI to use AI Make Cut (Beta) (new server route).");
+    assert.equal(aiMakeCutErrorText({ status: 409, code: "busy", message: "AI Make Cut (Beta) is already running." }), "AI Make Cut (Beta) is already running.");
+    assert.equal(aiMakeCutErrorText(null), "AI Make Cut (Beta) failed.");
   });
 
   it("a finished run is offered again until its cuts are created", () => {
@@ -247,7 +247,7 @@ describe("AI Make Cut texts", () => {
 
 describe("AI Make Cut right-click entry", () => {
   it("menu item follows Use AI", () => {
-    assert.deepEqual(aiMakeCutMenuItem(true), { key: "aiMakeCut", label: "AI Make Cut…", disabled: false, title: "" });
+    assert.deepEqual(aiMakeCutMenuItem(true), { key: "aiMakeCut", label: "AI Make Cut (Beta)…", disabled: false, title: "" });
     assert.deepEqual(aiMakeCutMenuItem(false), { key: "aiMakeCut", label: AI_MAKE_CUT_MENU_LABEL, disabled: true, title: USE_AI_OFF_TIP });
   });
 
@@ -258,7 +258,7 @@ describe("AI Make Cut right-click entry", () => {
     assert.ok(!keys({ native: false, aiMakeCut: true, useAi: true }).includes("aiMakeCut"));
     assert.ok(!keys({ native: true, aiMakeCut: false }).includes("aiMakeCut"));
     const off = cutCardMenuItems({ native: true, aiMakeCut: true, useAi: false }).find((i) => i.key === "aiMakeCut");
-    assert.deepEqual([off.disabled, off.title], [true, "Turn on Use AI in Project Settings"]);
+    assert.deepEqual([off.disabled, off.title], [true, "Turn on Use AI (Beta) in Project Settings"]);
   });
 });
 

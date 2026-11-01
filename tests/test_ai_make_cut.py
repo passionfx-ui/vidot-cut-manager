@@ -175,7 +175,7 @@ class JobTests(CutSplitTestBase):
         fake = FakeComfy()
         with mock.patch.object(gg_cut_split, "_generate", side_effect=RuntimeError("boom")):
             _, job = self.run_job(fake)
-        self.assertEqual((job["state"], job["code"], job["message"]), ("error", "sdk", "AI Make Cut failed: boom"))
+        self.assertEqual((job["state"], job["code"], job["message"]), ("error", "sdk", "AI Make Cut (Beta) failed: boom"))
         self.assertFalse(gg_cut_split._run_lock.locked())
 
     def test_checks_run_before_the_job_starts(self):
@@ -190,7 +190,7 @@ class JobTests(CutSplitTestBase):
         self.addCleanup(lambda: gg_cut_split._run_lock.locked() and gg_cut_split._run_lock.release())
         with self.assertRaises(gg_cut_split.CutSplitError) as cm:
             gg_cut_split.start_job("Another story.", start_thread=False)
-        self.assertEqual((cm.exception.code, str(cm.exception)), ("busy", "AI Make Cut is already running."))
+        self.assertEqual((cm.exception.code, str(cm.exception)), ("busy", "AI Make Cut (Beta) is already running."))
         self.assertEqual(gg_cut_split.job_status()["id"], first["id"])
 
     def test_thread_runs_the_job(self):
