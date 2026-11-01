@@ -737,6 +737,8 @@
 .gg-modal-field input.gg-switch:disabled { opacity: .5; cursor: default; }
 .gg-modal-field input.gg-switch:focus-visible { outline: 1px solid var(--gg-acc, #f2b84b); outline-offset: 1px; }
 .gg-modal-field.gg-off { opacity: .45; }
+.gg-ai-model-dirs { white-space: pre-line; text-align: left; }
+.gg-ai-model-vl-hint { color: #d9782c; font-weight: normal; margin-left: 0.35em; font-size: 10px; }
 .gg-modal-field select:disabled { cursor: not-allowed; }
 .gg-mm-notice { border: 1px solid #8a5a2b; background: #2e2519; border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
 .gg-mm-notice[hidden] { display: none; }

@@ -111,10 +111,44 @@ def list_text_models(lister=None) -> list[str]:
     return sorted(names, key=lambda n: (n.lower(), n))
 
 
+def list_text_model_scan_dirs() -> list[str]:
+    """Absolute directories ComfyUI scans for CLIPLoader text models (text_encoders and clip)."""
+    fp = _comfy("folder_paths")
+    if fp is None:
+        return []
+    dirs: list[str] = []
+    seen: set[str] = set()
+    get_paths = getattr(fp, "get_folder_paths", None)
+    fnap = getattr(fp, "folder_names_and_paths", None)
+    for folder in MODEL_FOLDERS:
+        try:
+            if callable(get_paths):
+                raw = get_paths(folder)
+            elif isinstance(fnap, dict) and folder in fnap:
+                raw = fnap[folder][0]
+            else:
+                continue
+            for item in raw or []:
+                p = Path(str(item)).expanduser()
+                try:
+                    p = p.resolve()
+                except OSError:
+                    p = p.absolute()
+                if not p.is_dir():
+                    continue
+                key = str(p)
+                if key not in seen:
+                    seen.add(key)
+                    dirs.append(key)
+        except Exception:  # noqa: BLE001
+            continue
+    return dirs
+
+
 def model_choices(lister=None) -> dict:
-    """{"models", "current", "default", "use_ai"} for the Project Settings AI Cut Split fields."""
+    """{"models", "current", "default", "use_ai", "scan_dirs"} for the Project Settings AI fields."""
     return {"models": list_text_models(lister), "current": model_settings()["clip_name"], "default": DEFAULT_CLIP,
-            "use_ai": use_ai_enabled()}
+            "use_ai": use_ai_enabled(), "scan_dirs": list_text_model_scan_dirs()}
 
 
 def _read_local_settings() -> dict:

@@ -1,6 +1,7 @@
 /** Pure helpers for the Project Settings "AI model" dropdown (GET/POST /gonggan/cut-split/model). No DOM. */
 
 import { AI_MAKE_CUT_LABEL } from "./gg_cut_list_core.js";
+import { containsForbiddenUserText } from "./gg_ui_text_core.js";
 
 /**
  * Dropdown options: the listed text model files, with the current setting (else the default) preselected and
@@ -46,6 +47,19 @@ export function cutSplitModelLoadErrorText(err) {
 
 export const USE_AI_OFF_TIP = "Turn on Use AI in Project Settings";
 export const AI_SPLIT_TIP = "Make cuts from a story with a local text model in ComfyUI";
+
+/** Orange hint beside the AI model label (0.9.138). */
+export const AI_MODEL_VL_HINT = "(Choose a vision-language LLM, e.g. Qwen3-VL)";
+
+/** User-visible lines for folders scanned by ComfyUI (one path per line). */
+export function cutSplitModelScanDirsText(data) {
+  const raw = Array.isArray(data?.scan_dirs) ? data.scan_dirs : [];
+  const lines = raw.map((d) => String(d ?? "").trim()).filter(Boolean);
+  const safe = lines.filter((p) => !containsForbiddenUserText(p));
+  if (safe.length) return safe.join("\n");
+  if (lines.length) return "ComfyUI model folders (text encoders and clip)";
+  return "";
+}
 
 /** Use AI setting from GET /gonggan/cut-split/model: on unless the server says false (older servers have no field). */
 export function cutSplitUseAi(data) {

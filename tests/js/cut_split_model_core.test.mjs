@@ -16,6 +16,8 @@ import {
   cutSplitMissingModelHtml,
   cutSplitMemoryConfirm,
   cutSplitPrecheckStep,
+  cutSplitModelScanDirsText,
+  AI_MODEL_VL_HINT,
   formatGb,
   USE_AI_OFF_TIP,
   AI_SPLIT_TIP,
@@ -25,6 +27,21 @@ import { AI_MAKE_CUT_LABEL } from "../../web/gg_cut_list_core.js";
 const DEFAULT = "qwen3vl_4b_int8_convrot.safetensors";
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const GONGGAN_JS = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/gonggan.js"), "utf8");
+
+describe("cutSplitModelScanDirsText", () => {
+  it("joins safe scan_dirs one per line", () => {
+    assert.equal(
+      cutSplitModelScanDirsText({ scan_dirs: ["C:\\ComfyUI\\models\\text_encoders", "C:\\ComfyUI\\models\\clip"] }),
+      "C:\\ComfyUI\\models\\text_encoders\nC:\\ComfyUI\\models\\clip",
+    );
+  });
+  it("hides paths with forbidden words", () => {
+    assert.match(
+      cutSplitModelScanDirsText({ scan_dirs: ["C:\\dev\\comfyui-gonggan-cut\\models\\text_encoders"] }),
+      /ComfyUI model folders/i,
+    );
+  });
+});
 
 describe("cutSplitModelOptions", () => {
   it("lists the models and preselects the current setting", () => {
@@ -220,8 +237,19 @@ describe("Project Settings dialog wiring (gonggan.js)", () => {
     assert.doesNotMatch(body, /AI Make Cut model/);
     assert.doesNotMatch(body, /AI Cut Split/);
     assert.equal(body.match(/<select class="gg-modal-cut-split-model"/g)?.length, 1);
-    assert.match(body, /<label class="gg-modal-field gg-cut-split-model-field">AI model\s*<select class="gg-modal-cut-split-model"/);
+    assert.match(body, /<label class="gg-modal-field gg-cut-split-model-field">AI model<span class="gg-ai-model-vl-hint">[\s\S]*<select class="gg-modal-cut-split-model"/);
     assert.match(body, /Turns AI features on\/off \(AI Make Cut, reference linking, \.\.\.\)\. Off: the AI model is never loaded\./);
+  });
+
+  it("shows scanned model folders under the dropdown", () => {
+    assert.match(body, /gg-ai-model-dirs/);
+    assert.match(body, /cutSplitModelScanDirsText\(d\)/);
+  });
+
+  it("shows the vision-language model hint beside the dropdown", () => {
+    assert.match(body, /gg-ai-model-vl-hint/);
+    assert.match(body, /esc\(AI_MODEL_VL_HINT\)/);
+    assert.equal(AI_MODEL_VL_HINT, "(Choose a vision-language LLM, e.g. Qwen3-VL)");
   });
 
   it("has one Use AI switch above the model dropdown, on by default", () => {

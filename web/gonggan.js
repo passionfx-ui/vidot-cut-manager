@@ -370,6 +370,8 @@ import {
 import {
   cutSplitModelOptions,
   cutSplitModelOptionsHtml,
+  cutSplitModelScanDirsText,
+  AI_MODEL_VL_HINT,
   cutSplitModelLoadErrorText,
   cutSplitUseAi,
   aiCutSplitButtonState,
@@ -1400,8 +1402,9 @@ function openProjectSettingsModal() {
         </span>
         <span class="gg-modal-hint">Turns AI features on/off (AI Make Cut, reference linking, ...). Off: the AI model is never loaded.</span>
       </label>
-      <label class="gg-modal-field gg-cut-split-model-field">AI model
+      <label class="gg-modal-field gg-cut-split-model-field">AI model<span class="gg-ai-model-vl-hint"> ${esc(AI_MODEL_VL_HINT)}</span>
         <select class="gg-modal-cut-split-model" disabled><option>Loading…</option></select>
+        <span class="gg-modal-hint gg-ai-model-dirs"></span>
       </label>` : ""}
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-modal-cancel">${nat ? "Cancel" : "Close"}</button>
@@ -1462,6 +1465,8 @@ function openProjectSettingsModal() {
       const opts = cutSplitModelOptions(d);
       modelSel.innerHTML = cutSplitModelOptionsHtml(opts, esc);
       modelInitial = opts.find((o) => o.selected)?.value || "";
+      const dirsEl = wrap.querySelector(".gg-ai-model-dirs");
+      if (dirsEl) dirsEl.textContent = cutSplitModelScanDirsText(d);
       if (useAiIn) {
         useAiInitial = cutSplitUseAi(d);
         useAiIn.checked = useAiInitial;

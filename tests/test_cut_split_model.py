@@ -58,14 +58,32 @@ class ListTests(unittest.TestCase):
             self.assertEqual(gg_cut_split.list_text_models(), [])
 
 
+class ScanDirTests(unittest.TestCase):
+    def test_resolves_text_encoders_and_clip_dirs(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        te = root / "models" / "text_encoders"
+        clip = root / "models" / "clip"
+        te.mkdir(parents=True)
+        clip.mkdir(parents=True)
+        fp = types.ModuleType("folder_paths")
+        fp.get_filename_list = lister({"text_encoders": ["a.safetensors"], "clip": ["b.safetensors"]})
+        fp.get_folder_paths = lambda name: [str(te if name == "text_encoders" else clip)]
+        with mock.patch.dict(sys.modules, {"folder_paths": fp}):
+            dirs = gg_cut_split.list_text_model_scan_dirs()
+        self.assertEqual(dirs, [str(te.resolve()), str(clip.resolve())])
+
+
 class ChoicesTests(unittest.TestCase):
-    def choices(self, settings):
-        with mock.patch.object(gg_cut_split.gg_data, "load_settings", return_value=settings):
+    def choices(self, settings, scan_dirs=None):
+        with mock.patch.object(gg_cut_split.gg_data, "load_settings", return_value=settings), \
+             mock.patch.object(gg_cut_split, "list_text_model_scan_dirs", return_value=scan_dirs or []):
             return gg_cut_split.model_choices(lister({"text_encoders": ["a.safetensors"]}))
 
     def test_current_setting(self):
         self.assertEqual(self.choices({"cut_split_clip": "a.safetensors"}),
-                         {"models": ["a.safetensors"], "current": "a.safetensors", "default": DEFAULT, "use_ai": True})
+                         {"models": ["a.safetensors"], "current": "a.safetensors", "default": DEFAULT,
+                          "use_ai": True, "scan_dirs": []})
 
     def test_default_when_unset(self):
         for s in ({}, {"cut_split_clip": ""}, {"cut_split_clip": "  "}):
@@ -98,7 +116,7 @@ class SaveTests(unittest.TestCase):
                          {"data_root": "D:/data", "uid": "me", "cut_split_clip_type": "qwen_image",
                           "cut_split_clip": "other.safetensors"})
         self.assertEqual(res, {"models": ["other.safetensors", DEFAULT], "current": "other.safetensors",
-                               "default": DEFAULT, "use_ai": True})
+                               "default": DEFAULT, "use_ai": True, "scan_dirs": []})
         self.assertEqual(gg_cut_split.model_settings(), {"clip_name": "other.safetensors", "type": "qwen_image"})
         self.assertEqual(sorted(p.name for p in self.dir.iterdir()),
                          ["gonggan_settings.default.json", "gonggan_settings.json"])
@@ -197,14 +215,16 @@ class RouteTests(unittest.TestCase):
         fp = types.ModuleType("folder_paths")
         fp.get_filename_list = lister({"text_encoders": ["b.safetensors", "a.safetensors"], "clip": ["a.safetensors"]})
         with mock.patch.dict(sys.modules, {"folder_paths": fp}), \
-                mock.patch.object(self.cut_split.gg_data, "load_settings", return_value={}):
+                mock.patch.object(self.cut_split.gg_data, "load_settings", return_value={}), \
+                mock.patch.object(self.cut_split, "list_text_model_scan_dirs", return_value=[]):
             res = self.call("GET")
         self.assertEqual(res.status, 200)
         self.assertEqual(res.body, {"ok": True, "models": ["a.safetensors", "b.safetensors"], "current": DEFAULT,
-                                    "default": DEFAULT, "use_ai": True})
+                                    "default": DEFAULT, "use_ai": True, "scan_dirs": []})
 
     def test_post_saves(self):
-        want = {"models": ["a.safetensors"], "current": "a.safetensors", "default": DEFAULT, "use_ai": True}
+        want = {"models": ["a.safetensors"], "current": "a.safetensors", "default": DEFAULT, "use_ai": True,
+                "scan_dirs": []}
         with mock.patch.object(self.cut_split, "save_settings", return_value=want) as save:
             res = self.call("POST", {"clip_name": "a.safetensors"})
         save.assert_called_once_with("a.safetensors", None)
