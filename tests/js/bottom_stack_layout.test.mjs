@@ -22,15 +22,11 @@ describe("Shots bottom stack keeps fixed heights", () => {
     assert.equal(prop(bar, "overflow"), "hidden");
   });
 
-  it("status panel has a fixed px height for 0, 1 and many selected", () => {
+  it("status panel has a fixed layout for job queue and queue toolbar", () => {
     const panel = ruleFor(".gg-shots.gg-cutpanel-status .gg-cutpanel");
-    assert.match(prop(panel, "height") || "", /^\d+px$/);
-    assert.equal(prop(panel, "max-height"), "none");
+    assert.match(prop(panel, "min-height") || "", /^\d+px$/);
     assert.equal(prop(panel, "overflow"), "hidden");
     assert.equal(prop(panel, "flex-shrink"), "0");
-    const info = ruleFor(".gg-shots .gg-cutpanel .gg-sp-info");
-    assert.equal(prop(info, "min-height"), "0");
-    assert.equal(prop(info, "overflow"), "hidden");
     const jq = ruleFor(".gg-shots .gg-cutpanel .gg-job-queue-list");
     assert.equal(prop(jq, "overflow-y"), "auto");
     assert.equal(prop(jq, "min-height"), "0");
@@ -112,9 +108,9 @@ describe("Shots icon row replaces the selection bar", () => {
 });
 
 describe("Queue button in the status panel", () => {
-  it("status panel shell has the queue status, batch counter, Random seed checkbox, and Queue button last", () => {
+  it("status panel shell has job queue, Random seed, and Queue button", () => {
     assert.ok(shellStart >= 0);
-    assert.match(shell, /class="gg-sp-info"/);
+    assert.ok(!shell.includes("gg-sp-info"));
     assert.match(shell, /class="gg-job-queue-list"/);
     assert.match(shell, /class="gg-random-seed-cb"/);
     assert.match(shell, /esc\(RANDOM_SEED_LABEL\)/);

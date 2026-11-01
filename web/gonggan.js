@@ -280,7 +280,7 @@ import {
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { batchProgressView, createRenderStatus, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
 import { captureRouteMissing, captureToast, createAutoCapture } from "./gg_auto_capture_core.js";
-import { selectionBarView, iconRowView, statusPanelView } from "./gg_status_panel_core.js";
+import { selectionBarView, iconRowView } from "./gg_status_panel_core.js";
 import { loadPanelOpen, savePanelOpen } from "./gg_panel_core.js";
 import {
   stepMove,
@@ -7007,31 +7007,6 @@ function versionStripHtml(c, selVid) {
   }).join("");
 }
 
-function statusPanelHtml() {
-  const tl = state.timeline;
-  const tlIds = new Set((tl?.cuts || []).map((c) => c.id));
-  const ids = tl ? cutSelIds().filter((id) => tlIds.has(id)) : [];
-  const cut = ids.length === 1 ? cutById(ids[0]) : null;
-  const head = cut ? cutHeaderParts(cut, tl, computeCutLabels(tl)) : null;
-  const v = statusPanelView({
-    count: ids.length,
-    cut,
-    cutLabel: head?.cutLabel,
-    name: head?.name,
-    render: cut ? cutRenderView(cut.id) : null,
-    progress: cut && state.pid ? progressTracker.getCutStatus(state.pid, cut.id) : null,
-    sdkJob: sdk.lastJob,
-    projectId: state.pid,
-    cutId: cut?.id,
-  });
-  if (v.kind === "multi") return `<div class="gg-sp-title gg-sp-count">${esc(v.text)}</div>`;
-  if (v.kind !== "cut") return `<div class="gg-sp-empty">${esc(v.text)}</div>`;
-  return `
-    <div class="gg-sp-title" title="${esc(v.title)}"><span class="gg-num">${esc(v.label)}</span> <span class="gg-sp-name">${esc(v.name)}</span></div>
-    <div class="gg-sp-status"><span class="gg-sp-chip gg-sp-${esc(v.status.mode)}" title="${esc(v.status.title)}"><span class="gg-sp-dot"></span>${esc(v.status.text)}</span></div>
-    <div class="gg-sp-meta"><span class="gg-sp-len${v.infoLength?.drift ? " gg-len-drift" : ""}" title="${esc(v.infoLength?.title || v.length.title)}">${esc(v.infoLength?.text ? `Length (sec) ${v.infoLength.text}` : v.length.text)}</span><span class="gg-sp-ver" title="${esc(v.version.title)}">${esc(v.version.text)}</span></div>`;
-}
-
 const ICON_SVG_ATTRS = 'width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
 const ICON_FOLDER = `<svg ${ICON_SVG_ATTRS}><path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10v6M9 13h6"/></svg>`;
 const ICON_NEW_PAGE = `<svg ${ICON_SVG_ATTRS}><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M12 12v6M9 15h6"/></svg>`;
@@ -7066,10 +7041,9 @@ async function confirmDeleteSelectedCuts() {
   await deleteSelectedCuts();
 }
 
-/** Status panel body: selection info on top, queue status + batch counter + Queue (right-aligned) in a row below. */
+/** Status panel: job queue (when active) + Queue toolbar (cut details stay in the list / version info). */
 function statusPanelShellHtml() {
   return `
-        <div class="gg-sp-info"></div>
         <div class="gg-job-queue" hidden aria-label="Job queue">
           <ul class="gg-job-queue-list"></ul>
         </div>
@@ -7085,12 +7059,7 @@ function statusPanelShellHtml() {
 }
 
 function paintStatusPanel(panel) {
-  const info = panel?.querySelector(".gg-sp-info");
-  if (!info) return;
-  const html = statusPanelHtml();
-  if (info.dataset.sp === html) return;
-  info.dataset.sp = html;
-  info.innerHTML = html;
+  if (!panel) return;
   paintJobQueue(panel.closest(".gg-shots") || panel);
 }
 
