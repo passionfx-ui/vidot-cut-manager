@@ -358,6 +358,14 @@ import {
   timelineToggleTooltip,
 } from "./gg_timeline_toggle_core.js";
 import {
+  JOB_HISTORY_DOCK_SETTING_ID,
+  readHeldDock,
+  writeHeldDock,
+  planDockOnCutManagerOpen,
+  planDockOnCutManagerClose,
+  resolveSettingApi,
+} from "./gg_job_history_dock_core.js";
+import {
   ZOOM_KEY_FACTOR,
   clampPx,
   thumbFromScroll,
@@ -6081,6 +6089,71 @@ function trackUndoArea(e) {
   });
 }
 
+/** User's Job History docked flag while Cut Manager forces the dock on. null = not holding. */
+let jobHistoryDockHeld = null;
+let jobHistoryDockChain = Promise.resolve();
+
+function enqueueJobHistoryDock(task) {
+  jobHistoryDockChain = jobHistoryDockChain.then(task, task);
+  return jobHistoryDockChain;
+}
+
+function jobHistorySettingApi() {
+  return resolveSettingApi(app.extensionManager?.setting);
+}
+
+function currentJobHistoryDockHeld() {
+  if (jobHistoryDockHeld === true || jobHistoryDockHeld === false) return jobHistoryDockHeld;
+  try {
+    return readHeldDock(localStorage);
+  } catch (_) {
+    return null;
+  }
+}
+
+function rememberJobHistoryDockHeld(held) {
+  jobHistoryDockHeld = held === true || held === false ? held : null;
+  try {
+    writeHeldDock(localStorage, jobHistoryDockHeld);
+  } catch (_) {}
+}
+
+/** Cut Manager opened: save ComfyUI Docked Job History, then force it on. */
+function onCutManagerJobHistoryOpen() {
+  enqueueJobHistoryDock(async () => {
+    const api = jobHistorySettingApi();
+    if (!api) return;
+    let current;
+    try {
+      current = api.get(JOB_HISTORY_DOCK_SETTING_ID);
+    } catch (_) {
+      return;
+    }
+    const plan = planDockOnCutManagerOpen(currentJobHistoryDockHeld(), current);
+    if (plan.held === true || plan.held === false) rememberJobHistoryDockHeld(plan.held);
+    if (plan.setTo == null) return;
+    try {
+      await api.set(JOB_HISTORY_DOCK_SETTING_ID, plan.setTo);
+    } catch (_) {}
+  });
+}
+
+/** Cut Manager closed: put Docked Job History back to the saved flag. */
+function onCutManagerJobHistoryClose() {
+  enqueueJobHistoryDock(async () => {
+    const plan = planDockOnCutManagerClose(currentJobHistoryDockHeld());
+    if (plan.setTo == null) return;
+    const api = jobHistorySettingApi();
+    if (!api) return;
+    try {
+      await api.set(JOB_HISTORY_DOCK_SETTING_ID, plan.setTo);
+    } catch (_) {
+      return;
+    }
+    rememberJobHistoryDockHeld(null);
+  });
+}
+
 /** Open Timeline when Shots becomes visible; close when Shots sidebar deactivates (if Timeline tab is active). */
 function bindShotsTabActivated(hostEl, onCleanup) {
   let wasShown = false;
@@ -6091,7 +6164,11 @@ function bindShotsTabActivated(hostEl, onCleanup) {
     if (shown && !wasShown) {
       openTimelinePanelIfAllowed();
       syncProgressWireState();
-    } else if (wasShown && !shown && !shotsSidebarActive()) closeTimelinePanel();
+      onCutManagerJobHistoryOpen();
+    } else if (wasShown && !shown && !shotsSidebarActive()) {
+      closeTimelinePanel();
+      onCutManagerJobHistoryClose();
+    }
     wasShown = shown;
   };
   const io = new IntersectionObserver(() => syncDom(), { threshold: 0.01 });
@@ -6104,16 +6181,25 @@ function bindShotsTabActivated(hostEl, onCleanup) {
     let prevId = sidebar.activeSidebarTabId;
     const unsub = sidebar.$subscribe(() => {
       const id = sidebar.activeSidebarTabId;
-      if (prevId === SHOTS_TAB && id !== SHOTS_TAB) closeTimelinePanel();
+      if (prevId === SHOTS_TAB && id !== SHOTS_TAB) {
+        closeTimelinePanel();
+        onCutManagerJobHistoryClose();
+      }
       prevId = id;
     });
     onCleanup.push(() => {
       unsub();
-      if (!shotsSidebarActive()) closeTimelinePanel();
+      if (!shotsSidebarActive()) {
+        closeTimelinePanel();
+        onCutManagerJobHistoryClose();
+      }
     });
   } else {
     onCleanup.push(() => {
-      if (!shotsSidebarActive()) closeTimelinePanel();
+      if (!shotsSidebarActive()) {
+        closeTimelinePanel();
+        onCutManagerJobHistoryClose();
+      }
     });
   }
 }
