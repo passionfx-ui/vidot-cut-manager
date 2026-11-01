@@ -263,6 +263,11 @@ import {
   videoPreviewFrameIndex,
 } from "./gg_timeline_scrub_core.js";
 import { routeTimelineClipPointerDown } from "./gg_timeline_pointer_core.js";
+import { isSceneRunStart, showTimelineSceneBand } from "./gg_timeline_scene_core.js";
+import {
+  timelineClipTypeBadgeHtml,
+  timelineClipTypeClassSuffix,
+} from "./gg_timeline_clip_type_core.js";
 import { animatedWebpFrameBytes, parseAnimatedWebp } from "./gg_webp_anim_core.js";
 import { noMediaText, noMediaThumbClass, playsAsVideo, isAnimatedImage, versionMedia } from "./gg_missing_media_core.js";
 import {
@@ -9336,18 +9341,20 @@ function mountTimeline(el) {
     err.hidden = !state.error;
     err.textContent = state.error || "";
     $r(".gg-track").innerHTML = cuts.map((c, i) => {
-      const run = c.group_id && (i === 0 || cuts[i - 1].group_id !== c.group_id);
+      const run = isSceneRunStart(c, i > 0 ? cuts[i - 1] : null);
       const hue = c.group_id ? groupColor(c.group_id) : 0;
+      const showBand = showTimelineSceneBand(c);
       const tip = `${c.group_name ? `${c.group_name}\n` : ""}${cutDisplayLabel(c, cutLabels)}. ${c.name}  ${c.sec.toFixed(1)}s${c.src_dur ? ` (src ${c.src_dur}s)` : ""}${(() => {
         const cap = effectiveCaption(c).trim();
         return cap ? `\n${cap}` : "";
       })()}`;
       return `
-      <div class="gg-clip${c.media ? "" : " gg-clip-empty"}${kindOf(c) === "video" ? " gg-clip-video" : ""}${c.pos !== c.index ? " gg-moved" : ""}${c.group_id ? " gg-in-scene" : ""}${run ? " gg-scene-start" : ""}"
+      <div class="gg-clip${c.media ? "" : " gg-clip-empty"}${timelineClipTypeClassSuffix(c)}${c.pos !== c.index ? " gg-moved" : ""}${c.group_id ? " gg-in-scene" : ""}${run ? " gg-scene-start" : ""}"
            data-cut-id="${esc(c.id)}" style="width:${c.sec * ed.px}px;${c.group_id ? `--gg-grp:${hue}` : ""}"
            title="${esc(tip)}">
-        ${run ? `<div class="gg-scene-band">${esc(c.group_name)}</div>` : ""}
+        ${showBand ? `<div class="gg-scene-band">${esc(c.group_name)}</div>` : ""}
         ${thumbHtml(c.media, "gg-clip-thumb")}
+        ${timelineClipTypeBadgeHtml(c, esc)}
         <span class="gg-clip-dot gg-dot-empty"></span>
         <div class="gg-clip-label"><span class="gg-no">${esc(cutDisplayLabel(c, cutLabels))}</span>${esc(displayCutName(c))}</div>
         <div class="gg-clip-in">${kindOf(c) === "video" && c.in > 0 ? `in ${c.in.toFixed(1)}` : ""}</div>

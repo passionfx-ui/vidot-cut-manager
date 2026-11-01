@@ -572,11 +572,38 @@
 .gg-timeline .gg-tick { position: absolute; top: 12px; width: 1px; height: 8px; background: var(--gg-line); font-size: 9px; color: var(--gg-dim); text-indent: 3px; white-space: nowrap; line-height: 10px; pointer-events: none; }
 .gg-timeline .gg-tick.gg-major { top: 0; height: 20px; background: #555c68; }
 .gg-timeline .gg-track { display: flex; flex: 1 1 auto; min-height: 84px; max-height: 150px; height: auto; margin-top: 6px; }
-.gg-timeline .gg-clip { position: relative; flex: 0 0 auto; box-sizing: border-box; height: 100%; overflow: hidden; border: 1px solid #0b0c0e; border-radius: 4px; background: #2b3d55; cursor: grab; user-select: none; touch-action: none; }
+.gg-timeline .gg-clip { position: relative; flex: 0 0 auto; box-sizing: border-box; height: 100%; overflow: hidden; border: 2px solid #0b0c0e; border-radius: 4px; background: #2b3d55; cursor: grab; user-select: none; touch-action: none; }
+.gg-timeline .gg-clip-type-image { border-color: #4a8fd4; background: #2a3d52; }
 .gg-timeline .gg-clip-video { background: #3b2b55; }
+.gg-timeline .gg-clip-type-video { border-color: #a56bff; }
+.gg-timeline .gg-clip-type-badge {
+  position: absolute;
+  left: 4px;
+  bottom: 18px;
+  z-index: 4;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1.1;
+  padding: 1px 4px;
+  border-radius: 3px;
+  pointer-events: none;
+  color: #f0f4ff;
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.8);
+}
+.gg-timeline .gg-clip.gg-on .gg-clip-type-badge {
+  background: rgba(20, 20, 28, 0.92);
+  border-color: var(--gg-acc, #f2b84b);
+  box-shadow: 0 0 0 1px rgba(242, 184, 75, 0.45);
+}
+.gg-timeline .gg-clip.gg-play .gg-clip-type-badge {
+  border-color: #6ee07a;
+}
 .gg-timeline .gg-clip.gg-in-scene { box-shadow: inset 0 3px 0 hsl(var(--gg-grp, 200) 50% 42% / .85); }
 .gg-timeline .gg-scene-band { position: absolute; left: 0; right: 0; top: 0; z-index: 2; font-size: 9px; padding: 1px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: hsl(var(--gg-grp, 200) 45% 32% / .92); pointer-events: none; }
-.gg-timeline .gg-scene-start .gg-clip-label { top: 14px; }
+.gg-timeline .gg-in-scene .gg-clip-label { top: 14px; }
 .gg-timeline .gg-clip.gg-moved { box-shadow: inset 0 -3px 0 #4bb3f2; }
 .gg-timeline .gg-clip.gg-on { outline: 2px solid var(--gg-acc); outline-offset: -2px; z-index: 1; }
 .gg-timeline .gg-clip.gg-play { box-shadow: inset 0 0 0 2px #6ee07a; }
