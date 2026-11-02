@@ -2478,6 +2478,8 @@ async function closeGongganOwnedTab(wf) {
     if (ggOwnedShotWorkflow === wf) ggOwnedShotWorkflow = null;
     return;
   }
+  // The last open tab must stay. Closing it makes ComfyUI replace the cut workflow with a blank one.
+  if (open.length < 2) return;
   try {
     await ws.closeWorkflow(wf, { warnIfUnsaved: false });
   } catch (e) {
@@ -3047,6 +3049,15 @@ function isLoadTokenStale(loadToken) {
   return loadToken !== undefined && loadToken !== wfLoadToken;
 }
 
+/** A cancelled switch loaded a graph, so the next click must not treat the old identity as current. */
+function invalidateLoadedCutWorkflow() {
+  wfLastLoadedCutId = "";
+  wfLastLoadedProjectId = "";
+  wfLastLoadedKind = null;
+  wfLastLoadedWorkflowKey = "";
+  wfLastLoadedNodeTypes = "";
+}
+
 /**
  * Move an unsaved shot tab onto this cut's path. Temporary only: a saved file is not renamed,
  * and the path is updated through the workflow store so the tab stays one entry.
@@ -3107,14 +3118,14 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   if (!loadTarget && ownedOpen?.isTemporary) {
     loadTarget = ownedOpen;
   } else if (!loadTarget) {
-    if (ownedOpen && !ownedOpen.isTemporary) await closeGongganOwnedTab(ownedOpen);
+    // Leave a saved shot tab open until the replacement tab exists. Closing it first
+    // drops the only tab when a newer click cancels this switch.
     loadTarget = loadName;
   }
   const reusedTab = typeof loadTarget === "object" ? loadTarget : null;
   ensureWorkflowManagerActive();
   if (isLoadTokenStale(loadToken)) return false;
   syncSavedVideoStartImage(workflow);
-  const tabCountBefore = (ws?.openWorkflows || []).length;
   const wantTypes = workflowNodeTypes(workflow);
   try {
     if (isUiWorkflowGraph(workflow)) {
@@ -3129,31 +3140,27 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
     }
   } catch (e) {
     console.warn("[gonggan] load failed", e);
-    ggToast("Workflow", e?.message || String(e), "warn");
+    if (isLoadTokenStale(loadToken)) invalidateLoadedCutWorkflow();
+    else ggToast("Workflow", e?.message || String(e), "warn");
     return false;
   } finally {
     if (loadToken !== undefined && loadToken === wfLoadToken) ggCutSwitchAutosaveBlocked = false;
+  }
+  // This switch lost to a newer click. Leave every open tab in place; the latest click loads next.
+  if (isLoadTokenStale(loadToken)) {
+    invalidateLoadedCutWorkflow();
+    return false;
   }
   if (wantTypes && liveGraphNodeTypes() !== wantTypes) {
     console.warn("[gonggan] cut workflow load mismatch", { wantTypes, live: liveGraphNodeTypes(), cutId: cut?.id });
     return false;
   }
-  if (isLoadTokenStale(loadToken)) {
-    claimLoadedShotTab(loadName, reusedTab);
-    const orphan = ggOwnedShotWorkflow;
-    const openAfter = ws?.openWorkflows || [];
-    if (orphan && orphan !== previous && openAfter.includes(orphan)) {
-      await closeGongganOwnedTab(orphan);
-    } else if ((openAfter.length || 0) > tabCountBefore) {
-      const extra = openAfter[openAfter.length - 1];
-      if (extra && extra !== previous && isGongganOwnedWorkflow(extra)) {
-        await closeGongganOwnedTab(extra);
-      }
-    }
-    return false;
-  }
   claimLoadedShotTab(loadName, reusedTab);
   await pointTemporaryShotTabAt(ggOwnedShotWorkflow, loadName);
+  if (isLoadTokenStale(loadToken)) {
+    invalidateLoadedCutWorkflow();
+    return false;
+  }
   markWorkflowGongganOwned(ggOwnedShotWorkflow, ggOwnedShotWorkflow?.path || storagePath, shotMeta);
   if (ggOwnedShotWorkflow?.isModified) ggOwnedShotWorkflow.isModified = false;
   if (ggOwnedShotWorkflow && cut) {
@@ -3163,7 +3170,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   try {
     const open = ws?.openWorkflows || [];
     const newTab = ggOwnedShotWorkflow;
-    if (previous && previous !== newTab && open.includes(previous) && isGongganOwnedWorkflow(previous)) {
+    if (previous && newTab && previous !== newTab && open.includes(previous) && open.includes(newTab) && isGongganOwnedWorkflow(previous)) {
       // A temporary tab's dot is "never saved", not an edit. The new graph is already on another tab.
       if (previous.isTemporary) {
         await closeGongganOwnedTab(previous);
@@ -3210,12 +3217,23 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   } catch (e) {
     console.warn("[gonggan] close previous shot tab failed", e);
   }
+  if (isLoadTokenStale(loadToken)) {
+    invalidateLoadedCutWorkflow();
+    return false;
+  }
   scheduleTabLabelRefresh();
   paintShotTabLabelNow(cut);
   scheduleLoadImageScan({ debounceMs: 200 });
   if (cut?.id) reconcileModifiedAfterShotLoad(cut.id);
-  if (isLoadTokenStale(loadToken)) return false;
+  if (isLoadTokenStale(loadToken)) {
+    invalidateLoadedCutWorkflow();
+    return false;
+  }
   await pruneExtraGongganShotTabs(ggOwnedShotWorkflow);
+  if (isLoadTokenStale(loadToken)) {
+    invalidateLoadedCutWorkflow();
+    return false;
+  }
   return true;
 }
 
@@ -3608,23 +3626,27 @@ function refreshProjectMemoryFromServer(pid, cuts) {
   return gen;
 }
 
-async function retargetOpenShotTab(cut, kind, key) {
+async function retargetOpenShotTab(cut, kind, key, loadToken) {
+  if (isLoadTokenStale(loadToken)) return false;
   const rel = shotWorkflowRelPathById({ projectId: state.pid, cutId: cut?.id || "", kind });
   const wf = ggOwnedShotWorkflow;
   if (wf) {
     const loadName = String(rel).replace(/^workflows\//, "");
     // Do not assign wf.path here. The workflow store keys tabs by path; a direct write leaves the old tab open.
     await pointTemporaryShotTabAt(wf, loadName);
+    if (isLoadTokenStale(loadToken)) return false;
     markWorkflowGongganOwned(wf, wf.path || loadName, { projectId: state.pid, cutId: cut.id });
     const shown = tabNameForCut(cut);
     if (shown) wf.ggCutDisplayName = shown;
   }
+  if (isLoadTokenStale(loadToken)) return false;
   markGraphGongganCut(cut.id);
   markWorkflowLoadComplete(cut.id, cut, null, kind);
   wfLastLoadedWorkflowKey = key || "";
   applyTabLabels();
   paintShotTabLabelNow(cut);
   bus.dispatchEvent(new Event("gg-opentab"));
+  return true;
 }
 
 async function openStoredCutWorkflow(cutId, cutRec, loadToken, entry) {
@@ -3662,7 +3684,7 @@ async function openStoredCutWorkflow(cutId, cutRec, loadToken, entry) {
     nextKind: kind,
     nextKey: key,
   })) {
-    await retargetOpenShotTab(cutRec, kind, key);
+    if (!(await retargetOpenShotTab(cutRec, kind, key, loadToken))) return;
     sdk.msg = `Canvas: ${title}`;
     bus.dispatchEvent(new Event("sdk"));
     return;
