@@ -79,6 +79,7 @@ export function queueButtonState({
   allRunning = false,
   batch = null,
   projectId = "",
+  queuePlan = null,
 } = {}) {
   const queue = { label: "Queue", mode: "queue" };
   if (!hasProject) return { ...queue, disabled: true, title: QUEUE_NO_PROJECT_TIP };
@@ -96,6 +97,12 @@ export function queueButtonState({
       };
     }
     return { ...queue, disabled: true, title: "Generate-all batch is running for another project" };
+  }
+  if (queuePlan && count > 0 && native) {
+    const tip = queuePlan.tooltip || "";
+    if (!queuePlan.actionable) return { ...queue, disabled: true, title: tip };
+    if (busy) return { ...queue, disabled: true, title: QUEUE_BUSY_TIP };
+    return { ...queue, disabled: false, title: tip || `Queue ${cuts(count)} to ComfyUI` };
   }
   const title = !(count > 0) ? QUEUE_EMPTY_TIP : !native ? QUEUE_NATIVE_TIP : busy ? QUEUE_BUSY_TIP : `Queue ${cuts(count)} to ComfyUI`;
   return { ...queue, disabled: !(count > 0) || !native || !!busy, title };

@@ -318,17 +318,38 @@ def _save_native_plan(pid: str, cut_id: str, wf: dict) -> str:
 
 
 def native_plan(pid: str, cut_id: str, *, new_seed: bool, canvas: dict | None = None, convert: bool = False,
-                fill_start: bool = False) -> dict:
+                fill_start: bool = False, template_kind: str | None = None) -> dict:
     """Resolve the cut's current saved workflow, set its seeds (new random ones for Regen, the saved ones for
     Queue) and store it under cache/regen. `fill_start` (Generate All) points a node titled "Start Image" at the
-    cut's Best / newest still image. Never queues; run_native_confirmed runs exactly this file."""
+    cut's Best / newest still image. `template_kind` "image" forces the project Image template path (a UI graph
+    is converted to API so the SDK can run it). Never queues; run_native_confirmed runs exactly this file."""
     na = _native_api()
     store = na.native_store()
     doc = store.get_project(pid)
     if not doc:
         raise ValueError("project not found")
-    src = na.native_cut_api_workflow(pid, cut_id, canvas, convert)
-    wf = src["workflow"]
+    if template_kind == "image":
+        src = na.native_cut_source_workflow(pid, cut_id, kind="image", by_kind=True)
+        wf = src.get("workflow")
+        if not isinstance(wf, dict):
+            raise na.NativeWorkflowError("empty", "This cut has no workflow yet. Not queued.")
+        source = src.get("source") or "template"
+        try:
+            from . import gg_template
+        except ImportError:
+            import gg_template  # type: ignore
+        if gg_template._is_ui_workflow(wf):
+            try:
+                wf = na._ui_to_api(wf)
+            except ValueError as ex:
+                raise na.NativeWorkflowError("ui_only", f"{na.UI_ONLY_MESSAGE} ({ex})") from None
+            source = "template" if source == "template" else "converted"
+        elif not gg_template._is_api_workflow(wf):
+            raise na.NativeWorkflowError("ui_only", na.UI_ONLY_MESSAGE)
+    else:
+        src = na.native_cut_api_workflow(pid, cut_id, canvas, convert)
+        wf = src["workflow"]
+        source = src["source"]
     try:
         from . import gg_ltx
     except ImportError:
@@ -347,20 +368,90 @@ def native_plan(pid: str, cut_id: str, *, new_seed: bool, canvas: dict | None = 
         wf, seeds = copy.deepcopy(wf), workflow_seeds(wf)
     start = na.fill_titled_start_image(pid, cut_id, wf) if fill_start else None
     name = _save_native_plan(pid, cut_id, wf)
-    return {"pid": pid, "cut_id": cut_id, "plan": name, "source": src["source"], "new_seed": bool(new_seed),
+    return {"pid": pid, "cut_id": cut_id, "plan": name, "source": source, "new_seed": bool(new_seed),
             "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf),
             **({"start_version": start} if start else {})}
 
 
+def native_regen_video_plan(pid: str, cut_id: str, video_vid: str, *, new_seed: bool = False) -> dict:
+    """Regenerate a selected video version: its saved/API workflow with Queue or new seeds."""
+    na = _native_api()
+    store = na.native_store()
+    doc = store.get_project(pid)
+    if not doc:
+        raise ValueError("project not found")
+    cut = (doc.get("cuts") or {}).get(cut_id)
+    if not cut:
+        raise ValueError("cut not found")
+    versions = store.list_versions(pid, cut_id)
+    ver = next((v for v in versions if v.get("id") == video_vid), None)
+    if not ver or (ver.get("asset") or {}).get("kind") != "video":
+        raise ValueError("The selected version is not a video.")
+    saved = na.native_version_workflow(pid, cut_id, video_vid)
+    wf = None
+    source = "stored"
+    try:
+        from . import gg_template
+    except ImportError:
+        import gg_template  # type: ignore
+    if saved and isinstance(saved.get("workflow"), dict):
+        wf = saved["workflow"]
+        if not gg_template._is_api_workflow(wf):
+            wf = None
+    if wf is None:
+        run = ver.get("run") if isinstance(ver.get("run"), dict) else {}
+        if isinstance(run.get("prompt_id"), str):
+            api = history_prompt(run["prompt_id"])
+            if api and gg_template._is_api_workflow(api):
+                wf, source = api, "history"
+    if not isinstance(wf, dict):
+        raise na.NativeWorkflowError("empty", "This cut has no workflow yet. Not queued.")
+    try:
+        from . import gg_ltx
+    except ImportError:
+        import gg_ltx  # type: ignore
+    sec = na.cut_generation_seconds(doc, cut_id)
+    err = gg_ltx.check_ltx_generation_duration(wf, sec)
+    if err:
+        raise ValueError(err)
+    wf = gg_ltx.patch_ltx_duration(wf, sec)
+    if gg_ltx.workflow_has_ltx_length(wf):
+        wf = na._apply_cut_prompt_to_workflow(wf, cut, require=True, video=True)
+    if new_seed:
+        wf, seeds = randomize_seeds(wf)
+    else:
+        wf, seeds = copy.deepcopy(wf), workflow_seeds(wf)
+    name = _save_native_plan(pid, cut_id, wf)
+    return {"pid": pid, "cut_id": cut_id, "plan": name, "source": source, "new_seed": bool(new_seed),
+            "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf),
+            "start_version": video_vid, "job": "regen"}
+
+
+def queue_job_plan(pid: str, cut_id: str, job: str, *, selected_vid: str | None = None, new_seed: bool = False) -> dict:
+    """Build a plan for one Queue-mode job (never queues)."""
+    j = (job or "image").lower()
+    if j == "video":
+        sv = selected_vid or None
+        return image_to_video_plan(pid, cut_id, sv, sv, new_seed=new_seed)
+    if j == "regen":
+        if not selected_vid:
+            raise ValueError("selected_vid required for regen")
+        return native_regen_video_plan(pid, cut_id, selected_vid, new_seed=new_seed)
+    return native_plan(pid, cut_id, new_seed=new_seed, convert=True, template_kind="image")
+
+
 def image_to_video_plan(pid: str, cut_id: str, selected_vid: str | None = None,
-                        start_vid: str | None = None) -> dict:
+                        start_vid: str | None = None, *, new_seed: bool = True) -> dict:
     """Image to Video dry run: the project's Video template with the cut's start image (exactly `start_vid` when
-    given) and description, new random seeds, stored under cache/regen like a Regen plan (run it with
+    given) and description, seeds per `new_seed`, stored under cache/regen like a Regen plan (run it with
     run_native_confirmed). Never queues."""
     info = _native_api().native_image_to_video_workflow(pid, cut_id, selected_vid, start_vid)
-    wf, seeds = randomize_seeds(info["workflow"])
+    if new_seed:
+        wf, seeds = randomize_seeds(info["workflow"])
+    else:
+        wf, seeds = copy.deepcopy(info["workflow"]), workflow_seeds(info["workflow"])
     name = _save_native_plan(pid, cut_id, wf)
-    return {"pid": pid, "cut_id": cut_id, "plan": name, "source": "image_to_video", "new_seed": True,
+    return {"pid": pid, "cut_id": cut_id, "plan": name, "source": "image_to_video", "new_seed": bool(new_seed),
             "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf),
             **{k: info[k] for k in ("template", "start_version", "start_node", "image", "prompt", "frames")}}
 
@@ -507,11 +598,15 @@ def _claim_slot_for_batch(batch_id: str, pid: str, cut_id: str) -> bool:
     return True
 
 
-def _generate_one(batch_id: str, pid: str, cut_id: str, *, new_seed: bool = False) -> dict:
-    """One cut through the 0.9.114 native SDK path: {"status", "error"?, "version"?}."""
+def _generate_one(batch_id: str, pid: str, cut_id: str, *, new_seed: bool = False, job: str | None = None,
+                  selected_vid: str | None = None) -> dict:
+    """One cut through the native SDK path: {"status", "error"?, "version"?}."""
     na = _native_api()
     try:
-        p = native_plan(pid, cut_id, new_seed=new_seed, convert=True, fill_start=True)
+        if job:
+            p = queue_job_plan(pid, cut_id, job, selected_vid=selected_vid or None, new_seed=new_seed)
+        else:
+            p = native_plan(pid, cut_id, new_seed=new_seed, convert=True, fill_start=True)
     except na.NativeWorkflowError as ex:
         return {"status": "skipped" if ex.code == "empty" else "failed", "error": str(ex)}
     except (ValueError, OSError) as ex:
@@ -547,9 +642,11 @@ def _generate_all_worker(batch_id: str) -> None:
             if item.get("status") != "waiting":
                 continue
             cut_id = item["cut_id"]
+            job = item.get("job")
+            selected_vid = item.get("selected_vid") or None
         _batch_update(batch_id, i, status="generating", started_at=time.time())
         try:
-            res = _generate_one(batch_id, pid, cut_id, new_seed=new_seed)
+            res = _generate_one(batch_id, pid, cut_id, new_seed=new_seed, job=job, selected_vid=selected_vid)
         except Exception as ex:  # noqa: BLE001
             res = {"status": "failed", "error": str(ex)}
         _batch_update(batch_id, i, **res, finished_at=time.time())
@@ -563,13 +660,34 @@ def _generate_all_worker(batch_id: str) -> None:
     _batch_update(batch_id, status="stopped" if stopped else "done", finished_at=time.time())
 
 
-def start_generate_all(pid: str, cut_ids, *, new_seed: bool = False) -> dict:
-    """Queue every cut in `cut_ids` (Shots list order) for one-at-a-time SDK generation; returns the batch."""
-    if not isinstance(cut_ids, list) or not all(isinstance(c, str) and c for c in cut_ids):
-        raise ValueError("cut_ids must be a list of cut ids")
-    ids = list(dict.fromkeys(cut_ids))
-    if not ids:
-        raise ValueError("no cuts to generate")
+def start_generate_all(pid: str, cut_ids, *, new_seed: bool = False, items=None) -> dict:
+    """Queue cuts in order for one-at-a-time SDK generation.
+
+    Legacy: `cut_ids` only (image regen path). Queue mode: `items` =
+    [{cut_id, job, selected_vid?}, ...] in Shots order."""
+    if items is not None:
+        if not isinstance(items, list) or not items:
+            raise ValueError("items must be a non-empty list")
+        parsed = []
+        for it in items:
+            if not isinstance(it, dict):
+                raise ValueError("each item must be an object")
+            cid = it.get("cut_id")
+            job = it.get("job")
+            if not isinstance(cid, str) or not cid or not isinstance(job, str) or not job:
+                raise ValueError("each item needs cut_id and job")
+            parsed.append({"cut_id": cid, "job": job, "selected_vid": it.get("selected_vid") or ""})
+        ids = list(dict.fromkeys(x["cut_id"] for x in parsed))
+        if len(ids) != len(parsed):
+            raise ValueError("duplicate cut_id in items")
+        batch_items = [{**x, "status": "waiting"} for x in parsed]
+    else:
+        if not isinstance(cut_ids, list) or not all(isinstance(c, str) and c for c in cut_ids):
+            raise ValueError("cut_ids must be a list of cut ids")
+        ids = list(dict.fromkeys(cut_ids))
+        if not ids:
+            raise ValueError("no cuts to generate")
+        batch_items = [{"cut_id": c, "status": "waiting"} for c in ids]
     if len(ids) > GENERATE_ALL_MAX:
         raise ValueError(f"at most {GENERATE_ALL_MAX} cuts per Generate All")
     batch_id = secrets.token_hex(6)
@@ -578,7 +696,7 @@ def start_generate_all(pid: str, cut_ids, *, new_seed: bool = False) -> dict:
             return {"ok": False, "message": "Generate All is already running", "batch": _batch_snapshot()}
         _batch.clear()
         _batch.update(id=batch_id, status="running", pid=pid, stop=False, new_seed=bool(new_seed),
-                      started_at=time.time(), items=[{"cut_id": c, "status": "waiting"} for c in ids])
+                      started_at=time.time(), items=batch_items)
     _batch_update(batch_id)
     threading.Thread(target=_generate_all_worker, args=(batch_id,), name="gonggan-generate-all", daemon=True).start()
     return {"ok": True, "batch": generate_all_status()}

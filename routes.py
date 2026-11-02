@@ -847,8 +847,16 @@ async def _native_regen(pid: str, cid: str, data: dict):
     {"dry_run": false, "confirm": true, "plan": <plan name from the dry run>} and runs exactly that file."""
     try:
         if data.get("dry_run", True) or data.get("confirm") is not True:
-            plan = await asyncio.to_thread(gg_sdk.native_plan, pid, cid, new_seed=data.get("mode") != "queue",
-                                           canvas=data.get("api_workflow"), convert=data.get("convert") is True)
+            job = data.get("job")
+            if isinstance(job, str) and job:
+                plan = await asyncio.to_thread(
+                    gg_sdk.queue_job_plan, pid, cid, job,
+                    selected_vid=data.get("selected_vid") or None,
+                    new_seed=data.get("mode") != "queue",
+                )
+            else:
+                plan = await asyncio.to_thread(gg_sdk.native_plan, pid, cid, new_seed=data.get("mode") != "queue",
+                                               canvas=data.get("api_workflow"), convert=data.get("convert") is True)
             return web.json_response({"ok": True, "dry_run": True, "queued": False, "plan": plan})
         return web.json_response(await asyncio.to_thread(gg_sdk.run_native_confirmed, pid, cid, data.get("plan")))
     except gg_native_api.NativeWorkflowError as ex:
@@ -873,7 +881,10 @@ async def gg_image_to_video(request):
     if start is not None and not isinstance(start, str):
         return _err(400, "start_vid must be a string")
     try:
-        plan = await asyncio.to_thread(gg_sdk.image_to_video_plan, pid, cid, vid or None, start or None)
+        plan = await asyncio.to_thread(
+            gg_sdk.image_to_video_plan, pid, cid, vid or None, start or None,
+            new_seed=bool(data.get("random_seed", True)),
+        )
     except ValueError as ex:
         return _err(400, str(ex))
     except Exception as ex:  # noqa: BLE001
@@ -889,7 +900,7 @@ async def gg_regen_status(request):
 
 @routes.post("/gonggan/generate-all")
 async def gg_generate_all(request):
-    """Native only: {"pid", "cut_ids" (Shots list order), "confirm": true} -> one SDK job per cut, in order."""
+    """Native only: {"pid", "cut_ids", "confirm": true} or Queue mode {"items": [{cut_id, job, selected_vid?}]}."""
     data = await _json_body(request)
     pid = data.get("pid")
     if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
@@ -897,8 +908,11 @@ async def gg_generate_all(request):
     if data.get("confirm") is not True:
         return _err(400, "confirm required")
     try:
-        res = await asyncio.to_thread(gg_sdk.start_generate_all, pid, data.get("cut_ids"),
-                                      new_seed=data.get("random_seed") is True)
+        res = await asyncio.to_thread(
+            gg_sdk.start_generate_all, pid, data.get("cut_ids"),
+            new_seed=data.get("random_seed") is True,
+            items=data.get("items"),
+        )
     except ValueError as ex:
         return _err(400, str(ex))
     return web.json_response(res, status=200 if res.get("ok") else 409)

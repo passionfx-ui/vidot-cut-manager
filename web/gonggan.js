@@ -162,6 +162,14 @@ import {
   saveRandomSeedOn,
   RANDOM_SEED_LABEL,
 } from "./gg_batch_render_core.js";
+import {
+  loadQueueMode,
+  saveQueueMode,
+  queueBatchPlan,
+  queuePlanTooltip,
+  QUEUE_MODE_LABELS,
+  QUEUE_MODES,
+} from "./gg_queue_mode_core.js";
 import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
 import {
   graphFitsKind,
@@ -452,7 +460,6 @@ import {
   generateAllConfirmMessage,
   generateAllFinishedToast,
   isGenerateAllRunning,
-  queueClickAction,
 } from "./gg_generate_all_core.js";
 
 const EXT = "gonggan.cut";
@@ -6323,6 +6330,7 @@ function updateSelectionBar(root) {
   const queueIds = timelineSelectedCutIds();
   const allCount = generateAllCutIds().length;
   const allRunning = isGenerateAllRunning(genAll.batch);
+  const qPlan = queueIds.length ? queuePlanForSelectedIds(queueIds) : null;
   const q = queueButtonState({
     count: queueIds.length,
     native: isNativeProject(),
@@ -6331,7 +6339,9 @@ function updateSelectionBar(root) {
     allRunning,
     batch: genAll.batch,
     projectId: state.pid,
+    queuePlan: qPlan ? { actionable: qPlan.actionable, tooltip: qPlan.tooltip } : null,
   });
+  syncQueueModeUi(root, qPlan?.mode);
   const queueBtn = root.querySelector(".gg-queue-btn");
   if (queueBtn) {
     queueBtn.disabled = q.disabled;
@@ -6748,16 +6758,111 @@ async function imageToVideoCut(cutId, { startVid = "" } = {}) {
   }
 }
 
-/** Status panel Queue: one selected cut = SDK job; two or more = generate-all batch on those cuts; Stop while that batch runs. */
+/** Status panel Queue: mode-aware jobs per selected cut (Image / Video / Auto). */
+function queueContextForCut(cutId) {
+  const picked = stripPick.pid === state.pid && stripPick.cutId === cutId ? stripPick.vid : "";
+  const o = wfOpenVersion;
+  const open = o && o.projectId === state.pid && o.cutId === cutId ? o.vid : "";
+  return { picked, open };
+}
+
+function queuePlanForSelectedIds(ids) {
+  const mode = loadQueueMode(localStorage);
+  const tl = state.timeline;
+  const { order } = shotsNavOrder();
+  const ordered = selectedInDisplayOrder(order, (tl?.cuts || []).map((c) => c.id), ids);
+  const cuts = ordered.map((id) => cutById(id)).filter(Boolean);
+  const batch = queueBatchPlan(cuts, mode, (cutId) => queueContextForCut(cutId));
+  return { ...batch, mode, tooltip: queuePlanTooltip(batch.counts) };
+}
+
+try {
+  globalThis.__gongganQueuePlan = (ids) => queuePlanForSelectedIds(Array.isArray(ids) && ids.length ? ids : timelineSelectedCutIds());
+} catch (_) {}
+
+function syncQueueModeUi(root, mode) {
+  const m = mode || loadQueueMode(localStorage);
+  root.querySelectorAll(".gg-queue-mode .gg-qm-seg").forEach((btn) => {
+    const on = btn.dataset.mode === m;
+    btn.classList.toggle("gg-on", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+}
+
+async function runQueueJobItem(item, { newSeed }) {
+  const cutId = item.cut_id;
+  const cut = cutById(cutId);
+  if (!cut || !state.timeline || !isNativeProject() || sdk.busy) return;
+  const tooLong = videoTooLongMessage(computeEffectiveSec(cut));
+  if (tooLong) {
+    ggToast("Queue", tooLong, "warn");
+    return;
+  }
+  const title = shotTitle(cut);
+  const pid = state.pid;
+  const sdkMode = newSeed ? "regen" : "queue";
+  sdk.busy = "regen";
+  sdk.regenCutId = cutId;
+  sdk.msg = `Preparing ${title}…`;
+  bus.dispatchEvent(new Event("sdk"));
+  try {
+    let plan;
+    if (item.job === "video") {
+      plan = (
+        await postJson("/gonggan/image-to-video", {
+          pid,
+          cut_id: cutId,
+          selected_vid: item.selected_vid,
+          start_vid: item.selected_vid,
+          random_seed: newSeed,
+        })
+      ).plan;
+    } else {
+      plan = (
+        await postJson("/gonggan/regen", {
+          pid,
+          cut_id: cutId,
+          mode: sdkMode,
+          dry_run: true,
+          job: item.job,
+          selected_vid: item.selected_vid || undefined,
+        })
+      ).plan;
+    }
+    sdk.msg = `${title}: ${sdkPlanSummary(plan)}`;
+    bus.dispatchEvent(new Event("sdk"));
+    if (!(await askConfirm({ message: batchRenderConfirmMessage([title]) }))) {
+      sdk.msg = "Not queued (cancelled).";
+      return;
+    }
+    await postJson("/gonggan/regen", { pid, cut_id: cutId, dry_run: false, confirm: true, plan: plan.plan });
+    syncRegenJobFromServer({ native: true, status: "running", pid, cut_id: cutId });
+    scheduleRegenPoll();
+    void refreshRegenJob();
+    sdk.msg = `Queued through Comfy SDK: ${title}`;
+    ggToast("Queued", `${title} (Comfy SDK)`, "ok");
+  } catch (e) {
+    sdk.msg = `Queue failed: ${sdkRegenErrorMessage(e?.message || e)}`;
+    ggToast("Queue", `${title} — ${sdkRegenErrorMessage(e?.message || e)}`, "warn");
+  } finally {
+    sdk.busy = "";
+    sdk.regenCutId = null;
+    bus.dispatchEvent(new Event("sdk"));
+  }
+}
+
+/** Status panel Queue: one selected cut = one mode job; two or more = generate-all of those jobs; Stop while that batch runs. */
 function queueButtonClick() {
   if (isGenerateAllRunning(genAll.batch) && genAll.batch?.pid === state.pid && !genAll.batch?.stop) {
     return stopGenerateAll();
   }
   const ids = timelineSelectedCutIds();
-  if (!ids.length) return;
-  const action = queueClickAction({ native: isNativeProject(), selected: ids.length });
-  if (action === "single") return sdkGenerateNativeCut(ids[0], { newSeed: loadRandomSeedOn(localStorage) });
-  if (action === "generate") return startGenerateAll(ids);
+  if (!ids.length || !isNativeProject()) return;
+  const plan = queuePlanForSelectedIds(ids);
+  if (!plan.actionable) return;
+  const newSeed = loadRandomSeedOn(localStorage);
+  if (plan.jobs.length === 1) return void runQueueJobItem(plan.jobs[0], { newSeed });
+  return startGenerateAll(ids, { items: plan.jobs, randomSeed: newSeed });
 }
 
 /** Every cut of the shown native project in Shots list order (collapsed scenes included). */
@@ -6786,7 +6891,7 @@ async function refreshGenerateAll() {
  * Generate All: every cut in list order, one Comfy SDK job at a time on the server (each cut's own saved
  * workflow and seed, the output added as a new version). Runs without the workflow tab; Stop cancels the rest.
  */
-async function startGenerateAll(cutIds) {
+async function startGenerateAll(cutIds, opts = {}) {
   if (!isNativeProject() || sdk.busy || batchRenderUi.running || genAll.starting || isGenerateAllRunning(genAll.batch)) return;
   const tl = state.timeline;
   const { order } = shotsNavOrder();
@@ -6800,12 +6905,21 @@ async function startGenerateAll(cutIds) {
   genAll.starting = true;
   document.querySelectorAll(".gg-shots").forEach((root) => updateSelectionBar(root));
   try {
-    const d = await postJson("/gonggan/generate-all", {
+    const body = {
       pid,
-      cut_ids: ids,
       confirm: true,
-      random_seed: loadRandomSeedOn(localStorage),
-    });
+      random_seed: opts.randomSeed ?? loadRandomSeedOn(localStorage),
+    };
+    if (opts.items?.length) {
+      body.items = opts.items.map((j) => ({
+        cut_id: j.cut_id,
+        job: j.job,
+        ...(j.selected_vid ? { selected_vid: j.selected_vid } : {}),
+      }));
+    } else {
+      body.cut_ids = ids;
+    }
+    const d = await postJson("/gonggan/generate-all", body);
     setGenerateAllBatch(d.batch);
     sdk.msg = `Generate All: ${ids.length} cut${ids.length === 1 ? "" : "s"} queued through Comfy SDK`;
     ggToast("Generate All started", `${ids.length} cut${ids.length === 1 ? "" : "s"}, one at a time in list order`, "ok");
@@ -7318,6 +7432,9 @@ function statusPanelShellHtml() {
           <label class="gg-random-seed" title="When on, each Queue run uses new random sampler seeds">
             <input type="checkbox" class="gg-random-seed-cb" /> ${esc(RANDOM_SEED_LABEL)}
           </label>
+          <div class="gg-queue-mode" role="group" aria-label="Queue mode">
+            ${QUEUE_MODES.map((m) => `<button type="button" class="gg-btn gg-qm-seg${m === "auto" ? " gg-on" : ""}" data-mode="${esc(m)}" aria-pressed="${m === "auto" ? "true" : "false"}">${esc(QUEUE_MODE_LABELS[m])}</button>`).join("")}
+          </div>
           <button type="button" class="gg-btn gg-primary gg-queue-btn" disabled>Queue</button>
         </div>`;
 }
@@ -7935,6 +8052,15 @@ function mountShots(el) {
       randomSeedCb.checked = loadRandomSeedOn(localStorage);
       randomSeedCb.addEventListener("change", () => saveRandomSeedOn(localStorage, randomSeedCb.checked));
     }
+    root.querySelectorAll(".gg-queue-mode .gg-qm-seg").forEach((btn) => {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = "1";
+      btn.addEventListener("click", () => {
+        saveQueueMode(localStorage, btn.dataset.mode);
+        syncQueueModeUi(root, btn.dataset.mode);
+        updateSelectionBar(root);
+      });
+    });
     bindStripHeader();
     const vsList = root.querySelector(".gg-vs-list");
     vsList?.addEventListener("scroll", () => {

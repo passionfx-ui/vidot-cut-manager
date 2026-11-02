@@ -359,14 +359,16 @@ describe("gonggan.js wiring (0.9.118)", () => {
     assert.ok(h >= 51 && h <= 55, `height ${h}`);
   });
 
-  it("no visible Regen; Queue respects Random seed", () => {
+  it("no visible Regen; Queue uses mode plan and Random seed", () => {
     assert.ok(!js.includes("gg-vs-regen"));
     assert.match(js, /\.gg-queue-btn"\)\?\.addEventListener\("click", \(\) => void queueButtonClick\(\)\)/);
     assert.match(js, /gg-random-seed-cb/);
+    assert.match(js, /gg-queue-mode/);
     const qb = fnBody("queueButtonClick");
-    assert.match(qb, /action === "single"\) return sdkGenerateNativeCut\(ids\[0\], \{ newSeed: loadRandomSeedOn\(localStorage\) \}\)/);
-    assert.match(qb, /action === "generate"\) return startGenerateAll\(ids\)/);
-    assert.match(fnBody("startGenerateAll"), /random_seed: loadRandomSeedOn\(localStorage\)/);
+    assert.match(qb, /queuePlanForSelectedIds\(ids\)/);
+    assert.match(qb, /runQueueJobItem\(plan\.jobs\[0\]/);
+    assert.match(qb, /startGenerateAll\(ids, \{ items: plan\.jobs, randomSeed: newSeed \}\)/);
+    assert.match(fnBody("startGenerateAll"), /random_seed: opts\.randomSeed/);
     assert.match(fnBody("regenNativeCut"), /sdkGenerateNativeCut\(cutId, \{ newSeed: true \}\)/);
   });
 });
