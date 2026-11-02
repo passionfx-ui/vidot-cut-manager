@@ -859,12 +859,44 @@ def pick_prompt_output(history: dict, prompt_id: str, root: Path, now: float | N
     return _run_output(prompt_id, h, root, now, node_ids)
 
 
+_OUTPUT_UUID = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _output_match_local(node_id: str) -> tuple[str, bool]:
+    """(local id, nested). A subgraph locator only matches history ids `<instance>:<local>`."""
+    text = str(node_id)
+    parts = text.split(":")
+    if len(parts) >= 2 and _OUTPUT_UUID.match(parts[0]) and parts[-1]:
+        return parts[-1], True
+    return text, False
+
+
 def _ordered_outputs(outputs, node_ids):
     items = list((outputs or {}).items())
     if node_ids is None:
         return items
     by_id = {str(k): v for k, v in items}
-    return [(nid, by_id[nid]) for nid in node_ids if nid in by_id]
+    ordered = []
+    seen = set()
+    for nid in node_ids:
+        key = str(nid)
+        if key in by_id and key not in seen:
+            ordered.append((key, by_id[key]))
+            seen.add(key)
+            continue
+        local, nested = _output_match_local(key)
+        if not local:
+            continue
+        for hk, hv in items:
+            hs = str(hk)
+            if hs in seen or not hs.endswith(":" + local):
+                continue
+            if nested or ":" in hs:
+                ordered.append((hs, hv))
+                seen.add(hs)
+    return ordered
 
 
 def _run_output(prompt_id: str, h, root: Path, now: float | None, node_ids=None) -> tuple[dict | None, str]:
@@ -878,18 +910,24 @@ def _run_output(prompt_id: str, h, root: Path, now: float | None, node_ids=None)
         if not isinstance(out, dict):
             continue
         flag = out.get("animated")
-        animated = any(flag) if isinstance(flag, (list, tuple)) else flag is True
         for key in ("images", "gifs", "videos", "video"):
-            for it in reversed(out.get(key) or []):
-                if not isinstance(it, dict) or it.get("type") != "output":
+            seq = [it for it in (out.get(key) or []) if isinstance(it, dict)]
+            for rev_i, it in enumerate(reversed(seq)):
+                if it.get("type") != "output":
                     continue
                 f = (root / (it.get("subfolder") or "") / it.get("filename", "")).resolve()
-                if f.is_file() and f.suffix.lower() in IMG_EXT | VID_EXT and root in f.parents:
-                    mtime = f.stat().st_mtime
-                    age = max(0.0, (time.time() if now is None else now) - mtime)
-                    return {"path": str(f), "from": "history", "prompt_id": prompt_id, "node": node_id,
-                            "name": f.name, "subfolder": it.get("subfolder") or "", "mtime": mtime,
-                            "age_sec": round(age, 1), "animated": animated and f.suffix.lower() in IMG_EXT}, ""
+                if not (f.is_file() and f.suffix.lower() in IMG_EXT | VID_EXT and root in f.parents):
+                    continue
+                orig_i = len(seq) - 1 - rev_i
+                if isinstance(flag, (list, tuple)):
+                    animated = bool(flag[orig_i]) if orig_i < len(flag) else any(bool(x) for x in flag)
+                else:
+                    animated = flag is True
+                mtime = f.stat().st_mtime
+                age = max(0.0, (time.time() if now is None else now) - mtime)
+                return {"path": str(f), "from": "history", "prompt_id": prompt_id, "node": node_id,
+                        "name": f.name, "subfolder": it.get("subfolder") or "", "mtime": mtime,
+                        "age_sec": round(age, 1), "animated": animated and f.suffix.lower() in IMG_EXT}, ""
     if allowed is not None:
         return None, "The last ComfyUI run saved no image or video from the app outputs."
     return None, "The last ComfyUI run saved no image or video (add a Save Image / Save Video node)."

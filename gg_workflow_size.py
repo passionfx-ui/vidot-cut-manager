@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 from typing import Any
 
 log = logging.getLogger("gonggan.gen_size")
@@ -299,11 +300,16 @@ def _set_node_size(node: dict, width: int, height: int) -> tuple[int | None, int
     return (w if ok_w else None, h if ok_h else None)
 
 
+_LOCATOR_UUID = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
 def _parse_linear_input(row: Any) -> tuple[str | None, str, str, str] | None:
     """(graph id or None, node id, widget name, label).
 
-    .app.json inputs are either `[nodeId, widgetName]` or
-    `["<graphId>:<nodeId>:<widgetName>", label]`.
+    .app.json inputs are `[nodeId, widgetName]`, `["<subgraphUuid>:<nodeId>", widgetName]`,
+    or the older `["<graphId>:<nodeId>:<widgetName>", label]`.
     """
     if not isinstance(row, (list, tuple)) or len(row) < 2:
         return None
@@ -316,6 +322,10 @@ def _parse_linear_input(row: Any) -> tuple[str | None, str, str, str] | None:
         if not graph_id or not node_id or not widget:
             return None
         return graph_id, str(node_id), str(widget), str(label if label is not None else widget)
+    if isinstance(head, str) and head.count(":") == 1 and label is not None:
+        graph_id, node_id = head.split(":", 1)
+        if _LOCATOR_UUID.match(graph_id) and node_id:
+            return graph_id, str(node_id), str(label), str(label)
     if isinstance(head, (int, str)) and label is not None:
         return None, str(head), str(label), str(label)
     return None
@@ -353,6 +363,33 @@ def _find_linear_nodes(graphs: list[tuple[str, dict]], graph_id: str | None, nod
     return found
 
 
+def _mirror_named_widget(root: dict, graph_id: str, widget_name: str, number: int) -> None:
+    """Copy a subgraph input onto the instance node, which is what the graph shows and queues.
+
+    Only an already named widget is written. Guessing a list slot would overwrite the prompt.
+    """
+    if not graph_id or not widget_name:
+        return
+    for _gid, host in _ui_graphs(root):
+        for node in host.get("nodes") or []:
+            if not isinstance(node, dict) or not _active(node):
+                continue
+            if str(node.get("type") or "") != graph_id:
+                continue
+            named = node.get("widgets_values_named")
+            if isinstance(named, dict) and widget_name in named:
+                named[widget_name] = number
+                values = node.get("widgets_values")
+                if isinstance(values, list):
+                    idx = list(named).index(widget_name)
+                    if idx < len(values):
+                        values[idx] = number
+                continue
+            inputs = node.get("inputs")
+            if isinstance(inputs, dict) and widget_name in inputs and not isinstance(inputs.get(widget_name), (list, tuple)):
+                inputs[widget_name] = number
+
+
 def _apply_linear_size(graph: dict, width: int, height: int) -> list[dict[str, Any]]:
     extra = graph.get("extra") if isinstance(graph.get("extra"), dict) else None
     linear = extra.get("linearData") if isinstance(extra, dict) else None
@@ -381,6 +418,10 @@ def _apply_linear_size(graph: dict, width: int, height: int) -> list[dict[str, A
         widgets: dict[str, str] = slot["widgets"]
         wrote_w = "width" in widgets and _write_widget(node, widgets["width"], w)
         wrote_h = "height" in widgets and _write_widget(node, widgets["height"], h)
+        if wrote_w:
+            _mirror_named_widget(graph, slot["graph"], widgets["width"], w)
+        if wrote_h:
+            _mirror_named_widget(graph, slot["graph"], widgets["height"], h)
         if wrote_w or wrote_h:
             written.append(_record(node, slot["graph"], w if wrote_w else None, h if wrote_h else None, "linear"))
     return written

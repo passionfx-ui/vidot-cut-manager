@@ -1,19 +1,57 @@
 /**
  * ComfyUI Apps mode (linearData) bindings. Pure: no DOM.
- * A workflow is an app template when extra.linearData lists inputs as
- * [ "<graphId>:<nodeId>:<widgetName>", "<widgetName>" ] and outputs as node ids.
+ * Inputs are `[nodeId, widgetName]` or `["<subgraphUuid>:<nodeId>", widgetName]`.
+ * Older saves used `["<graphId>:<nodeId>:<widgetName>", label]`.
+ * Outputs are node ids. A subgraph node is queued as `<instanceId>:<nodeId>`.
  */
 
 const PROMPT_NAMES = new Set(["text", "prompt"]);
+const LOCATOR_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function nodeTitle(node) {
   return String(node?.title || "").trim();
 }
 
-function nodeById(workflow, nodeId) {
-  const nodes = workflow?.nodes;
-  if (!Array.isArray(nodes)) return null;
-  return nodes.find((n) => n && String(n.id) === String(nodeId)) || null;
+function subgraphDefs(workflow) {
+  const subs = workflow?.definitions?.subgraphs;
+  if (!Array.isArray(subs)) return [];
+  return subs.filter((sg) => sg && Array.isArray(sg.nodes));
+}
+
+function nodeById(workflow, nodeId, graphId) {
+  const id = String(nodeId);
+  const graphs = [];
+  if (Array.isArray(workflow?.nodes)) graphs.push({ id: "", nodes: workflow.nodes });
+  for (const sg of subgraphDefs(workflow)) graphs.push({ id: String(sg.id || ""), nodes: sg.nodes });
+  if (graphId) {
+    const exact = graphs.find((g) => g.id === graphId);
+    const hit = exact?.nodes?.find((n) => n && String(n.id) === id);
+    if (hit) return hit;
+  }
+  const root = graphs.find((g) => g.id === "");
+  const rootHit = root?.nodes?.find((n) => n && String(n.id) === id);
+  if (rootHit) return rootHit;
+  for (const g of graphs) {
+    const hit = g.nodes.find((n) => n && String(n.id) === id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * Node locator stored by ComfyUI Apps.
+ * `"12"` is a root node. `"<uuid>:<id>"` is a node inside that subgraph.
+ * @param {string|number} ref
+ * @returns {{ graphId: string, nodeId: string } | null}
+ */
+export function parseNodeLocator(ref) {
+  const text = String(ref ?? "").trim();
+  if (!text) return null;
+  const parts = text.split(":");
+  if (parts.length === 2 && LOCATOR_UUID.test(parts[0]) && parts[1]) {
+    return { graphId: parts[0], nodeId: parts[1] };
+  }
+  return { graphId: "", nodeId: text };
 }
 
 /** @param {string} ref "<graphId>:<nodeId>:<widgetName>" */
@@ -25,6 +63,27 @@ export function parseLinearRef(ref) {
   const graphId = parts.slice(0, -2).join(":");
   if (!graphId || !nodeId || !widget) return null;
   return { graphId, nodeId: String(nodeId), widget: String(widget) };
+}
+
+/**
+ * One linearData input row.
+ * `[nodeId, widgetName]`, `["<uuid>:<nodeId>", widgetName]`, or the older 3-part ref.
+ * A third metadata object is ignored.
+ * @param {unknown} row
+ * @returns {{ graphId: string, nodeId: string, widget: string, label: string } | null}
+ */
+export function parseLinearInput(row) {
+  if (!Array.isArray(row) || row.length < 2 || row[0] == null || row[1] == null) return null;
+  const head = row[0];
+  const label = String(row[1]);
+  if (!label) return null;
+  if (typeof head === "string" && head.split(":").length >= 3) {
+    const legacy = parseLinearRef(head);
+    if (legacy) return { ...legacy, label: label || legacy.widget };
+  }
+  const loc = parseNodeLocator(head);
+  if (!loc?.nodeId) return null;
+  return { graphId: loc.graphId, nodeId: loc.nodeId, widget: label, label };
 }
 
 export function isPromptWidgetName(name) {
@@ -71,18 +130,17 @@ export function linearBindings(workflow) {
   const prompts = [];
   const controls = [];
   for (const row of linear.inputs) {
-    if (!Array.isArray(row) || !row.length) continue;
-    const parsed = parseLinearRef(row[0]);
+    const parsed = parseLinearInput(row);
     if (!parsed) continue;
-    const label = String(row[1] ?? parsed.widget);
-    const node = nodeById(workflow, parsed.nodeId);
+    const node = nodeById(workflow, parsed.nodeId, parsed.graphId);
     const entry = {
+      graphId: parsed.graphId,
       nodeId: parsed.nodeId,
       widget: parsed.widget,
-      label: label || parsed.widget,
+      label: parsed.label || parsed.widget,
       nodeTitle: nodeTitle(node),
     };
-    if (isPromptWidgetName(parsed.widget) || isPromptWidgetName(label)) prompts.push(entry);
+    if (isPromptWidgetName(parsed.widget) || isPromptWidgetName(parsed.label)) prompts.push(entry);
     else controls.push({ ...entry, ...controlMeta(node, parsed.widget) });
   }
   const positive = prompts[0] || null;
@@ -113,6 +171,60 @@ export function linearOutputIds(workflow) {
   const linear = workflow?.extra?.linearData;
   if (!linear || typeof linear !== "object" || !Array.isArray(linear.outputs)) return null;
   return linear.outputs.map((id) => String(id));
+}
+
+function executionPrefixes(workflow, subgraphId) {
+  const defs = new Map(subgraphDefs(workflow).map((sg) => [String(sg.id || ""), sg]));
+  const prefixes = [];
+  const stack = new Set();
+  const walk = (nodes, prefix) => {
+    for (const node of nodes || []) {
+      if (!node || typeof node !== "object") continue;
+      const type = String(node.type || "");
+      if (!defs.has(type) || stack.has(type)) continue;
+      const path = prefix ? `${prefix}:${node.id}` : String(node.id);
+      if (type === subgraphId) prefixes.push(path);
+      stack.add(type);
+      walk(defs.get(type).nodes, path);
+      stack.delete(type);
+    }
+  };
+  walk(workflow?.nodes, "");
+  return prefixes;
+}
+
+/**
+ * History / API ids for app outputs.
+ * A root id stays as-is. A node that lives in a subgraph is also `<instance>:<id>`,
+ * which is the id ComfyUI writes into history for that Save Video / SaveWEBP node.
+ * @param {object | null | undefined} workflow
+ * @returns {string[] | null}
+ */
+export function expandLinearOutputIds(workflow) {
+  const ids = linearOutputIds(workflow);
+  if (!ids) return null;
+  const out = [];
+  const push = (id) => {
+    const text = String(id || "").trim();
+    if (text && !out.includes(text)) out.push(text);
+  };
+  for (const raw of ids) {
+    const loc = parseNodeLocator(raw) || { graphId: "", nodeId: String(raw) };
+    let graphId = loc.graphId;
+    const nodeId = loc.nodeId;
+    if (!graphId && Array.isArray(workflow?.nodes) && workflow.nodes.some((n) => n && String(n.id) === nodeId)) {
+      push(nodeId);
+      continue;
+    }
+    if (!graphId) {
+      const home = subgraphDefs(workflow).find((sg) => (sg.nodes || []).some((n) => n && String(n.id) === nodeId));
+      graphId = home ? String(home.id || "") : "";
+    }
+    push(nodeId);
+    if (!graphId) continue;
+    for (const prefix of executionPrefixes(workflow, graphId)) push(`${prefix}:${nodeId}`);
+  }
+  return out;
 }
 
 /**

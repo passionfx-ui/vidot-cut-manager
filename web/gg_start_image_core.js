@@ -5,7 +5,7 @@
  * over widgets_values. A cut image written only into the array never reaches the node.
  */
 
-import { parseLinearRef } from "./gg_app_mode_core.js";
+import { parseLinearInput } from "./gg_app_mode_core.js";
 import { workflowGraphKind } from "./gg_rep_wf_core.js";
 
 const START_TITLE = "start image";
@@ -61,26 +61,6 @@ function workflowNodesDeep(workflow) {
   return out;
 }
 
-function parseLinearInputRow(row) {
-  if (!Array.isArray(row) || row.length < 2) return null;
-  const head = row[0];
-  const label = row[1];
-  if (typeof head === "string" && head.split(":").length >= 3) {
-    const parsed = parseLinearRef(head);
-    if (!parsed) return null;
-    return {
-      graphId: parsed.graphId,
-      nodeId: parsed.nodeId,
-      widget: parsed.widget,
-      label: String(label ?? parsed.widget),
-    };
-  }
-  if ((typeof head === "string" || typeof head === "number") && label != null) {
-    return { graphId: "", nodeId: String(head), widget: String(label), label: String(label) };
-  }
-  return null;
-}
-
 /**
  * LoadImage named by an app template's linearData inputs.
  * `{ nodeId, widget, graphId, label, node }` or null.
@@ -91,7 +71,7 @@ export function linearLoadImageInput(workflow) {
   const nodes = workflowNodesDeep(workflow);
   const hits = [];
   for (const row of rows) {
-    const parsed = parseLinearInputRow(row);
+    const parsed = parseLinearInput(row);
     if (!parsed) continue;
     let matches = nodes.filter((n) => n.id === parsed.nodeId);
     if (parsed.graphId) {

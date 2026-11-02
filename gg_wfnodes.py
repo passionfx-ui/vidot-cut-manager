@@ -4,6 +4,7 @@ Prompt: the node titled "Prompt", else the CLIPTextEncode feeding a sampler/cond
 Start image: the node titled "Start Image", else the first LoadImage node (lowest id). Nothing else is guessed."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 PROMPT_TITLE = "Prompt"
@@ -138,8 +139,17 @@ def _id_key(nid) -> tuple:
     return (0, int(s), s) if s.isdigit() else (1, 0, s)
 
 
+_LOCATOR_UUID = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
 def _parse_linear_input(row: Any) -> tuple[str, str, str, str] | None:
-    """(graph id, node id, widget name, label) from one linearData input row."""
+    """(graph id, node id, widget name, label) from one linearData input row.
+
+    ComfyUI stores `[nodeId, widgetName]` or `["<subgraphUuid>:<nodeId>", widgetName]`.
+    Older saves used `["<graphId>:<nodeId>:<widgetName>", label]`.
+    """
     if not isinstance(row, (list, tuple)) or len(row) < 2:
         return None
     head, label = row[0], row[1]
@@ -149,6 +159,10 @@ def _parse_linear_input(row: Any) -> tuple[str, str, str, str] | None:
         graph_id = ":".join(parts[:-2])
         if graph_id and node_id and widget:
             return graph_id, str(node_id), str(widget), str(label if label is not None else widget)
+    if isinstance(head, str) and head.count(":") == 1 and label is not None:
+        graph_id, node_id = head.split(":", 1)
+        if _LOCATOR_UUID.match(graph_id) and node_id:
+            return graph_id, str(node_id), str(label), str(label)
     if isinstance(head, (int, str)) and label is not None:
         return "", str(head), str(label), str(label)
     return None

@@ -357,7 +357,7 @@ import {
   isAppWorkflowFile,
   templateListPaths,
 } from "./gg_template_pick_core.js";
-import { clearLinearMode, hasLinearModeFlag, linearBindings, linearOutputIds, linearPromptLabel } from "./gg_app_mode_core.js";
+import { clearLinearMode, expandLinearOutputIds, hasLinearModeFlag, linearBindings, linearPromptLabel } from "./gg_app_mode_core.js";
 import { comboFilter, comboActiveIndex, comboKey, comboTypedValue } from "./gg_combo_core.js";
 import {
   folderAddressTarget,
@@ -4001,11 +4001,37 @@ function setLiveSeedNodes(ids, seed) {
   }
 }
 
-function findLiveWidget(nodeId, widgetName) {
-  const node = liveNodeById(nodeId);
-  if (!node) return null;
+function widgetNameHit(widget, widgetName) {
+  if (!widget) return false;
   const want = String(widgetName || "");
-  return (node.widgets || []).find((w) => w && (w.name === want || w.label === want)) || null;
+  return widget.name === want || widget.label === want || widget.sourceWidgetName === want;
+}
+
+function findLiveWidget(nodeId, widgetName) {
+  const id = String(nodeId || "");
+  const want = String(widgetName || "");
+  if (!id || !want) return null;
+  const direct = liveNodeById(id);
+  const onNode = (node, sourceId) => {
+    if (!node) return null;
+    return (node.widgets || []).find((w) => {
+      if (!widgetNameHit(w, want)) return false;
+      const src = w.sourceNodeId != null && w.sourceNodeId !== "" ? String(w.sourceNodeId) : "";
+      if (sourceId) return src === sourceId;
+      return !src;
+    }) || null;
+  };
+  const directHit = onNode(direct, "");
+  if (directHit) return directHit;
+  for (const node of liveGraphNodes()) {
+    const promoted = onNode(node, id);
+    if (promoted) return promoted;
+    const innerList = node?.subgraph?._nodes || node?.subgraph?.nodes || [];
+    const inner = innerList.find((n) => n && String(n.id) === id);
+    const innerHit = onNode(inner, "");
+    if (innerHit) return innerHit;
+  }
+  return null;
 }
 
 function readLiveWidgetValue(nodeId, widgetName) {
@@ -4013,32 +4039,80 @@ function readLiveWidgetValue(nodeId, widgetName) {
   return w ? w.value : undefined;
 }
 
-/** Write one widget on the live node (root graph, including a subgraph instance id). */
-function setLiveNamedWidget(nodeId, widgetName, value) {
-  const node = liveNodeById(nodeId);
+function writeLiveWidget(widget, value) {
+  if (!widget) return;
+  widget.value = value;
+  const values = widget.options?.values;
+  if (Array.isArray(values) && value != null && value !== "" && !values.includes(value)) values.push(value);
+  const el = widget.element || widget.inputEl;
+  if (!el) return;
+  if (el.type === "checkbox") el.checked = !!value;
+  else if ("value" in el) {
+    const shown = value == null ? "" : String(value);
+    if (el.value !== shown) el.value = shown;
+  }
+}
+
+function writeNamedOnNode(node, widgetName, value, sourceId) {
   if (!node) return false;
   const want = String(widgetName || "");
-  const widgets = node.widgets || [];
-  const idx = widgets.findIndex((w) => w && (w.name === want || w.label === want));
-  const w = idx >= 0 ? widgets[idx] : null;
-  if (w) {
-    w.value = value;
-    const el = w.element || w.inputEl;
-    if (el) {
-      if (el.type === "checkbox") el.checked = !!value;
-      else if ("value" in el) {
-        const shown = value == null ? "" : String(value);
-        if (el.value !== shown) el.value = shown;
-      }
-    }
+  let hit = false;
+  for (const w of node.widgets || []) {
+    if (!widgetNameHit(w, want)) continue;
+    const src = w.sourceNodeId != null && w.sourceNodeId !== "" ? String(w.sourceNodeId) : "";
+    if (sourceId) {
+      if (src !== sourceId) continue;
+    } else if (src) continue;
+    writeLiveWidget(w, value);
+    hit = true;
   }
   const named = node.widgets_values_named;
-  if (named && typeof named === "object" && !Array.isArray(named)) {
+  if (hit && named && typeof named === "object" && !Array.isArray(named)) {
     named[want] = value;
-    if (w?.name && w.name !== want) named[w.name] = value;
   }
-  try { app.canvas?.setDirty?.(true, true); } catch (_) {}
-  return !!w;
+  return hit;
+}
+
+/**
+ * Write a linearData input onto the live graph.
+ * Root nodes are written directly. A subgraph input is the promoted widget
+ * (`sourceNodeId` / `sourceWidgetName`) and the inner node. That is the value
+ * graphToPrompt sends.
+ */
+function setLiveBoundWidget(binding, value) {
+  const id = String(binding?.nodeId ?? "");
+  const want = String(binding?.widget || binding?.label || "");
+  const graphId = String(binding?.graphId || "");
+  if (!id || !want) return false;
+  let ok = false;
+  if (!graphId) {
+    const direct = liveNodeById(id);
+    if (direct && writeNamedOnNode(direct, want, value, "")) ok = true;
+    if (ok) {
+      try { app.canvas?.setDirty?.(true, true); } catch (_) {}
+      return true;
+    }
+  }
+  for (const node of liveGraphNodes()) {
+    const sub = node?.subgraph;
+    const type = String(node?.type || node?.comfyClass || "");
+    const subId = String(sub?.id || "");
+    if (graphId && type !== graphId && subId !== graphId) continue;
+    if (!graphId && !sub) continue;
+    if (writeNamedOnNode(node, want, value, id)) ok = true;
+    const innerList = sub?._nodes || sub?.nodes || [];
+    const inner = innerList.find((n) => n && String(n.id) === id);
+    if (inner && writeNamedOnNode(inner, want, value, "")) ok = true;
+  }
+  if (ok) {
+    try { app.canvas?.setDirty?.(true, true); } catch (_) {}
+  }
+  return ok;
+}
+
+/** Write one widget on the live node (root graph, or the promoted subgraph widget). */
+function setLiveNamedWidget(nodeId, widgetName, value) {
+  return setLiveBoundWidget({ nodeId, widget: widgetName }, value);
 }
 
 function workflowSnapshotForCut(cutId) {
@@ -4089,10 +4163,10 @@ function applyLinearPromptsForOpenCut() {
   if (!cut) return null;
   const binding = linearBindings(captureGraphWorkflowSnapshot());
   if (!binding?.positive) return binding;
-  setLiveNamedWidget(binding.positive.nodeId, binding.positive.widget, promptTextForQueue(cut));
+  setLiveBoundWidget(binding.positive, promptTextForQueue(cut));
   if (binding.negative) {
     const data = readCutData(cut);
-    setLiveNamedWidget(binding.negative.nodeId, binding.negative.widget, data.negative || "");
+    setLiveBoundWidget(binding.negative, data.negative || "");
   }
   return binding;
 }
@@ -4133,7 +4207,7 @@ function syncPromptNodeFromField(cutId, text) {
   if (binding?.positive) {
     ggApplyingCutData = true;
     try {
-      setLiveNamedWidget(binding.positive.nodeId, binding.positive.widget, value);
+      setLiveBoundWidget(binding.positive, value);
       rememberWorkflowBaselineFromActiveGraph(cutId);
     } finally {
       ggApplyingCutData = false;
@@ -8955,7 +9029,7 @@ async function captureFinishedPrompt(promptId) {
     const body = { pid: t.projectId, cut_id: t.cutId, prompt_id: String(promptId) };
     if (snap) {
       const merged = mergeLegacyTake(null, snap);
-      const outputNodes = linearOutputIds(snap.workflow);
+      const outputNodes = expandLinearOutputIds(snap.workflow);
       if (outputNodes) body.output_nodes = outputNodes;
       body.prompt = merged.positive || "";
       body.negative = merged.negative || "";
@@ -9382,32 +9456,22 @@ function applyLiveVideoImage(binding, imageName) {
   const name = String(imageName || "").trim();
   if (!name) return false;
   const names = [...new Set([binding?.widget, binding?.label, "image"].map((n) => String(n || "").trim()).filter(Boolean))];
-  const writeNode = (node) => {
-    if (!node) return false;
-    let ok = false;
-    for (const widgetName of names) {
-      if (setLiveNamedWidget(node.id, widgetName, name)) ok = true;
-    }
-    if (setLiveLoadImageWidget(node, name)) ok = true;
-    const inner = node.subgraph?._nodes || node.subgraph?.nodes;
-    if (binding?.nodeId && Array.isArray(inner)) {
-      const nested = inner.find((n) => n && String(n.id) === String(binding.nodeId));
-      if (nested && setLiveLoadImageWidget(nested, name)) ok = true;
-    }
-    return ok;
-  };
+  let ok = false;
   if (binding?.nodeId) {
-    const direct = liveNodeById(binding.nodeId);
-    if (writeNode(direct)) return true;
-  }
-  if (binding?.graphId) {
-    for (const node of liveGraphNodes()) {
-      const type = String(node?.type || node?.comfyClass || "");
-      if (type !== binding.graphId) continue;
-      if (writeNode(node)) return true;
+    for (const widgetName of names) {
+      if (setLiveBoundWidget({ nodeId: binding.nodeId, widget: widgetName, graphId: binding.graphId || "" }, name)) ok = true;
     }
+    const direct = liveNodeById(binding.nodeId);
+    if (direct && setLiveLoadImageWidget(direct, name)) ok = true;
   }
-  return writeNode(liveStartImageNode());
+  if (ok) return true;
+  return setLiveLoadImageWidget(liveStartImageNode(), name);
+}
+
+function promptLocalId(id) {
+  const text = String(id || "");
+  const cut = text.lastIndexOf(":");
+  return cut >= 0 ? text.slice(cut + 1) : text;
 }
 
 /** Write the uploaded still into the API prompt ComfyUI is about to send. */
@@ -9427,9 +9491,16 @@ function patchQueuedStartImage(prompt, imageName, preferId) {
     return na - nb || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   });
   const wanted = String(preferId || "");
-  const preferred = wanted ? rows.find((r) => r.id === wanted) : null;
+  const wantedLocal = promptLocalId(wanted);
+  const nested = wanted.includes(":");
+  const preferred = wanted
+    ? rows.filter((r) => r.id === wanted || (wantedLocal && (nested ? r.id.endsWith(`:${wantedLocal}`) : r.id === wantedLocal || r.id.endsWith(`:${wantedLocal}`))))
+    : [];
   const titled = rows.filter((r) => r.title === "start image");
-  const hit = preferred || (titled.length === 1 ? titled[0] : titled.length ? null : rows[0]);
+  const hit = preferred.find((r) => r.id === wanted)
+    || preferred.find((r) => r.title === "start image")
+    || preferred[0]
+    || (titled.length === 1 ? titled[0] : titled.length ? null : rows[0]);
   if (!hit) return;
   const inputs = hit.node.inputs && typeof hit.node.inputs === "object" ? hit.node.inputs : (hit.node.inputs = {});
   if (!Array.isArray(inputs.image)) inputs.image = name;
@@ -9461,9 +9532,9 @@ async function injectCutDataForQueue() {
     const linearSnap = captureGraphWorkflowSnapshot();
     const linear = linearBindings(linearSnap);
     if (linear?.positive) {
-      setLiveNamedWidget(linear.positive.nodeId, linear.positive.widget, promptTextForQueue(cut));
+      setLiveBoundWidget(linear.positive, promptTextForQueue(cut));
       if (linear.negative) {
-        setLiveNamedWidget(linear.negative.nodeId, linear.negative.widget, readCutData(cut).negative || "");
+        setLiveBoundWidget(linear.negative, readCutData(cut).negative || "");
       }
     }
     if (projectRandomSeedOn()) {
@@ -9471,7 +9542,7 @@ async function injectCutDataForQueue() {
       const ids = linearSnap ? cutSlotIds(linearSnap) : null;
       if (ids) setLiveSeedNodes(ids.seedIds, seed);
       for (const c of linear?.controls || []) {
-        if (c.seed) setLiveNamedWidget(c.nodeId, c.widget, seed);
+        if (c.seed) setLiveBoundWidget(c, seed);
       }
     }
     ggQueuedStartFile = "";
