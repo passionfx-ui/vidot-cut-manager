@@ -1048,3 +1048,38 @@ html.gg-edit-mode-on .gg-shots .gg-vs-body.gg-vs-dock {
   max-height: none;
 }
 .gg-bottom-strip .gg-export-panel { overflow: auto; }
+
+.gg-shots .gg-ref-group { border-bottom: 1px solid var(--gg-line, #353a44); margin-bottom: 4px; }
+.gg-shots .gg-ref-head { display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: var(--gg-panel); font-size: 11px; }
+.gg-shots .gg-ref-fold, .gg-shots .gg-ref-add-btn, .gg-shots .gg-ref-filter { font: inherit; background: transparent; color: inherit; border: 0; cursor: pointer; }
+.gg-shots .gg-ref-title { font-weight: 600; flex: 1; }
+.gg-shots .gg-ref-add-btn { padding: 1px 6px; }
+.gg-shots .gg-ref-filters, .gg-shots .gg-ref-add-form { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 6px 4px; }
+.gg-shots .gg-ref-filter { border: 1px solid var(--gg-line, #353a44); border-radius: 10px; padding: 1px 8px; }
+.gg-shots .gg-ref-filter.on { background: #3a5f9e; border-color: #3a5f9e; color: #fff; }
+.gg-shots .gg-ref-add-form input, .gg-shots .gg-ref-add-form select { min-width: 0; }
+.gg-shots .gg-ref-add-name { flex: 1; }
+.gg-shots .gg-ref-cards { display: flex; flex-direction: column; gap: 2px; padding: 0 4px 6px; }
+.gg-shots .gg-ref-card { display: flex; gap: 6px; align-items: center; padding: 3px; border-radius: 4px; cursor: pointer; }
+.gg-shots .gg-ref-card.gg-on, .gg-shots .gg-ref-card.on { background: rgba(58, 95, 158, .35); }
+.gg-shots .gg-ref-card .gg-ref-thumb { width: 36px; height: 36px; aspect-ratio: auto; flex: 0 0 auto; }
+.gg-shots .gg-ref-main { min-width: 0; display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; }
+.gg-shots .gg-ref-status { font-size: 10px; opacity: .7; }
+.gg-shots .gg-ref-none { opacity: .7; padding: 4px 6px; font-size: 11px; }
+.gg-shots .gg-sel-detail-host { border-top: 1px solid var(--gg-line, #353a44); }
+.gg-shots .gg-sel-detail { display: flex; flex-direction: column; gap: 4px; padding: 6px; font-size: 11px; }
+.gg-shots .gg-sel-field { display: flex; flex-direction: column; gap: 2px; }
+.gg-shots .gg-sel-field input, .gg-shots .gg-sel-field select, .gg-shots .gg-sel-field textarea { width: 100%; box-sizing: border-box; font: inherit; }
+.gg-shots .gg-sel-refs { display: flex; flex-direction: column; gap: 4px; }
+.gg-shots .gg-sel-ref-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.gg-shots .gg-ref-linkchip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--gg-line, #353a44); border-radius: 10px; padding: 1px 4px 1px 1px; max-width: 100%; }
+.gg-shots .gg-ref-linkchip.missing { opacity: .55; }
+.gg-shots .gg-ref-linkchip.unknown { color: #ff8d8d; border-color: #8a3b3b; }
+.gg-shots .gg-ref-chip-thumb { width: 18px; height: 18px; border-radius: 9px; overflow: hidden; display: inline-flex; }
+.gg-shots .gg-ref-chip-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.gg-shots .gg-ref-slot { display: inline-flex; align-items: center; gap: 2px; font-size: 10px; opacity: .85; }
+.gg-shots .gg-ref-unlink { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0 2px; }
+.gg-shots .gg-ref-link-pick, .gg-shots .gg-ref-link-empty { font-size: 11px; }
+.gg-mention-pop { position: fixed; z-index: 80; display: flex; flex-direction: column; min-width: 140px; max-height: 180px; overflow: auto; background: #1b1d22; border: 1px solid var(--gg-line, #353a44); border-radius: 4px; }
+.gg-mention-pop button { text-align: left; background: transparent; color: inherit; border: 0; padding: 4px 8px; cursor: pointer; font: inherit; }
+.gg-mention-pop button.on, .gg-mention-pop button:hover { background: #3a5f9e; }

@@ -1337,6 +1337,12 @@ def _capture_gen(data: dict) -> dict | None:
     source = data.get("source_image_take")
     if isinstance(source, str) and source.strip():
         gen["source_image_take"] = source.strip()[:80]
+    if isinstance(data.get("refs_used"), list):
+        from gg_project.ref_links import clean_refs_used
+
+        used = clean_refs_used(data.get("refs_used"))
+        if used:
+            gen["refs_used"] = used
     return gen or None
 
 

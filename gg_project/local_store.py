@@ -19,6 +19,12 @@ from .entities import (
     next_free_scene_name,
     new_version,
 )
+from .ref_links import (
+    REF_CATEGORIES,
+    active_references,
+    clean_description,
+    merge_ref_links,
+)
 from .errors import ConflictError
 from .ids import is_uuid_id, now_iso, uuid7
 from .media_anim import animation_info
@@ -558,6 +564,7 @@ class LocalStore:
     _CUT_UPDATE_FIELDS = frozenset({
         "planned_sec", "notes", "caption", "prompt", "end_card", "needs_redo",
         "negative", "seed", "input_image", "frames",
+        "description", "category", "ref_links", "pick_version_id",
     })
     _CAPTION_MAX_LEN = 4000
     _DUE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -691,6 +698,18 @@ class LocalStore:
                 if not isinstance(fields["needs_redo"], bool):
                     raise ValueError("needs_redo must be a boolean")
                 c["needs_redo"] = fields["needs_redo"]
+            if "description" in fields:
+                if not is_reference(c):
+                    raise ValueError("description is only for a reference")
+                c["description"] = clean_description(fields["description"])
+            if "category" in fields:
+                self._set_reference_category(doc, c, fields["category"])
+            if "pick_version_id" in fields:
+                self._set_reference_pick(pid, c, fields["pick_version_id"])
+            if "prompt" in fields or "ref_links" in fields:
+                incoming = fields["ref_links"] if "ref_links" in fields else None
+                prompt = c.get("prompt") if isinstance(c.get("prompt"), str) else ""
+                c["ref_links"] = merge_ref_links(c.get("ref_links"), incoming, prompt, active_references(self._cuts_map(doc)))
             bump_entity(c)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "update_cut", cut_id)
@@ -753,6 +772,8 @@ class LocalStore:
             if not c or c.get("deleted_at"):
                 raise ValueError("cut not found")
             c["name"] = name
+            if is_reference(c):
+                self._reject_duplicate_reference(doc, c)
             bump_entity(c)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "rename_cut", cut_id)
@@ -833,9 +854,38 @@ class LocalStore:
             self._save_project_doc(pid, doc, "import_structure", pid)
             return doc
 
+    def _reject_duplicate_reference(self, doc, ref: dict[str, Any]) -> None:
+        key = (str(ref.get("category") or "").lower(), str(ref.get("name") or "").strip().lower())
+        for other in self._cuts_map(doc).values():
+            if other is ref or not is_reference(other) or other.get("deleted_at"):
+                continue
+            if (str(other.get("category") or "").lower(), str(other.get("name") or "").strip().lower()) == key:
+                raise ValueError("this reference already exists")
+
+    def _set_reference_category(self, doc, ref: dict[str, Any], category: Any) -> None:
+        if not is_reference(ref):
+            raise ValueError("category is only for a reference")
+        if category not in REF_CATEGORIES:
+            raise ValueError("name and a valid category are required")
+        ref["category"] = category
+        self._reject_duplicate_reference(doc, ref)
+
+    def _set_reference_pick(self, pid: str, ref: dict[str, Any], vid: Any) -> None:
+        if not is_reference(ref):
+            raise ValueError("pick_version_id is only for a reference")
+        if vid is None or vid == "":
+            ref["pick_version_id"] = None
+            return
+        if not isinstance(vid, str) or not vid.strip() or len(vid) > 80:
+            raise ValueError("pick_version_id must be a version id or null")
+        vid = vid.strip()
+        if not any(v.get("id") == vid for v in self.list_versions(pid, ref["id"])):
+            raise ValueError("version not found")
+        ref["pick_version_id"] = vid
+
     def _add_reference_locked(self, doc, name, category, sha, skip_bad=False):
         nm = str(name or "").strip()[:80]
-        if category not in self._REF_CATEGORIES or not nm:
+        if category not in REF_CATEGORIES or not nm:
             if skip_bad:
                 return None
             raise ValueError("name and a valid category are required")
@@ -849,6 +899,7 @@ class LocalStore:
         c = new_cut(None, nm, 3.0, sha)
         c["kind"] = "reference"
         c["category"] = category
+        c["description"] = ""
         cuts[c["id"]] = c
         doc["cuts"] = cuts
         return c

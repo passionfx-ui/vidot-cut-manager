@@ -193,6 +193,27 @@ function workflowLooksLikeVideo(workflow) {
   return Array.isArray(subs) && subs.some((sg) => sg && workflowGraphKind(sg) === "video");
 }
 
+/** Load Image nodes the user can assign a reference to. The start-image node is left out. */
+export function listLoadImageChoices(workflow, excludeId) {
+  const skip = String(excludeId || "");
+  const rows = workflowNodesDeep(workflow).filter((n) => nodeType(n.node) === "LoadImage");
+  const out = [];
+  const seen = new Set();
+  for (const n of rows) {
+    if (!n.id || n.id === skip || seen.has(n.id)) continue;
+    seen.add(n.id);
+    const title = String(n.node?.title || n.node?._meta?.title || "").trim();
+    out.push({ id: n.id, label: title || n.id });
+  }
+  out.sort((a, b) => {
+    const [ka, va] = idKey(a.id);
+    const [kb, vb] = idKey(b.id);
+    if (ka !== kb) return ka - kb;
+    return va < vb ? -1 : va > vb ? 1 : 0;
+  });
+  return out;
+}
+
 export function syncSavedVideoStartImage(workflow) {
   if (!workflowLooksLikeVideo(workflow)) return null;
   const hit = findVideoImageTarget(workflow);

@@ -1088,6 +1088,164 @@ def _comfy_input_dir() -> Path:
     return Path(folder_paths.get_input_directory())
 
 
+def _extract_first_frame(src: Path, vid: str) -> Path | None:
+    """One frame of a video (or animated image) as a jpeg. None when ffmpeg cannot read it."""
+    try:
+        from . import gg_data as gd
+    except ImportError:
+        import gg_data as gd  # type: ignore
+    exe = gd.ffmpeg_exe()
+    if not exe:
+        return None
+    out = gd.CACHE_DIR / "ref_frames" / f"{vid}.jpg"
+    try:
+        if out.is_file() and out.stat().st_mtime >= src.stat().st_mtime and out.stat().st_size > 0:
+            return out
+    except OSError:
+        return None
+    import os
+    import secrets
+    import subprocess
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_name(f"{out.stem}.{os.getpid()}.{secrets.token_hex(4)}.tmp.jpg")
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        subprocess.run(
+            [exe, "-y", "-loglevel", "error", "-i", str(src), "-frames:v", "1", "-q:v", "3", str(tmp)],
+            check=False, capture_output=True, timeout=30, creationflags=flags,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if tmp.is_file() and tmp.stat().st_size > 0:
+        try:
+            tmp.replace(out)
+        except OSError:
+            return tmp if tmp.is_file() else None
+        if out.is_file():
+            return out
+    return None
+
+
+def reference_still_file(src: Path, vid: str) -> Path | None:
+    """Best/latest file as a still: the image itself, or the first frame of a video. None means text only."""
+    if is_still_image(src):
+        return src
+    if not src.is_file():
+        return None
+    return _extract_first_frame(src, vid)
+
+
+def _reference_version_file(pid: str, ref: dict) -> tuple[dict, Path] | None:
+    """The reference's Best version file, else the latest version file."""
+    store = native_store()
+    versions = store.list_versions(pid, ref.get("id") or "")
+    if not versions:
+        return None
+    pick = ref.get("pick_version_id")
+    ordered = []
+    if isinstance(pick, str) and pick:
+        hit = next((v for v in versions if v.get("id") == pick), None)
+        if hit:
+            ordered.append(hit)
+    for ver in versions:
+        if ver not in ordered:
+            ordered.append(ver)
+    for ver in ordered:
+        path = store.version_file(pid, ver)
+        if path is not None and path.is_file():
+            return ver, path
+    return None
+
+
+def reference_prompt_text(doc: dict, cut: dict, text: str, *, mention_prompt: str | None = None) -> str:
+    """@Name becomes the plain name, then a References block is appended. The caption field is not read here."""
+    from gg_project.ref_links import inject_prompt_text
+
+    cuts = doc.get("cuts") if isinstance(doc, dict) and isinstance(doc.get("cuts"), dict) else {}
+    source = mention_prompt if isinstance(mention_prompt, str) else (cut.get("prompt") if isinstance(cut.get("prompt"), str) else text)
+    return inject_prompt_text(text or "", cuts, cut if isinstance(cut, dict) else {}, source)
+
+
+def apply_reference_images(doc: dict, cut: dict, wf: dict, exclude_ids: list | None = None) -> list:
+    """Stage each linked reference into the Load Image node stored on its link.
+
+    The Start Image / selected-take node is never written. No slot, no still, or a failed
+    copy leaves that reference as text. Returns refs_used for the version meta.
+    """
+    from gg_project.ref_links import generation_links
+
+    if not isinstance(wf, dict) or not isinstance(cut, dict):
+        return []
+    cuts = doc.get("cuts") if isinstance(doc, dict) and isinstance(doc.get("cuts"), dict) else {}
+    prompt = cut.get("prompt") if isinstance(cut.get("prompt"), str) else ""
+    links = generation_links(cuts, cut, prompt)
+    exclude = {str(x) for x in (exclude_ids or []) if isinstance(x, str) and x}
+    try:
+        exclude.add(gg_wfnodes.find_start_image_node(wf)[0])
+    except gg_wfnodes.NodeNotFound:
+        pass
+    pid = doc.get("id") if isinstance(doc, dict) else ""
+    by_id = cuts if isinstance(cuts, dict) else {}
+    used = []
+    for link in links:
+        if link.get("missing"):
+            continue
+        mode = "text"
+        slot = link.get("slot") if isinstance(link.get("slot"), str) else None
+        staged_slot = None
+        if slot and slot not in exclude and isinstance(pid, str) and pid:
+            ref = by_id.get(link["ref_id"])
+            if isinstance(ref, dict):
+                try:
+                    found = _reference_version_file(pid, ref)
+                    still = reference_still_file(found[1], found[0]["id"]) if found else None
+                    if still is not None:
+                        name = stage_start_image(still, found[0]["id"])
+                        gg_wfnodes.set_node_image(wf, slot, name)
+                        mode = "image"
+                        staged_slot = slot
+                except (gg_wfnodes.NodeNotFound, OSError, ValueError):
+                    mode = "text"
+                    staged_slot = None
+        row = {
+            "ref_id": link["ref_id"],
+            "name": link.get("name") or "",
+            "category": link.get("category") or "Other",
+            "mode": mode,
+        }
+        if staged_slot:
+            row["slot"] = staged_slot
+        used.append(row)
+    return used
+
+
+def apply_cut_references(doc: dict, cut: dict, wf: dict, *, video: bool = False) -> tuple[dict, list]:
+    """Write the injected prompt when it differs, then fill reference image slots. Never queues.
+
+    The caption field is not edited. A video prompt still gets the same Dialogue suffix after the
+    reference block.
+    """
+    if not isinstance(cut, dict) or not isinstance(wf, dict):
+        return wf, []
+    base = cut_prompt_text(cut)
+    plain = cut_video_prompt_text(cut) if video else base
+    injected = ""
+    if base:
+        raw_prompt = cut.get("prompt") if isinstance(cut.get("prompt"), str) else ""
+        injected = reference_prompt_text(doc, cut, base, mention_prompt=raw_prompt)
+        if video:
+            cap = cut_caption_text(cut)
+            if cap:
+                injected = f'{injected} Dialogue: "{cap}"'
+    if injected and injected != plain:
+        try:
+            gg_wfnodes.set_prompt(wf, injected)
+        except gg_wfnodes.NodeNotFound:
+            pass
+    return wf, apply_reference_images(doc, cut, wf)
+
+
 def stage_start_image(src: Path, vid: str) -> str:
     """Copy a version image to ComfyUI's input/gonggan/start_<version id>.<ext> (once per version, the version
     file is never changed) and return the Load Image name for it."""
@@ -1168,7 +1326,17 @@ def native_image_to_video_workflow(pid: str, cut_id: str, selected_vid: str | No
         gg_wfnodes.find_start_image_node(graph)
         prefer_id = None
     ver, path = pick_start_version(pid, cut_id, selected_vid, start_vid)
-    prompt = cut_video_prompt_text(cut) or _version_prompt(pid, ver, path)
+    base = cut_prompt_text(cut)
+    if base:
+        raw_prompt = cut.get("prompt") if isinstance(cut.get("prompt"), str) else ""
+        prompt = reference_prompt_text(doc, cut, base, mention_prompt=raw_prompt)
+        cap = cut_caption_text(cut)
+        if cap:
+            prompt = f'{prompt} Dialogue: "{cap}"'
+    else:
+        prompt = _version_prompt(pid, ver, path)
+        if prompt:
+            prompt = reference_prompt_text(doc, cut, prompt, mention_prompt=prompt)
     if not prompt:
         raise ValueError("This cut has no description. Add a caption first.")
     sec = cut_generation_seconds(doc, cut_id)
@@ -1185,8 +1353,10 @@ def native_image_to_video_workflow(pid: str, cut_id: str, selected_vid: str | No
             node = gg_wfnodes.set_start_image(wf, image)
     else:
         node = gg_wfnodes.set_start_image(wf, image)
+    refs_used = apply_reference_images(doc, cut, wf, exclude_ids=[node])
     return {"workflow": wf, "template": label, "start_version": ver["id"], "start_node": node, "image": image,
-            "prompt": prompt, "frames": gg_ltx.frames_for_duration(float(sec), gg_ltx.workflow_fps(wf))}
+            "prompt": prompt, "frames": gg_ltx.frames_for_duration(float(sec), gg_ltx.workflow_fps(wf)),
+            "refs_used": refs_used}
 
 
 def _skip_native_media_lookup(media_id: str) -> bool:

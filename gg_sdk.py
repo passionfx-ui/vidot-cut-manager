@@ -310,11 +310,25 @@ def _native_api():
     return gg_native_api
 
 
+_PLAN_REFS: dict[str, list] = {}
+
+
 def _save_native_plan(pid: str, cut_id: str, wf: dict) -> str:
     name = f"native_{pid}_{cut_id}_{time.strftime('%Y%m%d-%H%M%S')}_{secrets.token_hex(3)}"
     REGEN_DIR.mkdir(parents=True, exist_ok=True)
     (REGEN_DIR / f"{name}.json").write_text(json.dumps(wf, ensure_ascii=False, indent=1), encoding="utf-8")
     return name
+
+
+def _remember_plan_refs(plan_name: str, refs_used) -> None:
+    if isinstance(plan_name, str) and isinstance(refs_used, list) and refs_used:
+        _PLAN_REFS[plan_name] = refs_used
+
+
+def _take_plan_refs(plan_name: str):
+    if not isinstance(plan_name, str):
+        return None
+    return _PLAN_REFS.pop(plan_name, None)
 
 
 def _project_gen_size(doc: dict, wf: dict, *, video: bool = False) -> dict:
@@ -405,11 +419,17 @@ def native_plan(pid: str, cut_id: str, *, new_seed: bool, canvas: dict | None = 
     else:
         seeds = workflow_seeds(wf)
     start = na.fill_titled_start_image(pid, cut_id, wf) if fill_start else None
+    video_prompt = gg_ltx.workflow_has_ltx_length(wf)
+    refs_used: list = []
+    if isinstance(cut, dict):
+        wf, refs_used = na.apply_cut_references(doc, cut, wf, video=video_prompt)
     name = _save_native_plan(pid, cut_id, wf)
+    _remember_plan_refs(name, refs_used)
     return {"pid": pid, "cut_id": cut_id, "plan": name, "source": source, "new_seed": bool(new_seed),
             "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf),
             "gen_size": gen_size,
-            **({"start_version": start} if start else {})}
+            **({"start_version": start} if start else {}),
+            **({"refs_used": refs_used} if refs_used else {})}
 
 
 def _wire_saved_video_start_image(na, pid: str, cut_id: str, wf: dict) -> None:
@@ -477,11 +497,14 @@ def native_regen_video_plan(pid: str, cut_id: str, video_vid: str, *, new_seed: 
         wf, seeds = randomize_seeds(wf)
     else:
         seeds = workflow_seeds(wf)
+    wf, refs_used = na.apply_cut_references(doc, cut, wf, video=True)
     name = _save_native_plan(pid, cut_id, wf)
+    _remember_plan_refs(name, refs_used)
     return {"pid": pid, "cut_id": cut_id, "plan": name, "source": source, "new_seed": bool(new_seed),
             "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf),
             "gen_size": gen_size,
-            "start_version": video_vid, "job": "regen"}
+            "start_version": video_vid, "job": "regen",
+            **({"refs_used": refs_used} if refs_used else {})}
 
 
 def queue_job_plan(pid: str, cut_id: str, job: str, *, selected_vid: str | None = None, new_seed: bool = False) -> dict:
@@ -512,9 +535,12 @@ def image_to_video_plan(pid: str, cut_id: str, selected_vid: str | None = None,
     else:
         seeds = workflow_seeds(wf)
     name = _save_native_plan(pid, cut_id, wf)
+    refs_used = info.get("refs_used") if isinstance(info.get("refs_used"), list) else []
+    _remember_plan_refs(name, refs_used)
     return {"pid": pid, "cut_id": cut_id, "plan": name, "source": "image_to_video", "new_seed": bool(new_seed),
             "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf), "gen_size": gen_size,
-            **{k: info[k] for k in ("template", "start_version", "start_node", "image", "prompt", "frames")}}
+            **{k: info[k] for k in ("template", "start_version", "start_node", "image", "prompt", "frames")},
+            **({"refs_used": refs_used} if refs_used else {})}
 
 
 BLACK_VIDEO_RETRY_NOTE = "Black video. Retried once automatically with a new seed."
@@ -547,15 +573,18 @@ def _retry_plan_file(wf_file: Path) -> Path:
     return dest
 
 
-def _run_native_worker(wf_file: Path, pid: str, cut_id: str, retry_black: bool = True) -> None:
+def _run_native_worker(wf_file: Path, pid: str, cut_id: str, retry_black: bool = True, refs_used=None) -> None:
     wf = json.loads(Path(wf_file).read_text(encoding="utf-8"))
+    if refs_used is None:
+        refs_used = _take_plan_refs(wf_file.stem)
     res = _runner(["run", "--workflow", str(wf_file), "--confirm"], timeout=1800)
     if not res.get("ok"):
         _set(status="error", error=res.get("error") or res.get("message"), finished_at=time.time())
         return
+    gen = {"refs_used": refs_used} if isinstance(refs_used, list) and refs_used else None
     try:
         cap = _native_api().native_capture_prompt_output(
-            pid, cut_id, str(res.get("job_id") or ""), wait_sec=15, api_workflow=wf,
+            pid, cut_id, str(res.get("job_id") or ""), wait_sec=15, api_workflow=wf, gen=gen,
         )
     except Exception as ex:  # noqa: BLE001
         cap = {"ok": False, "message": str(ex)}
@@ -573,7 +602,7 @@ def _run_native_worker(wf_file: Path, pid: str, cut_id: str, retry_black: bool =
                 _set(status="error", error=f"Black video; the retry could not start: {ex}", finished_at=time.time())
                 return
             _set(note="Black video. Retrying once with a new seed.")
-            _run_native_worker(retry, pid, cut_id, retry_black=False)
+            _run_native_worker(retry, pid, cut_id, retry_black=False, refs_used=refs_used)
             return
         try:
             store.mark_version_failed(pid, cut_id, ver["id"], BLACK_VIDEO_FAILED_MSG)

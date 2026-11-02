@@ -93,6 +93,18 @@ import { cutCardIdleWord, cutCardRenderView } from "./gg_cut_card_status_core.js
 import { bindLoadImageUi, installLoadImageQueueGuard, scheduleLoadImageScan } from "./gg_loadimage.js";
 import { REFERENCE_CATEGORIES } from "./gg_import_core.js";
 import {
+  applyMention,
+  displayRefLinks,
+  injectPromptText,
+  mentionAutocomplete,
+  mentionToken,
+  referenceStatusText,
+  referenceUseMode,
+  referencesConfirmLine,
+  stripMention,
+  unknownMentionTokens,
+} from "./gg_reference_core.js";
+import {
   folderNotCreated,
   loadLastLocation,
   newProjectFolderPreviewText,
@@ -187,7 +199,7 @@ import {
   shouldReuseOpenWorkflow,
   workflowContentKey,
 } from "./gg_project_store_core.js";
-import { findStartImageNode, findVideoImageTarget, syncSavedVideoStartImage } from "./gg_start_image_core.js";
+import { findStartImageNode, findVideoImageTarget, listLoadImageChoices, syncSavedVideoStartImage } from "./gg_start_image_core.js";
 import {
   applyCutData,
   cloneGraph,
@@ -1967,174 +1979,521 @@ function openProjectSettingsModal() {
   folderIn.focus();
 }
 
-let refsModalEl = null;
-const refsUi = { cat: "All" };
+const refsUi = { cat: "All", adding: false };
+const REFS_COLLAPSE_KEY = "gg.refsCollapsed";
 
-function closeReferencesModal() {
-  if (refsModalEl) {
-    refsModalEl.remove();
-    refsModalEl = null;
+function refsCollapsed() {
+  try {
+    return localStorage.getItem(REFS_COLLAPSE_KEY) === "1";
+  } catch {
+    return false;
   }
+}
+
+function setRefsCollapsed(on) {
+  try {
+    localStorage.setItem(REFS_COLLAPSE_KEY, on ? "1" : "0");
+  } catch { /* keep the fold for this paint only */ }
+}
+
+function activeReferences() {
+  return (state.timeline?.references || []).filter((r) => r && r.id);
+}
+
+function referenceById(id) {
+  return activeReferences().find((r) => r.id === id) || null;
+}
+
+function selectedReference() {
+  const id = state.cutId;
+  if (!id || !state.timeline) return null;
+  if ((state.timeline.cuts || []).some((c) => c.id === id)) return null;
+  return referenceById(id);
+}
+
+function cutPromptNow(cut) {
+  const open = cut && state.cutId === cut.id ? document.querySelector("#gg-root .gg-prompt-text") : null;
+  if (open && document.activeElement === open) return open.value;
+  return cut?.prompt || "";
+}
+
+function cutRefRows(cut) {
+  if (!cut) return [];
+  return displayRefLinks(cutPromptNow(cut), cut.ref_links, activeReferences());
+}
+
+function loadImageChoicesForCut(cutId) {
+  const wf = cutId && cutId === state.cutId ? state.cutWorkflow : null;
+  if (!wf) return [];
+  let exclude = "";
+  try {
+    exclude = findVideoImageTarget(wf)?.id || "";
+  } catch {
+    exclude = "";
+  }
+  return listLoadImageChoices(wf, exclude);
+}
+
+function referenceThumbHtml(media) {
+  return media?.id
+    ? `<img src="${esc(posterUrl(media.id))}" loading="lazy" alt="" />`
+    : `<span class="gg-ref-empty">No image yet</span>`;
 }
 
 function referenceCardHtml(r) {
-  const img = r.media
-    ? `<img src="${esc(posterUrl(r.media.id))}" loading="lazy" alt="" />`
-    : `<span class="gg-ref-empty">No image yet</span>`;
-  return `
-    <div class="gg-ref" data-ref-id="${esc(r.id)}">
-      <div class="gg-ref-thumb">${img}</div>
-      <div class="gg-ref-name" title="${esc(r.name)}">${esc(r.name)}</div>
-      <div class="gg-ref-cat">${esc(r.category)}</div>
-      <div class="gg-ref-actions">
-        <button type="button" class="gg-btn gg-ref-gen" title="Open this reference's workflow in a ComfyUI tab. Run it, then click Add last output.">Generate</button>
-        <button type="button" class="gg-btn gg-ref-add" title="Use ComfyUI's last output as this reference's image">Add last output</button>
-        <button type="button" class="gg-btn gg-ref-rename">Rename</button>
-        <button type="button" class="gg-btn gg-ref-del">Delete</button>
-      </div>
+  const on = state.cutId === r.id ? " on" : "";
+  return `<div class="gg-ref-card${on}" data-ref-id="${esc(r.id)}" data-cut-id="${esc(r.id)}" title="${esc(r.name)}">
+    <div class="gg-ref-thumb">${referenceThumbHtml(r.media)}</div>
+    <div class="gg-ref-main">
+      <b class="gg-ref-name">${esc(r.name)}</b>
+      <span class="gg-ref-cat">${esc(r.category || "Other")}</span>
+      <span class="gg-ref-status">${esc(referenceStatusText(r))}</span>
+    </div>
+  </div>`;
+}
+
+function referencesGroupHtml() {
+  if (!isNativeProject(state.timeline)) return "";
+  const all = activeReferences();
+  const cat = refsUi.cat && (refsUi.cat === "All" || REFERENCE_CATEGORIES.includes(refsUi.cat)) ? refsUi.cat : "All";
+  refsUi.cat = cat;
+  const shown = cat === "All" ? all : all.filter((r) => r.category === cat);
+  const open = !refsCollapsed();
+  const chips = ["All", ...REFERENCE_CATEGORIES].map((c) =>
+    `<button type="button" class="gg-ref-filter${c === cat ? " on" : ""}" data-ref-filter="${esc(c)}">${esc(c)}</button>`
+  ).join("");
+  const cards = shown.map(referenceCardHtml).join("")
+    || `<div class="gg-ref-none">${all.length ? "No references in this category." : "No references yet."}</div>`;
+  const form = refsUi.adding
+    ? `<form class="gg-ref-add-form">
+        <input class="gg-ref-add-name" maxlength="80" placeholder="Name" />
+        <select class="gg-ref-add-cat">${REFERENCE_CATEGORIES.map((c) => `<option${c === "Character" ? " selected" : ""}>${esc(c)}</option>`).join("")}</select>
+        <button type="submit">Add</button>
+        <button type="button" class="gg-ref-add-cancel">Cancel</button>
+      </form>`
+    : "";
+  return `<section class="gg-ref-group${open ? "" : " collapsed"}">
+    <div class="gg-ref-head">
+      <button type="button" class="gg-ref-fold" aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>
+      <span class="gg-ref-title">References (${all.length})</span>
+      <button type="button" class="gg-ref-add-btn">+ Add reference</button>
+    </div>
+    ${open ? `<div class="gg-ref-filters">${chips}</div>${form}<div class="gg-ref-cards">${cards}</div>` : ""}
+  </section>`;
+}
+
+function refSlotOptions(cut, row) {
+  const choices = loadImageChoicesForCut(cut.id);
+  const cur = row.slot || "";
+  const opts = [`<option value="">None</option>`].concat(choices.map((c) =>
+    `<option value="${esc(c.id)}"${c.id === cur ? " selected" : ""}>${esc(c.label)}</option>`
+  ));
+  if (cur && !choices.some((c) => c.id === cur)) {
+    opts.push(`<option value="${esc(cur)}" selected>${esc(cur)}</option>`);
+  }
+  return opts.join("");
+}
+
+function cutReferencesRowHtml(cut) {
+  const rows = cutRefRows(cut);
+  const chips = rows.map((row) => {
+    const thumb = row.missing
+      ? `<span class="gg-ref-empty">?</span>`
+      : referenceThumbHtml(row.media);
+    const label = row.missing ? `${row.name} missing` : `@${mentionToken(row.name)}`;
+    return `<span class="gg-ref-linkchip${row.missing ? " missing" : ""}" data-ref-id="${esc(row.ref_id)}">
+      <span class="gg-ref-chip-thumb">${thumb}</span>
+      <span class="gg-ref-chip-name">${esc(label)}</span>
+      <label class="gg-ref-slot">Slot <select data-ref-slot="${esc(row.ref_id)}">${refSlotOptions(cut, row)}</select></label>
+      <button type="button" class="gg-ref-unlink" data-ref-unlink="${esc(row.ref_id)}" title="Unlink">×</button>
+    </span>`;
+  }).join("");
+  const unknown = unknownMentionTokens(cutPromptNow(cut), activeReferences()).map((tok) =>
+    `<span class="gg-ref-linkchip unknown">Unknown @${esc(tok)}</span>`
+  ).join("");
+  const choices = activeReferences().filter((r) => !rows.some((row) => row.ref_id === r.id));
+  const menu = choices.length
+    ? `<select class="gg-ref-link-pick"><option value="">+ Link reference</option>${choices.map((r) =>
+        `<option value="${esc(r.id)}">${esc(r.name)} · ${esc(r.category || "Other")}</option>`
+      ).join("")}</select>`
+    : `<span class="gg-ref-link-empty">+ Link reference</span>`;
+  return `<div class="gg-sel-refs"><div class="gg-sel-label">References</div><div class="gg-sel-ref-row">${chips}${unknown}${menu}</div></div>`;
+}
+
+function selectionDetailHtml() {
+  const ref = selectedReference();
+  if (ref) {
+    return `<div class="gg-sel-detail" data-sel-kind="reference">
+      <label class="gg-sel-field">Name <input data-field="name" value="${esc(ref.name)}" maxlength="80" /></label>
+      <label class="gg-sel-field">Category <select data-field="category">${REFERENCE_CATEGORIES.map((c) =>
+        `<option${c === ref.category ? " selected" : ""}>${esc(c)}</option>`
+      ).join("")}</select></label>
+      <label class="gg-sel-field gg-sel-grow">Description <textarea data-field="description" rows="3" maxlength="4000">${esc(ref.description || "")}</textarea></label>
+      <label class="gg-sel-field gg-sel-grow">Prompt <textarea class="gg-ref-prompt" data-field="prompt" rows="3">${esc(ref.prompt || "")}</textarea></label>
     </div>`;
+  }
+  const cut = cutById(state.cutId, { cutsOnly: true });
+  if (!cut || !isNativeProject(state.timeline)) return "";
+  return `<div class="gg-sel-detail" data-sel-kind="cut">${cutReferencesRowHtml(cut)}</div>`;
 }
 
-function paintReferencesModal() {
-  const wrap = refsModalEl;
-  if (!wrap) return;
-  const all = (state.timeline && state.timeline.references) || [];
-  const cats = ["All", ...REFERENCE_CATEGORIES];
-  if (!cats.includes(refsUi.cat)) refsUi.cat = "All";
-  wrap.querySelector(".gg-refs-chips").innerHTML = cats
-    .map((c) => {
-      const n = c === "All" ? all.length : all.filter((r) => r.category === c).length;
-      return `<button type="button" class="gg-ref-chip${c === refsUi.cat ? " gg-on" : ""}" data-cat="${esc(c)}">${esc(c)} ${n}</button>`;
-    })
-    .join("");
-  const shown = refsUi.cat === "All" ? all : all.filter((r) => r.category === refsUi.cat);
-  const list = wrap.querySelector(".gg-refs-list");
-  list.innerHTML = shown.length
-    ? shown.map(referenceCardHtml).join("")
-    : `<div class="gg-refs-none">${all.length ? "Nothing in this category." : "No references yet. Add a character, place or prop below."}</div>`;
-  const sel = wrap.querySelector(".gg-refs-cat");
-  if (sel && refsUi.cat !== "All" && sel.dataset.touched !== "1") sel.value = refsUi.cat;
+function referenceErrorText(err, fallback) {
+  const msg = err?.message || "";
+  if (/already exists/i.test(msg)) return "A reference with that name already exists in this category.";
+  if (/not a reference/i.test(msg)) return "That item is not a reference.";
+  if (/category must be/i.test(msg)) return "Choose Character, Place, Prop, Style, or Other.";
+  return msg || fallback;
 }
 
-function referenceErrorText(err, what) {
-  return err && (err.status === 404 || err.status === 405) ? `Restart ComfyUI to enable ${what}.` : err.message;
+async function addReferenceFromGroup(name, category) {
+  const clean = normalizeNameInput(name, 80);
+  if (!clean.value) return;
+  await postJson("/gonggan/reference/add", { pid: state.pid, name: clean.value, category: category || "Character" });
+  refsUi.adding = false;
+  await loadTimeline({ keepView: true });
 }
 
-async function openReferenceWorkflow(refId) {
-  const ref = cutById(refId);
+function selectReference(id) {
+  if (!referenceById(id)) return;
+  state.cutSel = new Set();
+  selectCut(id);
+}
+
+async function renameReference(id, nextName) {
+  const ref = referenceById(id);
   if (!ref) return;
-  closeReferencesModal();
-  clearTimeout(wfLoadDebounce);
-  wfLoadDebounce = 0;
-  wfLastLoadedCutId = "";
-  wfLastLoadedProjectId = "";
-  const loadToken = ++wfLoadToken;
-  ggCutLoadsInFlight++;
-  try {
-    await scheduleLoadCutWorkflow(refId, ref, loadToken);
-  } finally {
-    ggCutLoadsInFlight--;
-  }
+  const name = nextName != null
+    ? normalizeNameInput(nextName, 80).value
+    : await askText({ title: "Rename reference", label: "Name", value: ref.name, okLabel: "Rename", maxLength: 80 });
+  if (!name || name === ref.name) return;
+  await saveCutName(id, name);
 }
 
-async function addLastOutputToReference(refId) {
-  const ref = cutById(refId);
-  try {
-    await postJson("/gonggan/send-output", { pid: state.pid, cut_id: refId });
-    await loadTimeline();
-    paintReferencesModal();
-    ggToast("Reference", `Added the last output to ${ref?.name || "the reference"}`, "ok");
-  } catch (err) {
-    ggToast("Reference", err.message, "warn");
-  }
+async function changeReferenceCategory(id, category) {
+  if (!REFERENCE_CATEGORIES.includes(category)) return;
+  await saveCutFields(id, { category });
 }
 
-async function renameReference(refId) {
-  const ref = cutById(refId);
+async function deleteReference(id) {
+  const ref = referenceById(id);
   if (!ref) return;
-  const name = await askText({ title: "Rename reference", label: "Name", value: ref.name, okLabel: "Rename", maxLength: 80 });
-  const clean = name == null ? "" : normalizeNameInput(name, 80).value;
-  if (!clean || clean === ref.name) return;
-  try {
-    await postJson("/gonggan/cut/rename", { pid: state.pid, cut_id: refId, name: clean });
-    await loadTimeline();
-    paintReferencesModal();
-  } catch (err) {
-    ggToast("Reference", referenceErrorText(err, "renaming"), "warn");
-  }
+  const ok = await askConfirm({
+    message: `Delete reference "${ref.name}"?\nIt will be moved to trash.`,
+    okLabel: "Delete",
+    danger: true,
+  });
+  if (!ok) return;
+  await deleteCutsByIds([id], historyStepId());
 }
 
-async function deleteReference(refId) {
-  const ref = cutById(refId);
+async function setReferenceBest(id) {
+  const ref = referenceById(id);
+  const vid = stripSelectedVersionId(ref) || ref?.media?.id || ref?.versions_list?.[0]?.id;
+  if (!ref || !vid) {
+    ggToast("Reference", "Import or generate an image before setting Best.", "warn");
+    return;
+  }
+  await saveCutFields(id, { pick_version_id: vid });
+}
+
+async function importReferenceMedia(id) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = IMPORT_ACCEPT;
+  input.style.display = "none";
+  document.body.appendChild(input);
+  const file = await new Promise((resolve) => {
+    input.addEventListener("change", () => resolve(input.files?.[0] || null), { once: true });
+    input.addEventListener("cancel", () => resolve(null), { once: true });
+    input.click();
+  });
+  input.remove();
+  if (!file || !state.pid) return;
+  const body = new FormData();
+  body.append("pid", state.pid);
+  body.append("cut_id", id);
+  body.append("file", file, importUploadName(file));
+  const res = await fetch(api.apiURL("/gonggan/import-version"), { method: "POST", body });
+  if (!res.ok) throw new Error("Could not import.");
+  await loadTimeline({ keepView: true });
+}
+
+async function useLastOutputOnReference(id) {
+  const ref = referenceById(id);
   if (!ref) return;
-  if (!(await askConfirm({ message: `Delete reference "${ref.name}"?`, danger: true }))) return;
-  try {
-    await postJson("/gonggan/cut/delete", { pid: state.pid, cuts: [refId] });
-    await loadTimeline();
-    paintReferencesModal();
-  } catch (err) {
-    ggToast("Reference", err.message, "warn");
+  const out = await postJson("/gonggan/send-output", { pid: state.pid, cut_id: id });
+  if (!out?.ok) {
+    ggToast("Reference", "No output image to use.", "warn");
+    return;
+  }
+  await loadTimeline({ keepView: true });
+}
+
+function openReferenceMenu(id, x, y) {
+  const ref = referenceById(id);
+  if (!ref) return;
+  const cats = REFERENCE_CATEGORIES.filter((c) => c !== ref.category).map((c) => ({
+    label: c,
+    action: () => changeReferenceCategory(id, c).catch((e) => ggToast("Reference", referenceErrorText(e, "References"), "warn")),
+  }));
+  showCtxMenu(x, y, [
+    { label: "Generate", action: () => generateReference(id) },
+    { label: "Set as Best", action: () => setReferenceBest(id).catch((e) => ggToast("Reference", e.message || "Could not set Best.", "warn")) },
+    { label: "Import Media", action: () => importReferenceMedia(id).catch((e) => ggToast("Reference", e.message || "Could not import.", "warn")) },
+    { label: "Use Last Output", action: () => useLastOutputOnReference(id).catch((e) => ggToast("Reference", e.message || "Could not use the last output.", "warn")) },
+    { label: "Rename", shortcut: "F2", action: () => renameReference(id).catch((e) => ggToast("Reference", referenceErrorText(e, "References"), "warn")) },
+    cats.length ? { label: "Change Category", submenu: cats } : null,
+    { separator: true },
+    { label: "Delete", danger: true, action: () => deleteReference(id).catch((e) => ggToast("Reference", e.message || "Could not delete.", "warn")) },
+  ].filter(Boolean));
+}
+
+async function generateReference(id) {
+  if (!referenceById(id)) return;
+  await flushPendingCutFields();
+  await sdkGenerateNativeCut(id, { newSeed: false });
+}
+
+function saveReferenceLinks(cutId, rows, prompt) {
+  const links = rows.map((row) => ({
+    ref_id: row.ref_id,
+    source: row.source === "mention" ? "mention" : "manual",
+    ...(row.slot ? { slot: row.slot } : {}),
+  }));
+  const fields = { ref_links: links };
+  if (typeof prompt === "string") fields.prompt = prompt;
+  return saveCutFields(cutId, fields);
+}
+
+function linkReferenceToCut(cut, refId) {
+  const ref = referenceById(refId);
+  if (!cut || !ref) return;
+  const rows = cutRefRows(cut).filter((row) => row.ref_id !== ref.id);
+  rows.push({ ref_id: ref.id, source: "manual", slot: null, name: ref.name });
+  saveReferenceLinks(cut.id, rows).catch((e) => ggToast("References", e.message || "Could not link.", "warn"));
+}
+
+function unlinkReferenceFromCut(cut, refId) {
+  const row = cutRefRows(cut).find((r) => r.ref_id === refId);
+  if (!cut || !row) return;
+  let prompt = cutPromptNow(cut);
+  if (row.name) prompt = stripMention(prompt, row.name);
+  const ta = document.querySelector(`#gg-root .gg-cut[data-cut-id="${CSS.escape(cut.id)}"] .gg-prompt-text`);
+  if (ta && ta.value !== prompt) ta.value = prompt;
+  const rows = displayRefLinks(prompt, cut.ref_links, activeReferences()).filter((r) => r.ref_id !== refId);
+  const links = rows.map((item) => ({
+    ref_id: item.ref_id,
+    source: item.source === "mention" ? "mention" : "manual",
+    ...(item.slot ? { slot: item.slot } : {}),
+  }));
+  scheduleCutFieldSave(cut.id, { ref_links: links, prompt }, { prompt: cut.prompt || "", ref_links: cut.ref_links || [] });
+  refreshOpenCutRefChips();
+}
+
+function setReferenceSlot(cut, refId, slot) {
+  const rows = cutRefRows(cut).map((row) => row.ref_id === refId ? { ...row, slot: slot || null } : row);
+  saveReferenceLinks(cut.id, rows).catch((e) => ggToast("References", e.message || "Could not set the slot.", "warn"));
+}
+
+function referencesLineForCut(cut) {
+  if (!cut) return "";
+  return referencesConfirmLine(cutRefRows(cut));
+}
+
+function bindMentionField(field) {
+  if (!field || field.dataset.mentionBound) return;
+  field.dataset.mentionBound = "1";
+  field.addEventListener("input", () => {
+    showMentionPopup(field);
+    refreshOpenCutRefChips();
+  });
+  field.addEventListener("keydown", (e) => {
+    const pop = mentionPopupEl;
+    if (!pop) return;
+    const items = [...pop.querySelectorAll("[data-mention-name]")];
+    const cur = items.findIndex((el) => el.classList.contains("on"));
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      e.stopPropagation();
+      const next = e.key === "ArrowDown" ? Math.min(items.length - 1, cur + 1) : Math.max(0, cur - 1);
+      items.forEach((el, i) => el.classList.toggle("on", i === next));
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      const pick = items[cur] || items[0];
+      if (!pick) return;
+      e.preventDefault();
+      e.stopPropagation();
+      commitMention(field, pick.dataset.mentionName);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closeMentionPopup();
+    }
+  }, true);
+  field.addEventListener("blur", () => setTimeout(closeMentionPopup, 120));
+}
+
+let mentionPopupEl = null;
+
+function closeMentionPopup() {
+  if (mentionPopupEl) {
+    mentionPopupEl.remove();
+    mentionPopupEl = null;
   }
 }
 
-function openReferencesModal() {
-  if (!isNativeProject() || !state.pid) return;
-  closeProjectModal();
-  closeReferencesModal();
-  const wrap = document.createElement("div");
-  wrap.className = "gg-modal-backdrop";
-  wrap.innerHTML = `
-    <div class="gg-modal gg-refs" role="dialog" aria-label="References">
-      <h3 class="gg-modal-title">References</h3>
-      <div class="gg-refs-chips"></div>
-      <div class="gg-refs-list"></div>
-      <form class="gg-refs-form">
-        <input type="text" class="gg-refs-name" maxlength="80" placeholder="New reference name" autocomplete="off" />
-        <select class="gg-refs-cat">${REFERENCE_CATEGORIES.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
-        <button type="submit" class="gg-btn gg-primary">+ New</button>
-      </form>
-      <div class="gg-refs-hint">Generate opens the workflow in a ComfyUI tab. Run it, then come back and click Add last output.</div>
-      <div class="gg-modal-actions"><button type="button" class="gg-btn gg-refs-close">Close</button></div>
-    </div>`;
-  document.body.appendChild(wrap);
-  refsModalEl = wrap;
-  paintReferencesModal();
-  wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeReferencesModal(); });
-  wrap.querySelector(".gg-refs-close").addEventListener("click", closeReferencesModal);
-  wrap.querySelector(".gg-refs-cat").addEventListener("change", (e) => { e.target.dataset.touched = "1"; });
-  wrap.addEventListener("click", (e) => {
-    const chip = e.target.closest(".gg-ref-chip");
-    if (chip) {
-      refsUi.cat = chip.dataset.cat;
-      const sel = wrap.querySelector(".gg-refs-cat");
-      if (sel) sel.dataset.touched = "";
-      paintReferencesModal();
+function showMentionPopup(field) {
+  closeMentionPopup();
+  const hit = mentionAutocomplete(field.value, field.selectionStart || 0, activeReferences());
+  if (!hit || !hit.items.length) return;
+  const pop = document.createElement("div");
+  pop.className = "gg-mention-pop";
+  pop.innerHTML = hit.items.map((r, i) => {
+    const ref = referenceById(r.id);
+    return `<button type="button" data-mention-name="${esc(r.name)}" class="${i === 0 ? "on" : ""}">@${esc(mentionToken(r.name))} <small>${esc(ref?.category || "Other")}</small></button>`;
+  }).join("");
+  document.body.appendChild(pop);
+  const rect = field.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, rect.left)}px`;
+  pop.style.top = `${rect.bottom + 4}px`;
+  pop.querySelectorAll("[data-mention-name]").forEach((btn) => {
+    btn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      commitMention(field, btn.dataset.mentionName);
+    });
+  });
+  mentionPopupEl = pop;
+}
+
+function commitMention(field, name) {
+  const hit = mentionAutocomplete(field.value, field.selectionStart || 0, activeReferences());
+  closeMentionPopup();
+  if (!hit) return;
+  const next = applyMention(field.value, hit.at, field.selectionStart || 0, mentionToken(name));
+  field.value = next.text;
+  field.focus();
+  field.setSelectionRange(next.caret, next.caret);
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+  field.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function withReferenceConfirm(message, cuts) {
+  const list = (cuts || []).filter(Boolean);
+  const lines = [];
+  for (const cut of list) {
+    const line = referencesLineForCut(cut);
+    if (!line) continue;
+    lines.push(list.length > 1 ? `${shotTitle(cut)} — ${line}` : line);
+  }
+  if (!lines.length) return message;
+  return `${message}\n${lines.join("\n")}`;
+}
+
+function repaintShots() {
+  bus.dispatchEvent(new Event("timeline"));
+}
+
+function bindReferenceGroup(root) {
+  const group = root.querySelector(".gg-ref-group");
+  if (!group) return;
+  group.querySelector(".gg-ref-fold")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setRefsCollapsed(!refsCollapsed());
+    repaintShots();
+  });
+  group.querySelector(".gg-ref-add-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    refsUi.adding = true;
+    refsUi.focusAdd = true;
+    repaintShots();
+  });
+  group.querySelectorAll("[data-ref-filter]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      refsUi.cat = btn.dataset.refFilter || "All";
+      repaintShots();
+    });
+  });
+  group.querySelector(".gg-ref-add-cancel")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    refsUi.adding = false;
+    repaintShots();
+  });
+  group.querySelector(".gg-ref-add-form")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const name = group.querySelector(".gg-ref-add-name")?.value || "";
+    const category = group.querySelector(".gg-ref-add-cat")?.value || "Character";
+    addReferenceFromGroup(name, category).catch((err) => ggToast("Reference", referenceErrorText(err, "References"), "warn"));
+  });
+  group.querySelectorAll(".gg-ref-card").forEach((card) => {
+    card.addEventListener("click", (e) => {
+      e.stopPropagation();
+      selectReference(card.dataset.refId);
+    });
+    card.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      selectReference(card.dataset.refId);
+      openReferenceMenu(card.dataset.refId, e.clientX, e.clientY);
+    });
+  });
+  if (refsUi.focusAdd) {
+    refsUi.focusAdd = false;
+    group.querySelector(".gg-ref-add-name")?.focus();
+  }
+}
+
+function bindSelectionDetail(root) {
+  const detail = root.querySelector(".gg-sel-detail");
+  if (!detail || detail.dataset.bound) return;
+  detail.dataset.bound = "1";
+  detail.querySelectorAll("[data-field='prompt'], .gg-prompt-text").forEach((el) => bindMentionField(el));
+  detail.addEventListener("change", (e) => {
+    const ref = selectedReference();
+    const slot = e.target?.dataset?.refSlot;
+    const liveCut = () => (state.timeline?.cuts || []).find((c) => c.id === state.cutId) || null;
+    if (slot && !ref) {
+      const live = liveCut();
+      if (live) setReferenceSlot(live, slot, e.target.value || "");
       return;
     }
-    const card = e.target.closest(".gg-ref");
-    const id = card?.dataset.refId;
-    if (!id) return;
-    if (e.target.closest(".gg-ref-gen")) openReferenceWorkflow(id);
-    else if (e.target.closest(".gg-ref-add")) addLastOutputToReference(id);
-    else if (e.target.closest(".gg-ref-rename")) renameReference(id);
-    else if (e.target.closest(".gg-ref-del")) deleteReference(id);
-  });
-  wrap.querySelector(".gg-refs-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const nameIn = wrap.querySelector(".gg-refs-name");
-    const name = normalizeNameInput(nameIn.value, 80).value;
-    if (!name) return;
-    const category = wrap.querySelector(".gg-refs-cat").value;
-    try {
-      await postJson("/gonggan/reference/add", { pid: state.pid, name, category });
-      nameIn.value = "";
-      await loadTimeline();
-      paintReferencesModal();
-    } catch (err) {
-      ggToast("Reference", referenceErrorText(err, "References"), "warn");
+    if (!ref) {
+      if (e.target?.classList?.contains("gg-ref-link-pick") && e.target.value) {
+        const live = liveCut();
+        if (live) linkReferenceToCut(live, e.target.value);
+      }
+      return;
+    }
+    const field = e.target?.dataset?.field;
+    if (field === "name") {
+      renameReference(ref.id, e.target.value).catch((err) => ggToast("Reference", referenceErrorText(err, "References"), "warn"));
+    } else if (field === "category") {
+      changeReferenceCategory(ref.id, e.target.value).catch((err) => ggToast("Reference", referenceErrorText(err, "References"), "warn"));
     }
   });
-  wrap.querySelector(".gg-refs-name").focus();
+  detail.addEventListener("click", (e) => {
+    const btn = e.target.closest?.("[data-ref-unlink]");
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const live = (state.timeline?.cuts || []).find((c) => c.id === state.cutId);
+    if (live) unlinkReferenceFromCut(live, btn.dataset.refUnlink);
+  });
+  detail.addEventListener("input", (e) => {
+    const ref = selectedReference();
+    const field = e.target?.dataset?.field;
+    if (!ref || (field !== "description" && field !== "prompt")) return;
+    scheduleCutFieldSave(ref.id, { [field]: e.target.value }, { [field]: ref[field] || "" });
+  });
+}
+
+function refreshOpenCutRefChips() {
+  const host = document.querySelector("#gg-root .gg-sel-detail[data-sel-kind='cut'] .gg-sel-ref-row");
+  const cut = cutById(state.cutId, { cutsOnly: true });
+  if (!host || !cut) return;
+  const wrap = document.createElement("div");
+  wrap.innerHTML = cutReferencesRowHtml(cut);
+  const row = wrap.querySelector(".gg-sel-ref-row");
+  if (row) host.replaceWith(row);
 }
 let askTextEl = null;
 
@@ -2325,7 +2684,6 @@ function openProjectContextMenu(e) {
   const nat = isNativeProject();
   showCtxMenu(e.clientX, e.clientY, [
     { label: "New Project…", action: () => openNewProjectModal() },
-    { label: "References…", disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => openReferencesModal() },
     { label: "Project Settings…", disabled: !state.pid, action: () => openProjectSettingsModal() },
     { label: "Rename Project…", disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => renameNativeProject() },
     { label: "Delete Project", danger: true, disabled: !nat, title: nat ? "" : NATIVE_ONLY_TIP, action: () => deleteNativeProject() },
@@ -3422,6 +3780,8 @@ let ggQueuedStartFile = "";
 let ggQueuedStartNode = "";
 /** Snapshot taken just before queuePrompt, attached to the returned prompt_id. */
 let ggPendingQueueSnap = null;
+let ggQueuedRefFiles = [];
+let ggQueuedPromptPack = null;
 /** Per-cut negative prompt, seed, input image, and frames. Positive prompt stays on the cut. */
 const cutDataMap = new Map();
 let cutDataFileTimer = 0;
@@ -5949,7 +6309,7 @@ async function ungroupSceneGroup(groupId) {
 function cutSelIds() {
   const cuts = state.timeline ? state.timeline.cuts : [];
   const ids = cuts.filter((c) => state.cutSel.has(c.id)).map((c) => c.id);
-  if (!ids.length && state.cutId) ids.push(state.cutId);
+  if (!ids.length && state.cutId && cuts.some((c) => c.id === state.cutId)) ids.push(state.cutId);
   return ids;
 }
 
@@ -5995,7 +6355,7 @@ function orderCutIds(ids) {
 
 async function createSceneGroup(cutIds) {
   let ids = orderCutIds(cutIds && cutIds.length ? cutIds : cutSelIds());
-  if (!ids.length && state.cutId) ids = [state.cutId];
+  if (!ids.length && state.cutId && (state.timeline?.cuts || []).some((c) => c.id === state.cutId)) ids = [state.cutId];
   if (!ids.length) return;
   const title = await askText({
     title: "Scene name",
@@ -8516,6 +8876,10 @@ function toggleBest(cutId, vid) {
 }
 
 async function setPick(cutId, vid, opts = {}) {
+  if (referenceById(cutId)) {
+    await saveCutFields(cutId, { pick_version_id: vid || null });
+    return;
+  }
   const c = cutsNow().find((x) => x.id === cutId);
   if (!c) return;
   const prev = {
@@ -8681,11 +9045,12 @@ async function sdkGenerateNativeCut(cutId, { newSeed }) {
   sdk.msg = `Preparing ${title}…`;
   bus.dispatchEvent(new Event("sdk"));
   try {
+    await flushPendingCutFields();
     const plan = await planNativeSdkJob(pid, cutId, newSeed ? "regen" : "queue");
     sdk.msg = `${title}: ${sdkPlanSummary(plan)}`;
     bus.dispatchEvent(new Event("sdk"));
     const message = newSeed ? regenConfirmMessage(title) : batchRenderConfirmMessage([title]);
-    if (!(await askConfirm({ message }))) {
+    if (!(await askConfirm({ message: withReferenceConfirm(message, [cutById(cutId) || cut]) }))) {
       sdk.msg = "Not queued (cancelled).";
       return;
     }
@@ -8731,6 +9096,7 @@ async function imageToVideoCut(cutId, { startVid = "" } = {}) {
   sdk.msg = `Preparing ${what} for ${title}…`;
   bus.dispatchEvent(new Event("sdk"));
   try {
+    await flushPendingCutFields();
     const plan = (await postJson("/gonggan/image-to-video", {
       pid,
       cut_id: cutId,
@@ -8740,7 +9106,7 @@ async function imageToVideoCut(cutId, { startVid = "" } = {}) {
     if (!makeVideoPlanOk(plan, startVid)) throw new Error(MAKE_VIDEO_OLD_SERVER);
     sdk.msg = `${title}: ${sdkPlanSummary(plan)}`;
     bus.dispatchEvent(new Event("sdk"));
-    if (!(await askConfirm({ message: i2vConfirmMessage(title, plan) }))) {
+    if (!(await askConfirm({ message: withReferenceConfirm(i2vConfirmMessage(title, plan), [cutById(cutId) || cut]) }))) {
       sdk.msg = "Not queued (cancelled).";
       return;
     }
@@ -8808,6 +9174,7 @@ async function runQueueJobItem(item, { newSeed }) {
   sdk.msg = `Preparing ${title}…`;
   bus.dispatchEvent(new Event("sdk"));
   try {
+    await flushPendingCutFields();
     let plan;
     if (item.job === "video") {
       plan = (
@@ -8833,7 +9200,7 @@ async function runQueueJobItem(item, { newSeed }) {
     }
     sdk.msg = `${title}: ${sdkPlanSummary(plan)}`;
     bus.dispatchEvent(new Event("sdk"));
-    if (!(await askConfirm({ message: batchRenderConfirmMessage([title]) }))) {
+    if (!(await askConfirm({ message: withReferenceConfirm(batchRenderConfirmMessage([title]), [cutById(cutId) || cut]) }))) {
       sdk.msg = "Not queued (cancelled).";
       return;
     }
@@ -8898,7 +9265,8 @@ async function startGenerateAll(cutIds, opts = {}) {
     : generateAllCutIds();
   if (!ids.length) return;
   const pid = state.pid;
-  if (!(await askConfirm({ message: generateAllConfirmMessage(ids.map((id) => shotTitle(cutById(id)))) }))) return;
+  await flushPendingCutFields();
+  if (!(await askConfirm({ message: withReferenceConfirm(generateAllConfirmMessage(ids.map((id) => shotTitle(cutById(id)))), ids.map((id) => cutById(id))) }))) return;
   if (state.pid !== pid) return;
   genAll.starting = true;
   document.querySelectorAll(".gg-shots").forEach((root) => updateSelectionBar(root));
@@ -8999,7 +9367,8 @@ async function queueSelectedCuts(cutIds) {
     return;
   }
   const labels = plan.queue.map((id) => shotTitle(cutById(id)));
-  if (!(await askConfirm({ message: batchRenderConfirmMessage(labels, skipped) }))) return;
+  await flushPendingCutFields();
+  if (!(await askConfirm({ message: withReferenceConfirm(batchRenderConfirmMessage(labels, skipped), plan.queue.map((id) => cutById(id))) }))) return;
   const pid = state.pid;
   const keepSel = [...state.cutSel];
   const total = plan.queue.length;
@@ -9147,6 +9516,7 @@ async function captureFinishedPrompt(promptId) {
       body.input_image = merged.inputImage || "";
       if (merged.inputImages?.length) body.input_images = merged.inputImages;
       if (merged.sourceImageTake) body.source_image_take = merged.sourceImageTake;
+      if (Array.isArray(snap.refs_used) && snap.refs_used.length) body.refs_used = snap.refs_used;
       if (merged.workflow) body.workflow = merged.workflow;
     }
     res = await api.fetchApi("/gonggan/capture-output", {
@@ -9657,6 +10027,138 @@ function patchQueuedStartImage(prompt, imageName, preferId) {
   if (named && typeof named === "object" && !Array.isArray(named)) named.image = name;
 }
 
+function collapsedFieldText(text) {
+  const v = String(text ?? "").trim();
+  return v ? v.split(/\s+/).join(" ") : "";
+}
+
+function queuePromptPack(cut) {
+  const raw = promptTextForQueue(cut);
+  const base = collapsedFieldText(raw);
+  const caption = collapsedFieldText(cut?.caption || "");
+  if (!base) return { raw, base, injected: "", video: "", caption };
+  const injected = injectPromptText(base, raw, cut.ref_links, activeReferences());
+  const video = caption ? `${injected} Dialogue: "${caption}"` : injected;
+  return { raw, base, injected, video, caption };
+}
+
+function patchQueueString(value, pack) {
+  if (typeof value !== "string" || !pack?.injected) return value;
+  if (value === pack.raw || value === pack.base) return pack.injected;
+  if (pack.caption) {
+    const plain = `${pack.base} Dialogue: "${pack.caption}"`;
+    const plainRaw = `${pack.raw} Dialogue: "${pack.caption}"`;
+    if (value === plain || value === plainRaw) return pack.video;
+  }
+  return value;
+}
+
+function patchQueuedReferenceText(prompt, pack) {
+  const output = prompt?.output;
+  if (!output || !pack?.injected || pack.injected === pack.base) return;
+  for (const node of Object.values(output)) {
+    const inputs = node?.inputs;
+    if (!inputs || typeof inputs !== "object") continue;
+    for (const key of Object.keys(inputs)) {
+      if (typeof inputs[key] === "string") inputs[key] = patchQueueString(inputs[key], pack);
+    }
+  }
+}
+
+function matchQueuedLoadImage(output, preferId) {
+  const wanted = String(preferId || "");
+  if (!output || !wanted) return null;
+  const wantedLocal = promptLocalId(wanted);
+  const nested = wanted.includes(":");
+  for (const [id, node] of Object.entries(output)) {
+    if (!node || node.class_type !== "LoadImage") continue;
+    const sid = String(id);
+    if (sid === wanted) return node;
+    if (wantedLocal && (nested ? sid.endsWith(`:${wantedLocal}`) : sid === wantedLocal || sid.endsWith(`:${wantedLocal}`))) return node;
+  }
+  return null;
+}
+
+function patchQueuedReferenceImages(prompt, files, startId) {
+  const output = prompt?.output;
+  if (!output || !files?.length) return;
+  const skip = String(startId || "");
+  for (const row of files) {
+    if (!row?.nodeId || !row.file || String(row.nodeId) === skip) continue;
+    const node = matchQueuedLoadImage(output, row.nodeId);
+    if (!node) continue;
+    const inputs = node.inputs && typeof node.inputs === "object" ? node.inputs : (node.inputs = {});
+    if (!Array.isArray(inputs.image)) inputs.image = row.file;
+  }
+}
+
+async function stageReferenceStill(media) {
+  if (!media?.id) return "";
+  if (media.kind === "video" || media.animated) {
+    const res = await api.fetchApi(`/gonggan/poster?id=${encodeURIComponent(media.id)}`);
+    if (!res.ok) return "";
+    const blob = await res.blob();
+    const filename = `ref_${media.id}.jpg`;
+    const form = new FormData();
+    form.append("image", new File([blob], filename, { type: blob.type || "image/jpeg" }));
+    form.append("overwrite", "true");
+    form.append("type", "input");
+    form.append("subfolder", "gonggan");
+    const up = await api.fetchApi("/upload/image", { method: "POST", body: form });
+    if (!up.ok) return "";
+    const data = await up.json().catch(() => ({}));
+    const name = String(data.name || filename).replace(/\\/g, "/");
+    const sub = String(data.subfolder || "gonggan").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+    if (!sub || name.startsWith(`${sub}/`)) return name;
+    return `${sub}/${name}`;
+  }
+  return copyVersionImageToInput(media.id);
+}
+
+async function stageReferenceQueue(cut) {
+  const rows = cutRefRows(cut);
+  const wf = workflowSnapshotForCut(cut.id);
+  let startId = "";
+  try {
+    startId = findVideoImageTarget(wf)?.id || "";
+  } catch {
+    startId = "";
+  }
+  const files = [];
+  const used = [];
+  for (const row of rows) {
+    if (row.missing) continue;
+    let mode = referenceUseMode(row);
+    let slot = mode === "image" ? row.slot : "";
+    if (slot && startId && String(slot) === String(startId)) {
+      mode = "text";
+      slot = "";
+    }
+    if (mode === "image" && slot) {
+      try {
+        const file = await stageReferenceStill(row.media);
+        if (file) files.push({ nodeId: slot, file });
+        else {
+          mode = "text";
+          slot = "";
+        }
+      } catch {
+        mode = "text";
+        slot = "";
+      }
+    }
+    const item = {
+      ref_id: row.ref_id,
+      name: row.name || "",
+      category: row.category || "Other",
+      mode: mode === "image" ? "image" : "text",
+    };
+    if (item.mode === "image" && slot) item.slot = slot;
+    used.push(item);
+  }
+  return { files, used };
+}
+
 /** Queue the graph that is open. A video graph also receives the cut's selected image Take. */
 async function injectCutDataForQueue() {
   ggPendingQueueSnap = null;
@@ -9665,6 +10167,7 @@ async function injectCutDataForQueue() {
   const pid = extra?.pid || extra?.projectId;
   if (!cutId || !pid || pid !== state.pid || !isNativeProject()) return true;
   if (!isGongganShotTabOpenAndActive() && wfLastLoadedCutId !== cutId) return true;
+  await flushPendingCutFields();
   await persistOpenGraphEdits();
   const cut = cutById(cutId);
   if (!cut) return true;
@@ -9717,6 +10220,9 @@ async function injectCutDataForQueue() {
     }
     take.numerics = numerics;
   }
+  const refQueue = await stageReferenceQueue(cut);
+  ggQueuedRefFiles = refQueue.files;
+  ggQueuedPromptPack = queuePromptPack(cut);
   ggPendingQueueSnap = {
     cutId,
     pid,
@@ -9731,6 +10237,7 @@ async function injectCutDataForQueue() {
     input_images: take.inputImages || [],
     workflow: after ? cloneGraph(after) : null,
     source_image_take: video ? sourceImageTake : "",
+    refs_used: refQueue.used,
     controls,
   };
   return true;
@@ -10211,7 +10718,7 @@ function mountShots(el) {
       });
     });
   };
-  const stripCut = () => (state.timeline ? state.timeline.cuts.find((x) => x.id === state.cutId) || null : null);
+  const stripCut = () => cutById(state.cutId);
   /** Thumbnail click: select this Take. The cut workflow stays until "Load workflow from this take". */
   const selectStripVersion = (cutId, vid) => {
     Object.assign(stripPick, { pid: state.pid, cutId, vid });
@@ -10254,7 +10761,20 @@ function mountShots(el) {
       }
     }
   };
+  const paintDetail = () => {
+    const host = root.querySelector(".gg-sel-detail-host");
+    if (!host) return;
+    const show = !!state.timeline && shotsViewOf(SHOW_FINAL_LIST, shotsUi.view) !== "final";
+    host.hidden = !show;
+    const html = show ? selectionDetailHtml() : "";
+    if (host.contains(document.activeElement) && host.dataset.html) return;
+    if (host.dataset.html === html) return;
+    host.dataset.html = html;
+    host.innerHTML = html;
+    bindSelectionDetail(host);
+  };
   const paintPanel = () => {
+    paintDetail();
     paintVersionStrip();
     const panel = root.querySelector(".gg-cutpanel");
     const badge = root.querySelector(".gg-sdk-slot");
@@ -10359,6 +10879,33 @@ function mountShots(el) {
     autoSizeFieldTextarea(ta);
   }
 
+  function captureDetailFocus() {
+    const el = document.activeElement;
+    if (!el || !root.contains(el) || !el.closest(".gg-sel-detail")) return null;
+    const field = el.dataset?.field || "";
+    if (!field) return null;
+    return {
+      cutId: state.cutId,
+      field,
+      value: el.value,
+      selectionStart: el.selectionStart,
+      selectionEnd: el.selectionEnd,
+      scrollTop: el.scrollTop,
+    };
+  }
+
+  function restoreDetailFocus(cap) {
+    if (!cap?.field || state.cutId !== cap.cutId) return;
+    const el = root.querySelector(`.gg-sel-detail [data-field="${CSS.escape(cap.field)}"]`);
+    if (!el) return;
+    el.value = cap.value;
+    el.focus({ preventScroll: true });
+    try {
+      el.setSelectionRange(cap.selectionStart, cap.selectionEnd);
+    } catch (_) {}
+    el.scrollTop = cap.scrollTop || 0;
+  }
+
   let repaintAfterCompose = () => {};
   let listSizeRo = null;
   let listSizeRoRaf = 0;
@@ -10410,6 +10957,7 @@ function mountShots(el) {
       const li = ta.closest(".gg-cut");
       const id = li?.dataset?.cutId;
       if (!id) return;
+      if (ta.classList.contains("gg-prompt-text")) bindMentionField(ta);
       const nat = isNativeProject() && !ta.disabled;
 
       const exitCardFieldEdit = () => {
@@ -10572,6 +11120,7 @@ function mountShots(el) {
       return;
     }
     const storyCap = captureFieldTextFocus();
+    const detailCap = captureDetailFocus();
     const tl = state.timeline;
     const opts = state.projects.map((p) =>
       `<option value="${esc(p.id)}"${p.id === state.pid ? " selected" : ""}>${esc(projectOptionLabel(p))}</option>`).join("");
@@ -10591,6 +11140,7 @@ function mountShots(el) {
         ? `<div class="gg-dim gg-list-empty gg-no-projects"><span>${esc(hintInfo.text)}</span>
             <button type="button" class="gg-btn gg-primary gg-new-project-btn">${esc(hintInfo.button)}</button></div>`
         : `<div class="gg-dim gg-list-empty">${esc(hintInfo.text)}</div>`;
+    const refsHtml = !viewFinal && tl && isNativeProject() ? referencesGroupHtml() : "";
     const listHtml = emptyHint || groupedListHtml(sections, {
       cutHtml: (c) => cutRowHtml(c, cutLabels),
       groupHue: groupColor,
@@ -10637,7 +11187,7 @@ function mountShots(el) {
         <span class="gg-meta-text">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</span>
         <button type="button" class="gg-btn gg-history-btn" title="History" aria-label="History" aria-haspopup="dialog" aria-expanded="false">History</button>
       </div>
-      <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${listHtml}</div>
+      <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${refsHtml}${listHtml}</div>
       <div class="gg-final-wrap"${viewFinal ? "" : " hidden"}>${viewFinal && tl ? finalCutListHtml(tl) : ""}</div>
       ${SHOW_SEL_BAR ? `<div class="gg-selbar">
         <span class="gg-sel-label"><span class="gg-sel-count">0</span> selected</span>
@@ -10646,6 +11196,7 @@ function mountShots(el) {
         <button type="button" class="gg-btn gg-sel-x" disabled title="Clear selection">×</button>
       </div>` : ""}
       ${iconRowHtml()}
+      <div class="gg-sel-detail-host"${tl && !viewFinal ? "" : " hidden"}></div>
       <div class="gg-vstrip" role="group" aria-label="${esc(takesNoun(captionLangNow()))}"${tl && !viewFinal ? "" : " hidden"}>
         <div class="gg-vs-body">
           <div class="gg-vs-list"></div>
@@ -10795,8 +11346,11 @@ function mountShots(el) {
     bindHoverPlay(root);
     bindThumbFallbacks(root);
     bindShotsReorder(root);
+    bindReferenceGroup(root);
     bindCutFieldTextareas();
     restoreFieldTextFocus(storyCap);
+    paintPanel();
+    restoreDetailFocus(detailCap);
     autoSizeAllFieldTextareas();
     observeListWrapForFieldHeight();
     paintSelection(root);
@@ -11009,13 +11563,19 @@ function mountShots(el) {
     if (action === "delete") {
       const overStrip = !!root.querySelector(".gg-vstrip:hover");
       if (overStrip && isNativeProject() && state.timeline) {
-        const c = state.timeline.cuts.find((x) => x.id === state.cutId) || null;
+        const c = cutById(state.cutId);
         const vid = stripSelectedVersionId(c);
         if (c && vid) {
           handled();
           if (!e.repeat) void deleteVersion(c.id, vid);
           return;
         }
+      }
+      const refDel = selectedReference();
+      if (refDel && !state.cutSel.size) {
+        handled();
+        if (!e.repeat) void deleteReference(refDel.id);
+        return;
       }
       if (!cutsForDelete().length) return;
       handled();
@@ -11047,7 +11607,13 @@ function mountShots(el) {
         selectCutFromKeys(ids[0]);
         return;
       case "rename":
-        if (!isNativeProject() || ids.length !== 1) return;
+        if (!isNativeProject()) return;
+        if (selectedReference() && !state.cutSel.size) {
+          handled();
+          void renameReference(selectedReference().id);
+          return;
+        }
+        if (ids.length !== 1) return;
         handled();
         void renameCut(ids[0]);
         return;
@@ -11097,7 +11663,7 @@ function mountShots(el) {
   };
   const onShotsEmptyClick = (e) => {
     if (!root.contains(e.target)) return;
-    if (e.target.closest(".gg-cut") || e.target.closest(".gg-selbar") || e.target.closest(".gg-iconrow") || e.target.closest(".gg-vstrip") || e.target.closest(".gg-cutpanel") || e.target.closest(".gg-ctx")) return;
+    if (e.target.closest(".gg-cut") || e.target.closest(".gg-ref-group") || e.target.closest(".gg-sel-detail") || e.target.closest(".gg-selbar") || e.target.closest(".gg-iconrow") || e.target.closest(".gg-vstrip") || e.target.closest(".gg-cutpanel") || e.target.closest(".gg-ctx")) return;
     if (!state.cutSel.size) return;
     state.cutSel.clear();
     cutSelAnchor = "";
@@ -11107,7 +11673,7 @@ function mountShots(el) {
   };
   const onShotsPanelContextMenu = (e) => {
     if (!root.contains(e.target) || !e.target.closest(".gg-grp-wrap")) return;
-    if (e.target.closest(".gg-cut") || e.target.closest(".gg-grp-sec[data-group-id] .gg-grp-head")) return;
+    if (e.target.closest(".gg-cut") || e.target.closest(".gg-ref-group") || e.target.closest(".gg-grp-sec[data-group-id] .gg-grp-head")) return;
     openShotsPanelContextMenu(e);
   };
   root.addEventListener("mouseenter", () => { root._ggHover = true; });
@@ -13642,6 +14208,8 @@ app.registerExtension({
           }
           const result = await prevGraphToPrompt.apply(app, gargs);
           if (ggQueuedStartFile) patchQueuedStartImage(result, ggQueuedStartFile, ggQueuedStartNode);
+          patchQueuedReferenceText(result, ggQueuedPromptPack);
+          patchQueuedReferenceImages(result, ggQueuedRefFiles, ggQueuedStartNode);
           return result;
         };
         try {
@@ -13650,6 +14218,8 @@ app.registerExtension({
           app.graphToPrompt = prevGraphToPrompt;
           ggQueuedStartFile = "";
           ggQueuedStartNode = "";
+          ggQueuedRefFiles = [];
+          ggQueuedPromptPack = null;
           restoreSeedControls(ggPendingQueueSnap?.controls);
           if (ggPendingQueueSnap) ggPendingQueueSnap.controls = null;
           ggApplyingCutData = false;

@@ -161,6 +161,13 @@ def _copy_take_fields(run: dict[str, Any], gen: dict[str, Any]) -> None:
     source = gen.get("source_image_take")
     if isinstance(source, str) and source.strip():
         run["source_image_take"] = source.strip()[:80]
+    refs_used = gen.get("refs_used")
+    if isinstance(refs_used, list):
+        from .ref_links import clean_refs_used
+
+        clean = clean_refs_used(refs_used)
+        if clean:
+            run["refs_used"] = clean
 
 
 def _take_int(value: Any, lo: int, hi: int) -> int | None:

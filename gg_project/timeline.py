@@ -10,6 +10,7 @@ except ImportError:  # unittest / plain script
     from gg_data import clamp_clip, media_duration  # type: ignore
 
 from .entities import is_reference
+from .ref_links import generation_links
 from .project_settings import PROJECT_ASSETS_DIR, is_external_project_asset_media, normalize_settings
 
 _IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -252,11 +253,53 @@ def _reference_views(root: Path, project: dict[str, Any]) -> list[dict[str, Any]
                  "created": j["mtime"], "seconds": j["seconds"], "width": None, "height": None}
                 for j in jobs
             ],
-            "pick": job["id"] if job else None,
+            "pick": pick if isinstance(pick, str) and any(j["id"] == pick for j in jobs) else None,
             "caption": "",
             "notes": "",
-            "prompt": "",
+            "prompt": c.get("prompt") if isinstance(c.get("prompt"), str) else "",
+            "description": c.get("description") if isinstance(c.get("description"), str) else "",
         })
+    out.sort(key=lambda row: (str(row.get("name") or "").lower(), row.get("id") or ""))
+    return out
+
+
+def _ref_link_views(project: dict[str, Any], references: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Per-cut link rows. A trashed reference stays linked and is marked missing."""
+    cuts = project.get("cuts") if isinstance(project.get("cuts"), dict) else {}
+    active = {row["id"]: row for row in references if isinstance(row, dict) and row.get("id")}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for cid, cut in cuts.items():
+        if not isinstance(cut, dict) or cut.get("deleted_at") or is_reference(cut):
+            continue
+        rows = []
+        prompt = cut.get("prompt") if isinstance(cut.get("prompt"), str) else ""
+        for link in generation_links(cuts, cut, prompt):
+            ref = active.get(link["ref_id"])
+            stored = cuts.get(link["ref_id"]) if isinstance(cuts.get(link["ref_id"]), dict) else {}
+            media = ref.get("media") if isinstance(ref, dict) else None
+            name = ""
+            category = "Other"
+            description = ""
+            if isinstance(ref, dict):
+                name = ref.get("name") or ""
+                category = ref.get("category") or "Other"
+                description = ref.get("description") if isinstance(ref.get("description"), str) else ""
+            elif isinstance(stored, dict):
+                name = stored.get("name") if isinstance(stored.get("name"), str) else ""
+                category = stored.get("category") if isinstance(stored.get("category"), str) else "Other"
+                description = stored.get("description") if isinstance(stored.get("description"), str) else ""
+            rows.append({
+                "ref_id": link["ref_id"],
+                "source": link["source"],
+                "slot": link["slot"],
+                "name": name,
+                "category": category,
+                "description": description,
+                "missing": link["missing"] or ref is None,
+                "media": media,
+            })
+        if rows:
+            out[cid] = rows
     return out
 
 
@@ -320,6 +363,8 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
     active = _active_cuts(project)
     scenes = _scene_by_id(project)
     order = timeline_order(project)
+    references = _reference_views(root, project)
+    link_views = _ref_link_views(project, references)
     groups = []
     for scene in project.get("scenes") or []:
         if not isinstance(scene, dict) or scene.get("deleted_at"):
@@ -415,6 +460,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "needs_redo": bool(cut.get("needs_redo")),
             "notes": cut.get("notes") if isinstance(cut.get("notes"), str) else "",
             "caption": cut.get("caption") if isinstance(cut.get("caption"), str) else "",
+            "ref_links": link_views.get(cid) or [],
             "scene_index": scene_idx,
             "cut_in_scene": 0,
             "number": 0,
@@ -456,7 +502,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
         },
         "cuts": cuts,
         "track_order": track,
-        "references": _reference_views(root, project),
+        "references": references,
         "groups": groups,
         "groups_customized": True,
         "total_sec": total,
