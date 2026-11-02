@@ -14,15 +14,6 @@ export const TL_TOOLS_BORDER_Y = 1;
 export const TL_RULER_PX = 20;
 export const TL_TRACK_MIN_PX = 84;
 export const TL_TRACK_MARGIN_TOP_PX = 6;
-/** Measured Logs / Timeline / Export strip before compacting. */
-export const BOTTOM_TAB_ROW_NATIVE_PX = 65;
-/** Compact strip is about 60% of that row. */
-export const BOTTOM_TAB_ROW_SCALE = 0.6;
-export const BOTTOM_TAB_ROW_PX = Math.round(BOTTOM_TAB_ROW_NATIVE_PX * BOTTOM_TAB_ROW_SCALE);
-/** Moved from the tab row onto the timeline body so the panel's fixed height stays put. */
-export const BOTTOM_TAB_ROW_SAVED_PX = BOTTOM_TAB_ROW_NATIVE_PX - BOTTOM_TAB_ROW_PX;
-/** Track cap, raised by the tab-row savings so that height is usable. */
-export const TL_TRACK_MAX_PX = 150 + BOTTOM_TAB_ROW_SAVED_PX;
 export const TL_SCROLL_PAD_BOTTOM_PX = 6;
 /** Horizontal scrollbar (the timeline zoom bar). */
 export const TL_SCROLLBAR_PX = 12;
@@ -91,13 +82,11 @@ export function normalModePreviewSize({ bodyHeight = 0, hostWidth = 0 } = {}) {
 
 /**
  * Timeline body. At least the editor stack so the horizontal scrollbar is fully
- * inside, and taller when the normal-mode preview needs it. The compact tab row
- * adds its saved pixels here; the measured chrome shrinks by the same amount,
- * so the bottom panel's fixed height does not change. The extra pixels go to
- * the timeline track; the scrollbar stays the last row.
+ * inside, and taller when the normal-mode preview needs it. The extra pixels
+ * go to the timeline track; the scrollbar stays the last row.
  */
 export function fixedTimelineBodyHeight() {
-  return Math.max(timelineEditorBodyPx(), timelineViewerBodyPx()) + BOTTOM_TAB_ROW_SAVED_PX;
+  return Math.max(timelineEditorBodyPx(), timelineViewerBodyPx());
 }
 
 /**
