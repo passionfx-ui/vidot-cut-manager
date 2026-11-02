@@ -287,6 +287,8 @@ import {
   tickIsCurrent,
 } from "./gg_playback_core.js";
 import {
+  animatedScrubFrameIndex,
+  animatedViewerMode,
   decideVideoSyncScrub,
   edgeScrollSpeed,
   followPlayheadScroll,
@@ -300,7 +302,8 @@ import {
   timelineClipTypeBadgeHtml,
   timelineClipTypeClassSuffix,
 } from "./gg_timeline_clip_type_core.js";
-import { noMediaText, noMediaThumbClass, playsAsVideo, versionMedia } from "./gg_missing_media_core.js";
+import { animatedWebpFrameBytes, parseAnimatedWebp } from "./gg_webp_anim_core.js";
+import { noMediaText, noMediaThumbClass, playsAsVideo, isAnimatedImage, versionMedia } from "./gg_missing_media_core.js";
 import {
   needsDurationProbe,
   formatClipDuration,
@@ -10221,9 +10224,38 @@ function showFrame(force) {
     } catch (_) {}
     if (play.on && !ed.scrubbing && viewer?.box) viewer.box.dataset.ggFrame = "";
   }
-  syncAnimatedStill(c);
+  syncAnimatedStill(c, local);
+  if (c && isAnimatedImage(c.media) && !animImgFallbackUrls.has(mediaUrl(c.media.id))) {
+    const cache = animScrubBytesCache.get(mediaUrl(c.media.id));
+    const idx = computeScrubFrameIndex(c, local, cache?.ready ? cache : null);
+    if (idx != null) setPreviewFrameIndex(idx);
+  }
   paintHead();
   refreshEditPreviewStill(c);
+}
+
+const animScrubBytesCache = new Map();
+// Urls that cannot use ImageDecoder stay on the plain <img> path. One decision per url.
+const animImgFallbackUrls = new Set();
+let animScrubPaintGen = 0;
+
+function animImgFallback(url) {
+  if (animImgFallbackUrls.has(url)) return true;
+  if (typeof ImageDecoder === "undefined" || window.isSecureContext === false) {
+    animImgFallbackUrls.add(url);
+    return true;
+  }
+  return false;
+}
+
+function animFailToImg(url) {
+  if (!url || animImgFallbackUrls.has(url)) return;
+  animImgFallbackUrls.add(url);
+  if (!viewer) return;
+  const cur = trackClips()[play.idx];
+  if (!cur?.media || mediaUrl(cur.media.id) !== url) return;
+  setPreviewFrameIndex(null);
+  syncAnimatedStillImg(cur);
 }
 
 function setPreviewFrameIndex(frameIndex) {
@@ -10231,12 +10263,165 @@ function setPreviewFrameIndex(frameIndex) {
   viewer.box.dataset.ggFrame = previewFrameAttr(frameIndex);
 }
 
+function scrubFrameCount(c) {
+  const n = Number(c?.media?.frames);
+  if (n > 0) return n | 0;
+  return 0;
+}
+
+function scrubMetaForFrameIndex(c, local, cache) {
+  return {
+    localSec: local,
+    clipIn: c.in,
+    clipSec: c.sec,
+    sourceSeconds: c.media?.seconds,
+    srcDur: c.src_dur,
+    mediaFrames: scrubFrameCount(c),
+    cacheFrameCount: cache?.frameCount,
+    durationsMs: cache?.durationsMs ?? cache?.parsed?.durationsMs,
+  };
+}
+
+function computeScrubFrameIndex(c, local, cache) {
+  if (!c || !isAnimatedImage(c.media)) return null;
+  return animatedScrubFrameIndex(scrubMetaForFrameIndex(c, local, cache));
+}
+
+async function ensureAnimScrubCache(url, c) {
+  let cache = animScrubBytesCache.get(url);
+  if (cache?.ready) return cache;
+  if (!cache) {
+    cache = {
+      buf: null,
+      parsed: null,
+      decoder: null,
+      frameCount: scrubFrameCount(c),
+      durationsMs: null,
+      ready: false,
+      loading: null,
+    };
+    animScrubBytesCache.set(url, cache);
+  }
+  if (!cache.loading) {
+    cache.loading = (async () => {
+      const res = await fetch(url);
+      const buf = await res.arrayBuffer();
+      cache.buf = buf;
+      cache.parsed = parseAnimatedWebp(buf);
+      if (cache.parsed) {
+        cache.durationsMs = cache.parsed.durationsMs;
+        if (!cache.frameCount) cache.frameCount = cache.parsed.frames;
+      }
+      if (typeof ImageDecoder !== "undefined") {
+        try {
+          cache.decoder = new ImageDecoder({ data: buf, type: "image/webp" });
+          await cache.decoder.completed;
+          const n = cache.decoder.tracks?.selectedTrack?.frameCount;
+          if (n > 0) cache.frameCount = n;
+        } catch (_) {
+          cache.decoder = null;
+        }
+      }
+      if (!cache.frameCount && cache.parsed) cache.frameCount = cache.parsed.frames;
+      cache.ready = true;
+    })();
+  }
+  await cache.loading;
+  return cache;
+}
+
+async function decodeAnimatedScrubFrame(cache, frameIdx) {
+  const frameCount = Math.max(1, cache.frameCount || cache.parsed?.frames || 1);
+  const idx = Math.min(frameCount - 1, Math.max(0, frameIdx | 0));
+  if (cache.decoder) {
+    const result = await cache.decoder.decode({ frameIndex: idx });
+    try {
+      return { bmp: await createImageBitmap(result.image), frameIdx: idx };
+    } finally {
+      result.image.close?.();
+    }
+  }
+  const bytes = cache.parsed?.frameWebps?.[idx] ?? animatedWebpFrameBytes(cache.buf, idx);
+  if (!bytes) throw new Error("frame unavailable");
+  const bmp = await createImageBitmap(new Blob([bytes], { type: "image/webp" }));
+  return { bmp, frameIdx: idx };
+}
+
+async function paintAnimatedScrubFrame(c, local) {
+  if (!viewer?.still || !c?.media || !isAnimatedImage(c.media)) return;
+  const url = mediaUrl(c.media.id);
+  if (animImgFallbackUrls.has(url)) return;
+  let cache = animScrubBytesCache.get(url);
+  const idxEarly = computeScrubFrameIndex(c, local, cache?.ready ? cache : null);
+  const { still } = viewer;
+  if (idxEarly != null) {
+    const key = `${url}#${idxEarly}`;
+    if (still._ggKey === key && !still.hidden) {
+      setPreviewFrameIndex(idxEarly);
+      mirrorEditPreviewFrame(still, idxEarly);
+      return;
+    }
+  }
+  const gen = ++animScrubPaintGen;
+  try {
+    cache = await ensureAnimScrubCache(url, c);
+    if (gen !== animScrubPaintGen || !viewer || animImgFallbackUrls.has(url)) return;
+    const idx = computeScrubFrameIndex(c, local, cache);
+    if (idx == null) {
+      if (cache?.ready) animFailToImg(url);
+      return;
+    }
+    const key = `${url}#${idx}`;
+    if (still._ggKey === key && !still.hidden) {
+      setPreviewFrameIndex(idx);
+      mirrorEditPreviewFrame(still, idx);
+      return;
+    }
+    const { bmp, frameIdx } = await decodeAnimatedScrubFrame(cache, idx);
+    if (gen !== animScrubPaintGen || !viewer || animImgFallbackUrls.has(url)) {
+      bmp.close?.();
+      return;
+    }
+    still.width = bmp.width;
+    still.height = bmp.height;
+    still.getContext("2d").drawImage(bmp, 0, 0);
+    still.hidden = false;
+    still._ggKey = key;
+    mirrorEditPreviewFrame(still, frameIdx);
+    bmp.close?.();
+    setPreviewFrameIndex(frameIdx);
+  } catch (_) {
+    animFailToImg(url);
+  }
+}
+
+/** Animated WebP/GIF clips: playhead-synced decoded frame on canvas (paused, scrub, playback). */
+function syncAnimatedStill(c, local) {
+  if (!viewer || !viewer.still) return;
+  const fallbackUrl = c?.media && isAnimatedImage(c.media) ? mediaUrl(c.media.id) : "";
+  if (fallbackUrl && animImgFallback(fallbackUrl)) {
+    setPreviewFrameIndex(null);
+    syncAnimatedStillImg(c);
+    return;
+  }
+  const { img, still } = viewer;
+  const mode = animatedViewerMode(c && c.media, play.on, viewer.mode === "export", ed.scrubbing);
+  if (mode !== "canvas") {
+    if (!still.hidden) still.hidden = true;
+    still._ggKey = "";
+    setPreviewFrameIndex(null);
+    return;
+  }
+  img.hidden = true;
+  paintAnimatedScrubFrame(c, local);
+}
+
 /**
  * Animated WebP/GIF "video" versions are drawn with <img>, which has no pause():
  * the browser keeps animating it no matter what the transport does. While stopped,
  * show a frozen canvas copy of the current frame instead of the live <img>.
  */
-function syncAnimatedStill(c) {
+function syncAnimatedStillImg(c) {
   if (!viewer || !viewer.still) return;
   const { img, still } = viewer;
   const mode = animatedStillMode(c && c.media, play.on, viewer.mode === "export");
@@ -10259,7 +10444,13 @@ function syncAnimatedStill(c) {
     return true;
   };
   if (!(img.complete && draw())) {
-    img.addEventListener("load", () => { if (!play.on) syncAnimatedStill(trackClips()[play.idx]); }, { once: true });
+    img.addEventListener("load", () => {
+      if (play.on) return;
+      const cur = trackClips()[play.idx];
+      const url = cur?.media ? mediaUrl(cur.media.id) : "";
+      if (!url || url !== img.dataset.src || !animImgFallbackUrls.has(url)) return;
+      syncAnimatedStillImg(cur);
+    }, { once: true });
   }
 }
 
