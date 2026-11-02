@@ -7432,16 +7432,150 @@ function applyEditModeTimelineRow(root) {
 }
 
 /**
- * I16 layout: Timeline and Export live in our strip, appended to ComfyUI's
- * empty `#comfyui-body-bottom` slot. That slot is grid row 3 (`auto`) of
- * `.comfyui-body`. The graph, its canvas toolbar (selection, fit, zoom, minimap),
- * and the native Logs panel stay in row 2, so they sit above the strip in normal
- * flow. We do not set styles on the native bottom panel, splitter, or gutter.
- * Removing the strip lets row 3 collapse. Height is `gg.stripHeight`, or the
- * I14 default `fixedBottomPanelHeight(tab chrome)` (already ×1.2) when unset.
+ * I17 layout: Timeline and Export live in our strip, appended to ComfyUI's
+ * empty `#comfyui-body-bottom` slot (grid row 3). While the strip is open that
+ * slot is only the center column, and the left and right sidebars span row 2
+ * and row 3, so they keep their full height. The graph and its canvas toolbar
+ * stay in row 2 and are not covered. Those grid placements are cleared when
+ * the strip is removed. The native Logs panel is not restyled.
+ * Height is `gg.stripHeight`, or the I14 default `fixedBottomPanelHeight`
+ * (already ×1.2) when unset.
  */
 function stripHost() {
   return document.getElementById("comfyui-body-bottom");
+}
+
+function visiblePanelRect(el) {
+  if (!el || !el.isConnected) return null;
+  const cs = getComputedStyle(el);
+  if (cs.display === "none" || cs.visibility === "hidden") return null;
+  const r = el.getBoundingClientRect();
+  if (r.width < 8 || r.height < 8) return null;
+  return r;
+}
+
+/** Horizontal span of the graph workspace: after the left panels, before any right panels. */
+function measureStripWorkspace() {
+  const graph = visiblePanelRect(graphWorkAreaElement());
+  if (!graph) return null;
+  let left = graph.left;
+  let right = graph.right;
+  const pullLeft = (r) => {
+    if (!r || r.width > 720 || r.width < 8) return;
+    if (r.right > left - 4 && r.right < right - 32) left = Math.max(left, r.right);
+  };
+  const pullRight = (r) => {
+    if (!r || r.width > 720 || r.width < 8) return;
+    if (r.left < right + 4 && r.left > left + 32) right = Math.min(right, r.left);
+  };
+  pullLeft(visiblePanelRect(document.getElementById("comfyui-body-left")));
+  pullLeft(visiblePanelRect(document.querySelector(".gg-root.gg-shots")));
+  pullRight(visiblePanelRect(document.getElementById("comfyui-body-right")));
+  // A dock that hangs below the graph would be covered by the strip. Docks that
+  // stay inside the graph sit above the strip and are left at the graph width.
+  for (const pane of document.querySelectorAll(".p-splitterpanel")) {
+    const r = visiblePanelRect(pane);
+    if (!r || r.height < 64 || r.bottom <= graph.bottom + 12) continue;
+    if (r.left >= graph.left + graph.width * 0.5) pullRight(r);
+    else pullLeft(r);
+  }
+  if (right - left < 32) return { left: graph.left, right: graph.right };
+  return { left, right };
+}
+
+/** Sidebars span the strip row; the strip slot stays in the graph column. Cleared on hide. */
+function pinStripGrid() {
+  const left = document.getElementById("comfyui-body-left");
+  const right = document.getElementById("comfyui-body-right");
+  const bottom = stripHost();
+  if (left) left.style.gridRow = "2 / -1";
+  if (right) right.style.gridRow = "2 / -1";
+  if (bottom) bottom.style.gridColumn = "2";
+}
+
+function clearStripGrid() {
+  const left = document.getElementById("comfyui-body-left");
+  const right = document.getElementById("comfyui-body-right");
+  const bottom = stripHost();
+  if (left) left.style.gridRow = "";
+  if (right) right.style.gridRow = "";
+  if (bottom) bottom.style.gridColumn = "";
+  if (ownStripEl) {
+    ownStripEl.style.marginLeft = "";
+    ownStripEl.style.width = "";
+  }
+}
+
+function applyStripWorkspace() {
+  if (!isOwnStripShown()) return;
+  pinStripGrid();
+  const el = ownStripEl;
+  const host = stripHost();
+  if (!el || !host) return;
+  const hostRect = host.getBoundingClientRect();
+  const bounds = measureStripWorkspace();
+  if (!bounds || hostRect.width < 8) {
+    el.style.marginLeft = "";
+    el.style.width = "100%";
+    return;
+  }
+  const margin = Math.max(0, Math.round(bounds.left - hostRect.left));
+  const room = Math.max(32, Math.round(hostRect.width - margin));
+  const width = Math.min(room, Math.max(32, Math.round(bounds.right - bounds.left)));
+  const slackRight = Math.round(hostRect.right - bounds.right);
+  if (margin > 1 || slackRight > 1) {
+    el.style.marginLeft = `${margin}px`;
+    el.style.width = `${width}px`;
+  } else {
+    el.style.marginLeft = "";
+    el.style.width = "100%";
+  }
+}
+
+let stripWorkspaceObserver = null;
+let stripWatched = new WeakSet();
+let stripLayoutLock = false;
+
+function stripWatchTargets() {
+  const list = [
+    document.getElementById("comfyui-body-left"),
+    document.getElementById("comfyui-body-right"),
+    document.getElementById("graph-canvas-container"),
+    document.querySelector(".comfyui-body"),
+    document.querySelector(".gg-root.gg-shots"),
+  ];
+  for (const pane of document.querySelectorAll(".p-splitterpanel")) list.push(pane);
+  return list.filter(Boolean);
+}
+
+function onStripWorkspaceResize() {
+  if (stripLayoutLock || !isOwnStripShown()) return;
+  stripLayoutLock = true;
+  try {
+    ensureStripObservers();
+    applyStripWorkspace();
+    refreshStripLayoutDependents();
+  } finally {
+    stripLayoutLock = false;
+  }
+}
+
+function ensureStripObservers() {
+  if (!window.ResizeObserver) return;
+  if (!stripWorkspaceObserver) {
+    stripWorkspaceObserver = new ResizeObserver(() => onStripWorkspaceResize());
+  }
+  for (const el of stripWatchTargets()) {
+    if (stripWatched.has(el)) continue;
+    stripWatched.add(el);
+    stripWorkspaceObserver.observe(el);
+  }
+}
+
+function clearStripObservers() {
+  stripWorkspaceObserver?.disconnect();
+  stripWorkspaceObserver = null;
+  stripWatched = new WeakSet();
 }
 
 function isOwnStripShown() {
@@ -7490,6 +7624,7 @@ function applyOwnStripHeight(explicitPx) {
   const next = desiredStripHeight(explicitPx);
   el.style.height = `${next}px`;
   el.style.flex = "0 0 auto";
+  applyStripWorkspace();
 }
 
 function ownStripTop() {
@@ -7619,6 +7754,7 @@ function ensureOwnStrip() {
   ownStripEl = el;
   host.appendChild(el);
   syncOwnStripTabs();
+  pinStripGrid();
   return el;
 }
 
@@ -7633,20 +7769,26 @@ function showOwnStrip(tries = 0) {
   const host = stripHost();
   if (el.parentElement !== host) host.appendChild(el);
   el.hidden = false;
+  pinStripGrid();
+  ensureStripObservers();
   applyOwnStripHeight();
   syncOwnStripTabs();
   requestAnimationFrame(() => {
     if (!isOwnStripShown()) return;
+    ensureStripObservers();
     if (loadStripHeightPx() == null) applyOwnStripHeight();
+    else applyStripWorkspace();
     refreshStripLayoutDependents();
   });
   refreshStripLayoutDependents();
 }
 
 function hideOwnStrip() {
-  if (!ownStripEl) return;
+  if (!ownStripEl && !document.getElementById("comfyui-body-left")?.style.gridRow) return;
   ownStripDrag = null;
-  ownStripEl.remove();
+  clearStripObservers();
+  clearStripGrid();
+  ownStripEl?.remove();
   refreshStripLayoutDependents();
 }
 
@@ -7659,6 +7801,7 @@ if (!globalThis.__ggOwnStripResize) {
   globalThis.__ggOwnStripResize = true;
   window.addEventListener("resize", () => {
     if (!isOwnStripShown()) return;
+    ensureStripObservers();
     applyOwnStripHeight();
     refreshStripLayoutDependents();
   });

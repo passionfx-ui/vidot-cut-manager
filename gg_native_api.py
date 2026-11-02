@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import copy
+import logging
 import threading
 import time
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger("gonggan-cut")
 
 try:
     from .gg_data import PACK_DIR, clamp_clip
@@ -183,6 +186,35 @@ def project_template_graph(doc: dict, kind: str = "image") -> dict | None:
     return resolve_template_graph(project_template_ref(doc, kind))
 
 
+def copy_new_cut_template(doc: dict, kind: str = "image") -> dict | None:
+    """One owned copy of the Image or Video template chosen in options.
+
+    The cut stores this graph itself. Later edits to the template file do not
+    touch the copy. None when nothing is chosen or the file cannot be read
+    (a warning is logged; the cut then starts empty).
+    """
+    kind_name = "video" if kind == "video" else "image"
+    ref = project_template_ref(doc, kind_name)
+    if not isinstance(ref, str) or not ref.strip():
+        log.warning("[gonggan-cut] new %s cut: no template chosen; starting empty", kind_name)
+        return None
+    try:
+        graph = project_template_graph(doc, kind_name)
+    except ValueError as ex:
+        log.warning(
+            "[gonggan-cut] new %s cut: could not load template %s (%s); starting empty",
+            kind_name, ref, ex,
+        )
+        return None
+    if not isinstance(graph, dict) or not graph:
+        log.warning(
+            "[gonggan-cut] new %s cut: could not load template %s; starting empty",
+            kind_name, ref,
+        )
+        return None
+    return copy.deepcopy(graph)
+
+
 def project_video_template(doc: dict) -> tuple[str, dict]:
     """(label, graph) of the project's Video template; ValueError when it cannot be read."""
     ref = project_template_ref(doc, "video")
@@ -201,7 +233,8 @@ def create_native_project(
 ) -> dict:
     """Creates the project folder under the chosen location (or ComfyUI's output directory when omitted),
     sets settings.project_folder, and adds only an `assets` subfolder. Name collisions get ' (2)', ' (3)', …
-    The first cut starts empty. Templates stay a starting point the user can load later."""
+    The first cut gets one copy of the Image template chosen in options. If that template
+    is missing, the cut starts empty."""
     name = (name or "").strip()
     if not name:
         raise ValueError("name required")
@@ -217,8 +250,9 @@ def create_native_project(
         folder = make_unique_project_folder(loc, name, created)
     settings = {**(settings or {}), "project_folder": str(folder)}
     store = native_store()
+    first_graph = copy_new_cut_template({"settings": normalize_settings(settings)}, "image")
     try:
-        doc = store.create_project(name, template_ref=ref, template_graph=None, settings=settings)
+        doc = store.create_project(name, template_ref=ref, template_graph=first_graph, settings=settings)
     except Exception:
         for d in reversed(created):
             try:
@@ -402,7 +436,8 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
         for cid, c in (before.get("cuts") or {}).items():
             if isinstance(c, dict) and not c.get("deleted_at"):
                 before_ids.add(cid)
-    doc = store.add_cut(pid, scene_id=scene_id, after=after, template_graph=None)
+    graph = copy_new_cut_template(doc, "image")
+    doc = store.add_cut(pid, scene_id=scene_id, after=after, template_graph=graph)
     new_id = None
     for cid, c in (doc.get("cuts") or {}).items():
         if cid not in before_ids and isinstance(c, dict) and not c.get("deleted_at"):
@@ -413,7 +448,7 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
     return {
         "ok": True,
         "cut": {"id": new_id, "name": cut_entry.get("name")} if cut_entry else None,
-        "template_copied": False,
+        "template_copied": graph is not None,
         "timeline": tl,
     }
 
@@ -481,17 +516,19 @@ def native_add_cut_list(pid: str, cuts, workflow: str | None = None, after: str 
     if not doc:
         raise ValueError("project not found")
     rows = gg_ltx.validate_cut_list(cuts)
-    base = project_template_graph(doc, "image")
-    if not isinstance(base, dict):
-        raise ValueError("Image template not found. Pick another one in Project Settings.")
+    base = copy_new_cut_template(doc, "image")
     entries = []
-    try:
+    if base is None:
         for r in rows:
-            g = copy.deepcopy(base)
-            gg_wfnodes.set_prompt(g, r["prompt"])
-            entries.append({**r, "graph": g})
-    except gg_wfnodes.NodeNotFound as ex:
-        raise ValueError(f"Image template: {ex}") from None
+            entries.append({**r, "graph": None})
+    else:
+        try:
+            for r in rows:
+                g = copy.deepcopy(base)
+                gg_wfnodes.set_prompt(g, r["prompt"])
+                entries.append({**r, "graph": g})
+        except gg_wfnodes.NodeNotFound as ex:
+            raise ValueError(f"Image template: {ex}") from None
     _remove_pristine_seed_cuts(store, pid, None)
     _doc, ids = store.add_cuts(pid, entries, after=after if isinstance(after, str) and after else None)
     scene_pairs = [
@@ -508,7 +545,7 @@ def native_import_structure(pid: str, payload: dict) -> dict:
     doc = store.get_project(pid)
     if not doc:
         raise ValueError("project not found")
-    graph = project_template_graph(doc, "image")
+    graph = copy_new_cut_template(doc, "image")
     store.import_structure(
         pid,
         payload.get("scenes"),
