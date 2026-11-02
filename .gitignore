@@ -13,3 +13,9 @@ trash/
 projects/
 tests/e2e/node_modules/
 tests/screens/
+
+# internal working notes
+docs/FIX_LIST_*.md
+docs/*_question.md
+docs/_progress_*.txt
+.agent_*.txt
