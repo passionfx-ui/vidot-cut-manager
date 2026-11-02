@@ -858,7 +858,6 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-gen-custom-dims { display: flex; gap: 8px; }
 .gg-gen-custom-dims .gg-modal-field { flex: 1; margin-bottom: 0; }
 .gg-gen-custom input[type="number"] { width: 100%; box-sizing: border-box; }
-.gg-modal-field input.gg-modal-random-seed { width: auto; margin: 0; padding: 0; border: 0; background: transparent; flex: 0 0 auto; }
 .gg-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--gg-fg, #e6e8ec); font-size: 12px; }
 .gg-modal-field input.gg-switch { appearance: none; -webkit-appearance: none; position: relative; width: 32px; height: 18px; margin: 0; padding: 0; border-radius: 9px; border: 1px solid var(--gg-line, #353a44); background: #3a3f4a; cursor: pointer; flex: 0 0 auto; transition: background .15s; }
 .gg-modal-field input.gg-switch::before { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #cfd3da; transition: transform .15s; }

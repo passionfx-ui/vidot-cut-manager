@@ -1190,7 +1190,6 @@ function openNewProjectModal() {
         resolution: wrap.querySelector(".gg-modal-gen-res")?.value,
         width: wrap.querySelector(".gg-modal-gen-width")?.value,
         height: wrap.querySelector(".gg-modal-gen-height")?.value,
-        random_seed: !!wrap.querySelector(".gg-modal-random-seed")?.checked,
       }),
     });
     if (req.error) {
@@ -1657,10 +1656,6 @@ function genSettingsModalHtml(curSettings) {
       </div>
       <span class="gg-modal-hint">Saved with this project. Aspect ratio does not change a custom size.</span>
     </div>
-    <label class="gg-modal-field gg-modal-random-seed-field">
-      <span class="gg-switch-row"><input type="checkbox" class="gg-modal-random-seed"${s.random_seed ? " checked" : ""} /> ${esc(RANDOM_SEED_LABEL)}</span>
-      <span class="gg-modal-hint">Same as the Queue toolbar toggle: new sampler seeds per job when on.</span>
-    </label>
   </fieldset>`;
 }
 
@@ -1791,11 +1786,6 @@ function openProjectSettingsModal() {
   };
   folderIn.value = curSettings.project_folder;
   folderIn.addEventListener("input", () => { if (folderErr) folderErr.textContent = ""; });
-  const modalRandomSeed = wrap.querySelector(".gg-modal-random-seed");
-  modalRandomSeed?.addEventListener("change", () => {
-    saveRandomSeedOn(localStorage, !!modalRandomSeed.checked);
-    syncRandomSeedToolbar(document);
-  });
   wrap.querySelector(".gg-modal-gen-res")?.addEventListener("change", () => syncGenResolutionFields(wrap));
   wrap.querySelector(".gg-modal-gen-aspect")?.addEventListener("change", () => syncGenResolutionFields(wrap));
   wrap.querySelector(".gg-modal-folder-browse")?.addEventListener("click", () => {
@@ -1849,7 +1839,7 @@ function openProjectSettingsModal() {
       resolution: wrap.querySelector(".gg-modal-gen-res")?.value,
       width: wrap.querySelector(".gg-modal-gen-width")?.value,
       height: wrap.querySelector(".gg-modal-gen-height")?.value,
-      random_seed: !!wrap.querySelector(".gg-modal-random-seed")?.checked,
+      random_seed: curSettings.random_seed,
     }));
     const aiPatch = cutSplitSettingsPatch({
       modelInitial,
