@@ -368,9 +368,8 @@ import {
 import {
   EDIT_MODE_LABEL,
   EDIT_MODE_ON_CLASS,
+  editPreviewAtPlayhead,
   editPreviewOverlayRect,
-  editPreviewStill,
-  editPreviewSwap,
   loadEditPreviewMode,
   saveEditPreviewMode,
 } from "./gg_edit_preview_core.js";
@@ -9219,10 +9218,170 @@ function ensureEditPreviewEl() {
     el = document.createElement("div");
     el.className = "gg-edit-preview";
     el.setAttribute("role", "img");
-    el.innerHTML = `<img alt="" /><div class="gg-edit-preview-label"></div><div class="gg-edit-preview-empty" hidden></div>`;
+    el.innerHTML = `<img alt="" /><video class="gg-edit-preview-vid" playsinline muted preload="auto" hidden></video><div class="gg-edit-preview-label"></div><div class="gg-edit-preview-empty" hidden></div>`;
     document.body.appendChild(el);
+  } else if (!el.querySelector("video")) {
+    const vid = document.createElement("video");
+    vid.className = "gg-edit-preview-vid";
+    vid.muted = true;
+    vid.playsInline = true;
+    vid.preload = "auto";
+    vid.hidden = true;
+    el.querySelector("img")?.after(vid);
   }
   return el;
+}
+
+/** Playhead time inside `cut` when the playhead is on that cut; otherwise the cut in-point. */
+function editPreviewPlayheadTiming(cut) {
+  const { i, local } = itemAt(play.t);
+  const at = trackClips()[i];
+  if (cut && at && String(cut.id) === String(at.id)) {
+    return { clipIn: Number(cut.in) || 0, localSec: local };
+  }
+  return { clipIn: Number(cut?.in) || 0, localSec: 0 };
+}
+
+function clearEditPreviewVideo(vid) {
+  if (!vid) return;
+  try { vid.pause(); } catch (_) {}
+  vid.hidden = true;
+  vid._ggWant = null;
+  vid._ggWait = false;
+  vid._ggSeekAt = 0;
+  vid._ggGen = (vid._ggGen | 0) + 1;
+  vid._ggSeekGen = -1;
+  vid.removeAttribute("src");
+  try { vid.load(); } catch (_) {}
+  delete vid.dataset.src;
+}
+
+function showEditPreviewVideoFrame(el, vid) {
+  vid.hidden = false;
+  el.dataset.previewReady = "1";
+  const empty = el.querySelector(".gg-edit-preview-empty");
+  if (empty) empty.hidden = true;
+}
+
+function wireEditPreviewVideo(vid) {
+  if (!vid || vid._ggEditWired) return;
+  vid._ggEditWired = true;
+  vid.addEventListener("seeked", () => {
+    const box = vid.closest(".gg-edit-preview");
+    if (!box || box.dataset.previewMode !== "video") return;
+    if (vid.dataset.src !== box.dataset.previewUrl) return;
+    if ((vid._ggSeekGen | 0) !== (vid._ggGen | 0)) return;
+    showEditPreviewVideoFrame(box, vid);
+  });
+  vid.addEventListener("error", () => {
+    vid._ggWait = false;
+    const box = vid.closest(".gg-edit-preview");
+    if (!box || box.dataset.previewMode !== "video") return;
+    if (!vid.dataset.src || vid.dataset.src !== box.dataset.previewUrl) return;
+    vid.hidden = true;
+    box.dataset.previewReady = "0";
+    const empty = box.querySelector(".gg-edit-preview-empty");
+    if (empty) {
+      empty.hidden = false;
+      empty.textContent = "Video failed to load";
+    }
+  });
+  vid.addEventListener("emptied", () => { vid._ggWait = false; });
+  vid.addEventListener("abort", () => { vid._ggWait = false; });
+}
+
+/** Seek or play the overlay video so its picture matches the playhead. Muted: the timeline viewer owns sound. */
+function followEditPreviewVideo(el, vid) {
+  const want = Number(vid._ggWant) || 0;
+  const baseSync = {
+    want,
+    current: vid.currentTime || 0,
+    duration: vid.duration,
+    playing: !!play.on,
+    paused: vid.paused,
+    seeking: vid.seeking,
+    readyState: vid.readyState,
+    lastSeekAt: vid._ggSeekAt || 0,
+    now: performance.now(),
+  };
+  const sync = ed.scrubbing
+    ? (decideVideoSyncScrub({ ...baseSync, scrubbing: true }) || decideVideoSync(baseSync))
+    : decideVideoSync(baseSync);
+  if (sync.seekTo != null) {
+    try {
+      vid._ggSeekGen = vid._ggGen | 0;
+      vid.currentTime = sync.seekTo;
+      vid._ggSeekAt = performance.now();
+    } catch (_) {}
+  }
+  if (sync.pause) {
+    try { vid.pause(); } catch (_) {}
+  }
+  if (sync.play) scheduleVideoPlay(vid, play.gen, play);
+  if (sync.seekTo == null && vid.readyState >= 2 && !vid.seeking) {
+    showEditPreviewVideoFrame(el, vid);
+  }
+}
+
+function applyEditPreviewVideo(el, vid, plan) {
+  wireEditPreviewVideo(vid);
+  vid.muted = true;
+  const img = el.querySelector("img");
+  if (img) {
+    img.hidden = true;
+    if (img.getAttribute("src")) {
+      img.removeAttribute("src");
+      delete img.dataset.src;
+    }
+  }
+  const empty = el.querySelector(".gg-edit-preview-empty");
+  if (empty && empty.textContent) {
+    empty.hidden = true;
+    empty.textContent = "";
+  }
+  if (plan.clearPrevious) {
+    try { vid.pause(); } catch (_) {}
+    vid.hidden = true;
+    vid._ggWait = false;
+    vid._ggSeekAt = 0;
+    vid.removeAttribute("src");
+    delete vid.dataset.src;
+  }
+  vid._ggWant = plan.want;
+  const url = plan.url;
+  if (!url) {
+    vid.hidden = true;
+    el.dataset.previewReady = "0";
+    el.dataset.ggFrame = "";
+    return;
+  }
+  const reveal = () => {
+    if (el.dataset.previewMode !== "video") return;
+    if (vid.dataset.src !== el.dataset.previewUrl) return;
+    followEditPreviewVideo(el, vid);
+  };
+  if (plan.clearPrevious || vid.dataset.src !== url) {
+    vid.hidden = true;
+    el.dataset.previewReady = "0";
+    vid._ggGen = (vid._ggGen | 0) + 1;
+    const gen = vid._ggGen;
+    vid._ggSeekGen = -1;
+    vid.dataset.src = url;
+    vid._ggSeekAt = 0;
+    let revealed = false;
+    const onData = () => {
+      if (revealed || vid._ggGen !== gen) return;
+      revealed = true;
+      vid._ggWait = false;
+      reveal();
+    };
+    vid.addEventListener("loadeddata", onData, { once: true });
+    vid.src = url;
+    if (vid.readyState >= 2) onData();
+  } else {
+    reveal();
+  }
+  el.dataset.ggFrame = previewFrameAttr(plan.frame);
 }
 
 function refreshEditPreviewStill(cut) {
@@ -9230,20 +9389,27 @@ function refreshEditPreviewStill(cut) {
   const el = document.querySelector(".gg-edit-preview");
   if (!el) return;
   const c = cut === undefined ? currentEditPreviewCut() : cut;
-  const spec = editPreviewStill(c?.media);
-  const url = spec ? (spec.kind === "poster" ? posterUrl(spec.id) : mediaUrl(spec.id)) : "";
-  const cutId = c?.id != null ? String(c.id) : "";
-  const mediaId = spec?.id || "";
-  if (
-    url &&
-    el.dataset.previewReady === "1" &&
-    el.dataset.previewCut === cutId &&
-    el.dataset.previewMedia === mediaId &&
-    el.dataset.previewUrl === url
-  ) {
-    return;
-  }
+  const mediaId = c?.media?.id != null && String(c.media.id) !== "" ? String(c.media.id) : "";
+  const timing = editPreviewPlayheadTiming(c);
+  const plan = editPreviewAtPlayhead(
+    {
+      mode: el.dataset.previewMode || "",
+      cutId: el.dataset.previewCut || "",
+      mediaId: el.dataset.previewMedia || "",
+      url: el.dataset.previewUrl || "",
+      loaded: el.dataset.previewReady === "1",
+    },
+    {
+      cutId: c?.id != null ? String(c.id) : "",
+      media: c?.media || null,
+      url: mediaId ? mediaUrl(mediaId) : "",
+      posterUrl: mediaId ? posterUrl(mediaId) : "",
+      clipIn: timing.clipIn,
+      localSec: timing.localSec,
+    },
+  );
   const img = el.querySelector("img");
+  const vid = el.querySelector("video");
   const label = el.querySelector(".gg-edit-preview-label");
   const empty = el.querySelector(".gg-edit-preview-empty");
   const labels = computeCutLabels(state.timeline || { cuts: [] });
@@ -9251,18 +9417,18 @@ function refreshEditPreviewStill(cut) {
   if (label && label.textContent !== name) label.textContent = name;
   const aria = name ? `Edit preview, ${name}` : "Edit preview";
   if (el.getAttribute("aria-label") !== aria) el.setAttribute("aria-label", aria);
-  const plan = editPreviewSwap(
-    {
-      cutId: el.dataset.previewCut || "",
-      mediaId: el.dataset.previewMedia || "",
-      url: el.dataset.previewUrl || "",
-      loaded: el.dataset.previewReady === "1",
-    },
-    { cutId, media: c?.media || null, url },
-  );
+  el.dataset.previewMode = plan.mode === "video" ? "video" : (plan.showEmpty ? "empty" : "still");
   el.dataset.previewCut = plan.cutId;
   el.dataset.previewMedia = plan.mediaId;
   el.dataset.previewUrl = plan.url;
+  if (plan.mode === "video" && vid) {
+    if (plan.changed) editPreviewLoadToken += 1;
+    applyEditPreviewVideo(el, vid, plan);
+    return;
+  }
+  if (plan.hideVideo) clearEditPreviewVideo(vid);
+  else if (vid) vid.hidden = true;
+  el.dataset.ggFrame = "";
   if (!img || !empty) return;
   if (plan.showImage) {
     el.dataset.previewReady = "1";
@@ -9296,6 +9462,7 @@ function refreshEditPreviewStill(cut) {
   img.dataset.src = assigned;
   const reveal = () => {
     if (token !== editPreviewLoadToken) return;
+    if (el.dataset.previewMode === "video") return;
     if (img.dataset.src !== assigned) return;
     if (el.dataset.previewUrl !== assigned) return;
     el.dataset.previewReady = "1";
@@ -9428,7 +9595,7 @@ function mountTimeline(el) {
         <span class="gg-tl-title"></span>
         <span class="gg-tl-info"></span>
         <span class="gg-tip"></span>
-        <button type="button" class="gg-btn gg-edit-mode" title="Still image of the current cut over the graph" aria-pressed="false">${EDIT_MODE_LABEL}</button>
+        <button type="button" class="gg-btn gg-edit-mode" title="Current cut over the graph. Video follows the playhead." aria-pressed="false">${EDIT_MODE_LABEL}</button>
         <button class="gg-btn gg-snap" title="Snap: 1 s steps (off = 0.1 s)">Snap</button>
         <button class="gg-btn gg-reset" title="Reset to original order and lengths">Reset</button>
         <span class="gg-sep"></span>

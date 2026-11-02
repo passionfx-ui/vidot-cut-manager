@@ -1,4 +1,7 @@
-/** Edit toggle: still preview over the graph (pure, no DOM). */
+/** Edit toggle: preview over the graph (pure, no DOM). */
+
+import { playsAsVideo } from "./gg_missing_media_core.js";
+import { sourceTimeAtClip, videoPreviewFrameIndex } from "./gg_timeline_scrub_core.js";
 
 export const TIMELINE_EDIT_MODE_KEY = "gg.timelineEditMode";
 export const EDIT_MODE_LABEL = "Edit Mode";
@@ -76,6 +79,78 @@ export function editPreviewSwap(shown, next) {
     clearPrevious: srcSteps[0] === "clear",
     showImage,
     showEmpty: !spec,
+    srcSteps,
+  };
+}
+
+/**
+ * What the edit preview shows for the cut at the playhead.
+ * A real video follows that playhead: source time is the clip in-point plus the
+ * time into the clip, and the frame index uses the same 24 fps display count as
+ * the timeline. Moving along the same video does not reload the file. A different
+ * cut clears the previous picture first. Still images stay still. Animated clips
+ * stay on their poster (the timeline WebP preview is a separate path).
+ *
+ * @param {null|{mode?: string, cutId?: string, mediaId?: string, url?: string, loaded?: boolean}} shown
+ * @param {{cutId?: string, media?: object|null, url?: string, posterUrl?: string, clipIn?: number, localSec?: number}} next
+ */
+export function editPreviewAtPlayhead(shown, next) {
+  const media = next?.media ?? null;
+  const cutId = next?.cutId != null ? String(next.cutId) : "";
+  if (playsAsVideo(media) && media.id != null && String(media.id) !== "") {
+    return editPreviewVideoFollow(shown, next, cutId);
+  }
+
+  const spec = editPreviewStill(media);
+  let stillUrl = "";
+  if (spec?.kind === "poster") {
+    stillUrl = next?.posterUrl ? String(next.posterUrl) : (next?.url ? String(next.url) : "");
+  } else if (spec && next?.url) {
+    stillUrl = String(next.url);
+  }
+  const swap = editPreviewSwap(shown, { cutId: next?.cutId, media, url: stillUrl });
+  return {
+    ...swap,
+    mode: swap.showEmpty ? "empty" : "still",
+    want: null,
+    frame: null,
+    showVideo: false,
+    hideVideo: shown?.mode === "video",
+  };
+}
+
+function editPreviewVideoFollow(shown, next, cutId) {
+  const mediaId = String(next.media.id);
+  const url = next?.url ? String(next.url) : "";
+  const want = sourceTimeAtClip({ clipIn: next?.clipIn, localSec: next?.localSec });
+  const frame = videoPreviewFrameIndex(want);
+  const prevUrl = shown?.url ? String(shown.url) : "";
+  const prevCut = shown?.cutId != null ? String(shown.cutId) : "";
+  const prevMedia = shown?.mediaId != null ? String(shown.mediaId) : "";
+  const same = !!url && shown?.mode === "video" && prevUrl === url && prevMedia === mediaId && prevCut === cutId;
+  const showVideo = same && !!shown?.loaded;
+  let srcSteps = [];
+  if (!showVideo) {
+    if (!url) {
+      if (prevUrl) srcSteps = ["clear"];
+    } else if (!same) {
+      srcSteps = prevUrl ? ["clear", url] : [url];
+    }
+  }
+  return {
+    mode: "video",
+    cutId,
+    mediaId,
+    kind: "video",
+    url,
+    want,
+    frame,
+    changed: !same,
+    clearPrevious: srcSteps[0] === "clear",
+    showImage: false,
+    showVideo,
+    showEmpty: false,
+    hideVideo: false,
     srcSteps,
   };
 }

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   EDIT_MODE_LABEL,
   EDIT_PREVIEW_GAP_PX,
+  editPreviewAtPlayhead,
   editPreviewOverlayRect,
   editPreviewStill,
   editPreviewSwap,
@@ -134,6 +135,139 @@ describe("edit preview cut change", () => {
     assert.equal(next.clearPrevious, false);
     assert.equal(next.showImage, true);
     assert.deepEqual(next.srcSteps, []);
+  });
+});
+
+describe("edit preview video follows playhead", () => {
+  const image = (id) => ({ id, kind: "image" });
+  const video = (id) => ({ id, kind: "video" });
+  const animated = (id) => ({ id, kind: "video", animated: true });
+
+  it("seeks a video cut to the playhead source time and that frame", () => {
+    const plan = editPreviewAtPlayhead(null, {
+      cutId: "v",
+      media: video("vid"),
+      url: "/media/vid",
+      posterUrl: "/poster/vid",
+      clipIn: 0.5,
+      localSec: 1.5,
+    });
+    assert.equal(plan.mode, "video");
+    assert.equal(plan.kind, "video");
+    assert.equal(plan.url, "/media/vid");
+    assert.equal(plan.want, 2);
+    assert.equal(plan.frame, 48);
+    assert.equal(plan.changed, true);
+    assert.equal(plan.clearPrevious, false);
+    assert.deepEqual(plan.srcSteps, ["/media/vid"]);
+    assert.equal(plan.showVideo, false);
+    assert.equal(plan.showImage, false);
+    assert.equal(plan.showEmpty, false);
+  });
+
+  it("follows a later playhead frame on the same video without reloading", () => {
+    const shown = { mode: "video", cutId: "v", mediaId: "vid", url: "/media/vid", loaded: true };
+    const plan = editPreviewAtPlayhead(shown, {
+      cutId: "v",
+      media: video("vid"),
+      url: "/media/vid",
+      clipIn: 0.5,
+      localSec: 2,
+    });
+    assert.equal(plan.changed, false);
+    assert.equal(plan.clearPrevious, false);
+    assert.deepEqual(plan.srcSteps, []);
+    assert.equal(plan.showVideo, true);
+    assert.equal(plan.showImage, false);
+    assert.equal(plan.want, 2.5);
+    assert.equal(plan.frame, 60);
+    assert.equal(plan.hideVideo, false);
+  });
+
+  it("clears the previous frame when the video cut changes, then seeks the new playhead", () => {
+    const shown = { mode: "video", cutId: "a", mediaId: "v1", url: "/media/v1", loaded: true };
+    const plan = editPreviewAtPlayhead(shown, {
+      cutId: "b",
+      media: video("v2"),
+      url: "/media/v2",
+      clipIn: 1,
+      localSec: 0,
+    });
+    assert.equal(plan.changed, true);
+    assert.equal(plan.clearPrevious, true);
+    assert.deepEqual(plan.srcSteps, ["clear", "/media/v2"]);
+    assert.equal(plan.showVideo, false);
+    assert.equal(plan.want, 1);
+    assert.equal(plan.frame, 24);
+  });
+
+  it("does not restart a video load that has not finished", () => {
+    const shown = { mode: "video", cutId: "v", mediaId: "vid", url: "/media/vid", loaded: false };
+    const plan = editPreviewAtPlayhead(shown, {
+      cutId: "v",
+      media: video("vid"),
+      url: "/media/vid",
+      clipIn: 0,
+      localSec: 0.5,
+    });
+    assert.equal(plan.changed, false);
+    assert.equal(plan.clearPrevious, false);
+    assert.deepEqual(plan.srcSteps, []);
+    assert.equal(plan.showVideo, false);
+    assert.equal(plan.want, 0.5);
+    assert.equal(plan.frame, 12);
+  });
+
+  it("keeps a still image still and an animated clip on its poster", () => {
+    const stillShown = { mode: "still", cutId: "a", mediaId: "m1", url: "/media/m1", loaded: true };
+    const still = editPreviewAtPlayhead(stillShown, {
+      cutId: "a",
+      media: image("m1"),
+      url: "/media/m1",
+      posterUrl: "/poster/m1",
+      clipIn: 0,
+      localSec: 1.2,
+    });
+    assert.equal(still.mode, "still");
+    assert.equal(still.want, null);
+    assert.equal(still.frame, null);
+    assert.equal(still.showImage, true);
+    assert.equal(still.showVideo, false);
+    assert.deepEqual(still.srcSteps, []);
+
+    const anim = editPreviewAtPlayhead(null, {
+      cutId: "w",
+      media: animated("webp"),
+      url: "/media/webp",
+      posterUrl: "/poster/webp",
+      clipIn: 0,
+      localSec: 1,
+    });
+    assert.equal(anim.mode, "still");
+    assert.equal(anim.kind, "poster");
+    assert.equal(anim.url, "/poster/webp");
+    assert.equal(anim.want, null);
+    assert.equal(anim.frame, null);
+    assert.equal(anim.showVideo, false);
+  });
+
+  it("clears the video frame when the playhead moves onto a still cut", () => {
+    const shown = { mode: "video", cutId: "v", mediaId: "vid", url: "/media/vid", loaded: true };
+    const plan = editPreviewAtPlayhead(shown, {
+      cutId: "s",
+      media: image("img"),
+      url: "/media/img",
+      posterUrl: "/poster/img",
+      clipIn: 0,
+      localSec: 0,
+    });
+    assert.equal(plan.mode, "still");
+    assert.equal(plan.hideVideo, true);
+    assert.equal(plan.showVideo, false);
+    assert.equal(plan.clearPrevious, true);
+    assert.deepEqual(plan.srcSteps, ["clear", "/media/img"]);
+    assert.equal(plan.showImage, false);
+    assert.equal(plan.frame, null);
   });
 });
 
