@@ -848,14 +848,16 @@ async def _native_regen(pid: str, cid: str, data: dict):
     try:
         if data.get("dry_run", True) or data.get("confirm") is not True:
             job = data.get("job")
+            rs = data.get("random_seed")
+            new_seed = (data.get("mode") != "queue") if rs is None else bool(rs)
             if isinstance(job, str) and job:
                 plan = await asyncio.to_thread(
                     gg_sdk.queue_job_plan, pid, cid, job,
                     selected_vid=data.get("selected_vid") or None,
-                    new_seed=data.get("mode") != "queue",
+                    new_seed=new_seed,
                 )
             else:
-                plan = await asyncio.to_thread(gg_sdk.native_plan, pid, cid, new_seed=data.get("mode") != "queue",
+                plan = await asyncio.to_thread(gg_sdk.native_plan, pid, cid, new_seed=new_seed,
                                                canvas=data.get("api_workflow"), convert=data.get("convert") is True)
             return web.json_response({"ok": True, "dry_run": True, "queued": False, "plan": plan})
         return web.json_response(await asyncio.to_thread(gg_sdk.run_native_confirmed, pid, cid, data.get("plan")))

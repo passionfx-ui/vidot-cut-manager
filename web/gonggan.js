@@ -158,8 +158,8 @@ import {
   batchRenderSummary,
   queueButtonState,
   queueDeleteBody,
-  loadRandomSeedOn,
   saveRandomSeedOn,
+  queueRandomSeedOn,
   RANDOM_SEED_LABEL,
 } from "./gg_batch_render_core.js";
 import {
@@ -397,6 +397,10 @@ import {
   normalizeProjectSettings,
   projectSettingsModalPatch,
   folderCheckErrorText,
+  GEN_ASPECT_RATIOS,
+  GEN_SHORT_SIDE_OPTIONS,
+  GEN_SHORT_SIDE_LABELS,
+  randomSeedFromProjectSettings,
 } from "./gg_project_settings_core.js";
 import {
   cutSplitModelOptions,
@@ -690,6 +694,7 @@ function adoptMutationTimeline(tl, requestPid) {
   // A mutation response belongs to the project it was sent for; never show it under another project.
   if (!shouldAdoptMutationTimeline(tl, requestPid, state.pid)) return false;
   state.timeline = tl;
+  syncRandomSeedToolbar(document);
   return true;
 }
 
@@ -710,6 +715,7 @@ async function loadTimeline() {
   timelineAssignByLoad = false;
   state.error = failure ? "Could not load timeline: " + failure : "";
   bus.dispatchEvent(new Event("timeline"));
+  syncRandomSeedToolbar(document);
   refreshTrashCount();
   await reloadOpenCutWorkflowIfRepChanged();
   void offerStoredAiMakeCutResult();
@@ -1408,6 +1414,54 @@ function openFolderPicker(startValue, onSelect) {
   void load(startPathCandidates(startValue));
 }
 
+function projectRandomSeedOn() {
+  return randomSeedFromProjectSettings(state.timeline?.project?.settings, localStorage);
+}
+
+function syncRandomSeedToolbar(root) {
+  const cb = (root || document).querySelector?.(".gg-random-seed-cb");
+  if (cb) cb.checked = projectRandomSeedOn();
+}
+
+async function persistRandomSeedToProject(on) {
+  saveRandomSeedOn(localStorage, on);
+  if (!state.pid || !isNativeProject()) return;
+  try {
+    const reqPid = state.pid;
+    const data = await postJson("/gonggan/project/update", {
+      pid: reqPid,
+      fields: { settings: { random_seed: on } },
+    });
+    if (data.timeline) adoptMutationTimeline(data.timeline, reqPid);
+  } catch (_) {
+    /* toolbar still reflects localStorage */
+  }
+}
+
+function genSettingsModalHtml(curSettings) {
+  const s = normalizeProjectSettings(curSettings);
+  const aspectOpts = GEN_ASPECT_RATIOS.map(
+    (a) => `<option value="${esc(a)}"${a === s.gen_aspect ? " selected" : ""}>${esc(a)}</option>`,
+  ).join("");
+  const resOpts = GEN_SHORT_SIDE_OPTIONS.map(
+    (n) => `<option value="${n}"${n === s.resolution_short ? " selected" : ""}>${esc(GEN_SHORT_SIDE_LABELS[n] || String(n))}</option>`,
+  ).join("");
+  return `<fieldset class="gg-gen-settings">
+    <legend>Generation</legend>
+    <label class="gg-modal-field">Aspect ratio
+      <select class="gg-modal-gen-aspect">${aspectOpts}</select>
+    </label>
+    <label class="gg-modal-field">Resolution
+      <select class="gg-modal-gen-res">${resOpts}</select>
+      <span class="gg-modal-hint">Short side of the frame; width and height follow the aspect ratio (multiples of 8).</span>
+    </label>
+    <label class="gg-modal-field gg-modal-random-seed-field">
+      <span class="gg-switch-row"><input type="checkbox" class="gg-modal-random-seed"${s.random_seed ? " checked" : ""} /> ${esc(RANDOM_SEED_LABEL)}</span>
+      <span class="gg-modal-hint">Same as the Queue toolbar toggle: new sampler seeds per job when on.</span>
+    </label>
+  </fieldset>`;
+}
+
 function openProjectSettingsModal() {
   if (!state.pid) return;
   closeProjectModal();
@@ -1428,6 +1482,7 @@ function openProjectSettingsModal() {
       </label>` : ""}
       ${nat ? "" : templateFieldHtml()}
       ${nat ? `${templateFieldHtml("image")}${templateFieldHtml("video")}` : ""}
+      ${nat ? genSettingsModalHtml(curSettings) : ""}
       ${nat && AI_CUT_SPLIT_VISIBLE ? `<label class="gg-modal-field gg-use-ai-field">
         <span class="gg-switch-row">${esc(USE_AI_LABEL)}
           <input type="checkbox" class="gg-switch gg-modal-use-ai" role="switch" disabled />
@@ -1471,6 +1526,11 @@ function openProjectSettingsModal() {
   };
   folderIn.value = curSettings.project_folder;
   folderIn.addEventListener("input", () => { if (folderErr) folderErr.textContent = ""; });
+  const modalRandomSeed = wrap.querySelector(".gg-modal-random-seed");
+  modalRandomSeed?.addEventListener("change", () => {
+    saveRandomSeedOn(localStorage, !!modalRandomSeed.checked);
+    syncRandomSeedToolbar(document);
+  });
   wrap.querySelector(".gg-modal-folder-browse")?.addEventListener("click", () => {
     openFolderPicker(folderIn.value, (path) => {
       if (!wrap.isConnected) return;
@@ -1517,6 +1577,10 @@ function openProjectSettingsModal() {
     const patch = projectSettingsModalPatch(curSettings, folderIn.value, {
       image_template: kindTemplates.image,
       video_template: kindTemplates.video,
+    }, {
+      gen_aspect: wrap.querySelector(".gg-modal-gen-aspect")?.value,
+      resolution_short: Number(wrap.querySelector(".gg-modal-gen-res")?.value),
+      random_seed: !!wrap.querySelector(".gg-modal-random-seed")?.checked,
     });
     const aiPatch = cutSplitSettingsPatch({
       modelInitial,
@@ -1559,6 +1623,7 @@ function openProjectSettingsModal() {
       bus.dispatchEvent(new Event("projects"));
       bus.dispatchEvent(new Event("timeline"));
       paintProjectSummary(null);
+      syncRandomSeedToolbar(document);
       ggToast("Project", "Settings saved", "ok");
     } catch (err) {
       ggToast("Project", err.message, "warn");
@@ -6860,7 +6925,7 @@ function queueButtonClick() {
   if (!ids.length || !isNativeProject()) return;
   const plan = queuePlanForSelectedIds(ids);
   if (!plan.actionable) return;
-  const newSeed = loadRandomSeedOn(localStorage);
+  const newSeed = queueRandomSeedOn(localStorage, state.timeline?.project?.settings);
   if (plan.jobs.length === 1) return void runQueueJobItem(plan.jobs[0], { newSeed });
   return startGenerateAll(ids, { items: plan.jobs, randomSeed: newSeed });
 }
@@ -6908,7 +6973,7 @@ async function startGenerateAll(cutIds, opts = {}) {
     const body = {
       pid,
       confirm: true,
-      random_seed: opts.randomSeed ?? loadRandomSeedOn(localStorage),
+      random_seed: opts.randomSeed ?? queueRandomSeedOn(localStorage, state.timeline?.project?.settings),
     };
     if (opts.items?.length) {
       body.items = opts.items.map((j) => ({
@@ -8049,8 +8114,8 @@ function mountShots(el) {
     const randomSeedCb = root.querySelector(".gg-random-seed-cb");
     if (randomSeedCb && !randomSeedCb.dataset.bound) {
       randomSeedCb.dataset.bound = "1";
-      randomSeedCb.checked = loadRandomSeedOn(localStorage);
-      randomSeedCb.addEventListener("change", () => saveRandomSeedOn(localStorage, randomSeedCb.checked));
+      randomSeedCb.checked = projectRandomSeedOn();
+      randomSeedCb.addEventListener("change", () => void persistRandomSeedToProject(randomSeedCb.checked));
     }
     root.querySelectorAll(".gg-queue-mode .gg-qm-seg").forEach((btn) => {
       if (btn.dataset.bound) return;

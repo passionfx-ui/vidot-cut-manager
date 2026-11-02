@@ -1,6 +1,7 @@
 /** Pure decisions for Queue on the selected cuts (no DOM): queue order, empty-cut skips, modal and toast text. */
 
 import { isRegenEmptyCut } from "./gg_native_regen_core.js";
+import { randomSeedFromProjectSettings } from "./gg_gen_settings_core.js";
 
 /** Empty title when Queue is off because nothing is selected (0.9.120: no tooltip). */
 export const QUEUE_EMPTY_TIP = "";
@@ -20,6 +21,11 @@ export function loadRandomSeedOn(localStorage) {
 
 export function saveRandomSeedOn(localStorage, on) {
   localStorage?.setItem?.(RANDOM_SEED_LS_KEY, on ? "1" : "0");
+}
+
+/** Project `settings.random_seed` wins when present; else localStorage (legacy). */
+export function queueRandomSeedOn(localStorage, projectSettings) {
+  return randomSeedFromProjectSettings(projectSettings, localStorage);
 }
 
 const cuts = (n) => `${n} cut${n === 1 ? "" : "s"}`;

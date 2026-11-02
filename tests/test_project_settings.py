@@ -88,11 +88,12 @@ class ProjectSettingsTests(unittest.TestCase):
         self.assertEqual(s2["width"], 720)
 
     def test_native_create_update_round_trip(self):
-        settings = {"aspect": "1:1", "width": 1024, "height": 1024, "fps": 25, "cut_seconds": 6}
+        settings = {"gen_aspect": "1:1", "resolution_short": 512, "fps": 25, "cut_seconds": 6}
         res = na.create_native_project("Round", settings=settings)
         pid = res["project"]["id"]
         tl = na.native_timeline(pid)
         self.assertEqual(tl["project"]["settings"]["cut_seconds"], 6.0)
+        self.assertEqual(tl["project"]["settings"]["width"], 512)
         na.native_update_project(pid, {"settings": {"cut_seconds": 8, "fps": 30}})
         tl2 = na.native_timeline(pid)
         self.assertEqual(tl2["project"]["settings"]["cut_seconds"], 8.0)

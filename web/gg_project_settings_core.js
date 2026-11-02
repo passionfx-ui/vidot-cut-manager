@@ -1,6 +1,25 @@
 /** Pure helpers for native project setup fields (no DOM). */
 
 import { DEFAULT_IMAGE_TEMPLATE, DEFAULT_VIDEO_TEMPLATE } from "./gg_template_pick_core.js";
+import {
+  GEN_ASPECT_RATIOS,
+  GEN_SHORT_SIDE_OPTIONS,
+  GEN_SHORT_SIDE_LABELS,
+  dimensionsFromGenSettings,
+  normalizeGenSettings,
+  genSettingsModalPatch,
+  randomSeedFromProjectSettings,
+} from "./gg_gen_settings_core.js";
+
+export {
+  GEN_ASPECT_RATIOS,
+  GEN_SHORT_SIDE_OPTIONS,
+  GEN_SHORT_SIDE_LABELS,
+  dimensionsFromGenSettings,
+  normalizeGenSettings,
+  genSettingsModalPatch,
+  randomSeedFromProjectSettings,
+};
 
 export const RESOLUTION_PRESETS = [
   { aspect: "16:9", width: 1280, height: 720, label: "16:9 1280×720" },
@@ -24,6 +43,9 @@ export const CAPTION_LANG_OPTIONS = [
 
 export const DEFAULT_PROJECT_SETTINGS = {
   aspect: "16:9",
+  gen_aspect: "16:9",
+  resolution_short: 720,
+  random_seed: true,
   width: 1280,
   height: 720,
   fps: 24,
@@ -34,7 +56,20 @@ export const DEFAULT_PROJECT_SETTINGS = {
   video_template: DEFAULT_VIDEO_TEMPLATE,
 };
 
-const SETTING_KEYS = ["aspect", "width", "height", "fps", "cut_seconds", "caption_lang", "project_folder", "image_template", "video_template"];
+const SETTING_KEYS = [
+  "aspect",
+  "gen_aspect",
+  "resolution_short",
+  "random_seed",
+  "width",
+  "height",
+  "fps",
+  "cut_seconds",
+  "caption_lang",
+  "project_folder",
+  "image_template",
+  "video_template",
+];
 
 /** @param {{ aspect: string, width: number, height: number }} preset */
 export function presetKey(preset) {
@@ -78,7 +113,7 @@ export function clampCutSeconds(value) {
 
 export function clampAspect(value) {
   const s = String(value ?? "").trim();
-  return RESOLUTION_PRESETS.some((p) => p.aspect === s) ? s : DEFAULT_PROJECT_SETTINGS.aspect;
+  return GEN_ASPECT_RATIOS.includes(s) ? s : DEFAULT_PROJECT_SETTINGS.gen_aspect;
 }
 
 /** @param {unknown} value */
@@ -102,9 +137,10 @@ export function clampTemplateRef(value, fallback) {
  * Settings patch for the Project Settings modal: Output folder and the Image / Video templates, only the keys
  * that changed (other stored keys are left as they are).
  * @param {{ image_template?: string, video_template?: string }} [templates] omitted keys are not changed
+ * @param {{ gen_aspect?: string, resolution_short?: number, random_seed?: boolean }} [genForm] omitted = leave generation settings
  * @returns {{ project_folder?: string, image_template?: string, video_template?: string } | null} null when nothing changed
  */
-export function projectSettingsModalPatch(current, folderValue, templates = {}) {
+export function projectSettingsModalPatch(current, folderValue, templates = {}, genForm = undefined) {
   const cur = normalizeProjectSettings(current);
   const patch = {};
   const folder = clampProjectFolder(folderValue);
@@ -114,6 +150,8 @@ export function projectSettingsModalPatch(current, folderValue, templates = {}) 
     const ref = clampTemplateRef(templates[key], DEFAULT_PROJECT_SETTINGS[key]);
     if (ref !== cur[key]) patch[key] = ref;
   }
+  const genPatch = genForm != null ? genSettingsModalPatch(cur, genForm) : null;
+  if (genPatch) Object.assign(patch, genPatch);
   return Object.keys(patch).length ? patch : null;
 }
 
@@ -135,9 +173,14 @@ export function normalizeProjectSettings(raw) {
   for (const key of SETTING_KEYS) {
     if (src[key] != null) out[key] = src[key];
   }
-  out.aspect = clampAspect(out.aspect);
-  out.width = clampDim(out.width);
-  out.height = clampDim(out.height);
+  if (src.random_seed != null) out.random_seed = !!src.random_seed;
+  const gen = normalizeGenSettings(src, out);
+  out.gen_aspect = gen.gen_aspect;
+  out.aspect = gen.gen_aspect;
+  out.resolution_short = gen.resolution_short;
+  out.random_seed = gen.random_seed;
+  out.width = gen.width;
+  out.height = gen.height;
   out.fps = clampFps(out.fps);
   out.cut_seconds = clampCutSeconds(out.cut_seconds);
   out.caption_lang = clampCaptionLang(out.caption_lang);
@@ -168,7 +211,7 @@ export function mergeProjectSettings(current, patch) {
   if (!patch || typeof patch !== "object") return base;
   const merged = { ...base };
   for (const key of SETTING_KEYS) {
-    if (patch[key] != null) merged[key] = patch[key];
+    if (key in patch) merged[key] = patch[key];
   }
   return normalizeProjectSettings(merged);
 }

@@ -5,6 +5,9 @@ import os
 from pathlib import Path
 from typing import Any
 
+GEN_ASPECT_RATIOS = ("16:9", "9:16", "1:1", "4:3", "3:4", "21:9")
+GEN_SHORT_SIDES = (512, 720, 1080)
+
 RESOLUTION_PRESETS: list[dict[str, Any]] = [
     {"aspect": "16:9", "width": 1280, "height": 720, "label": "16:9 1280×720"},
     {"aspect": "16:9", "width": 1920, "height": 1080, "label": "16:9 1920×1080"},
@@ -24,6 +27,9 @@ DEFAULT_VIDEO_TEMPLATE = "builtin:video-ltx"
 
 DEFAULT_PROJECT_SETTINGS: dict[str, Any] = {
     "aspect": "16:9",
+    "gen_aspect": "16:9",
+    "resolution_short": 720,
+    "random_seed": True,
     "width": 1280,
     "height": 720,
     "fps": 24,
@@ -34,8 +40,22 @@ DEFAULT_PROJECT_SETTINGS: dict[str, Any] = {
     "video_template": DEFAULT_VIDEO_TEMPLATE,
 }
 
-_SETTING_KEYS = frozenset({"aspect", "width", "height", "fps", "cut_seconds", "caption_lang", "project_folder",
-                           "image_template", "video_template"})
+_SETTING_KEYS = frozenset(
+    {
+        "aspect",
+        "gen_aspect",
+        "resolution_short",
+        "random_seed",
+        "width",
+        "height",
+        "fps",
+        "cut_seconds",
+        "caption_lang",
+        "project_folder",
+        "image_template",
+        "video_template",
+    }
+)
 TEMPLATE_SETTING_KEYS = ("image_template", "video_template")
 
 
@@ -84,12 +104,65 @@ def _clamp_cut_seconds(value: Any) -> float:
     return round(v, 2)
 
 
-def _clamp_aspect(value: Any) -> str:
+def _round_gen_dim(value: Any, round_to: int = 8) -> int:
+    try:
+        v = int(round(float(value)))
+    except (TypeError, ValueError):
+        v = int(DEFAULT_PROJECT_SETTINGS["width"])
+    v = max(round_to, min(4096, v))
+    return (v // round_to) * round_to
+
+
+def _infer_resolution_short(aspect: Any, width: Any, height: Any) -> int:
+    a = _clamp_gen_aspect(aspect)
+    aw_s, ah_s = a.split(":", 1)
+    aw, ah = int(aw_s or 16), int(ah_s or 9)
+    try:
+        w, h = int(round(float(width))), int(round(float(height)))
+    except (TypeError, ValueError):
+        return int(DEFAULT_PROJECT_SETTINGS["resolution_short"])
+    short = h if aw >= ah else w
+    return min(GEN_SHORT_SIDES, key=lambda n: abs(n - short))
+
+
+def _clamp_gen_aspect(value: Any) -> str:
     s = str(value or "").strip()
-    for p in RESOLUTION_PRESETS:
-        if p["aspect"] == s:
-            return s
-    return str(DEFAULT_PROJECT_SETTINGS["aspect"])
+    return s if s in GEN_ASPECT_RATIOS else str(DEFAULT_PROJECT_SETTINGS["gen_aspect"])
+
+
+def _clamp_resolution_short(value: Any) -> int:
+    try:
+        v = int(round(float(value)))
+    except (TypeError, ValueError):
+        v = int(DEFAULT_PROJECT_SETTINGS["resolution_short"])
+    return v if v in GEN_SHORT_SIDES else int(DEFAULT_PROJECT_SETTINGS["resolution_short"])
+
+
+def _clamp_random_seed(value: Any) -> bool:
+    if value is None:
+        return bool(DEFAULT_PROJECT_SETTINGS["random_seed"])
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off")
+    return bool(value)
+
+
+def dimensions_from_gen_settings(aspect: Any, short_side: Any, *, round_to: int = 8) -> dict[str, int]:
+    """Width/height from aspect + short-side preset (landscape: height=short; portrait: width=short)."""
+    a = _clamp_gen_aspect(aspect)
+    short = _clamp_resolution_short(short_side)
+    aw_s, ah_s = a.split(":", 1)
+    aw, ah = int(aw_s or 16), int(ah_s or 9)
+    if aw >= ah:
+        height = _round_gen_dim(short, round_to)
+        width = _round_gen_dim(height * aw / ah, round_to)
+    else:
+        width = _round_gen_dim(short, round_to)
+        height = _round_gen_dim(width * ah / aw, round_to)
+    return {"width": width, "height": height}
+
+
+def _clamp_aspect(value: Any) -> str:
+    return _clamp_gen_aspect(value)
 
 
 def _clamp_caption_lang(value: Any) -> str:
@@ -320,9 +393,23 @@ def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     for key in _SETTING_KEYS:
         if key in src:
             out[key] = src[key]
-    out["aspect"] = _clamp_aspect(out.get("aspect"))
-    out["width"] = _clamp_dim(out.get("width"))
-    out["height"] = _clamp_dim(out.get("height"))
+    gen_aspect = _clamp_gen_aspect(src.get("gen_aspect") or src.get("aspect") or out.get("gen_aspect") or out.get("aspect"))
+    if "resolution_short" in src:
+        resolution_short = _clamp_resolution_short(src["resolution_short"])
+    elif "width" in src or "height" in src:
+        resolution_short = _infer_resolution_short(gen_aspect, src.get("width", out.get("width")), src.get("height", out.get("height")))
+    else:
+        resolution_short = _clamp_resolution_short(out.get("resolution_short"))
+    dims = dimensions_from_gen_settings(gen_aspect, resolution_short)
+    out["gen_aspect"] = gen_aspect
+    out["aspect"] = gen_aspect
+    out["resolution_short"] = resolution_short
+    if "random_seed" in src:
+        out["random_seed"] = _clamp_random_seed(src["random_seed"])
+    elif "random_seed" not in (raw or {}):
+        out.setdefault("random_seed", bool(DEFAULT_PROJECT_SETTINGS["random_seed"]))
+    out["width"] = dims["width"]
+    out["height"] = dims["height"]
     out["fps"] = _clamp_fps(out.get("fps"))
     out["cut_seconds"] = _clamp_cut_seconds(out.get("cut_seconds"))
     out["caption_lang"] = _clamp_caption_lang(out.get("caption_lang"))

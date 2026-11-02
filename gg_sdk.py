@@ -317,6 +317,40 @@ def _save_native_plan(pid: str, cut_id: str, wf: dict) -> str:
     return name
 
 
+def _project_gen_size(doc: dict, wf: dict, *, video: bool = False) -> dict:
+    try:
+        from gg_project.project_settings import normalize_settings
+    except ImportError:
+        from .gg_project.project_settings import normalize_settings  # type: ignore
+    try:
+        import gg_workflow_size as gws
+    except ImportError:
+        from . import gg_workflow_size as gws  # type: ignore
+    s = normalize_settings((doc or {}).get("settings"))
+    return gws.apply_generation_size(wf, int(s["width"]), int(s["height"]), video=video)
+
+
+def _workflow_gen_size_is_video(wf: dict, *, template_kind: str | None = None, job: str | None = None) -> bool:
+    if template_kind == "image" or (job or "").lower() == "image":
+        return False
+    j = (job or "").lower()
+    if j in ("video", "regen", "image_to_video"):
+        return True
+    try:
+        from . import gg_ltx
+    except ImportError:
+        import gg_ltx  # type: ignore
+    if gg_ltx.workflow_has_ltx_length(wf):
+        return True
+    for node in (wf or {}).values():
+        if not isinstance(node, dict):
+            continue
+        ct = str(node.get("class_type") or "")
+        if "Video" in ct or ct in ("LTXVImgToVideo", "WanImageToVideo", "Wan22ImageToVideo"):
+            return True
+    return False
+
+
 def native_plan(pid: str, cut_id: str, *, new_seed: bool, canvas: dict | None = None, convert: bool = False,
                 fill_start: bool = False, template_kind: str | None = None) -> dict:
     """Resolve the cut's current saved workflow, set its seeds (new random ones for Regen, the saved ones for
@@ -362,14 +396,19 @@ def native_plan(pid: str, cut_id: str, *, new_seed: bool, canvas: dict | None = 
     cut = (doc.get("cuts") or {}).get(cut_id)
     if isinstance(cut, dict) and gg_ltx.workflow_has_ltx_length(wf):
         wf = na._apply_cut_prompt_to_workflow(wf, cut, require=True, video=True)
+    wf = copy.deepcopy(wf)
+    gen_size = _project_gen_size(
+        doc, wf, video=_workflow_gen_size_is_video(wf, template_kind=template_kind),
+    )
     if new_seed:
         wf, seeds = randomize_seeds(wf)
     else:
-        wf, seeds = copy.deepcopy(wf), workflow_seeds(wf)
+        seeds = workflow_seeds(wf)
     start = na.fill_titled_start_image(pid, cut_id, wf) if fill_start else None
     name = _save_native_plan(pid, cut_id, wf)
     return {"pid": pid, "cut_id": cut_id, "plan": name, "source": source, "new_seed": bool(new_seed),
             "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf),
+            "gen_size": gen_size,
             **({"start_version": start} if start else {})}
 
 
@@ -417,13 +456,16 @@ def native_regen_video_plan(pid: str, cut_id: str, video_vid: str, *, new_seed: 
     wf = gg_ltx.patch_ltx_duration(wf, sec)
     if gg_ltx.workflow_has_ltx_length(wf):
         wf = na._apply_cut_prompt_to_workflow(wf, cut, require=True, video=True)
+    wf = copy.deepcopy(wf)
+    gen_size = _project_gen_size(doc, wf, video=True)
     if new_seed:
         wf, seeds = randomize_seeds(wf)
     else:
-        wf, seeds = copy.deepcopy(wf), workflow_seeds(wf)
+        seeds = workflow_seeds(wf)
     name = _save_native_plan(pid, cut_id, wf)
     return {"pid": pid, "cut_id": cut_id, "plan": name, "source": source, "new_seed": bool(new_seed),
             "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf),
+            "gen_size": gen_size,
             "start_version": video_vid, "job": "regen"}
 
 
@@ -445,14 +487,18 @@ def image_to_video_plan(pid: str, cut_id: str, selected_vid: str | None = None,
     """Image to Video dry run: the project's Video template with the cut's start image (exactly `start_vid` when
     given) and description, seeds per `new_seed`, stored under cache/regen like a Regen plan (run it with
     run_native_confirmed). Never queues."""
-    info = _native_api().native_image_to_video_workflow(pid, cut_id, selected_vid, start_vid)
+    na = _native_api()
+    doc = na.native_store().get_project(pid) or {}
+    info = na.native_image_to_video_workflow(pid, cut_id, selected_vid, start_vid)
+    wf = copy.deepcopy(info["workflow"])
+    gen_size = _project_gen_size(doc, wf, video=True)
     if new_seed:
-        wf, seeds = randomize_seeds(info["workflow"])
+        wf, seeds = randomize_seeds(wf)
     else:
-        wf, seeds = copy.deepcopy(info["workflow"]), workflow_seeds(info["workflow"])
+        seeds = workflow_seeds(wf)
     name = _save_native_plan(pid, cut_id, wf)
     return {"pid": pid, "cut_id": cut_id, "plan": name, "source": "image_to_video", "new_seed": bool(new_seed),
-            "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf),
+            "seeds": seeds, "seed": next(iter(seeds.values()), None), "nodes": len(wf), "gen_size": gen_size,
             **{k: info[k] for k in ("template", "start_version", "start_node", "image", "prompt", "frames")}}
 
 
