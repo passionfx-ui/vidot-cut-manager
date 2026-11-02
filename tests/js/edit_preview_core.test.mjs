@@ -218,7 +218,7 @@ describe("edit preview video follows playhead", () => {
     assert.equal(plan.frame, 12);
   });
 
-  it("keeps a still image still and an animated clip on its poster", () => {
+  it("keeps a still image still and follows an animated clip with frames", () => {
     const stillShown = { mode: "still", cutId: "a", mediaId: "m1", url: "/media/m1", loaded: true };
     const still = editPreviewAtPlayhead(stillShown, {
       cutId: "a",
@@ -243,12 +243,27 @@ describe("edit preview video follows playhead", () => {
       clipIn: 0,
       localSec: 1,
     });
-    assert.equal(anim.mode, "still");
-    assert.equal(anim.kind, "poster");
-    assert.equal(anim.url, "/poster/webp");
-    assert.equal(anim.want, null);
-    assert.equal(anim.frame, null);
+    assert.equal(anim.mode, "frames");
+    assert.equal(anim.showImage, false);
     assert.equal(anim.showVideo, false);
+    assert.equal(anim.url, "/media/webp");
+  });
+
+  it("follows an animated clip with playhead frames instead of a frozen poster", () => {
+    const shown = { mode: "frames", cutId: "w", mediaId: "webp", url: "/media/webp", loaded: true };
+    const later = editPreviewAtPlayhead(shown, {
+      cutId: "w",
+      media: animated("webp"),
+      url: "/media/webp",
+      posterUrl: "/poster/webp",
+      clipIn: 0.2,
+      localSec: 0.8,
+    });
+    assert.equal(later.mode, "frames");
+    assert.equal(later.changed, false);
+    assert.equal(later.showImage, false);
+    assert.equal(later.showVideo, false);
+    assert.deepEqual(later.srcSteps, []);
   });
 
   it("clears the video frame when the playhead moves onto a still cut", () => {

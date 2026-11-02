@@ -6164,6 +6164,14 @@ function applyEditModeTimelineRow(root) {
     });
     const viewerEl = rowRoot.querySelector(".gg-viewer");
     const editorEl = rowRoot.querySelector(".gg-editor");
+    const transport = rowRoot.querySelector(".gg-transport");
+    const tools = rowRoot.querySelector(".gg-tl-tools");
+    // H2 hides .gg-viewer. The play button lives in .gg-transport, so park it on the tools row
+    // while Edit mode is on, and put it back under the preview when Edit mode is off.
+    if (transport && tools && viewerEl) {
+      if (row.hideLeftPreview) tools.prepend(transport);
+      else viewerEl.appendChild(transport);
+    }
     if (viewerEl) viewerEl.style.display = row.hideLeftPreview ? row.viewerDisplay : "";
     if (editorEl) {
       editorEl.style.flex = row.hideLeftPreview ? row.editorFlex : "";
@@ -9052,6 +9060,7 @@ async function paintAnimatedScrubFrame(c, local) {
     const key = `${url}#${idxEarly}`;
     if (still._ggKey === key && !still.hidden) {
       setPreviewFrameIndex(idxEarly);
+      mirrorEditPreviewFrame(still, idxEarly);
       return;
     }
   }
@@ -9064,6 +9073,7 @@ async function paintAnimatedScrubFrame(c, local) {
     const key = `${url}#${idx}`;
     if (still._ggKey === key && !still.hidden) {
       setPreviewFrameIndex(idx);
+      mirrorEditPreviewFrame(still, idx);
       return;
     }
     const { bmp, frameIdx } = await decodeAnimatedScrubFrame(cache, idx);
@@ -9076,6 +9086,7 @@ async function paintAnimatedScrubFrame(c, local) {
     still.getContext("2d").drawImage(bmp, 0, 0);
     still.hidden = false;
     still._ggKey = key;
+    mirrorEditPreviewFrame(still, frameIdx);
     bmp.close?.();
     setPreviewFrameIndex(frameIdx);
   } catch (_) {}
@@ -9094,6 +9105,24 @@ function syncAnimatedStill(c, local) {
   }
   img.hidden = true;
   paintAnimatedScrubFrame(c, local);
+}
+
+/** Copy the timeline's decoded frame onto the Edit overlay. The in-panel canvas is display:none in Edit mode. */
+function mirrorEditPreviewFrame(still, frameIdx) {
+  if (!timelineEditModeOn || !still || still.width < 1 || still.height < 1) return;
+  const el = document.querySelector(".gg-edit-preview");
+  const canvas = el?.querySelector(".gg-edit-preview-still");
+  if (!el || !canvas || el.dataset.previewMode !== "frames") return;
+  canvas.width = still.width;
+  canvas.height = still.height;
+  canvas.getContext("2d").drawImage(still, 0, 0);
+  canvas.hidden = false;
+  const img = el.querySelector("img");
+  if (img) img.hidden = true;
+  const vid = el.querySelector("video");
+  if (vid) vid.hidden = true;
+  el.dataset.previewReady = "1";
+  if (frameIdx != null) el.dataset.ggFrame = previewFrameAttr(frameIdx);
 }
 
 function preloadNext(i) {
@@ -9625,7 +9654,7 @@ function ensureEditPreviewEl() {
     el = document.createElement("div");
     el.className = "gg-edit-preview";
     el.setAttribute("role", "img");
-    el.innerHTML = `<img alt="" /><video class="gg-edit-preview-vid" playsinline muted preload="auto" hidden></video><div class="gg-edit-preview-label"></div><div class="gg-edit-preview-empty" hidden></div>`;
+    el.innerHTML = `<img alt="" /><video class="gg-edit-preview-vid" playsinline muted preload="auto" hidden></video><canvas class="gg-edit-preview-still" hidden></canvas><div class="gg-edit-preview-label"></div><div class="gg-edit-preview-empty" hidden></div>`;
     document.body.appendChild(el);
   } else if (!el.querySelector("video")) {
     const vid = document.createElement("video");
@@ -9635,6 +9664,12 @@ function ensureEditPreviewEl() {
     vid.preload = "auto";
     vid.hidden = true;
     el.querySelector("img")?.after(vid);
+  }
+  if (el && !el.querySelector(".gg-edit-preview-still")) {
+    const canvas = document.createElement("canvas");
+    canvas.className = "gg-edit-preview-still";
+    canvas.hidden = true;
+    (el.querySelector("video") || el.querySelector("img"))?.after(canvas);
   }
   return el;
 }
@@ -9824,10 +9859,26 @@ function refreshEditPreviewStill(cut) {
   if (label && label.textContent !== name) label.textContent = name;
   const aria = name ? `Edit preview, ${name}` : "Edit preview";
   if (el.getAttribute("aria-label") !== aria) el.setAttribute("aria-label", aria);
-  el.dataset.previewMode = plan.mode === "video" ? "video" : (plan.showEmpty ? "empty" : "still");
+  el.dataset.previewMode = plan.mode === "video" || plan.mode === "frames" ? plan.mode : (plan.showEmpty ? "empty" : "still");
   el.dataset.previewCut = plan.cutId;
   el.dataset.previewMedia = plan.mediaId;
   el.dataset.previewUrl = plan.url;
+  const frameCanvas = el.querySelector(".gg-edit-preview-still");
+  if (frameCanvas && plan.mode !== "frames") frameCanvas.hidden = true;
+  if (plan.mode === "frames") {
+    if (img) img.hidden = true;
+    if (plan.hideVideo) clearEditPreviewVideo(vid);
+    else if (vid) {
+      try { vid.pause(); } catch (_) {}
+      vid.hidden = true;
+    }
+    if (empty) empty.hidden = true;
+    if (frameCanvas) frameCanvas.hidden = false;
+    const still = viewer?.still;
+    const key = String(still?._ggKey || "");
+    if (still && plan.url && key.startsWith(plan.url + "#")) mirrorEditPreviewFrame(still, null);
+    return;
+  }
   if (plan.mode === "video" && vid) {
     if (plan.changed) editPreviewLoadToken += 1;
     applyEditPreviewVideo(el, vid, plan);

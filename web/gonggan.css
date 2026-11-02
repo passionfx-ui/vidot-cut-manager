@@ -552,7 +552,10 @@ html.gg-edit-mode-on .gg-timeline .gg-viewer { display: none; }
   overflow: hidden;
 }
 .gg-edit-preview img,
-.gg-edit-preview video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.gg-edit-preview video,
+.gg-edit-preview canvas { width: 100%; height: 100%; object-fit: contain; background: #000; }
+html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-transport { margin-top: 0; flex: 0 0 auto; }
+html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
 .gg-edit-preview [hidden] { display: none !important; }
 .gg-edit-preview-label {
   position: absolute;
