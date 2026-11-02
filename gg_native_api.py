@@ -475,7 +475,7 @@ def native_save_groups(pid: str, groups) -> dict | None:
     return store.to_timeline(pid)
 
 
-def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
+def native_add_cut(pid: str, group_id: str | None, after: str | None, copy_template: bool = True) -> dict:
     store = native_store()
     doc = store.get_project(pid)
     if not doc:
@@ -487,7 +487,7 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
         for cid, c in (before.get("cuts") or {}).items():
             if isinstance(c, dict) and not c.get("deleted_at"):
                 before_ids.add(cid)
-    graph = copy_new_cut_template(doc, "image")
+    graph = copy_new_cut_template(doc, "image") if copy_template else None
     doc = store.add_cut(pid, scene_id=scene_id, after=after, template_graph=graph)
     new_id = None
     for cid, c in (doc.get("cuts") or {}).items():
@@ -1254,6 +1254,38 @@ def _add_output_version(pid: str, cut_id: str, lo: dict, api_workflow: dict | No
     return ver
 
 
+def _workflow_has_body(graph: dict | None) -> bool:
+    if not isinstance(graph, dict) or not graph:
+        return False
+    nodes = graph.get("nodes")
+    if isinstance(nodes, list):
+        return any(isinstance(n, dict) for n in nodes)
+    return any(isinstance(n, dict) and n.get("class_type") for n in graph.values())
+
+
+def embedded_import_workflow(path: Path) -> dict | None:
+    """ComfyUI graph embedded in an imported file, or None when the file has none.
+
+    PNG `workflow` (UI graph) wins. `prompt` (API graph) is used when the UI graph is missing.
+    The returned copy is for the cut only. The file on disk is not rewritten.
+    """
+    path = Path(path)
+    if path.suffix.lower() != ".png":
+        return None
+    try:
+        meta = gg_wfstore.extract_png_meta(path)
+    except OSError:
+        return None
+    ui = meta.get("workflow") if isinstance(meta.get("workflow"), dict) else None
+    api = meta.get("prompt") if isinstance(meta.get("prompt"), dict) else None
+    graph = ui if _workflow_has_body(ui) else None
+    if graph is None and _workflow_has_body(api):
+        graph = api
+    if not isinstance(graph, dict):
+        return None
+    return clear_cut_linear_mode(copy.deepcopy(graph))
+
+
 def native_import_version(pid: str, cut_id: str, src: Path | str) -> dict:
     """A picked image/video file becomes a new version of the cut. The file is copied (never moved)
     into the project's assets under a new version id name; `src` itself is only read."""
@@ -1267,6 +1299,50 @@ def native_import_version(pid: str, cut_id: str, src: Path | str) -> dict:
     if not cut or cut.get("deleted_at"):
         raise ValueError("cut not found")
     return {"ok": True, "version": _add_output_version(pid, cut_id, {"path": str(src)})}
+
+
+def native_import_image_cut(
+    pid: str,
+    src: Path | str,
+    after: str | None = None,
+    group_id: str | None = None,
+) -> dict:
+    """Import creates a cut. The options template is not copied into it.
+
+    A ComfyUI workflow embedded in the file becomes that cut's workflow.
+    With no embedded workflow the cut workflow stays empty. Add cut and a new
+    project's first cut still copy the options template.
+    """
+    src = Path(src)
+    if src.suffix.lower() not in _MEDIA_KIND:
+        raise ValueError(f"Unsupported file type: {src.suffix or '(none)'}")
+    store = native_store()
+    doc = store.get_project(pid)
+    if not doc or doc.get("deleted_at"):
+        raise ValueError("project not found")
+    added = native_add_cut(pid, group_id, after if isinstance(after, str) and after else None, copy_template=False)
+    cut = added.get("cut") if isinstance(added.get("cut"), dict) else None
+    cut_id = cut.get("id") if cut else None
+    if not isinstance(cut_id, str) or not cut_id:
+        raise ValueError("could not create cut")
+    graph = embedded_import_workflow(src)
+    try:
+        ver = _add_output_version(pid, cut_id, {"path": str(src)})
+    except Exception:
+        try:
+            store.delete_cuts(pid, [cut_id])
+        except Exception:
+            log.exception("[gonggan-cut] import cut cleanup failed")
+        raise
+    if graph is not None:
+        store.set_cut_workflow(pid, cut_id, graph)
+    return {
+        "ok": True,
+        "cut": {"id": cut_id, "name": cut.get("name")},
+        "version": ver,
+        "workflow_embedded": graph is not None,
+        "timeline": store.to_timeline(pid),
+    }
 
 
 _CAPTURE_LOCK = threading.Lock()

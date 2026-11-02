@@ -1319,7 +1319,11 @@ async def gg_capture_output(request):
 
 @routes.post("/gonggan/import-version")
 async def gg_import_version(request):
-    """Native only: multipart {pid, cut_id, file}; the uploaded file becomes a new version of the cut."""
+    """Native only: multipart {pid, cut_id, file} adds a version of an existing cut.
+
+    multipart {pid, file, create_cut=1, after?, group?} creates a cut for that file
+    and does not copy the options template into it.
+    """
     fields: dict[str, str] = {}
     tmp = None
     try:
@@ -1333,14 +1337,26 @@ async def gg_import_version(request):
                 with open(tmp, "xb") as f:
                     while chunk := await part.read_chunk(1 << 20):
                         f.write(chunk)
-            elif part.name in ("pid", "cut_id"):
+            elif part.name in ("pid", "cut_id", "create_cut", "after", "group"):
                 fields[part.name] = (await part.text()).strip()
-        pid, cid = fields.get("pid"), fields.get("cut_id")
-        if not pid or not cid or not gg_native_api.is_native_pid(pid):
+        pid = fields.get("pid")
+        if not pid or not gg_native_api.is_native_pid(pid):
             return _err(400, "pid and cut_id required")
         if tmp is None:
             return _err(400, "file required")
-        res = await asyncio.to_thread(gg_native_api.native_import_version, pid, cid, tmp)
+        if fields.get("create_cut") in ("1", "true", "yes"):
+            res = await asyncio.to_thread(
+                gg_native_api.native_import_image_cut,
+                pid,
+                tmp,
+                fields.get("after") or None,
+                fields.get("group") or None,
+            )
+        else:
+            cid = fields.get("cut_id")
+            if not cid:
+                return _err(400, "pid and cut_id required")
+            res = await asyncio.to_thread(gg_native_api.native_import_version, pid, cid, tmp)
     except ValueError as ex:
         return _err(400, str(ex))
     except Exception as ex:  # noqa: BLE001

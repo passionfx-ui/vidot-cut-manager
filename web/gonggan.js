@@ -9136,7 +9136,7 @@ function probeStripDurations(c) {
 
 let stripImportBusy = false;
 
-/** Version row Import: native file picker; each picked file becomes a new version of the cut. */
+/** Import: native file picker. Each picked file becomes its own cut (no options template). */
 function pickVersionImportFiles(cutId) {
   const pid = state.pid;
   if (!cutId || !isNativeProject() || stripImportBusy) return;
@@ -9148,39 +9148,62 @@ function pickVersionImportFiles(cutId) {
   input.click();
 }
 
-/** One upload per file in pick order, so the last picked file ends up newest (left). */
+/** One new cut per file, in pick order, after the selected cut. No options template is copied. */
 async function importVersionFiles(pid, cutId, files) {
   if (!files.length) return;
   stripImportBusy = true;
   bus.dispatchEvent(new Event("sdk"));
   const failed = [];
-  let added = 0;
+  const created = [];
+  const before = snapshotOrderGroups(state.timeline);
+  const group = cutById(cutId)?.group_id || "";
+  let after = cutId;
+  let lastTimeline = null;
   try {
     for (const file of files) {
       const form = new FormData();
       form.append("pid", pid);
-      form.append("cut_id", cutId);
+      form.append("create_cut", "1");
+      if (after) form.append("after", after);
+      if (group) form.append("group", group);
       form.append("file", file, file.name);
       try {
         const res = await api.fetchApi("/gonggan/import-version", { method: "POST", body: form });
         const data = await res.json().catch(() => ({}));
         if (res.status === 404 || res.status === 405) throw new Error("Restart ComfyUI to enable Import");
         if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
-        added++;
-        const vid = data.version && data.version.id;
-        if (vid && state.pid === pid) {
-          const stepId = historyStepId();
-          recordShotsEntry(pid, { kind: "version", op: "add", cut_id: cutId, version_id: vid, history_step: stepId }, "Import version");
-        }
+        const newId = data.cut && data.cut.id;
+        if (!newId) throw new Error("Import did not create a cut");
+        created.push(newId);
+        after = newId;
+        if (data.timeline) lastTimeline = data.timeline;
       } catch (e) {
         failed.push(`${file.name}: ${e.message}`);
       }
     }
   } finally {
     stripImportBusy = false;
-    if (added && state.pid === pid) await loadTimeline({ reloadWorkflows: true });
+    if (created.length && state.pid === pid) {
+      if (lastTimeline) adoptMutationTimeline(lastTimeline, pid);
+      recordShotsEntry(
+        pid,
+        { kind: "cuts", op: "add", ids: created, before, after: snapshotOrderGroups(state.timeline) },
+        created.length === 1 ? "Import" : `Import ${created.length}`,
+      );
+      await loadTimeline({ reloadWorkflows: true });
+      const lastId = created[created.length - 1];
+      wfLastLoadedCutId = "";
+      wfLastLoadedProjectId = "";
+      selectCut(lastId);
+      requestAnimationFrame(() => {
+        document
+          .querySelector(`.gg-shots .gg-cut[data-cut-id="${CSS.escape(lastId)}"]`)
+          ?.scrollIntoView({ block: "nearest" });
+      });
+    }
     bus.dispatchEvent(new Event("sdk"));
   }
+  const added = created.length;
   if (failed.length) ggToast(`Imported ${added} of ${files.length}`, failed.join("\n"), "warn");
   else ggToast(`Imported ${added} file${added === 1 ? "" : "s"}`, "", "ok");
 }
