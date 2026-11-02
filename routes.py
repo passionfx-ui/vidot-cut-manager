@@ -70,7 +70,25 @@ async def gg_settings(request):
         "native_projects_dir": native_projects,
         "default_project_location": default_project_location,
         "history_steps": _history_steps_limit(),
+        "ai_features": gg_data.ai_features_enabled(s),
     })
+
+
+@routes.post("/gonggan/ai-features")
+async def gg_ai_features(request):
+    """{"enabled": bool} -> gonggan_settings.json "ai_features". Other keys stay."""
+    data = await _json_body(request)
+    enabled = data.get("enabled")
+    if not isinstance(enabled, bool):
+        return _err(400, "enabled must be true or false.")
+    try:
+        saved = await asyncio.to_thread(gg_data.save_ai_features, enabled)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] AI features setting failed")
+        return _err(500, str(ex))
+    return web.json_response({"ok": True, "ai_features": saved})
 
 
 @routes.get("/gonggan/projects")

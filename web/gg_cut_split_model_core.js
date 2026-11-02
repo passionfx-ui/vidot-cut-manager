@@ -47,6 +47,37 @@ export function cutSplitModelLoadErrorText(err) {
 
 export const USE_AI_LABEL = "Use AI (Beta)";
 export const AI_TEXT_LABEL = "AI text (Beta)";
+/** Project Settings › Global. Missing or anything other than "1" is off. */
+export const AI_FEATURES_LABEL = "AI features";
+export const AI_FEATURES_KEY = "gg.aiFeatures";
+export const AI_FEATURES_HINT =
+  "Off hides AI Make Cut and the other AI controls, and does not start them.";
+
+/** @param {Storage|null|undefined} storage */
+export function aiFeaturesChoiceSaved(storage) {
+  try {
+    const v = storage?.getItem(AI_FEATURES_KEY);
+    return v === "1" || v === "0";
+  } catch (_) {
+    return false;
+  }
+}
+
+/** @param {Storage|null|undefined} storage */
+export function loadAiFeatures(storage) {
+  try {
+    return storage?.getItem(AI_FEATURES_KEY) === "1";
+  } catch (_) {
+    return false;
+  }
+}
+
+/** @param {Storage|null|undefined} storage @param {boolean} on */
+export function saveAiFeatures(storage, on) {
+  try {
+    storage?.setItem(AI_FEATURES_KEY, on ? "1" : "0");
+  } catch (_) {}
+}
 export const USE_AI_OFF_TIP = `Turn on ${USE_AI_LABEL} in Project Settings`;
 export const USE_AI_FEATURES_HINT =
   `Turns AI features on/off (${AI_MAKE_CUT_LABEL}, ${AI_TEXT_LABEL}, ...). Off: the AI model is never loaded.`;

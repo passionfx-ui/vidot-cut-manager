@@ -45,6 +45,41 @@ def load_settings() -> dict:
     return s
 
 
+def ai_features_enabled(settings: dict | None = None) -> bool:
+    """gonggan_settings.json "ai_features". Off unless the value is exactly true."""
+    v = (settings if settings is not None else load_settings()).get("ai_features", False)
+    return v is True
+
+
+def save_ai_features(on: bool) -> bool:
+    """Write "ai_features" into gonggan_settings.json. Other keys stay."""
+    if not isinstance(on, bool):
+        raise ValueError("ai_features must be true or false.")
+    path = SETTINGS_FILE
+    data: dict = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except (OSError, ValueError) as ex:
+            raise ValueError(f"Could not read {path.name}: {ex}") from None
+        if not isinstance(loaded, dict):
+            raise ValueError(f"{path.name} is not a JSON object.")
+        data = loaded
+    elif DEFAULT_SETTINGS_FILE.is_file():
+        try:
+            base = json.loads(DEFAULT_SETTINGS_FILE.read_text(encoding="utf-8") or "{}")
+        except (OSError, ValueError):
+            base = {}
+        if isinstance(base, dict):
+            data = dict(base)
+    data["ai_features"] = on
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    return on
+
+
 def user_dir(settings: dict | None = None) -> Path:
     s = settings or load_settings()
     uid = str(s.get("uid") or "")

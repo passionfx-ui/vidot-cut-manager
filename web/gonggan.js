@@ -461,6 +461,11 @@ import {
   USE_AI_LABEL,
   USE_AI_FEATURES_HINT,
   USE_AI_OFF_TIP,
+  AI_FEATURES_LABEL,
+  AI_FEATURES_HINT,
+  loadAiFeatures,
+  saveAiFeatures,
+  aiFeaturesChoiceSaved,
 } from "./gg_cut_split_model_core.js";
 import {
   undoKeyAction,
@@ -534,8 +539,15 @@ const SHOW_FINAL_LIST = false;
  * AI Make Cut (internally "cut split") in the UI: the Shots toolbar button, the cut list right-click entry and the
  * Project Settings AI section (Use AI, model, pre-check). Off = none of it is shown and nothing calls
  * /gonggan/cut-split/*; code and server routes are kept.
+ * I27: AI features (Project Settings) is a second gate, default off. Off hides that UI and skips its init.
  */
 const AI_CUT_SPLIT_VISIBLE = true;
+let aiFeaturesOn = loadAiFeatures(localStorage);
+let aiFeaturesAdopted = false;
+
+function aiFeaturesActive() {
+  return AI_CUT_SPLIT_VISIBLE && aiFeaturesOn;
+}
 const bus = new EventTarget();
 const state = { projects: [], projectsLoaded: false, pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
 /** Workflow graphs for the open project. Cut switches read this; only open/reload/save fill it. */
@@ -723,6 +735,7 @@ async function refreshProjectListForDropdown() {
     }
     refreshSdk(true);
     refreshProjectTemplateFlag();
+    void adoptServerAiFeaturesIfUnset();
     refreshCutSplitUseAi();
   })();
   try {
@@ -786,7 +799,7 @@ async function loadTimeline(opts) {
 }
 
 async function offerStoredAiMakeCutResult() {
-  if (!state.pid || !isNativeProject() || !AI_CUT_SPLIT_VISIBLE) return;
+  if (!state.pid || !isNativeProject() || !aiFeaturesActive()) return;
   const storedId = loadAiMakeCutJob(localStorage, state.pid);
   if (!storedId) return;
   const usedId = localStorage.getItem(aiMakeCutUsedStorageKey(state.pid)) || "";
@@ -1239,8 +1252,9 @@ const TEMPLATE_FIELDS = {
 
 function templateFieldHtml(key = "default") {
   const f = TEMPLATE_FIELDS[key];
+  const title = key === "video" && !aiFeaturesActive() ? "Workflow for Image to Video" : f.title;
   const listId = key === "default" ? "gg-tpl-list" : `gg-tpl-list-${key}`;
-  return `<div class="gg-modal-field gg-tpl-field" data-tpl="${key}" title="${esc(f.title)}">
+  return `<div class="gg-modal-field gg-tpl-field" data-tpl="${key}" title="${esc(title)}">
         <span class="gg-tpl-label">${esc(f.label)}</span>
         <span class="gg-tpl-wrap">
           <span class="gg-tpl-box">
@@ -1700,7 +1714,13 @@ function openProjectSettingsModal() {
         <input type="number" class="gg-modal-history-steps" min="1" max="500" step="1" value="${HISTORY_STEPS_DEFAULT}" />
         <span class="gg-modal-hint">How many History steps to keep for each project. Older steps are removed and their hidden files are deleted.</span>
       </label>
-      ${nat && AI_CUT_SPLIT_VISIBLE ? `<label class="gg-modal-field gg-use-ai-field">
+      ${AI_CUT_SPLIT_VISIBLE ? `<label class="gg-modal-field gg-ai-features-field">
+        <span class="gg-switch-row">${esc(AI_FEATURES_LABEL)}
+          <input type="checkbox" class="gg-switch gg-modal-ai-features" role="switch"${aiFeaturesOn ? " checked" : ""} />
+        </span>
+        <span class="gg-modal-hint">${esc(AI_FEATURES_HINT)}</span>
+      </label>` : ""}
+      ${nat && AI_CUT_SPLIT_VISIBLE ? `<div class="gg-ai-features-panel"${aiFeaturesOn ? "" : " hidden"}><label class="gg-modal-field gg-use-ai-field">
         <span class="gg-switch-row">${esc(USE_AI_LABEL)}
           <input type="checkbox" class="gg-switch gg-modal-use-ai" role="switch" disabled />
         </span>
@@ -1709,7 +1729,7 @@ function openProjectSettingsModal() {
       <label class="gg-modal-field gg-cut-split-model-field">AI model<span class="gg-ai-model-vl-hint"> ${esc(AI_MODEL_VL_HINT)}</span>
         <select class="gg-modal-cut-split-model" disabled><option>Loading…</option></select>
         <span class="gg-modal-hint gg-ai-model-dirs"></span>
-      </label>` : ""}
+      </label></div>` : ""}
       </div>
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
@@ -1771,12 +1791,15 @@ function openProjectSettingsModal() {
     if (state.pid && (dropped.length || projectHistory.sizes().steps)) scheduleHistorySave();
     return true;
   }
+  const aiFeatIn = wrap.querySelector(".gg-modal-ai-features");
+  const aiFeaturesInitial = aiFeaturesOn;
   const folderIn = wrap.querySelector(".gg-modal-folder");
   if (!nat || !folderIn) {
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       try {
         await saveHistoryStepsIfChanged();
+        await saveAiFeaturesIfChanged(aiFeatIn, aiFeaturesInitial);
         closeProjectModal();
         ggToast("Settings", "Settings saved", "ok");
       } catch (err) {
@@ -1816,25 +1839,38 @@ function openProjectSettingsModal() {
     if (modelField) modelField.title = off ? USE_AI_OFF_TIP : "";
   };
   useAiIn?.addEventListener("change", syncModelField);
-  if (modelSel) void getJson("/gonggan/cut-split/model").then(
-    (d) => {
-      if (!wrap.isConnected || !modelSel) return;
-      const opts = cutSplitModelOptions(d);
-      modelSel.innerHTML = cutSplitModelOptionsHtml(opts, esc);
-      modelInitial = opts.find((o) => o.selected)?.value || "";
-      const dirsEl = wrap.querySelector(".gg-ai-model-dirs");
-      if (dirsEl) dirsEl.textContent = cutSplitModelScanDirsText(d);
-      if (useAiIn) {
-        useAiInitial = cutSplitUseAi(d);
-        useAiIn.checked = useAiInitial;
-        useAiIn.disabled = false;
-      }
-      syncModelField();
-    },
-    (err) => {
-      if (modelSel) modelSel.innerHTML = `<option>${esc(cutSplitModelLoadErrorText(err))}</option>`;
-    },
-  );
+  const aiPanel = wrap.querySelector(".gg-ai-features-panel");
+  let modelListStarted = false;
+  const loadCutSplitModelList = () => {
+    if (modelListStarted || !modelSel) return;
+    modelListStarted = true;
+    void getJson("/gonggan/cut-split/model").then(
+      (d) => {
+        if (!wrap.isConnected || !modelSel) return;
+        const opts = cutSplitModelOptions(d);
+        modelSel.innerHTML = cutSplitModelOptionsHtml(opts, esc);
+        modelInitial = opts.find((o) => o.selected)?.value || "";
+        const dirsEl = wrap.querySelector(".gg-ai-model-dirs");
+        if (dirsEl) dirsEl.textContent = cutSplitModelScanDirsText(d);
+        if (useAiIn) {
+          useAiInitial = cutSplitUseAi(d);
+          useAiIn.checked = useAiInitial;
+          useAiIn.disabled = false;
+        }
+        syncModelField();
+      },
+      (err) => {
+        if (modelSel) modelSel.innerHTML = `<option>${esc(cutSplitModelLoadErrorText(err))}</option>`;
+      },
+    );
+  };
+  const syncAiFeaturesPanel = () => {
+    const on = !!aiFeatIn?.checked;
+    if (aiPanel) aiPanel.hidden = !on;
+    if (on) loadCutSplitModelList();
+  };
+  aiFeatIn?.addEventListener("change", syncAiFeaturesPanel);
+  syncAiFeaturesPanel();
   let saving = false;
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1849,22 +1885,26 @@ function openProjectSettingsModal() {
       height: wrap.querySelector(".gg-modal-gen-height")?.value,
       random_seed: curSettings.random_seed,
     }));
-    const aiPatch = cutSplitSettingsPatch({
+    const wantAi = !!aiFeatIn?.checked;
+    const aiPatch = wantAi ? cutSplitSettingsPatch({
       modelInitial,
       model: modelSel?.value,
       useAiInitial,
       useAi: useAiIn?.checked,
-    });
+    }) : null;
     let historyChanged = false;
+    let featuresChanged = false;
     try {
       historyChanged = await saveHistoryStepsIfChanged();
+      featuresChanged = await saveAiFeaturesIfChanged(aiFeatIn, aiFeaturesInitial);
     } catch (err) {
       ggToast("Settings", err.message, "warn");
       return;
     }
+    if (featuresChanged && wantAi && !aiPatch) void refreshCutSplitUseAi();
     if (!patch && !aiPatch) {
       closeProjectModal();
-      if (historyChanged) ggToast("Settings", "Settings saved", "ok");
+      if (historyChanged || featuresChanged) ggToast("Settings", "Settings saved", "ok");
       return;
     }
     const reqPid = state.pid;
@@ -4657,8 +4697,43 @@ async function refreshProjectTemplateFlag() {
 /** Project Settings › Use AI (global, gonggan_settings.json). Missing or unknown counts as off. */
 let cutSplitUseAiOn = false;
 
+async function saveAiFeaturesIfChanged(input, initial) {
+  if (!input) return false;
+  const next = !!input.checked;
+  if (next === !!initial) return false;
+  saveAiFeatures(localStorage, next);
+  try {
+    await postJson("/gonggan/ai-features", { enabled: next });
+  } catch (err) {
+    if (err?.status !== 404 && err?.status !== 405) throw err;
+  }
+  aiFeaturesOn = next;
+  aiFeaturesAdopted = true;
+  bus.dispatchEvent(new Event("ai-features"));
+  if (next) void offerStoredAiMakeCutResult();
+  return true;
+}
+
+async function adoptServerAiFeaturesIfUnset() {
+  if (aiFeaturesAdopted || aiFeaturesChoiceSaved(localStorage)) {
+    aiFeaturesAdopted = true;
+    return;
+  }
+  aiFeaturesAdopted = true;
+  try {
+    const d = await getJson("/gonggan/settings");
+    if (typeof d?.ai_features !== "boolean" || d.ai_features === aiFeaturesOn) return;
+    aiFeaturesOn = d.ai_features;
+    bus.dispatchEvent(new Event("ai-features"));
+    if (aiFeaturesOn) {
+      void refreshCutSplitUseAi();
+      void offerStoredAiMakeCutResult();
+    }
+  } catch (_) {}
+}
+
 async function refreshCutSplitUseAi() {
-  if (!AI_CUT_SPLIT_VISIBLE) return;
+  if (!aiFeaturesActive()) return;
   try {
     cutSplitUseAiOn = cutSplitUseAi(await getJson("/gonggan/cut-split/model"));
   } catch (_) {
@@ -4783,7 +4858,7 @@ const AI_SPLIT_IDLE_HINT = "Runs a local text model (TextGenerate) in ComfyUI th
  * run that is still going or finished while the dialog was closed.
  */
 function openAiCutSplitModal() {
-  if (!AI_CUT_SPLIT_VISIBLE || !isNativeProject() || document.querySelector(".gg-aisplit-modal")) return;
+  if (!aiFeaturesActive() || !isNativeProject() || document.querySelector(".gg-aisplit-modal")) return;
   if (!cutSplitUseAiOn) {
     ggToast(AI_MAKE_CUT_LABEL, USE_AI_OFF_TIP, "warn");
     return;
@@ -5718,7 +5793,7 @@ function openCutContextMenu(e, cutId) {
     hasImage: cutHasStartImage(c),
     hasVersion: !!(c?.versions_list || []).length,
     hasListCuts: visible.length > 0,
-    aiMakeCut: AI_CUT_SPLIT_VISIBLE,
+    aiMakeCut: aiFeaturesActive(),
     useAi: cutSplitUseAiOn,
   });
   showCtxMenu(
@@ -5839,7 +5914,7 @@ function openShotsPanelContextMenu(e) {
   const items = [{ label: "Add Cut", action: () => addLocalCut() }];
   const ids = cutSelIds();
   if (ids.length) items.push({ label: MAKE_SCENE_LABEL, action: () => createSceneGroup(ids) });
-  if (nat && AI_CUT_SPLIT_VISIBLE) {
+  if (nat && aiFeaturesActive()) {
     const { key: _k, ...ai } = aiMakeCutMenuItem(cutSplitUseAiOn);
     items.push({ ...ai, action: () => openAiCutSplitModal() });
   }
@@ -9746,7 +9821,7 @@ function iconRowHtml() {
   const btn = (cls, tip, icon) =>
     `<button type="button" class="gg-btn gg-ir-btn ${cls}" title="${esc(tip)}" aria-label="${esc(tip)}" disabled>${icon}</button>`;
   const aiWand =
-    AI_CUT_SPLIT_VISIBLE && isNativeProject()
+    aiFeaturesActive() && isNativeProject()
       ? (() => {
           const s = aiMakeCutIconButtonState(cutSplitUseAiOn);
           return `<button type="button" class="gg-btn gg-ir-btn gg-ir-aicut gg-ai-split" title="${esc(s.title)}" aria-label="${esc(s.ariaLabel)}"${s.disabled ? " disabled" : ""}>${ICON_WAND}</button>`;
@@ -10846,7 +10921,9 @@ function mountShots(el) {
     if (list) fillHistoryList(list);
   });
   const onUseAi = () => syncAiSplitButton(root);
+  const onAiFeatures = () => paint();
   bus.addEventListener("cut-split-use-ai", onUseAi);
+  bus.addEventListener("ai-features", onAiFeatures);
   bus.addEventListener("template", onTemplate);
   bus.addEventListener("select", onSel);
   bus.addEventListener("gg-opentab", onOpenTab);
@@ -10858,6 +10935,7 @@ function mountShots(el) {
   paint();
   if (!state.projects.length) loadProjects();
   refreshProjectTemplateFlag();
+  void adoptServerAiFeaturesIfUnset();
   refreshCutSplitUseAi();
   refreshSdk(false);
   const timer = setInterval(() => refreshSdk(false), 20000);
@@ -11041,6 +11119,7 @@ function mountShots(el) {
     bus.removeEventListener("timeline", paint);
     bus.removeEventListener("template", onTemplate);
     bus.removeEventListener("cut-split-use-ai", onUseAi);
+    bus.removeEventListener("ai-features", onAiFeatures);
     bus.removeEventListener("select", onSel);
     bus.removeEventListener("gg-opentab", onOpenTab);
     bus.removeEventListener("gg-playcut", onPlayCut);
