@@ -823,6 +823,13 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-split-preview { font-size: 11px; white-space: pre-line; min-height: 1.2em; }
 .gg-split-err { color: #e5766a; }
 .gg-proj-settings-modal { width: min(420px, calc(100vw - 32px)); box-sizing: border-box; }
+.gg-proj-settings-modal .gg-settings-tabs { display: flex; gap: 4px; margin: 0 0 12px; }
+.gg-proj-settings-modal .gg-settings-tab {
+  flex: 1 1 0; background: #1b1d22; color: var(--gg-fg, #e6e8ec); border: 1px solid var(--gg-line, #353a44);
+  border-radius: 4px; padding: 4px 8px; cursor: pointer; font: inherit;
+}
+.gg-proj-settings-modal .gg-settings-tab.gg-on { background: var(--gg-acc, #f2b84b); color: #1a1a1a; border-color: var(--gg-acc, #f2b84b); }
+.gg-proj-settings-modal .gg-settings-pane[hidden] { display: none !important; }
 .gg-proj-settings-modal .gg-modal-field { margin-bottom: 14px; }
 .gg-gen-settings { border: 0; margin: 0 0 4px; padding: 0; min-inline-size: 0; }
 .gg-gen-settings > legend { font-size: 12px; font-weight: 600; color: var(--gg-fg, #e6e8ec); padding: 0; margin-bottom: 6px; }

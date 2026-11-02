@@ -409,6 +409,11 @@ import {
   randomSeedFromProjectSettings,
 } from "./gg_project_settings_core.js";
 import {
+  SETTINGS_TAB_LABELS,
+  SETTINGS_TAB_PROJECT,
+  settingsTabPanes,
+} from "./gg_settings_tabs_core.js";
+import {
   cutSplitModelOptions,
   cutSplitModelOptionsHtml,
   cutSplitModelScanDirsText,
@@ -1511,11 +1516,17 @@ function openProjectSettingsModal() {
   closeProjectModal();
   const nat = isNativeProject();
   const curSettings = normalizeProjectSettings(state.timeline?.project?.settings);
+  const initialTabs = settingsTabPanes(SETTINGS_TAB_PROJECT);
   const wrap = document.createElement("div");
   wrap.className = "gg-modal-backdrop";
   wrap.innerHTML = `
     <form class="gg-modal gg-proj-settings-modal" role="dialog" aria-label="Project settings">
       <h3 class="gg-modal-title">Project Settings</h3>
+      <div class="gg-settings-tabs" role="tablist" aria-label="Settings">
+        <button type="button" class="gg-btn gg-settings-tab${initialTabs.project ? " gg-on" : ""}" role="tab" id="gg-settings-tab-project" aria-selected="${initialTabs.project ? "true" : "false"}" aria-controls="gg-settings-pane-project" data-settings-tab="project">${esc(SETTINGS_TAB_LABELS.project)}</button>
+        <button type="button" class="gg-btn gg-settings-tab${initialTabs.global ? " gg-on" : ""}" role="tab" id="gg-settings-tab-global" aria-selected="${initialTabs.global ? "true" : "false"}" aria-controls="gg-settings-pane-global" data-settings-tab="global">${esc(SETTINGS_TAB_LABELS.global)}</button>
+      </div>
+      <div class="gg-settings-pane" role="tabpanel" id="gg-settings-pane-project" aria-labelledby="gg-settings-tab-project" data-settings-pane="project"${initialTabs.project ? "" : " hidden"}>
       ${nat ? `<label class="gg-modal-field">Output folder
         <span class="gg-folder-row">
           <input type="text" class="gg-modal-folder" maxlength="260" spellcheck="false" autocomplete="off" placeholder="e.g. D:\\Films\\My Film" />
@@ -1527,6 +1538,8 @@ function openProjectSettingsModal() {
       ${nat ? "" : templateFieldHtml()}
       ${nat ? `${templateFieldHtml("image")}${templateFieldHtml("video")}` : ""}
       ${nat ? genSettingsModalHtml(curSettings) : ""}
+      </div>
+      <div class="gg-settings-pane" role="tabpanel" id="gg-settings-pane-global" aria-labelledby="gg-settings-tab-global" data-settings-pane="global"${initialTabs.global ? "" : " hidden"}>
       ${nat && AI_CUT_SPLIT_VISIBLE ? `<label class="gg-modal-field gg-use-ai-field">
         <span class="gg-switch-row">${esc(USE_AI_LABEL)}
           <input type="checkbox" class="gg-switch gg-modal-use-ai" role="switch" disabled />
@@ -1537,6 +1550,7 @@ function openProjectSettingsModal() {
         <select class="gg-modal-cut-split-model" disabled><option>Loading…</option></select>
         <span class="gg-modal-hint gg-ai-model-dirs"></span>
       </label>` : ""}
+      </div>
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-modal-cancel">${nat ? "Cancel" : "Close"}</button>
         ${nat ? `<button type="submit" class="gg-btn gg-primary">Save</button>` : ""}
@@ -1544,6 +1558,23 @@ function openProjectSettingsModal() {
     </form>`;
   document.body.appendChild(wrap);
   projectModalEl = wrap;
+  const showSettingsTab = (id) => {
+    const panes = settingsTabPanes(id);
+    wrap.querySelectorAll("[data-settings-tab]").forEach((btn) => {
+      const on = panes[btn.dataset.settingsTab] === true;
+      btn.classList.toggle("gg-on", on);
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    wrap.querySelectorAll("[data-settings-pane]").forEach((pane) => {
+      pane.hidden = panes[pane.dataset.settingsPane] !== true;
+    });
+  };
+  wrap.querySelector(".gg-settings-tabs")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-settings-tab]");
+    if (!btn) return;
+    if (document.activeElement?.classList?.contains("gg-tpl-combo")) document.activeElement.blur();
+    showSettingsTab(btn.dataset.settingsTab);
+  });
   const form = wrap.querySelector("form");
   wireProjectTemplateField(wrap.querySelector('[data-tpl="default"]'));
   // 0.9.135: no Default template field; an old project-level template shows (and saves) as its Image template.
