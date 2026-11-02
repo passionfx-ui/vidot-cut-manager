@@ -10650,6 +10650,7 @@ app.registerExtension({
     { id: EXPORT_TAB, title: EXPORT_TAB_TITLE, type: "custom", icon: "pi pi-download", render: (el) => mountExport(el) },
   ],
   async setup() {
+    document.documentElement.classList.add("gg-pack-bottom-tabs");
     globalThis.__gongganCutAutosaveOnSwitch = "0.8.2";
     globalThis.__gongganProjectFolders = "0.8.2";
     globalThis.__gongganTimelineNoTabSwitch = "0.8.3";

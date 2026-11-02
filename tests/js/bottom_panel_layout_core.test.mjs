@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import {
   BOTTOM_PANEL_RESIZABLE,
+  BOTTOM_TAB_ROW_SAVED_PX,
   NORMAL_PREVIEW_GROWTH,
   TL_SCROLLBAR_PX,
   TL_SCROLLBAR_MARGIN_BOTTOM_PX,
@@ -42,9 +43,9 @@ describe("bottom panel height fits the horizontal scrollbar", () => {
     );
     const extra = fixedTimelineBodyHeight() - timelineEditorBodyPx();
     assert.ok(extra > 0);
-    assert.equal(extra, normalPreviewScreenPx() - g2FilledPreviewScreenPx());
-    assert.equal(fixedTimelineBodyHeight(), timelineViewerBodyPx());
-    assert.equal(fixedTimelineBodyHeight(), 214);
+    assert.equal(extra, normalPreviewScreenPx() - g2FilledPreviewScreenPx() + BOTTOM_TAB_ROW_SAVED_PX);
+    assert.equal(fixedTimelineBodyHeight(), timelineViewerBodyPx() + BOTTOM_TAB_ROW_SAVED_PX);
+    assert.equal(fixedTimelineBodyHeight(), 240);
     assert.equal(TL_SCROLLBAR_PX, 12);
     assert.equal(TL_TRACK_MIN_PX, 84);
   });
@@ -92,11 +93,13 @@ describe("normal-mode left preview is about 40% larger", () => {
     assert.ok(fixedTimelineBodyHeight() >= timelineEditorBodyPx());
     const wide = 1600;
     const before = normalModePreviewSize({ bodyHeight: timelineEditorBodyPx(), hostWidth: wide });
+    const designed = normalModePreviewSize({ bodyHeight: timelineViewerBodyPx(), hostWidth: wide });
     const after = normalModePreviewSize({ bodyHeight: fixedTimelineBodyHeight(), hostWidth: wide });
     assert.equal(before.height, g2FilledPreviewScreenPx());
-    assert.equal(after.height, normalPreviewScreenPx());
-    assert.ok(after.height / before.height >= 1.38 && after.height / before.height <= 1.42);
-    assert.ok(after.width / before.width >= 1.38 && after.width / before.width <= 1.42);
+    assert.equal(designed.height, normalPreviewScreenPx());
+    assert.ok(designed.height / before.height >= 1.38 && designed.height / before.height <= 1.42);
+    assert.ok(designed.width / before.width >= 1.38 && designed.width / before.width <= 1.42);
+    assert.equal(after.height, designed.height + BOTTOM_TAB_ROW_SAVED_PX);
     assert.ok(js.includes("normalModePreviewSize("));
   });
 
@@ -170,7 +173,7 @@ describe("edit mode hides the in-panel left preview and gives that width to the 
     const plain = editModeTimelineRow({ editMode: false, hostWidth: 900, previewWidth: 400 });
     assert.equal(wide.timelineWidth, 900);
     assert.equal(plain.timelineWidth, 500);
-    assert.equal(fixedTimelineBodyHeight(), timelineViewerBodyPx());
+    assert.equal(fixedTimelineBodyHeight(), timelineViewerBodyPx() + BOTTOM_TAB_ROW_SAVED_PX);
   });
 
   it("hides the left viewer from the timeline row and lets the editor fill the row", () => {
