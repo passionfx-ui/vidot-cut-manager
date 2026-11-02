@@ -39,6 +39,7 @@ import {
   formatCutListLength,
   formatCutInfoLengthField,
   cutGenerationPromptText,
+  cutGenerationSec,
   formatCutVersionStatus,
   versionRepState,
   plannedLenInputPlaceholder,
@@ -185,6 +186,19 @@ import {
   workflowContentKey,
 } from "./gg_project_store_core.js";
 import { findStartImageNode, syncSavedVideoStartImage } from "./gg_start_image_core.js";
+import {
+  applyCutData,
+  cloneGraph,
+  cutSlotIds,
+  extractCutData,
+  framesForSeconds,
+  hasLoadImageNode,
+  hasPromptNode,
+  isImageFileName,
+  LOAD_IMAGE_NODE_MISSING,
+  PROMPT_NODE_MISSING,
+  stripCutData,
+} from "./gg_cut_data_core.js";
 import { findImageWidget } from "./gg_loadimage_core.js";
 import {
   cutHeaderParts,
@@ -2599,18 +2613,8 @@ async function runGongganWipAutosave(opts = {}) {
 
   ggWipAutosaveRunning = true;
   try {
-    const resolved = resolveWorkflowCutForWip(wf);
-    if (resolved) syncEditedMarkerBeforeSave(resolved.cutId, resolved.cut);
-    applyWipStampForWorkflow(wf);
-    const deps = buildAutosaveDeps();
-    if (typeof deps.saveWorkflow !== "function") throw new Error("saveWorkflow unavailable");
-    const savedSnap = captureWorkflowSnapshotForTab(wf);
-    await autosaveWorkflow(wf, deps);
-    // Saved content is the new baseline: a later switch must not re-stamp it with a newer version key.
-    if (resolved?.cutId && savedSnap) {
-      ggWorkflowBaselines.set(resolved.cutId, savedSnap);
-      rememberWorkflowInMemory(resolved.cutId, resolved.cut, savedSnap);
-    }
+    const ok = await persistOpenGraphEdits();
+    if (!ok) throw new Error("save failed");
     ggWipLastAutosaveAt = Date.now();
     const okMsg = autosaveStatusMessage({ failing: false, wasFailing: ggWipAutosaveFailing, label: autosaveStatusLabelForWorkflow(wf) });
     ggWipAutosaveFailing = false;
@@ -2709,6 +2713,12 @@ function autosaveStatusLabelForWorkflow(wf) {
 }
 
 async function prepareGongganShotTabReplace() {
+  const persisted = await persistOpenGraphEdits();
+  if (!persisted) {
+    ggCutSwitchAutosaveBlocked = true;
+    ggToast("Auto-save failed. Switch cancelled.", "Could not save this cut. Press Ctrl+S, then switch again.", "warn");
+    return false;
+  }
   const tabs = collectGongganShotTabs();
   const dirtyTabs = filterTabsNeedingAutosave(tabs, autosaveContextForWorkflow);
   if (dirtyTabs.length) {
@@ -3055,6 +3065,7 @@ function invalidateLoadedCutWorkflow() {
   wfLastLoadedProjectId = "";
   wfLastLoadedKind = null;
   wfLastLoadedWorkflowKey = "";
+  wfLastLoadedStructureKey = "";
   wfLastLoadedNodeTypes = "";
 }
 
@@ -3309,6 +3320,19 @@ let ggMakeVideoCutId = "";
 let wfLastLoadedKind = null;
 /** workflowContentKey of the graph currently on the shot tab. */
 let wfLastLoadedWorkflowKey = "";
+/** Structure-only key of the shared template on the shot tab (prompt/seed/image ignored). */
+let wfLastLoadedStructureKey = "";
+/** True while cut data is being written into the open graph (autosave must not treat that as an edit). */
+let ggApplyingCutData = false;
+/** Snapshot taken just before queuePrompt, attached to the returned prompt_id. */
+let ggPendingQueueSnap = null;
+/** Per-cut negative prompt, seed, input image, and frames. Positive prompt stays on the cut. */
+const cutDataMap = new Map();
+let cutDataFileTimer = 0;
+/** null = not tried, true = server accepts the extra fields, false = this server does not. */
+let cutDataServerOk = null;
+let runSnapshots = { byPrompt: {}, byVersion: {} };
+let runSnapTimer = 0;
 /** Sorted node type list when a cut load last completed (skip reload guard). */
 let wfLastLoadedNodeTypes = "";
 
@@ -3608,6 +3632,7 @@ function syncProjectMemory(pid, cuts, { reload = false } = {}) {
 /** One fill of every cut workflow when the project is opened or reloaded from the server. No prefetch. */
 function refreshProjectMemoryFromServer(pid, cuts) {
   const gen = projectMemory.begin(pid);
+  void loadProjectCutData(pid, gen);
   const templatePromise = (async () => {
     try {
       const wf = await fetchProjectTemplatePayload();
@@ -3706,12 +3731,421 @@ async function openStoredCutWorkflow(cutId, cutRec, loadToken, entry) {
   ggToast(toastSummary, toastDetail ? `${title} — ${toastDetail}` : title, toastKind);
 }
 
+function cutDataRel(pid) {
+  return `workflows/gonggan/${pid}/cut-data.json`;
+}
+
+function templateFileRel(pid, kind) {
+  return `workflows/gonggan/${pid}/template-${kind}.json`;
+}
+
+function runSnapRel(pid) {
+  return `workflows/gonggan/${pid}/run-snapshots.json`;
+}
+
+function isWorkflowGraph(wf) {
+  if (!wf || typeof wf !== "object") return false;
+  if (Array.isArray(wf.nodes)) return true;
+  return Object.values(wf).some((n) => n && typeof n === "object" && n.class_type);
+}
+
+async function readUserdataJson(rel) {
+  try {
+    const res = await api.fetchApi(`/userdata/${encodeURIComponent(rel)}`);
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    return data && typeof data === "object" ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeUserdataJson(rel, obj) {
+  const res = await api.fetchApi(`/userdata/${encodeURIComponent(rel)}?overwrite=true`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(obj),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+async function loadProjectCutData(pid, gen) {
+  const file = await readUserdataJson(cutDataRel(pid));
+  if (projectMemory.generation() !== gen || projectMemory.pid() !== pid) return;
+  cutDataMap.clear();
+  const cuts = file?.cuts;
+  if (cuts && typeof cuts === "object") {
+    for (const [id, row] of Object.entries(cuts)) {
+      if (row && typeof row === "object") cutDataMap.set(id, { ...row });
+    }
+  }
+  for (const c of state.timeline?.cuts || []) {
+    if (!c?.id) continue;
+    const row = { ...(cutDataMap.get(c.id) || {}) };
+    if (row.negative == null && typeof c.negative === "string" && c.negative) row.negative = c.negative;
+    if (row.seed == null && c.seed != null) row.seed = c.seed;
+    if (row.input_image == null && c.input_image) row.input_image = c.input_image;
+    if (row.frames == null && c.frames != null) row.frames = c.frames;
+    if (Object.keys(row).length) cutDataMap.set(c.id, row);
+  }
+  const snaps = await readUserdataJson(runSnapRel(pid));
+  if (projectMemory.generation() !== gen || projectMemory.pid() !== pid) return;
+  runSnapshots = snaps && typeof snaps === "object"
+    ? { byPrompt: snaps.byPrompt || {}, byVersion: snaps.byVersion || {} }
+    : { byPrompt: {}, byVersion: {} };
+}
+
+function scheduleCutDataFile() {
+  clearTimeout(cutDataFileTimer);
+  const pid = state.pid;
+  cutDataFileTimer = setTimeout(() => {
+    cutDataFileTimer = 0;
+    if (!pid || pid !== state.pid) return;
+    const cuts = {};
+    for (const [id, row] of cutDataMap) cuts[id] = row;
+    writeUserdataJson(cutDataRel(pid), { cuts }).catch((e) => console.warn("[gonggan] cut data save failed", e));
+  }, 400);
+}
+
+function scheduleRunSnapFile() {
+  clearTimeout(runSnapTimer);
+  const pid = state.pid;
+  runSnapTimer = setTimeout(() => {
+    runSnapTimer = 0;
+    if (!pid || pid !== state.pid) return;
+    writeUserdataJson(runSnapRel(pid), runSnapshots).catch((e) => console.warn("[gonggan] run snapshot save failed", e));
+  }, 400);
+}
+
+async function pushCutExtra(cutId, patch) {
+  if (!cutId || !state.pid || cutDataServerOk === false) return;
+  const fields = {};
+  if (patch.negative != null) fields.negative = patch.negative;
+  if (patch.seed != null && patch.seed !== "") fields.seed = Number(patch.seed);
+  if (patch.input_image != null) fields.input_image = patch.input_image;
+  if (patch.frames != null && patch.frames !== "") fields.frames = Number(patch.frames);
+  if (!Object.keys(fields).length) return;
+  try {
+    await postJson("/gonggan/cut/update", { pid: state.pid, cut_id: cutId, fields });
+    cutDataServerOk = true;
+  } catch (e) {
+    if (String(e?.message || "").includes("unsupported")) cutDataServerOk = false;
+  }
+}
+
+function rememberCutExtra(cutId, patch) {
+  if (!cutId || !patch) return;
+  const row = { ...(cutDataMap.get(cutId) || {}) };
+  for (const key of ["negative", "seed", "input_image", "frames"]) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) row[key] = patch[key];
+  }
+  cutDataMap.set(cutId, row);
+  const c = cutById(cutId);
+  if (c) {
+    if (patch.negative != null) c.negative = patch.negative;
+    if (patch.seed != null) c.seed = patch.seed;
+    if (patch.input_image != null) c.input_image = patch.input_image;
+    if (patch.frames != null) c.frames = patch.frames;
+  }
+  scheduleCutDataFile();
+  void pushCutExtra(cutId, patch);
+}
+
+function readCutData(cut) {
+  const row = cut?.id ? cutDataMap.get(cut.id) || {} : {};
+  const sel = stripSelectedVersionId(cut);
+  const selected = findCutVersion(cut, sel);
+  const storedImage = row.input_image != null ? row.input_image : (cut?.input_image || "");
+  const inputImage = isStillVersion(selected) ? selected.id : (storedImage || "");
+  let seed = row.seed != null ? row.seed : cut?.seed;
+  seed = seed != null && seed !== "" ? Number(seed) : null;
+  let frames = row.frames != null ? row.frames : cut?.frames;
+  if (frames == null || frames === "") frames = framesForSeconds(cutGenerationSec(cut), 24);
+  frames = frames != null && frames !== "" ? Number(frames) : null;
+  return {
+    positive: cutGenerationPromptText(cut),
+    negative: row.negative != null ? String(row.negative) : String(cut?.negative || ""),
+    seed: Number.isFinite(seed) ? seed : null,
+    inputImage: inputImage || "",
+    frames: Number.isFinite(frames) ? frames : null,
+  };
+}
+
+function structureKeyOf(graph) {
+  const stripped = stripCutData(graph);
+  return stripped ? workflowContentKey(stripped) : "";
+}
+
+async function ensureKindTemplate(kind, cut) {
+  const cached = projectMemory.kindTemplate(kind);
+  if (cached) return cached;
+  const pid = state.pid;
+  const gen = projectMemory.generation();
+  const saved = await readUserdataJson(templateFileRel(pid, kind));
+  if (projectMemory.generation() !== gen) return null;
+  if (isWorkflowGraph(saved)) {
+    projectMemory.setKindTemplate(kind, saved, gen);
+    return saved;
+  }
+  const settings = state.timeline?.project?.settings || {};
+  const ref = kind === "video" ? settings.video_template : settings.image_template;
+  if (ref && !String(ref).startsWith("builtin:")) {
+    const wf = await readUserdataJson(`workflows/${String(ref).replace(/^workflows\//, "")}`);
+    if (projectMemory.generation() !== gen) return null;
+    if (isWorkflowGraph(wf)) {
+      projectMemory.setKindTemplate(kind, wf, gen);
+      return wf;
+    }
+  }
+  if (kind !== "video") {
+    let legacy = projectMemory.template();
+    if (!legacy) {
+      const pending = projectMemory.templateInflight();
+      if (pending) {
+        await pending;
+        legacy = projectMemory.template();
+      }
+    }
+    if (!legacy) {
+      try { legacy = await fetchProjectTemplatePayload(); } catch (_) {}
+    }
+    if (projectMemory.generation() !== gen) return null;
+    if (isWorkflowGraph(legacy)) {
+      projectMemory.setKindTemplate(kind, legacy, gen);
+      return legacy;
+    }
+  }
+  if (!cut?.id) return null;
+  try {
+    const data = await fetchCutSourceWorkflowPayload(cut.id, cut, kind);
+    if (projectMemory.generation() !== gen) return null;
+    if (isWorkflowGraph(data?.workflow)) {
+      projectMemory.setKindTemplate(kind, data.workflow, gen);
+      return data.workflow;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function liveNodeById(id) {
+  if (!id) return null;
+  const nodes = app.graph?._nodes || app.graph?.nodes || [];
+  return nodes.find((n) => n && String(n.id) === String(id)) || null;
+}
+
+function setLiveTextNode(id, text) {
+  const node = liveNodeById(id);
+  if (!node) return;
+  const widgets = node.widgets || [];
+  const w = widgets.find((x) => x && (x.name === "text" || x.name === "prompt"))
+    || widgets.find((x) => x && typeof x.value === "string");
+  if (!w) return;
+  w.value = text == null ? "" : String(text);
+}
+
+function setLiveSeedNodes(ids, seed) {
+  const n = Number(seed);
+  if (!Number.isFinite(n)) return;
+  const idSet = new Set((ids || []).map(String));
+  if (!idSet.size) return;
+  const nodes = app.graph?._nodes || app.graph?.nodes || [];
+  for (const node of nodes) {
+    if (!node || !idSet.has(String(node.id))) continue;
+    for (const w of node.widgets || []) {
+      if (w && (w.name === "seed" || w.name === "noise_seed")) w.value = n;
+    }
+  }
+}
+
+/** Slot values kept on the shared template (a cut with no value of its own falls back to these). */
+function kindSlotDefaults(kind) {
+  const tmpl = projectMemory.kindTemplate(kind);
+  return tmpl ? extractCutData(tmpl) : { positive: "", negative: "", seed: null, inputImage: "", frames: null };
+}
+
+function setLiveFrames(id, frames) {
+  const node = liveNodeById(id);
+  if (!node) return;
+  const n = Number(frames);
+  if (!Number.isFinite(n)) return;
+  const w = (node.widgets || []).find((x) => x && x.name === "length");
+  if (w) w.value = n;
+  else if (node.widgets && node.widgets[2]) node.widgets[2].value = n;
+}
+
+function syncPromptFieldFromGraph(cutId, text) {
+  const c = cutById(cutId);
+  if (!c || String(c.prompt || "") === String(text ?? "")) return;
+  const before = c.prompt;
+  c.prompt = text == null ? "" : String(text);
+  scheduleCutFieldSave(cutId, { prompt: c.prompt }, { prompt: before || "" });
+  const ta = document.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cutId)}"] .gg-prompt-text`);
+  if (ta && document.activeElement !== ta) ta.value = c.prompt;
+}
+
+function syncPromptNodeFromField(cutId, text) {
+  if (ggApplyingCutData) return;
+  if (wfLastLoadedCutId !== cutId || wfLastLoadedProjectId !== state.pid) return;
+  if (!isGongganShotTabOpenAndActive()) return;
+  const snap = captureGraphWorkflowSnapshot();
+  const id = snap ? cutSlotIds(snap).promptId : "";
+  if (!id) return;
+  ggApplyingCutData = true;
+  try {
+    setLiveTextNode(id, text);
+    rememberWorkflowBaselineFromActiveGraph(cutId);
+  } finally {
+    ggApplyingCutData = false;
+  }
+}
+
+async function applyLiveCutData(cut, data, loadToken) {
+  if (isLoadTokenStale(loadToken)) return;
+  const snap = captureGraphWorkflowSnapshot();
+  const ids = snap ? cutSlotIds(snap) : null;
+  const kind = workflowKindForCut(cut);
+  const base = kindSlotDefaults(kind);
+  const seed = data.seed != null ? data.seed : base.seed;
+  const frames = data.frames != null ? data.frames : base.frames;
+  const fileImage = isImageFileName(data.inputImage)
+    ? String(data.inputImage).trim()
+    : (isImageFileName(base.inputImage) ? String(base.inputImage).trim() : "");
+  ggApplyingCutData = true;
+  try {
+    if (ids?.promptId) setLiveTextNode(ids.promptId, data.positive);
+    if (ids?.negativeId) setLiveTextNode(ids.negativeId, data.negative);
+    if (seed != null) setLiveSeedNodes(ids?.seedIds, seed);
+    if (frames != null) setLiveFrames(ids?.lengthId, frames);
+    if (kind === "video") {
+      const ver = findCutVersion(cut, data.inputImage);
+      if (isStillVersion(ver)) {
+        try {
+          const name = await copyVersionImageToInput(ver.id);
+          if (!isLoadTokenStale(loadToken)) {
+            const node = liveStartImageNode();
+            if (node) setLiveLoadImageWidget(node, name);
+          }
+        } catch (e) {
+          console.warn("[gonggan] cut start image", e);
+        }
+      } else if (fileImage) {
+        const node = liveStartImageNode();
+        if (node) setLiveLoadImageWidget(node, fileImage);
+      }
+    } else if (fileImage) {
+      const node = liveNodeById(ids?.imageId) || liveStartImageNode();
+      if (node) setLiveLoadImageWidget(node, fileImage);
+    }
+  } finally {
+    ggApplyingCutData = false;
+  }
+  if (!isLoadTokenStale(loadToken) && cut?.id) rememberWorkflowBaselineFromActiveGraph(cut.id);
+}
+
+async function persistOpenGraphEdits() {
+  if (ggApplyingCutData) return true;
+  const cutId = app.graph?.extra?.gonggan?.cutId || "";
+  if (!cutId || cutId !== wfLastLoadedCutId || wfLastLoadedProjectId !== state.pid) return true;
+  if (!isGongganShotTabOpenAndActive()) return true;
+  const current = captureGraphWorkflowSnapshot();
+  const baseline = ggWorkflowBaselines.get(cutId) || (ggWorkflowBaselineCutId === cutId ? ggWorkflowBaseline : null);
+  if (!current || !baseline || !Array.isArray(current.nodes) || !current.nodes.length) return true;
+  const now = extractCutData(current);
+  const prev = extractCutData(baseline);
+  let structureChanged = false;
+  try {
+    structureChanged = structureKeyOf(current) !== structureKeyOf(baseline);
+  } catch {
+    structureChanged = true;
+  }
+  const seedChanged = (now.seed == null) !== (prev.seed == null) || Number(now.seed) !== Number(prev.seed);
+  const framesChanged = (now.frames == null) !== (prev.frames == null) || Number(now.frames) !== Number(prev.frames);
+  const dataChanged = now.positive !== prev.positive || now.negative !== prev.negative
+    || seedChanged || now.inputImage !== prev.inputImage || framesChanged;
+  if (!structureChanged && !dataChanged) return true;
+  try {
+    if (now.positive !== prev.positive) syncPromptFieldFromGraph(cutId, now.positive);
+    const extra = {};
+    if (now.negative !== prev.negative) extra.negative = now.negative;
+    if (seedChanged && now.seed != null) extra.seed = now.seed;
+    if (now.inputImage !== prev.inputImage) extra.input_image = now.inputImage;
+    if (framesChanged && now.frames != null) extra.frames = now.frames;
+    if (Object.keys(extra).length) rememberCutExtra(cutId, extra);
+    if (structureChanged) {
+      const kind = wfLastLoadedKind === "video" ? "video" : "image";
+      let copy = cloneGraph(current);
+      if (copy) {
+        const prev = projectMemory.kindTemplate(kind);
+        copy = prev ? applyCutData(copy, extractCutData(prev)) : stripCutData(copy);
+      }
+      if (copy) {
+        projectMemory.setKindTemplate(kind, copy, projectMemory.generation());
+        await writeUserdataJson(templateFileRel(state.pid, kind), copy);
+      }
+    }
+    rememberWorkflowBaselineForCut(cutId, current);
+    return true;
+  } catch (e) {
+    console.warn("[gonggan] template save failed", e);
+    return false;
+  }
+}
+
+async function openCutOnSharedTemplate(cutId, cutRec, loadToken) {
+  const kind = workflowKindForCut(cutRec);
+  const template = await ensureKindTemplate(kind, cutRec);
+  if (isLoadTokenStale(loadToken)) return "stale";
+  if (!template) return "miss";
+  const saved = await persistOpenGraphEdits();
+  if (isLoadTokenStale(loadToken)) return "stale";
+  if (saved === false) {
+    ggCutSwitchAutosaveBlocked = true;
+    ggToast("Auto-save failed. Switch cancelled.", "Could not save this cut. Press Ctrl+S, then switch again.", "warn");
+    return "stale";
+  }
+  const data = readCutData(cutRec);
+  const structKey = structureKeyOf(template);
+  const openWf = ggOwnedShotWorkflow;
+  const openDirty = !!(openWf && workflowTabNeedsAutosave(openWf, autosaveContextForWorkflow(openWf)));
+  const sameStructure = !openDirty && shouldReuseOpenWorkflow({
+    tabActive: isGongganShotTabOpenAndActive(),
+    openKind: wfLastLoadedKind,
+    openKey: wfLastLoadedStructureKey,
+    nextKind: kind,
+    nextKey: structKey,
+  });
+  if (sameStructure) {
+    if (!(await retargetOpenShotTab(cutRec, kind, structKey, loadToken))) return "stale";
+    await applyLiveCutData(cutRec, data, loadToken);
+    if (isLoadTokenStale(loadToken)) return "stale";
+    wfLastLoadedStructureKey = structKey;
+    return "ok";
+  }
+  const filled = applyCutData(cloneGraph(template), data);
+  if (!filled) return "miss";
+  ggCutSwitchAutosaveBlocked = false;
+  const loaded = await loadWorkflowIntoDedicatedTab(filled, cutRec, loadToken);
+  if (isLoadTokenStale(loadToken) || ggCutSwitchAutosaveBlocked || !loaded) return "stale";
+  markWorkflowLoadComplete(cutId, cutRec, null, kind);
+  wfLastLoadedWorkflowKey = structKey;
+  wfLastLoadedStructureKey = structKey;
+  await applyLiveCutData(cutRec, data, loadToken);
+  if (isLoadTokenStale(loadToken)) return "stale";
+  const shown = tabNameForCut(cutRec);
+  if (shown && ggOwnedShotWorkflow) ggOwnedShotWorkflow.ggCutDisplayName = shown;
+  paintShotTabLabelNow(cutRec);
+  return "ok";
+}
+
 async function loadCutWorkflow(cutId, cut, loadToken) {
   const tl = state.timeline;
   if (!tl || !cutId) return;
   if (isLoadTokenStale(loadToken)) return;
   const cutRec = cut || cutById(cutId);
   if (!cutRec) return;
+  const shared = await openCutOnSharedTemplate(cutId, cutRec, loadToken);
+  if (shared === "stale" || isLoadTokenStale(loadToken)) return;
+  if (shared === "ok") return;
   const kind = workflowKindForCut(cutRec);
   const gen = projectMemory.generation();
   let entry = projectMemory.getWorkflow(cutId);
@@ -3765,37 +4199,48 @@ async function fetchStoredVersionWorkflow(cutId, vid) {
 
 const VERSION_SOURCE_DETAIL = { embedded: "embedded in result", stored: "stored version workflow" };
 
-/** Thumbnail click: open that version's own workflow in the shot tab. Never touches the pick. */
+/** Thumbnail click: put that result's prompt, seed, and input image back on the cut, then show the shared template. */
 async function loadVersionWorkflow(cutId, vid, loadToken) {
   const cut = cutById(cutId);
   const ver = findCutVersion(cut, vid);
   if (!cut || !ver) return;
-  ggCutSwitchAutosaveBlocked = false;
-  const name = `${shotTitle(cut)} · v${versionIndexFromList(cut.versions_list, vid)}`;
-  for (const src of versionWorkflowSourceOrder(ver)) {
+  let snap = ver.gen && typeof ver.gen === "object" ? ver.gen : runSnapshots.byVersion?.[vid];
+  if (!snap) {
     let wf = null;
     try {
-      wf = src === "embedded" ? await fetchEmbeddedVersionWorkflow(vid) : await fetchStoredVersionWorkflow(cutId, vid);
+      wf = await fetchEmbeddedVersionWorkflow(vid);
+      if (!wf) wf = await fetchStoredVersionWorkflow(cutId, vid);
     } catch (e) {
-      console.warn(`[gonggan] version workflow (${src}) failed`, e);
+      console.warn("[gonggan] version data failed", e);
     }
     if (isLoadTokenStale(loadToken)) return;
-    const kind = cutWorkflowKind(cut, ver.kind === "image" || ver.kind === "video" ? ver.kind : null);
-    if (!wf || !graphFitsKind(wf, kind)) continue;
-    const loaded = await loadWorkflowIntoDedicatedTab(wf, cut, loadToken);
-    if (isLoadTokenStale(loadToken) || ggCutSwitchAutosaveBlocked || !loaded) return;
-    markWorkflowLoadComplete(cutId, cut, vid, kind);
-    wfLastLoadedWorkflowKey = workflowContentKey(wf);
-    markGraphGongganCut(cutId);
-    sdk.msg = `Canvas: ${name} (${VERSION_SOURCE_DETAIL[src]})`;
-    bus.dispatchEvent(new Event("sdk"));
-    bus.dispatchEvent(new Event("gg-opentab"));
-    ggToast("Shot", `${name} — ${VERSION_SOURCE_DETAIL[src]}`, "ok");
-    return;
+    if (wf) {
+      const data = extractCutData(wf);
+      if (hasPromptNode(wf) || data.seed != null || data.inputImage) snap = data;
+    }
   }
-  if (await loadVersionKindWorkflow(cut, ver, name, loadToken)) return;
   if (isLoadTokenStale(loadToken)) return;
-  ggToast("Workflow", sentence(VERSION_WF_MISSING, name), "warn");
+  if (snap) {
+    const positive = snap.positive != null ? snap.positive : snap.prompt;
+    if (positive != null) {
+      const before = cut.prompt;
+      cut.prompt = String(positive);
+      scheduleCutFieldSave(cutId, { prompt: cut.prompt }, { prompt: before || "" });
+      const ta = document.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cutId)}"] .gg-prompt-text`);
+      if (ta && document.activeElement !== ta) ta.value = cut.prompt;
+    }
+    const extra = {};
+    if (snap.negative != null) extra.negative = String(snap.negative);
+    if (snap.seed != null && snap.seed !== "") extra.seed = Number(snap.seed);
+    const image = snap.input_image != null ? snap.input_image : snap.inputImage;
+    if (image != null) extra.input_image = String(image);
+    if (Object.keys(extra).length) rememberCutExtra(cutId, extra);
+  }
+  if (isLoadTokenStale(loadToken)) return;
+  await loadCutWorkflow(cutId, cut, loadToken);
+  if (isLoadTokenStale(loadToken)) return;
+  wfOpenVersion = { projectId: state.pid, cutId, vid };
+  bus.dispatchEvent(new Event("gg-opentab"));
 }
 
 /** A version with no workflow of its own: open the cut's workflow of that version's kind (image or video). */
@@ -6596,6 +7041,7 @@ function openFieldExpandModal(ta, cutId) {
           } else {
             c.prompt = text;
             scheduleCutFieldSave(cutId, { prompt: text }, { prompt: initial });
+            syncPromptNodeFromField(cutId, text);
           }
         }
         void flushPendingCutFields();
@@ -7947,11 +8393,19 @@ async function captureFinishedPrompt(promptId) {
   if (!t) return;
   let res;
   let d = {};
+  const snap = runSnapshots.byPrompt?.[String(promptId)] || null;
   try {
+    const body = { pid: t.projectId, cut_id: t.cutId, prompt_id: String(promptId) };
+    if (snap) {
+      body.prompt = snap.positive || "";
+      body.negative = snap.negative || "";
+      if (snap.seed != null && snap.seed !== "") body.seed = snap.seed;
+      body.input_image = snap.input_image || "";
+    }
     res = await api.fetchApi("/gonggan/capture-output", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pid: t.projectId, cut_id: t.cutId, prompt_id: String(promptId) }),
+      body: JSON.stringify(body),
     });
     d = await res.json().catch(() => ({}));
   } catch (e) {
@@ -7970,6 +8424,11 @@ async function captureFinishedPrompt(promptId) {
   const cutText = cut ? `${cutDisplayLabel(cut, computeCutLabels(tl))} ${cut.name || ""}`.trim() : "";
   const msg = captureToast(d, cutText);
   if (msg) ggToast(msg.summary, msg.detail, msg.kind);
+  if (d?.ok && d.version?.id && snap) {
+    if (!runSnapshots.byVersion) runSnapshots.byVersion = {};
+    runSnapshots.byVersion[d.version.id] = snap;
+    scheduleRunSnapFile();
+  }
   if (d?.ok && !d.duplicate && state.pid === t.projectId) await loadTimeline({ reloadWorkflows: true });
 }
 
@@ -8222,6 +8681,118 @@ async function copyVersionImageToInput(vid) {
   const sub = String(data.subfolder || "gonggan").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
   if (!sub || name.startsWith(`${sub}/`)) return name;
   return `${sub}/${name}`;
+}
+
+function seedControlWidgets() {
+  const out = [];
+  const nodes = app.graph?._nodes || app.graph?.nodes || [];
+  for (const node of nodes) {
+    const widgets = node?.widgets || [];
+    if (!widgets.some((w) => w && (w.name === "seed" || w.name === "noise_seed"))) continue;
+    const control = widgets.find((w) => w && w.name === "control_after_generate");
+    if (control) out.push(control);
+  }
+  return out;
+}
+
+function pinSeedControls() {
+  const saved = [];
+  for (const control of seedControlWidgets()) {
+    saved.push({ widget: control, value: control.value });
+    control.value = "fixed";
+  }
+  return saved;
+}
+
+function restoreSeedControls(saved) {
+  for (const row of saved || []) {
+    if (row?.widget) row.widget.value = row.value;
+  }
+}
+
+function randomQueueSeed() {
+  return Math.floor(Math.random() * 1e15);
+}
+
+function rememberRunSnapshot(promptId, snap) {
+  if (!promptId || !snap?.cutId) return;
+  if (!runSnapshots.byPrompt) runSnapshots.byPrompt = {};
+  runSnapshots.byPrompt[String(promptId)] = {
+    cutId: snap.cutId,
+    positive: snap.positive || "",
+    negative: snap.negative || "",
+    seed: snap.seed,
+    input_image: snap.input_image || "",
+  };
+  scheduleRunSnapFile();
+}
+
+/** Re-inject this cut's prompt and seed (and, for video, its selected image) before the graph is queued. */
+async function injectCutDataForQueue() {
+  ggPendingQueueSnap = null;
+  const extra = app.graph?.extra?.gonggan;
+  const cutId = extra?.cutId;
+  const pid = extra?.pid || extra?.projectId;
+  if (!cutId || !pid || pid !== state.pid || !isNativeProject() || !isGongganShotTabOpenAndActive()) return true;
+  await persistOpenGraphEdits();
+  const cut = cutById(cutId);
+  if (!cut) return true;
+  const kind = workflowKindForCut(cut);
+  const snap = captureGraphWorkflowSnapshot();
+  if (!snap || !hasPromptNode(snap)) {
+    ggToast("Cannot queue", PROMPT_NODE_MISSING, "warn");
+    return false;
+  }
+  if (kind === "video" && !hasLoadImageNode(snap)) {
+    ggToast("Cannot queue", LOAD_IMAGE_NODE_MISSING, "warn");
+    return false;
+  }
+  const data = readCutData(cut);
+  const seed = projectRandomSeedOn() ? randomQueueSeed() : (data.seed != null ? data.seed : randomQueueSeed());
+  const ids = cutSlotIds(snap);
+  const controls = pinSeedControls();
+  ggApplyingCutData = true;
+  try {
+    if (ids.promptId) setLiveTextNode(ids.promptId, data.positive);
+    if (ids.negativeId) setLiveTextNode(ids.negativeId, data.negative);
+    setLiveSeedNodes(ids.seedIds, seed);
+    if (data.frames != null) setLiveFrames(ids.lengthId, data.frames);
+    if (kind === "video") {
+      await feedVideoCutStartImage();
+      const selected = findCutVersion(cut, stripSelectedVersionId(cut));
+      if (!isStillVersion(selected) && isImageFileName(data.inputImage)) {
+        const node = liveStartImageNode();
+        if (node) setLiveLoadImageWidget(node, data.inputImage);
+      }
+    } else if (isImageFileName(data.inputImage)) {
+      const node = liveNodeById(ids.imageId) || liveStartImageNode();
+      if (node) setLiveLoadImageWidget(node, data.inputImage);
+    }
+  } catch (e) {
+    restoreSeedControls(controls);
+    ggApplyingCutData = false;
+    throw e;
+  }
+  rememberCutExtra(cutId, { seed, negative: data.negative });
+  let inputImage = "";
+  if (kind === "video") {
+    const ver = findCutVersion(cut, stripSelectedVersionId(cut));
+    if (isStillVersion(ver)) inputImage = ver.id;
+  }
+  if (!inputImage) {
+    const after = captureGraphWorkflowSnapshot();
+    inputImage = after ? extractCutData(after).inputImage || "" : "";
+  }
+  ggPendingQueueSnap = {
+    cutId,
+    pid,
+    positive: data.positive || "",
+    negative: data.negative || "",
+    seed,
+    input_image: inputImage,
+    controls,
+  };
+  return true;
 }
 
 /**
@@ -8763,6 +9334,7 @@ function mountShots(el) {
           const prev = c.prompt;
           c.prompt = ta.value;
           scheduleCutFieldSave(id, { prompt: ta.value }, { prompt: prev });
+          syncPromptNodeFromField(id, ta.value);
         }
         autoSizeFieldTextarea(ta);
       });
@@ -11449,12 +12021,25 @@ app.registerExtension({
       app._ggVideoStartWrapped = true;
       const origQueue = app.queuePrompt.bind(app);
       app.queuePrompt = async function ggVideoStartQueue(...args) {
+        let ok = true;
         try {
-          await feedVideoCutStartImage();
+          ok = await injectCutDataForQueue();
         } catch (e) {
-          console.warn("[gonggan] video queue: start image step failed; queuing as before", e);
+          console.warn("[gonggan] queue inject failed; queuing as before", e);
         }
-        return origQueue(...args);
+        if (!ok) {
+          ggApplyingCutData = false;
+          return {};
+        }
+        try {
+          return await origQueue(...args);
+        } finally {
+          restoreSeedControls(ggPendingQueueSnap?.controls);
+          if (ggPendingQueueSnap) ggPendingQueueSnap.controls = null;
+          ggApplyingCutData = false;
+          const cutId = app.graph?.extra?.gonggan?.cutId;
+          if (cutId) rememberWorkflowBaselineFromActiveGraph(cutId);
+        }
       };
     }
     loadPersistedJobs();
@@ -11467,6 +12052,7 @@ app.registerExtension({
         const res = await origQueue(...args);
         try {
           if (res?.prompt_id) {
+            if (ggPendingQueueSnap) rememberRunSnapshot(res.prompt_id, ggPendingQueueSnap);
             const target = promptCutTarget({
               graphExtra: args[1]?.workflow?.extra?.gonggan ?? app.graph?.extra?.gonggan,
               loadedCutId: wfLastLoadedCutId,

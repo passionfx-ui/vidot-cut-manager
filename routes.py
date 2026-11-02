@@ -1199,6 +1199,31 @@ async def gg_send_output(request):
     return web.json_response(res, status=200 if res.get("ok") else 404)
 
 
+def _capture_gen(data: dict) -> dict | None:
+    """Prompt, seed, and input image the browser injected for this queued run."""
+    if not isinstance(data, dict):
+        return None
+    gen: dict = {}
+    if isinstance(data.get("prompt"), str):
+        gen["prompt"] = data["prompt"][:16000]
+    if isinstance(data.get("negative"), str):
+        gen["negative"] = data["negative"][:16000]
+    if data.get("seed") is not None:
+        seed = data.get("seed")
+        if isinstance(seed, bool) or not isinstance(seed, (int, float)):
+            raise ValueError("bad seed")
+        if isinstance(seed, float):
+            if not seed.is_integer():
+                raise ValueError("bad seed")
+            seed = int(seed)
+        if seed < 0 or seed > 2**63 - 1:
+            raise ValueError("bad seed")
+        gen["seed"] = int(seed)
+    if isinstance(data.get("input_image"), str):
+        gen["input_image"] = data["input_image"][:500]
+    return gen or None
+
+
 @routes.post("/gonggan/capture-output")
 async def gg_capture_output(request):
     """Native only: the finished run `prompt_id` (queued from that cut) becomes a version of the cut."""
@@ -1207,7 +1232,10 @@ async def gg_capture_output(request):
     if not isinstance(pid, str) or not isinstance(cid, str) or not gg_native_api.is_native_pid(pid):
         return _err(400, "pid and cut_id required")
     try:
-        res = await asyncio.to_thread(gg_native_api.native_capture_prompt_output, pid, cid, prompt_id)
+        gen = _capture_gen(data)
+        res = await asyncio.to_thread(
+            gg_native_api.native_capture_prompt_output, pid, cid, prompt_id, gen=gen,
+        )
     except ValueError as ex:
         return _err(400, str(ex))
     except Exception as ex:  # noqa: BLE001

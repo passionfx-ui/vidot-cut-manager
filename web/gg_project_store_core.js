@@ -64,6 +64,8 @@ export function createProjectMemory() {
   let template = null;
   /** @type {Promise<unknown> | null} */
   let templatePromise = null;
+  /** Project image / video template graphs (structure only; cut data is applied on top). */
+  const kindTemplates = new Map();
 
   return {
     generation() {
@@ -80,7 +82,16 @@ export function createProjectMemory() {
       inflight.clear();
       template = null;
       templatePromise = null;
+      kindTemplates.clear();
       return generation;
+    },
+    setKindTemplate(kind, wf, gen) {
+      if (gen !== undefined && gen !== generation) return;
+      if (kind !== "image" && kind !== "video") return;
+      kindTemplates.set(kind, wf && typeof wf === "object" ? wf : null);
+    },
+    kindTemplate(kind) {
+      return kindTemplates.get(kind) || null;
     },
     setTemplate(wf, gen) {
       if (gen !== generation) return;

@@ -541,9 +541,38 @@ class LocalStore:
             self._save_project_doc(pid, doc, "add_cuts", ids[0])
             return doc, ids
 
-    _CUT_UPDATE_FIELDS = frozenset({"planned_sec", "notes", "caption", "prompt", "end_card", "needs_redo"})
+    _CUT_UPDATE_FIELDS = frozenset({
+        "planned_sec", "notes", "caption", "prompt", "end_card", "needs_redo",
+        "negative", "seed", "input_image", "frames",
+    })
     _CAPTION_MAX_LEN = 4000
     _DUE_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+    def _validate_seed(self, value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise ValueError("seed must be an integer or null")
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        if not isinstance(value, int):
+            raise ValueError("seed must be an integer or null")
+        if value < 0 or value > 2**63 - 1:
+            raise ValueError("seed out of range")
+        return value
+
+    def _validate_frames(self, value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise ValueError("frames must be an integer or null")
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        if not isinstance(value, int):
+            raise ValueError("frames must be an integer or null")
+        if value < 1 or value > 100000:
+            raise ValueError("frames out of range")
+        return value
 
     def _validate_planned_sec(self, value: Any) -> float | None:
         if value is None:
@@ -620,6 +649,26 @@ class LocalStore:
                 if prompt is not None and not isinstance(prompt, str):
                     raise ValueError("prompt must be a string")
                 c["prompt"] = prompt if prompt is not None else ""
+            if "negative" in fields:
+                negative = fields["negative"]
+                if negative is not None and not isinstance(negative, str):
+                    raise ValueError("negative must be a string")
+                neg = negative if negative is not None else ""
+                if len(neg) > 16000:
+                    raise ValueError("negative must be at most 16000 characters")
+                c["negative"] = neg
+            if "seed" in fields:
+                c["seed"] = self._validate_seed(fields["seed"])
+            if "input_image" in fields:
+                image = fields["input_image"]
+                if image is not None and not isinstance(image, str):
+                    raise ValueError("input_image must be a string")
+                name = image if image is not None else ""
+                if len(name) > 500:
+                    raise ValueError("input_image must be at most 500 characters")
+                c["input_image"] = name
+            if "frames" in fields:
+                c["frames"] = self._validate_frames(fields["frames"])
             if "end_card" in fields:
                 if not isinstance(fields["end_card"], bool):
                     raise ValueError("end_card must be a boolean")
@@ -929,6 +978,7 @@ class LocalStore:
         workflow: dict | None = None,
         prompt_id: str | None = None,
         animated: bool = False,
+        gen: dict | None = None,
     ) -> dict[str, Any]:
         """`animated`: ComfyUI reported the output as animated (history `animated: [true]`). Such an image,
         or a WebP / GIF / APNG file with more than one frame, is stored as kind "video" with animated: true."""
@@ -981,7 +1031,7 @@ class LocalStore:
                 asset["animated"] = True
                 asset.update({k: anim[k] for k in ("frames", "seconds") if anim and anim.get(k)})
             wf_sha = self.put_blob(pid, workflow) if workflow else None
-            ver = new_version(cut_id, asset, wf_sha, prompt_id)
+            ver = new_version(cut_id, asset, wf_sha, prompt_id, gen=gen)
             vpath = self._project_dir(pid) / "versions" / cut_id / f"{ver['id']}.json"
             _atomic_write_json(vpath, ver)
             if is_reference(c):

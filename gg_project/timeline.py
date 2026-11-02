@@ -260,6 +260,38 @@ def _reference_views(root: Path, project: dict[str, Any]) -> list[dict[str, Any]
     return out
 
 
+def _version_gen(ver: dict[str, Any]) -> dict[str, Any] | None:
+    """Prompt, seed, and input image stored with the run that made this version."""
+    run = ver.get("run") if isinstance(ver.get("run"), dict) else {}
+    gen: dict[str, Any] = {}
+    if isinstance(run.get("prompt"), str):
+        gen["prompt"] = run["prompt"]
+    if isinstance(run.get("negative"), str):
+        gen["negative"] = run["negative"]
+    seed = run.get("seed")
+    if isinstance(seed, bool):
+        seed = None
+    if isinstance(seed, int):
+        gen["seed"] = seed
+    if isinstance(run.get("input_image"), str):
+        gen["input_image"] = run["input_image"]
+    return gen or None
+
+
+def _cut_seed(cut: dict[str, Any]) -> int | None:
+    seed = cut.get("seed")
+    if isinstance(seed, bool):
+        return None
+    return seed if isinstance(seed, int) else None
+
+
+def _cut_frames(cut: dict[str, Any]) -> int | None:
+    frames = cut.get("frames")
+    if isinstance(frames, bool):
+        return None
+    return frames if isinstance(frames, int) else None
+
+
 def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
     pid = project["id"]
     active = _active_cuts(project)
@@ -318,6 +350,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
                 "missing": jobs[v["id"]] is None,
                 "failed": bool(v.get("failed")),
                 "error": v.get("error") if isinstance(v.get("error"), str) else "",
+                "gen": _version_gen(v),
             }
             for v in versions
         ]
@@ -333,6 +366,10 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
             "scene_id": scene_id,
             "story": "",
             "prompt": cut.get("prompt") or "",
+            "negative": cut.get("negative") if isinstance(cut.get("negative"), str) else "",
+            "seed": _cut_seed(cut),
+            "input_image": cut.get("input_image") if isinstance(cut.get("input_image"), str) else "",
+            "frames": _cut_frames(cut),
             "shot": "",
             "tl_sec": sec,
             "tl_in": tl_in,

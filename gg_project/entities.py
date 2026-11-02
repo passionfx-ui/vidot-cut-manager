@@ -97,15 +97,32 @@ def new_version(
     asset: dict[str, Any],
     workflow_sha: str | None,
     prompt_id: str | None = None,
+    gen: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     v = entity_base()
     v["cut_id"] = cut_id
     v["asset"] = asset
     v["workflow_sha"] = workflow_sha
-    v["run"] = {
+    run: dict[str, Any] = {
         "backend": "local",
         "prompt_id": prompt_id,
         "status": "completed",
         "error": None,
     }
+    if isinstance(gen, dict):
+        if isinstance(gen.get("prompt"), str):
+            run["prompt"] = gen["prompt"]
+        if isinstance(gen.get("negative"), str):
+            run["negative"] = gen["negative"]
+        seed = gen.get("seed")
+        if isinstance(seed, bool):
+            seed = None
+        elif isinstance(seed, float) and seed.is_integer():
+            seed = int(seed)
+        if isinstance(seed, int) and 0 <= seed <= 2**63 - 1:
+            run["seed"] = seed
+        image = gen.get("input_image")
+        if isinstance(image, str):
+            run["input_image"] = image[:500]
+    v["run"] = run
     return v

@@ -1155,7 +1155,8 @@ def native_send_last_output(pid: str, cut_id: str) -> dict:
     return {"ok": True, "version": _add_output_version(pid, cut_id, lo), "output": lo}
 
 
-def _add_output_version(pid: str, cut_id: str, lo: dict, api_workflow: dict | None = None) -> dict:
+def _add_output_version(pid: str, cut_id: str, lo: dict, api_workflow: dict | None = None,
+                        gen: dict | None = None) -> dict:
     path = Path(lo["path"])
     meta = gg_wfstore.extract_png_meta(path) if path.suffix.lower() == ".png" else {}
     ui = meta.get("workflow") if isinstance(meta.get("workflow"), dict) else None
@@ -1170,6 +1171,7 @@ def _add_output_version(pid: str, cut_id: str, lo: dict, api_workflow: dict | No
         workflow=workflow,
         prompt_id=lo.get("prompt_id") if isinstance(lo.get("prompt_id"), str) else None,
         animated=lo.get("animated") is True,
+        gen=gen,
     )
     return ver
 
@@ -1194,7 +1196,7 @@ _CAPTURE_LOCK = threading.Lock()
 
 def native_capture_prompt_output(
     pid: str, cut_id: str, prompt_id: str, wait_sec: float = 5.0, poll_sec: float = 0.25,
-    api_workflow: dict | None = None,
+    api_workflow: dict | None = None, gen: dict | None = None,
 ) -> dict:
     """A finished run queued from a cut becomes a version of that cut (once per prompt id).
 
@@ -1228,4 +1230,4 @@ def native_capture_prompt_output(
             run = ver.get("run") if isinstance(ver.get("run"), dict) else {}
             if run.get("prompt_id") == prompt_id:
                 return {"ok": True, "version": ver, "output": lo, "duplicate": True}
-        return {"ok": True, "version": _add_output_version(pid, cut_id, lo, api_workflow), "output": lo, "duplicate": False}
+        return {"ok": True, "version": _add_output_version(pid, cut_id, lo, api_workflow, gen), "output": lo, "duplicate": False}
