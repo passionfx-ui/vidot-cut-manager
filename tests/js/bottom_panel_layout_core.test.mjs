@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import {
   BOTTOM_PANEL_RESIZABLE,
+  NORMAL_PREVIEW_GROWTH,
   TL_SCROLLBAR_PX,
   TL_SCROLLBAR_MARGIN_BOTTOM_PX,
   TL_TRACK_MIN_PX,
@@ -12,6 +13,10 @@ import {
   timelineTrackStackPx,
   timelineScrollbarBlockPx,
   timelineEditorBodyPx,
+  timelineViewerChromePx,
+  g2FilledPreviewScreenPx,
+  normalPreviewScreenPx,
+  normalModePreviewSize,
   timelineViewerBodyPx,
   fixedTimelineBodyHeight,
   fixedPanelChrome,
@@ -30,13 +35,15 @@ describe("bottom panel height fits the horizontal scrollbar", () => {
   it("ends at the scrollbar block, with no gap under it", () => {
     assert.equal(timelineScrollbarBlockPx(), TL_SCROLLBAR_PX + TL_SCROLLBAR_MARGIN_BOTTOM_PX);
     assert.equal(timelineEditorBodyPx(), timelineControlRowPx() + timelineTrackStackPx() + timelineScrollbarBlockPx());
-    assert.equal(fixedTimelineBodyHeight(), timelineEditorBodyPx());
     assert.equal(
-      fixedTimelineBodyHeight() - (timelineControlRowPx() + timelineTrackStackPx()),
+      timelineEditorBodyPx() - (timelineControlRowPx() + timelineTrackStackPx()),
       timelineScrollbarBlockPx(),
     );
-    assert.ok(timelineEditorBodyPx() > timelineViewerBodyPx());
-    assert.equal(fixedTimelineBodyHeight(), 166);
+    const extra = fixedTimelineBodyHeight() - timelineEditorBodyPx();
+    assert.ok(extra > 0);
+    assert.equal(extra, normalPreviewScreenPx() - g2FilledPreviewScreenPx());
+    assert.equal(fixedTimelineBodyHeight(), timelineViewerBodyPx());
+    assert.equal(fixedTimelineBodyHeight(), 214);
     assert.equal(TL_SCROLLBAR_PX, 12);
     assert.equal(TL_TRACK_MIN_PX, 84);
   });
@@ -47,6 +54,9 @@ describe("bottom panel height fits the horizontal scrollbar", () => {
     assert.match(prop(zoom, "margin") || "", new RegExp(`(?:^|\\s)${TL_SCROLLBAR_MARGIN_BOTTOM_PX}px$`));
     const track = ruleFor(".gg-timeline .gg-track");
     assert.equal(prop(track, "min-height"), `${TL_TRACK_MIN_PX}px`);
+    const screen = ruleFor(".gg-timeline .gg-screen");
+    assert.equal(prop(screen, "min-height"), `${normalPreviewScreenPx()}px`);
+    assert.equal(prop(screen, "aspect-ratio"), "16 / 9");
   });
 
   it("counts tab chrome and a small bottom pad, not empty space under a short timeline", () => {
@@ -66,6 +76,42 @@ describe("bottom panel height fits the horizontal scrollbar", () => {
     assert.equal(fixedBottomPanelHeight(48, true), fixedBottomPanelHeight(48, false));
     assert.equal(fixedBottomPanelHeight(0, true), fixedTimelineBodyHeight());
     assert.equal(fixedBottomPanelHeight(-4, true), fixedTimelineBodyHeight());
+  });
+});
+
+describe("normal-mode left preview is about 40% larger", () => {
+  it("grows the G2 screen by 40% and raises the fixed body so the track can use it", () => {
+    assert.equal(NORMAL_PREVIEW_GROWTH, 1.4);
+    assert.equal(timelineViewerChromePx(), 46);
+    assert.equal(g2FilledPreviewScreenPx(), timelineEditorBodyPx() - timelineViewerChromePx());
+    assert.equal(g2FilledPreviewScreenPx(), 120);
+    assert.equal(normalPreviewScreenPx(), Math.round(g2FilledPreviewScreenPx() * NORMAL_PREVIEW_GROWTH));
+    assert.equal(normalPreviewScreenPx(), 168);
+    assert.equal(timelineViewerBodyPx(), timelineViewerChromePx() + normalPreviewScreenPx());
+    assert.ok(fixedTimelineBodyHeight() >= timelineEditorBodyPx());
+    const wide = 1600;
+    const before = normalModePreviewSize({ bodyHeight: timelineEditorBodyPx(), hostWidth: wide });
+    const after = normalModePreviewSize({ bodyHeight: fixedTimelineBodyHeight(), hostWidth: wide });
+    assert.equal(before.height, g2FilledPreviewScreenPx());
+    assert.equal(after.height, normalPreviewScreenPx());
+    assert.ok(after.height / before.height >= 1.38 && after.height / before.height <= 1.42);
+    assert.ok(after.width / before.width >= 1.38 && after.width / before.width <= 1.42);
+    assert.ok(js.includes("normalModePreviewSize("));
+  });
+
+  it("anchors the taller body without a resize handle, scrollbar still inside", () => {
+    const height = fixedBottomPanelHeight(40, false);
+    const box = anchoredBottomPanelBox({ viewportHeight: 900, height, left: 12, width: 1400 });
+    assert.equal(box.resizable, false);
+    assert.equal(BOTTOM_PANEL_RESIZABLE, false);
+    assert.equal(box.position, "fixed");
+    assert.equal(box.bottom, 0);
+    assert.equal(box.height, fixedTimelineBodyHeight() + 40);
+    assert.equal(box.top, 900 - box.height);
+    assert.equal(
+      timelineEditorBodyPx() - timelineControlRowPx() - timelineTrackStackPx(),
+      timelineScrollbarBlockPx(),
+    );
   });
 });
 

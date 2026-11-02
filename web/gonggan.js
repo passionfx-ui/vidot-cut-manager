@@ -365,6 +365,7 @@ import {
   fixedPanelChrome,
   fixedBottomPanelHeight,
   anchoredBottomPanelBox,
+  normalModePreviewSize,
 } from "./gg_bottom_panel_layout_core.js";
 import {
   JOB_HISTORY_DOCK_SETTING_ID,
@@ -10126,8 +10127,8 @@ function mountTimeline(el) {
     const bodyH = fixedTimelineBodyHeight();
     const h = root.getBoundingClientRect().height || host.clientHeight || bodyH;
     const scr = root.querySelector(".gg-screen");
-    const w = Math.max(200, Math.min(host.clientWidth * 0.4, ((h || bodyH) - 46) * 16 / 9));
-    if (scr) { scr.style.width = Math.round(w) + "px"; scr.style.height = Math.round(w * 9 / 16) + "px"; }
+    const box = normalModePreviewSize({ bodyHeight: h || bodyH, hostWidth: host.clientWidth });
+    if (scr) { scr.style.width = `${box.width}px`; scr.style.height = `${box.height}px`; }
   };
   const ro = window.ResizeObserver ? new ResizeObserver(fit) : null;
   if (ro) ro.observe(host);

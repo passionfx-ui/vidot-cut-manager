@@ -19,9 +19,12 @@ export const TL_SCROLL_PAD_BOTTOM_PX = 6;
 export const TL_SCROLLBAR_PX = 12;
 export const TL_SCROLLBAR_MARGIN_BOTTOM_PX = 6;
 export const TL_VIEWER_PAD_Y = 12;
-export const TL_SCREEN_MIN_PX = 112;
 export const TL_TRANSPORT_PX = 28;
 export const TL_TRANSPORT_MARGIN_TOP_PX = 6;
+/** Normal-mode left preview vs the screen that filled the G2 body. */
+export const NORMAL_PREVIEW_GROWTH = 1.4;
+export const PREVIEW_MIN_WIDTH_PX = 200;
+export const PREVIEW_HOST_FRACTION = 0.4;
 
 /** One tools row: padding, border, and one button line. */
 export function timelineControlRowPx() {
@@ -43,11 +46,45 @@ export function timelineEditorBodyPx() {
   return timelineControlRowPx() + timelineTrackStackPx() + timelineScrollbarBlockPx();
 }
 
-export function timelineViewerBodyPx() {
-  return TL_VIEWER_PAD_Y + TL_SCREEN_MIN_PX + TL_TRANSPORT_MARGIN_TOP_PX + TL_TRANSPORT_PX;
+/** Padding plus transport. The screen sits in whatever body height is left. */
+export function timelineViewerChromePx() {
+  return TL_VIEWER_PAD_Y + TL_TRANSPORT_MARGIN_TOP_PX + TL_TRANSPORT_PX;
 }
 
-/** Timeline body. Tall enough for the horizontal scrollbar, and no taller. */
+/** Screen height that filled the G2 editor body, before the H1 bump. */
+export function g2FilledPreviewScreenPx() {
+  return timelineEditorBodyPx() - timelineViewerChromePx();
+}
+
+/** Normal-mode left preview, about 40% larger than the G2 screen. */
+export function normalPreviewScreenPx() {
+  return Math.round(g2FilledPreviewScreenPx() * NORMAL_PREVIEW_GROWTH);
+}
+
+export function timelineViewerBodyPx() {
+  return timelineViewerChromePx() + normalPreviewScreenPx();
+}
+
+/**
+ * Left preview box for a bottom-panel body height.
+ * Wide panels are limited by the body, so a taller body makes the preview larger.
+ * @param {{ bodyHeight?: number, hostWidth?: number }} box
+ */
+export function normalModePreviewSize({ bodyHeight = 0, hostWidth = 0 } = {}) {
+  const body = Number(bodyHeight) || 0;
+  const host = Number(hostWidth) || 0;
+  const byHeight = (body - timelineViewerChromePx()) * (16 / 9);
+  const w = Math.max(PREVIEW_MIN_WIDTH_PX, Math.min(host * PREVIEW_HOST_FRACTION, byHeight));
+  const width = Math.round(w);
+  const height = Math.round((width * 9) / 16);
+  return { width, height };
+}
+
+/**
+ * Timeline body. At least the editor stack so the horizontal scrollbar is fully
+ * inside, and taller when the normal-mode preview needs it. The extra pixels
+ * go to the timeline track; the scrollbar stays the last row.
+ */
 export function fixedTimelineBodyHeight() {
   return Math.max(timelineEditorBodyPx(), timelineViewerBodyPx());
 }
