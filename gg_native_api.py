@@ -1184,6 +1184,7 @@ _CAPTURE_LOCK = threading.Lock()
 def native_capture_prompt_output(
     pid: str, cut_id: str, prompt_id: str, wait_sec: float = 5.0, poll_sec: float = 0.25,
     api_workflow: dict | None = None, gen: dict | None = None, ui_workflow: dict | None = None,
+    output_nodes=None,
 ) -> dict:
     """A finished run queued from a cut becomes a version of that cut (once per prompt id).
 
@@ -1203,9 +1204,10 @@ def native_capture_prompt_output(
     cut = (doc.get("cuts") or {}).get(cut_id)
     if not cut or cut.get("deleted_at"):
         raise ValueError("cut not found")
+    node_ids = output_nodes if isinstance(output_nodes, list) else gg_sdk.linear_output_node_ids(ui_workflow)
     deadline = time.monotonic() + max(0.0, wait_sec)
     while True:
-        info = gg_sdk.prompt_output_info(prompt_id)
+        info = gg_sdk.prompt_output_info(prompt_id, node_ids)
         if not info.get("pending") or time.monotonic() >= deadline:
             break
         time.sleep(poll_sec)

@@ -816,21 +816,65 @@ def pick_last_output(history: dict, root: Path, now: float | None = None) -> tup
     return _run_output(prompt_id, h, root, now)
 
 
-def pick_prompt_output(history: dict, prompt_id: str, root: Path, now: float | None = None) -> tuple[dict | None, str]:
+def clean_output_node_ids(node_ids):
+    """None keeps every output. A list (even empty) is the only node ids that may become a Take."""
+    if node_ids is None:
+        return None
+    if not isinstance(node_ids, (list, tuple)):
+        return None
+    out = []
+    for item in node_ids:
+        if isinstance(item, bool) or not isinstance(item, (str, int)):
+            continue
+        text = str(item).strip()
+        if not text or len(text) > 80:
+            continue
+        out.append(text)
+        if len(out) >= 40:
+            break
+    return out
+
+
+def linear_output_node_ids(workflow):
+    """Node ids from workflow.extra.linearData.outputs, or None when that list is absent."""
+    if not isinstance(workflow, dict):
+        return None
+    extra = workflow.get("extra")
+    if not isinstance(extra, dict):
+        return None
+    linear = extra.get("linearData")
+    if not isinstance(linear, dict) or "outputs" not in linear:
+        return None
+    outputs = linear.get("outputs")
+    if not isinstance(outputs, list):
+        return None
+    return clean_output_node_ids(outputs)
+
+
+def pick_prompt_output(history: dict, prompt_id: str, root: Path, now: float | None = None, node_ids=None) -> tuple[dict | None, str]:
     """Output of one finished run (by prompt id); (None, reason) when it is not in history yet or has none."""
     h = (history or {}).get(prompt_id)
     if h is None:
         return None, "That ComfyUI run is not in the history yet."
-    return _run_output(prompt_id, h, root, now)
+    return _run_output(prompt_id, h, root, now, node_ids)
 
 
-def _run_output(prompt_id: str, h, root: Path, now: float | None) -> tuple[dict | None, str]:
+def _ordered_outputs(outputs, node_ids):
+    items = list((outputs or {}).items())
+    if node_ids is None:
+        return items
+    by_id = {str(k): v for k, v in items}
+    return [(nid, by_id[nid]) for nid in node_ids if nid in by_id]
+
+
+def _run_output(prompt_id: str, h, root: Path, now: float | None, node_ids=None) -> tuple[dict | None, str]:
     h = h if isinstance(h, dict) else {}
     st = h.get("status") if isinstance(h.get("status"), dict) else {}
     if st.get("status_str") == "error":
         return None, "The last ComfyUI run failed, so nothing was sent. Fix it and run again."
     root = Path(root).resolve()
-    for node_id, out in (h.get("outputs") or {}).items():
+    allowed = clean_output_node_ids(node_ids)
+    for node_id, out in _ordered_outputs(h.get("outputs"), allowed):
         if not isinstance(out, dict):
             continue
         flag = out.get("animated")
@@ -846,6 +890,8 @@ def _run_output(prompt_id: str, h, root: Path, now: float | None) -> tuple[dict 
                     return {"path": str(f), "from": "history", "prompt_id": prompt_id, "node": node_id,
                             "name": f.name, "subfolder": it.get("subfolder") or "", "mtime": mtime,
                             "age_sec": round(age, 1), "animated": animated and f.suffix.lower() in IMG_EXT}, ""
+    if allowed is not None:
+        return None, "The last ComfyUI run saved no image or video from the app outputs."
     return None, "The last ComfyUI run saved no image or video (add a Save Image / Save Video node)."
 
 
@@ -860,14 +906,17 @@ def last_output_info() -> dict:
     return {"output": lo, "reason": reason}
 
 
-def prompt_output_info(prompt_id: str) -> dict:
-    """Like last_output_info, for one prompt id. `pending` = the run is not in /history yet."""
+def prompt_output_info(prompt_id: str, node_ids=None) -> dict:
+    """Like last_output_info, for one prompt id. `pending` = the run is not in /history yet.
+
+    `node_ids` limits the Take to those history output nodes (Apps mode linearData.outputs).
+    """
     try:
         from server import PromptServer
         hist = PromptServer.instance.prompt_queue.get_history(prompt_id=prompt_id) or {}
     except Exception as ex:  # noqa: BLE001
         return {"output": None, "reason": f"Could not read ComfyUI history: {ex}", "pending": False}
-    lo, reason = pick_prompt_output(hist, prompt_id, _output_root())
+    lo, reason = pick_prompt_output(hist, prompt_id, _output_root(), node_ids=node_ids)
     return {"output": lo, "reason": reason, "pending": prompt_id not in hist}
 
 

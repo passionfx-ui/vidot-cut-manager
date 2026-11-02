@@ -1304,8 +1304,10 @@ async def gg_capture_output(request):
     try:
         gen = _capture_gen(data)
         ui = data.get("workflow") if isinstance(data.get("workflow"), dict) else None
+        output_nodes = data.get("output_nodes") if isinstance(data.get("output_nodes"), list) else None
         res = await asyncio.to_thread(
             gg_native_api.native_capture_prompt_output, pid, cid, prompt_id, gen=gen, ui_workflow=ui,
+            output_nodes=output_nodes,
         )
     except ValueError as ex:
         return _err(400, str(ex))

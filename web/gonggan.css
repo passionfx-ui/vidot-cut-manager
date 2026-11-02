@@ -424,6 +424,8 @@
 .gg-shots .gg-prompt-text.gg-field-editing { cursor: text; }
 .gg-shots .gg-prompt-text:disabled { opacity: 0.55; }
 .gg-shots .gg-cut.gg-cut-prompt { align-items: flex-start; }
+.gg-shots .gg-prompt-col { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.gg-shots .gg-app-bind { font-size: 10px; line-height: 1.2; color: var(--gg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gg-shots .gg-prompt-field-wrap {
   flex: 1 1 auto;
   min-width: 0;
@@ -902,6 +904,50 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-shots .gg-no-projects { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .gg-new-project-modal { width: min(420px, calc(100vw - 32px)); box-sizing: border-box; }
 .gg-new-project-modal .gg-modal-field { margin-bottom: 14px; }
+
+/* I15: app inputs, docked on the graph workspace (not the ComfyUI right panel). */
+.gg-app-controls {
+  --gg-line: #353a44;
+  --gg-dim: #9aa0aa;
+  --gg-fg: #e6e8ec;
+  --gg-panel: #23262d;
+  position: fixed;
+  z-index: 2500;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  color: var(--gg-fg);
+  background: rgba(27, 29, 34, 0.94);
+  border: 1px solid var(--gg-line);
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  font: 12px/1.3 system-ui, "Segoe UI", "Malgun Gothic", sans-serif;
+}
+.gg-app-controls[hidden] { display: none !important; }
+.gg-app-controls .gg-app-head { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--gg-line); }
+.gg-app-controls.gg-app-collapsed .gg-app-head { border-bottom: 0; }
+.gg-app-controls .gg-app-fold { flex: 0 0 auto; width: 22px; height: 20px; padding: 0; border: 0; background: transparent; color: var(--gg-fg); cursor: pointer; }
+.gg-app-controls .gg-app-title { font-weight: 600; font-size: 12px; }
+.gg-app-controls .gg-app-body { overflow: auto; padding: 4px 8px 8px; display: flex; flex-direction: column; gap: 6px; }
+.gg-app-controls .gg-app-body[hidden] { display: none !important; }
+.gg-app-controls .gg-app-row { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.gg-app-controls .gg-app-k { font-size: 10px; color: var(--gg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gg-app-controls input[type="text"],
+.gg-app-controls input[type="number"],
+.gg-app-controls select {
+  width: 100%;
+  box-sizing: border-box;
+  background: #1c1f25;
+  color: var(--gg-fg);
+  border: 1px solid var(--gg-line);
+  border-radius: 4px;
+  padding: 2px 4px;
+  font: inherit;
+}
+.gg-app-controls input:disabled,
+.gg-app-controls select:disabled { opacity: 0.55; }
+.gg-app-controls input[type="checkbox"] { margin: 0; }
 
 /* I2b: compact Logs / Timeline / Export tabs (buttons only; containers untouched) */
 .bottom-panel [role="tablist"] [role="tab"],

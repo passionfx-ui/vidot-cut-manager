@@ -66,6 +66,24 @@ export function isInternalWorkflowPath(path) {
   return /^gonggan\//i.test(s);
 }
 
+/** ComfyUI Apps mode workflow file (userdata name ends with .app.json). */
+export function isAppWorkflowFile(path) {
+  const base = String(path ?? "").trim().replace(/\\/g, "/").split("/").pop() || "";
+  return base.toLowerCase().endsWith(".app.json");
+}
+
+/**
+ * Userdata workflows that can be picked as templates: .app.json files only.
+ * Built-in refs are not files. Internal gonggan paths are left out.
+ * @param {string[]} paths
+ * @returns {string[]}
+ */
+export function appWorkflowPaths(paths) {
+  return userTemplatePaths(paths)
+    .filter((p) => isAppWorkflowFile(p))
+    .sort((a, b) => a.localeCompare(b));
+}
+
 /**
  * @param {string[]} paths
  * @param {string} [keep] currently selected ref (internal paths kept only when this matches)
@@ -96,9 +114,9 @@ export function filterTemplatePaths(paths, query, keep) {
 }
 
 /**
- * Template combobox items: (none) first (only for Default template), then the built-in templates, then user
- * templates A–Z. The current ref is always listed (also an internal or since-deleted workflow), so a saved value
- * still shows and stays selectable.
+ * Template combobox items: (none) first (only for Default template), then the built-in templates, then
+ * Apps workflows (.app.json) A–Z. Other userdata workflows stay out of the list. A saved .app.json
+ * that has since left the folder is still listed. A saved non-app path is not.
  * @param {string[]} paths
  * @param {string} current saved template ref ("" = none)
  * @param {{ none?: boolean }} [opts] none: false for the Image / Video template fields (always a template)
@@ -106,8 +124,8 @@ export function filterTemplatePaths(paths, query, keep) {
  */
 export function templateComboItems(paths, current, { none = true } = {}) {
   const cur = String(current ?? "").trim();
-  const list = [...userTemplatePaths(paths, cur)].filter((p) => !isBuiltinTemplate(p)).sort((a, b) => a.localeCompare(b));
-  if (cur && !isBuiltinTemplate(cur) && !list.includes(cur)) list.push(cur);
+  const list = appWorkflowPaths(paths);
+  if (cur && isAppWorkflowFile(cur) && !list.includes(cur)) list.push(cur);
   return [
     ...(none ? [{ value: "", label: "(none)" }] : []),
     ...BUILTIN_TEMPLATES.map((t) => ({ value: t.value, label: t.label })),

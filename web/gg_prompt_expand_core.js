@@ -97,15 +97,18 @@ export function promptExpandModalShellHtml() {
   return fieldExpandModalShellHtml("prompt");
 }
 
-/** @param {{ native?: boolean, text?: string, placeholder?: string, title?: string, thumb?: string }} p */
+/** @param {{ native?: boolean, text?: string, placeholder?: string, title?: string, thumb?: string, bindLabel?: string }} p */
 export function promptFieldRowHtml(p) {
-  return `<div class="gg-cut-thumb-col">${p.thumb || ""}</div>${expandableFieldWrapHtml({
+  const bind = p.bindLabel
+    ? `<div class="gg-app-bind" title="This prompt is written to this widget when you queue">${escHtml(p.bindLabel)}</div>`
+    : "";
+  return `<div class="gg-cut-thumb-col">${p.thumb || ""}</div><div class="gg-prompt-col">${bind}${expandableFieldWrapHtml({
     textareaClass: "gg-prompt-text",
     text: p.text,
     placeholder: p.placeholder,
     title: p.title,
     native: p.native,
-  })}`;
+  })}</div>`;
 }
 
 /** Caption list row (same expand bar + wrap as prompt). */

@@ -353,7 +353,10 @@ import {
   templateComboItems,
   templateLabel,
   isBuiltinTemplate,
+  isAppWorkflowFile,
+  appWorkflowPaths,
 } from "./gg_template_pick_core.js";
+import { linearBindings, linearOutputIds, linearPromptLabel } from "./gg_app_mode_core.js";
 import { comboFilter, comboActiveIndex, comboKey, comboTypedValue } from "./gg_combo_core.js";
 import {
   folderAddressTarget,
@@ -1352,6 +1355,10 @@ function wireProjectTemplateField(wrap, field) {
     void apply(it.value);
   };
   const commitTyped = () => {
+    if (input.value.trim() === shown()) {
+      showValue();
+      return;
+    }
     const ref = comboTypedValue(comboItems(), input.value) || (none ? "" : current());
     if (ref === current()) showValue();
     else void apply(ref);
@@ -3978,6 +3985,102 @@ function setLiveSeedNodes(ids, seed) {
   }
 }
 
+function findLiveWidget(nodeId, widgetName) {
+  const node = liveNodeById(nodeId);
+  if (!node) return null;
+  const want = String(widgetName || "");
+  return (node.widgets || []).find((w) => w && (w.name === want || w.label === want)) || null;
+}
+
+function readLiveWidgetValue(nodeId, widgetName) {
+  const w = findLiveWidget(nodeId, widgetName);
+  return w ? w.value : undefined;
+}
+
+/** Write one widget on the live node (root graph, including a subgraph instance id). */
+function setLiveNamedWidget(nodeId, widgetName, value) {
+  const node = liveNodeById(nodeId);
+  if (!node) return false;
+  const want = String(widgetName || "");
+  const widgets = node.widgets || [];
+  const idx = widgets.findIndex((w) => w && (w.name === want || w.label === want));
+  const w = idx >= 0 ? widgets[idx] : null;
+  if (w) {
+    w.value = value;
+    const el = w.element || w.inputEl;
+    if (el) {
+      if (el.type === "checkbox") el.checked = !!value;
+      else if ("value" in el) {
+        const shown = value == null ? "" : String(value);
+        if (el.value !== shown) el.value = shown;
+      }
+    }
+  }
+  const named = node.widgets_values_named;
+  if (named && typeof named === "object" && !Array.isArray(named)) {
+    named[want] = value;
+    if (w?.name && w.name !== want) named[w.name] = value;
+  }
+  try { app.canvas?.setDirty?.(true, true); } catch (_) {}
+  return !!w;
+}
+
+function workflowSnapshotForCut(cutId) {
+  if (!cutId) return null;
+  if (
+    wfLastLoadedCutId === cutId &&
+    wfLastLoadedProjectId === state.pid &&
+    app.graph?.extra?.gonggan?.cutId === cutId
+  ) {
+    const live = captureGraphWorkflowSnapshot();
+    if (live) return live;
+  }
+  const stored = cutWorkflowMap.get(cutWorkflowKey(state.pid, cutId));
+  return stored || null;
+}
+
+function promptBindLabel(cutId) {
+  return linearPromptLabel(linearBindings(workflowSnapshotForCut(cutId)));
+}
+
+function openCutForLinear() {
+  const extra = app.graph?.extra?.gonggan;
+  const cutId = extra?.cutId;
+  const pid = extra?.pid || extra?.projectId;
+  if (!cutId || !pid || pid !== state.pid || !isNativeProject()) return null;
+  if (!isGongganShotTabOpenAndActive() && wfLastLoadedCutId !== cutId) return null;
+  const cut = cutById(cutId);
+  return cut || null;
+}
+
+/** Prompt tab text for this cut. The visible field wins over the stored value. */
+function promptTextForQueue(cut) {
+  if (!cut) return "";
+  const stored = cut.prompt != null ? String(cut.prompt) : "";
+  const ta = document.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cut.id)}"] .gg-prompt-text`);
+  if (!ta || typeof ta.value !== "string") return stored;
+  if (ta.value === stored || document.activeElement === ta) return ta.value;
+  return stored;
+}
+
+/**
+ * Copy the prompt tab into the linearData text widgets on the live nodes.
+ * No linear positive binding: leave the graph alone (I13 / I14).
+ * @returns {object | null}
+ */
+function applyLinearPromptsForOpenCut() {
+  const cut = openCutForLinear();
+  if (!cut) return null;
+  const binding = linearBindings(captureGraphWorkflowSnapshot());
+  if (!binding?.positive) return binding;
+  setLiveNamedWidget(binding.positive.nodeId, binding.positive.widget, promptTextForQueue(cut));
+  if (binding.negative) {
+    const data = readCutData(cut);
+    setLiveNamedWidget(binding.negative.nodeId, binding.negative.widget, data.negative || "");
+  }
+  return binding;
+}
+
 /** Slot values kept on the shared template (a cut with no value of its own falls back to these). */
 function kindSlotDefaults(kind) {
   const tmpl = projectMemory.kindTemplate(kind);
@@ -4009,6 +4112,18 @@ function syncPromptNodeFromField(cutId, text) {
   if (wfLastLoadedCutId !== cutId || wfLastLoadedProjectId !== state.pid) return;
   if (!isGongganShotTabOpenAndActive()) return;
   const snap = captureGraphWorkflowSnapshot();
+  const binding = linearBindings(snap);
+  const value = text == null ? "" : String(text);
+  if (binding?.positive) {
+    ggApplyingCutData = true;
+    try {
+      setLiveNamedWidget(binding.positive.nodeId, binding.positive.widget, value);
+      rememberWorkflowBaselineFromActiveGraph(cutId);
+    } finally {
+      ggApplyingCutData = false;
+    }
+    return;
+  }
   const id = snap ? cutSlotIds(snap).promptId : "";
   if (!id) return;
   ggApplyingCutData = true;
@@ -4132,7 +4247,7 @@ async function saveCutWorkflowNow(cutId, { flush = false } = {}) {
     }
     const now = extractCutData(current);
     const prev = extractCutData(baseline);
-    if (now.positive !== prev.positive) syncPromptFieldFromGraph(cutId, now.positive);
+    if (!linearBindings(current)?.positive && now.positive !== prev.positive) syncPromptFieldFromGraph(cutId, now.positive);
   }
   if (!changed) return true;
   const copy = cloneGraph(current);
@@ -4246,6 +4361,26 @@ async function adoptStoredCutFieldsIfBlank(cut, loadToken) {
   if (wfLastLoadedCutId !== cut.id || app.graph?.extra?.gonggan?.cutId !== cut.id) return;
   const snap = captureGraphWorkflowSnapshot();
   if (!snap || !Array.isArray(snap.nodes) || !snap.nodes.length) return;
+  const binding = linearBindings(snap);
+  if (binding?.positive) {
+    const data = readCutData(cut);
+    const text = data.positive;
+    ggApplyingCutData = true;
+    try {
+      if (text) setLiveNamedWidget(binding.positive.nodeId, binding.positive.widget, text);
+      else {
+        const current = readLiveWidgetValue(binding.positive.nodeId, binding.positive.widget);
+        if (typeof current === "string" && current.trim()) syncPromptFieldFromGraph(cut.id, current);
+      }
+      if (binding.negative && data.negative) {
+        setLiveNamedWidget(binding.negative.nodeId, binding.negative.widget, data.negative);
+      }
+    } finally {
+      ggApplyingCutData = false;
+    }
+    rememberWorkflowBaselineFromActiveGraph(cut.id);
+    return;
+  }
   const now = extractCutData(snap);
   if (now.positive) return;
   const data = readCutData(cut);
@@ -4400,7 +4535,7 @@ function syncTplUseLastButton(root) {
   const btn = root?.querySelector(".gg-tpl-use-last");
   if (!btn) return;
   const last = loadLastTemplate(localStorage);
-  const show = !projectTemplateRef && typeof last === "string" && !!last && (userWorkflowPaths.includes(last) || isBuiltinTemplate(last));
+  const show = !projectTemplateRef && typeof last === "string" && !!last && (isAppWorkflowFile(last) || isBuiltinTemplate(last));
   btn.hidden = !show;
   if (!show) return;
   btn.title = `Link last used template: ${templateLabel(last)}`;
@@ -5368,10 +5503,24 @@ function cutWorkflowIsEmpty(cutId) {
 
 function templateChoicesForCut(cutId) {
   const settings = state.timeline?.project?.settings || {};
-  return [
+  const items = [
     { label: "Image template", action: () => { void loadTemplateIntoCut(cutId, settings.image_template); } },
     { label: "Video template", action: () => { void loadTemplateIntoCut(cutId, settings.video_template); } },
   ];
+  const used = new Set(
+    [settings.image_template, settings.video_template].map((r) => String(r || "").trim()).filter(Boolean),
+  );
+  for (const p of appWorkflowPaths(userWorkflowPaths)) {
+    if (used.has(p)) continue;
+    used.add(p);
+    items.push({
+      label: shortTemplateName(p, 42),
+      title: p,
+      action: () => { void loadTemplateIntoCut(cutId, p); },
+    });
+  }
+  if (!items.length) return [{ label: "No app templates", disabled: true }];
+  return items;
 }
 
 async function fetchTemplateGraph(ref) {
@@ -7064,6 +7213,7 @@ function promptRowContent(c) {
     placeholder: "Prompt for Generate…",
     title: nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP,
     native: nat,
+    bindLabel: promptBindLabel(c.id),
   });
 }
 
@@ -8565,6 +8715,8 @@ async function captureFinishedPrompt(promptId) {
     const body = { pid: t.projectId, cut_id: t.cutId, prompt_id: String(promptId) };
     if (snap) {
       const merged = mergeLegacyTake(null, snap);
+      const outputNodes = linearOutputIds(snap.workflow);
+      if (outputNodes) body.output_nodes = outputNodes;
       body.prompt = merged.positive || "";
       body.negative = merged.negative || "";
       if (merged.seed != null && merged.seed !== "") body.seed = merged.seed;
@@ -8990,10 +9142,21 @@ async function injectCutDataForQueue() {
   let sourceImageTake = "";
   ggApplyingCutData = true;
   try {
+    const linearSnap = captureGraphWorkflowSnapshot();
+    const linear = linearBindings(linearSnap);
+    if (linear?.positive) {
+      setLiveNamedWidget(linear.positive.nodeId, linear.positive.widget, promptTextForQueue(cut));
+      if (linear.negative) {
+        setLiveNamedWidget(linear.negative.nodeId, linear.negative.widget, readCutData(cut).negative || "");
+      }
+    }
     if (projectRandomSeedOn()) {
-      const live = captureGraphWorkflowSnapshot();
-      const ids = live ? cutSlotIds(live) : null;
-      if (ids) setLiveSeedNodes(ids.seedIds, randomQueueSeed());
+      const seed = randomQueueSeed();
+      const ids = linearSnap ? cutSlotIds(linearSnap) : null;
+      if (ids) setLiveSeedNodes(ids.seedIds, seed);
+      for (const c of linear?.controls || []) {
+        if (c.seed) setLiveNamedWidget(c.nodeId, c.widget, seed);
+      }
     }
     ggQueuedStartFile = "";
     if (video) {
@@ -9007,6 +9170,21 @@ async function injectCutDataForQueue() {
   }
   const after = captureGraphWorkflowSnapshot();
   const take = extractTakeSnapshot(after);
+  const bound = linearBindings(after);
+  if (bound) {
+    if (bound.positive) take.positive = promptTextForQueue(cut);
+    if (bound.negative) take.negative = readCutData(cut).negative || "";
+    const numerics = { ...(take.numerics || {}) };
+    for (const c of bound.controls) {
+      const v = readLiveWidgetValue(c.nodeId, c.widget);
+      if (typeof v !== "number" || !Number.isFinite(v)) continue;
+      numerics[c.widget] = v;
+      if (c.seed) take.seed = v;
+      if (c.widget === "steps") take.steps = v;
+      if (c.widget === "cfg") take.cfg = v;
+    }
+    take.numerics = numerics;
+  }
   ggPendingQueueSnap = {
     cutId,
     pid,
@@ -9151,6 +9329,213 @@ async function confirmDeleteSelectedCuts() {
   if (!n) return;
   if (!(await askConfirm({ message: deleteCutsConfirmMessage(n), danger: true }))) return;
   await deleteSelectedCuts();
+}
+
+const APP_CONTROLS_OPEN_KEY = "gonggan-cut.appControlsOpen";
+let appControlSaveTimer = 0;
+
+function appControlsOpen() {
+  try { return localStorage.getItem(APP_CONTROLS_OPEN_KEY) !== "0"; } catch (_) { return true; }
+}
+
+function comboChoices(widget) {
+  let values = widget?.options?.values;
+  if (typeof values === "function") {
+    try { values = values(); } catch (_) { values = []; }
+  }
+  if (!Array.isArray(values)) return [];
+  const cur = widget?.value;
+  const list = values.slice(0, 400).map((v) => (v == null ? "" : String(v)));
+  if (cur != null && cur !== "" && !list.includes(String(cur))) list.unshift(String(cur));
+  return list;
+}
+
+function liveControlView(c) {
+  const w = findLiveWidget(c.nodeId, c.widget);
+  if (!w) return { ...c, missing: true, choices: [] };
+  let kind = c.kind || "text";
+  const values = w.options?.values;
+  if (w.type === "toggle" || w.type === "boolean" || typeof w.value === "boolean") kind = "toggle";
+  else if (w.type === "combo" || Array.isArray(values) || typeof values === "function") kind = "combo";
+  else if (w.type === "number" || w.type === "slider" || typeof w.value === "number") kind = "number";
+  const integer = !!c.integer || w.options?.precision === 0;
+  return { ...c, kind, integer, missing: false, choices: kind === "combo" ? comboChoices(w) : [], value: w.value };
+}
+
+function appControlRowHtml(c) {
+  const view = liveControlView(c);
+  const label = view.label || view.widget;
+  const title = `Node ${view.nodeId} · ${view.widget}`;
+  const attrs = `data-node="${esc(view.nodeId)}" data-widget="${esc(view.widget)}" data-kind="${esc(view.kind)}"${view.integer ? ' data-integer="1"' : ""}${view.seed ? ' data-seed="1"' : ""}`;
+  const randomOn = view.seed && projectRandomSeedOn();
+  const dis = view.missing || randomOn ? " disabled" : "";
+  const tip = view.missing
+    ? `${title}. Widget is not on the open graph.`
+    : randomOn
+      ? "Random seed is on. Queue uses a new seed."
+      : title;
+  let field = "";
+  if (view.kind === "toggle") {
+    field = `<input type="checkbox" ${attrs}${view.value ? " checked" : ""}${dis} title="${esc(tip)}" />`;
+  } else if (view.kind === "combo" && view.choices.length) {
+    const opts = view.choices.map((v) => `<option value="${esc(v)}"${String(view.value) === v ? " selected" : ""}>${esc(v)}</option>`).join("");
+    field = `<select ${attrs}${dis} title="${esc(tip)}">${opts}</select>`;
+  } else if (view.kind === "number") {
+    const step = view.integer ? "1" : "any";
+    const shown = typeof view.value === "number" && Number.isFinite(view.value) ? String(view.value) : "";
+    field = `<input type="number" step="${step}" ${attrs} value="${esc(shown)}"${dis} title="${esc(tip)}" />`;
+  } else {
+    field = `<input type="text" ${attrs} value="${esc(view.value == null ? "" : String(view.value))}"${dis} title="${esc(tip)}" />`;
+  }
+  return `<label class="gg-app-row"><span class="gg-app-k" title="${esc(title)}">${esc(label)}</span>${field}</label>`;
+}
+
+function openAppControls() {
+  const cut = openCutForLinear();
+  if (!cut) return null;
+  const binding = linearBindings(captureGraphWorkflowSnapshot());
+  if (!binding?.controls?.length) return null;
+  return { cutId: cut.id, controls: binding.controls };
+}
+
+function ensureAppControlsEl() {
+  let el = document.querySelector(".gg-app-controls");
+  if (el) return el;
+  el = document.createElement("div");
+  el.className = "gg-app-controls";
+  el.hidden = true;
+  el.innerHTML = `<div class="gg-app-head"><button type="button" class="gg-app-fold" aria-label="Collapse inputs"></button><span class="gg-app-title">Inputs</span></div><div class="gg-app-body"></div>`;
+  document.body.appendChild(el);
+  el.querySelector(".gg-app-fold")?.addEventListener("click", () => {
+    const open = !appControlsOpen();
+    try { localStorage.setItem(APP_CONTROLS_OPEN_KEY, open ? "1" : "0"); } catch (_) {}
+    paintAppControls();
+  });
+  const onEdit = (e) => onAppControlEdit(e);
+  el.addEventListener("input", onEdit);
+  el.addEventListener("change", onEdit);
+  return el;
+}
+
+function placeAppControls(el) {
+  const graph = editPreviewBox(graphWorkAreaElement());
+  if (!graph) return false;
+  const toolbarBottom = measureEditPreviewToolbarBottom(graph);
+  const sides = measureEditPreviewSides(graph);
+  const docker = measureRightDockerLeft(graph, toolbarBottom);
+  const panel = document.querySelector(".bottom-panel");
+  const bottomTop = panel && bottomPanelShown() ? panel.getBoundingClientRect().top : null;
+  const shots = document.querySelector(".gg-root.gg-shots");
+  const area = editPreviewOverlayRect({
+    graphRect: graph,
+    toolbarBottom,
+    shotsRect: shots ? shots.getBoundingClientRect() : null,
+    rightPanelLeft: sides.right,
+    rightDockerLeft: docker,
+    bottomPanelTop: bottomTop,
+  });
+  if (!area) return false;
+  const width = Math.min(240, Math.max(168, Math.round(area.width * 0.32)));
+  el.style.top = `${Math.round(area.top + 8)}px`;
+  el.style.left = `${Math.round(area.right - width - 8)}px`;
+  el.style.width = `${width}px`;
+  el.style.maxHeight = `${Math.max(72, Math.round(area.height - 16))}px`;
+  return true;
+}
+
+function paintAppControls() {
+  const el = ensureAppControlsEl();
+  const spec = openAppControls();
+  if (!spec) {
+    el.hidden = true;
+    return;
+  }
+  if (!placeAppControls(el)) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  const open = appControlsOpen();
+  el.classList.toggle("gg-app-collapsed", !open);
+  const fold = el.querySelector(".gg-app-fold");
+  if (fold) {
+    fold.textContent = open ? "▾" : "▸";
+    fold.title = open ? "Collapse" : "Expand";
+    fold.setAttribute("aria-expanded", open ? "true" : "false");
+    fold.setAttribute("aria-label", open ? "Collapse inputs" : "Expand inputs");
+  }
+  const body = el.querySelector(".gg-app-body");
+  if (!body) return;
+  body.hidden = !open;
+  const key = spec.controls.map((c) => `${c.nodeId}:${c.widget}:${c.kind}`).join("|");
+  const randomOn = projectRandomSeedOn() ? "1" : "0";
+  if (body.dataset.key !== key || body.dataset.random !== randomOn) {
+    body.dataset.key = key;
+    body.dataset.random = randomOn;
+    body.innerHTML = spec.controls.map(appControlRowHtml).join("");
+    return;
+  }
+  for (const c of spec.controls) {
+    const input = body.querySelector(`[data-node="${CSS.escape(c.nodeId)}"][data-widget="${CSS.escape(c.widget)}"]`);
+    if (!input || document.activeElement === input) continue;
+    const view = liveControlView(c);
+    if (view.kind === "toggle") input.checked = !!view.value;
+    else if (view.value != null && input.value !== String(view.value)) input.value = String(view.value);
+    if (c.seed) {
+      input.disabled = projectRandomSeedOn();
+      input.title = input.disabled ? "Random seed is on. Queue uses a new seed." : `Node ${c.nodeId} · ${c.widget}`;
+    }
+  }
+}
+
+function onAppControlEdit(e) {
+  const input = e.target?.closest?.("[data-node][data-widget]");
+  if (!input || input.disabled) return;
+  const kind = input.dataset.kind || "text";
+  let value;
+  if (kind === "toggle") {
+    if (e.type === "input") return;
+    value = !!input.checked;
+  } else if (kind === "number") {
+    if (input.value.trim() === "" || input.value === "-" || input.value === ".") return;
+    const n = Number(input.value);
+    if (!Number.isFinite(n)) return;
+    value = input.dataset.integer === "1" && e.type === "change" ? Math.round(n) : n;
+  } else if (kind === "combo") {
+    if (e.type === "input") return;
+    value = input.value;
+  } else {
+    value = input.value;
+  }
+  setLiveNamedWidget(input.dataset.node, input.dataset.widget, value);
+  const cutId = app.graph?.extra?.gonggan?.cutId;
+  if (!cutId) return;
+  clearTimeout(appControlSaveTimer);
+  appControlSaveTimer = setTimeout(() => {
+    appControlSaveTimer = 0;
+    void saveCutWorkflowNow(cutId);
+  }, 400);
+}
+
+function syncPromptBindLabels() {
+  document.querySelectorAll(".gg-cut.gg-cut-prompt").forEach((li) => {
+    const id = li.dataset.cutId;
+    if (!id) return;
+    const label = promptBindLabel(id);
+    const col = li.querySelector(".gg-prompt-col") || li;
+    let el = li.querySelector(".gg-app-bind");
+    if (!label) {
+      if (el) el.remove();
+      return;
+    }
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "gg-app-bind";
+      el.title = "This prompt is written to this widget when you queue";
+      col.insertBefore(el, col.firstChild);
+    }
+    if (el.textContent !== label) el.textContent = label;
+  });
 }
 
 /** Status panel: job queue (when active) + Queue toolbar (cut details stay in the list / version info). */
@@ -9806,7 +10191,10 @@ function mountShots(el) {
     if (randomSeedCb && !randomSeedCb.dataset.bound) {
       randomSeedCb.dataset.bound = "1";
       randomSeedCb.checked = projectRandomSeedOn();
-      randomSeedCb.addEventListener("change", () => void persistRandomSeedToProject(randomSeedCb.checked));
+      randomSeedCb.addEventListener("change", () => {
+        void persistRandomSeedToProject(randomSeedCb.checked);
+        paintAppControls();
+      });
     }
     root.querySelectorAll(".gg-queue-mode .gg-qm-seg").forEach((btn) => {
       if (btn.dataset.bound) return;
@@ -12342,6 +12730,17 @@ app.registerExtension({
     }, 500);
     bindLoadImageUi({ ggToast });
     installLoadImageQueueGuard();
+    void fetchUserWorkflowPaths();
+    const refreshAppUi = () => {
+      if (document.hidden) return;
+      try {
+        syncPromptBindLabels();
+        paintAppControls();
+      } catch (_) {}
+    };
+    for (const ev of ["select", "gg-opentab", "timeline"]) bus.addEventListener(ev, refreshAppUi);
+    window.addEventListener("resize", refreshAppUi);
+    setInterval(refreshAppUi, 800);
     if (!app._ggVideoStartWrapped) {
       app._ggVideoStartWrapped = true;
       const origQueue = app.queuePrompt.bind(app);
@@ -12360,6 +12759,7 @@ app.registerExtension({
         }
         const prevGraphToPrompt = app.graphToPrompt;
         app.graphToPrompt = async function ggQueueGraphToPrompt(...gargs) {
+          applyLinearPromptsForOpenCut();
           if (ggQueuedStartFile) {
             const node = liveStartImageNode();
             if (node) setLiveLoadImageWidget(node, ggQueuedStartFile);

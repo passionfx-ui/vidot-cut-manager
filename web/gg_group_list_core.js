@@ -27,8 +27,8 @@ export function captionRowContentHtml({ thumb = "", text, placeholder, title, na
 }
 
 /** Prompt list view: same interaction as Caption, saves to cut.prompt. */
-export function promptRowContentHtml({ thumb = "", text, placeholder, title, native }) {
-  return promptFieldRowHtml({ thumb, text, placeholder, title, native });
+export function promptRowContentHtml({ thumb = "", text, placeholder, title, native, bindLabel = "" }) {
+  return promptFieldRowHtml({ thumb, text, placeholder, title, native, bindLabel });
 }
 
 /**
