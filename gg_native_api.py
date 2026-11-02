@@ -24,6 +24,7 @@ try:
         make_unique_project_folder,
         normalize_settings,
         project_folder_path,
+        resolve_video_template,
         mp4_export_dir_for_project,
         check_export_output_folder,
     )
@@ -43,6 +44,7 @@ except ImportError:  # unittest / plain script
         make_unique_project_folder,
         normalize_settings,
         project_folder_path,
+        resolve_video_template,
         mp4_export_dir_for_project,
         check_export_output_folder,
     )
@@ -166,6 +168,8 @@ def check_template_settings(settings: dict | None) -> None:
         label = _TEMPLATE_SETTING_LABELS[key]
         if not isinstance(ref, str):
             raise ValueError(f"{label} must be a string")
+        if key == "video_template":
+            ref = resolve_video_template(ref, provided=True)
         try:
             gg_template.read_workflow_ref(ref)
         except ValueError:

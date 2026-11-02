@@ -24,7 +24,12 @@ CAPTION_LANG_ALLOWED = frozenset(
 )
 
 DEFAULT_IMAGE_TEMPLATE = "builtin:image"
-DEFAULT_VIDEO_TEMPLATE = "builtin:video-ltx"
+# Built-in used when the user LTX app workflow is not on disk.
+BUILTIN_VIDEO_TEMPLATE = "builtin:video-ltx"
+# Same ref the template picker stores for a file in ComfyUI user/default/workflows
+# (no "workflows/" prefix). New projects, and a blank video_template, use this when the file exists.
+USER_DEFAULT_VIDEO_TEMPLATE = "LTX 4b video mp4.app.json"
+DEFAULT_VIDEO_TEMPLATE = USER_DEFAULT_VIDEO_TEMPLATE
 
 DEFAULT_PROJECT_SETTINGS: dict[str, Any] = {
     "aspect": "16:9",
@@ -184,9 +189,58 @@ def _clamp_project_folder(value: Any) -> str:
 
 
 def _clamp_template_ref(value: Any, default: str) -> str:
-    """Image / Video template: a built-in ref or a ComfyUI user workflow path; empty = the built-in default."""
+    """Image / Video template: a built-in ref or a ComfyUI user workflow path; empty = `default`."""
     s = "".join(ch for ch in str(value or "") if ch >= " ").strip().replace("\\", "/")[:260]
     return s or default
+
+
+def _video_template_key(ref: str) -> str:
+    """Picker ref: workflows-relative, no leading workflows/ (see gg_template._normalize_ref)."""
+    s = (ref or "").replace("\\", "/").strip().lstrip("/")
+    if s.lower().startswith("workflows/"):
+        s = s[len("workflows/") :]
+    return s
+
+
+def _is_user_default_video(ref: str) -> bool:
+    return _video_template_key(ref).lower() == USER_DEFAULT_VIDEO_TEMPLATE.lower()
+
+
+def user_default_video_available() -> bool:
+    """True when user/default/workflows/LTX 4b video mp4.app.json is a readable workflow file."""
+    try:
+        import gg_template
+    except ImportError:
+        return False
+    try:
+        return bool(gg_template.workflow_ref_exists(USER_DEFAULT_VIDEO_TEMPLATE))
+    except Exception:
+        return False
+
+
+def default_video_template() -> str:
+    """Video template for a new project, and when video_template is blank.
+
+    The user LTX app workflow when that file is in ComfyUI's workflows folder;
+    otherwise the built-in LTX template. A saved ref that is not this file is left alone.
+    """
+    if user_default_video_available():
+        return USER_DEFAULT_VIDEO_TEMPLATE
+    return BUILTIN_VIDEO_TEMPLATE
+
+
+def resolve_video_template(value: Any, *, provided: bool) -> str:
+    """Explicit templates stay, including builtin:video-ltx on projects that already saved it.
+
+    A blank value uses default_video_template(). The user LTX app ref is kept only while
+    that file exists; if it is missing, the built-in template is used instead.
+    """
+    s = _clamp_template_ref(value, "")
+    if not provided or not s:
+        return default_video_template()
+    if _is_user_default_video(s):
+        return USER_DEFAULT_VIDEO_TEMPLATE if user_default_video_available() else BUILTIN_VIDEO_TEMPLATE
+    return s
 
 
 _WIN_BAD_NAME_CHARS = set('<>:"|?*')
@@ -453,7 +507,11 @@ def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     out["project_folder"] = _clamp_project_folder(out.get("project_folder"))
     out["export_folder"] = _clamp_project_folder(out.get("export_folder"))
     out["image_template"] = _clamp_template_ref(out.get("image_template"), DEFAULT_IMAGE_TEMPLATE)
-    out["video_template"] = _clamp_template_ref(out.get("video_template"), DEFAULT_VIDEO_TEMPLATE)
+    provided_video = isinstance(raw, dict) and "video_template" in raw
+    out["video_template"] = resolve_video_template(
+        raw.get("video_template") if provided_video else "",
+        provided=provided_video,
+    )
     return out
 
 

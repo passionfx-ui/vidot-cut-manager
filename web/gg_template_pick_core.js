@@ -12,7 +12,40 @@ export const BUILTIN_TEMPLATES = [
   { value: "builtin:video-ltx-t2v", label: "Video LTX text-to-video", kind: "video" },
 ];
 export const DEFAULT_IMAGE_TEMPLATE = "builtin:image";
-export const DEFAULT_VIDEO_TEMPLATE = "builtin:video-ltx";
+/** Built-in used when the user LTX app workflow is not in the picker list. */
+export const BUILTIN_VIDEO_TEMPLATE = "builtin:video-ltx";
+/**
+ * User workflow in ComfyUI user/default/workflows.
+ * Same ref the template picker stores (workflows/ prefix removed).
+ */
+export const USER_DEFAULT_VIDEO_TEMPLATE = "LTX 4b video mp4.app.json";
+export const DEFAULT_VIDEO_TEMPLATE = USER_DEFAULT_VIDEO_TEMPLATE;
+
+/** Picker ref: workflows-relative path, no leading workflows/. */
+export function videoTemplateRefKey(ref) {
+  let s = String(ref ?? "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
+  if (s.toLowerCase().startsWith("workflows/")) s = s.slice("workflows/".length);
+  return s;
+}
+
+/**
+ * Default Video template for a new project, and when none is set.
+ * Pass the template picker's user workflow paths. When that list contains the LTX app file,
+ * the returned id is the picker's path. When `paths` is omitted, the user-workflow id is used
+ * and the server falls back if the file is missing. When the list is present and the file is
+ * not in it, the built-in video template is used. Other saved refs are not rewritten here.
+ * @param {string[]|null|undefined} paths
+ * @returns {string}
+ */
+export function defaultVideoTemplate(paths) {
+  if (paths == null) return USER_DEFAULT_VIDEO_TEMPLATE;
+  const want = USER_DEFAULT_VIDEO_TEMPLATE.toLowerCase();
+  for (const p of paths) {
+    const key = videoTemplateRefKey(p);
+    if (key.toLowerCase() === want) return key;
+  }
+  return BUILTIN_VIDEO_TEMPLATE;
+}
 
 /** @param {string} ref */
 export function isBuiltinTemplate(ref) {

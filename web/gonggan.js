@@ -358,6 +358,7 @@ import {
   isBuiltinTemplate,
   isAppWorkflowFile,
   templateListPaths,
+  defaultVideoTemplate,
 } from "./gg_template_pick_core.js";
 import { clearLinearMode, expandLinearOutputIds, hasLinearModeFlag, linearBindings, linearPromptLabel } from "./gg_app_mode_core.js";
 import { comboFilter, comboActiveIndex, comboKey, comboTypedValue } from "./gg_combo_core.js";
@@ -1142,13 +1143,29 @@ function openNewProjectModal() {
   const pathHint = wrap.querySelector(".gg-np-path");
   const locErr = wrap.querySelector(".gg-modal-folder-err");
   const createBtn = wrap.querySelector(".gg-modal-create");
-  const kindTemplates = { image: DEFAULT_PROJECT_SETTINGS.image_template, video: DEFAULT_PROJECT_SETTINGS.video_template };
+  const kindTemplates = {
+    image: DEFAULT_PROJECT_SETTINGS.image_template,
+    video: defaultVideoTemplate(userWorkflowPathsLoaded ? userWorkflowPaths : null),
+  };
+  let videoStillDefault = true;
+  const repaintTemplate = {};
   for (const kind of ["image", "video"]) {
-    wireProjectTemplateField(wrap.querySelector(`[data-tpl="${kind}"]`), {
+    repaintTemplate[kind] = wireProjectTemplateField(wrap.querySelector(`[data-tpl="${kind}"]`), {
       get: () => kindTemplates[kind],
-      set: (ref) => { kindTemplates[kind] = ref; },
+      set: (ref) => {
+        if (kind === "video") videoStillDefault = false;
+        kindTemplates[kind] = ref;
+      },
     });
   }
+  const applyDefaultVideoTemplate = () => {
+    if (!videoStillDefault || !wrap.isConnected) return;
+    const next = defaultVideoTemplate(userWorkflowPathsLoaded ? userWorkflowPaths : null);
+    if (next === kindTemplates.video) return;
+    kindTemplates.video = next;
+    repaintTemplate.video?.();
+  };
+  if (!userWorkflowPathsLoaded) fetchUserWorkflowPaths().then(() => applyDefaultVideoTemplate());
   const syncPath = () => {
     const locForPath = locIn.value.trim() || defaultStorageHint;
     const p = projectFolderPath(locForPath, nameIn.value);
@@ -4643,6 +4660,7 @@ function openVersionWorkflow(cutId, vid) {
 let projectHasTemplate = false;
 let projectTemplateRef = "";
 let userWorkflowPaths = [];
+let userWorkflowPathsLoaded = false;
 
 async function fetchUserWorkflowPaths() {
   try {
@@ -4660,6 +4678,8 @@ async function fetchUserWorkflowPaths() {
     userWorkflowPaths = paths;
   } catch (_) {
     userWorkflowPaths = [];
+  } finally {
+    userWorkflowPathsLoaded = true;
   }
   return userWorkflowPaths;
 }
