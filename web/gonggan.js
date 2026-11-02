@@ -7432,117 +7432,97 @@ function applyEditModeTimelineRow(root) {
 }
 
 /**
- * I17 layout: Timeline and Export live in our strip, appended to ComfyUI's
- * empty `#comfyui-body-bottom` slot (grid row 3). While the strip is open that
- * slot is only the center column, and the left and right sidebars span row 2
- * and row 3, so they keep their full height. The graph and its canvas toolbar
- * stay in row 2 and are not covered. Those grid placements are cleared when
- * the strip is removed. The native Logs panel is not restyled.
+ * I18 layout: Timeline and Export stay out of `#comfyui-body-bottom`. That slot
+ * is a full-width grid row, so using it shortens the left icon bar and the cut
+ * list. The strip is fixed to the bottom of the center graph column only
+ * (between the side panels). Padding on that column reserves the same height
+ * so the canvas toolbar, which sits at the bottom of `.graph-canvas-panel`,
+ * stays above the strip. Closing the strip removes the element and those
+ * inline reserves. The native Logs panel is not restyled. No grid-row or
+ * grid-column changes.
  * Height is `gg.stripHeight`, or the I14 default `fixedBottomPanelHeight`
  * (already ×1.2) when unset.
  */
-function stripHost() {
-  return document.getElementById("comfyui-body-bottom");
+function graphColumnElement() {
+  const gutter = document.querySelector('[data-testid="graph-canvas-gutter"]');
+  const column = gutter?.parentElement;
+  if (!column || !column.isConnected) return null;
+  if (!column.querySelector(".graph-canvas-panel")) return null;
+  return column;
 }
 
-function visiblePanelRect(el) {
-  if (!el || !el.isConnected) return null;
-  const cs = getComputedStyle(el);
-  if (cs.display === "none" || cs.visibility === "hidden") return null;
-  const r = el.getBoundingClientRect();
-  if (r.width < 8 || r.height < 8) return null;
-  return r;
+function releaseStripReserve(el) {
+  if (!el) return;
+  el.style.paddingBottom = "";
+  el.style.minHeight = "";
+  el.style.boxSizing = "";
+  if (el.dataset.testid === "graph-canvas-gutter") el.style.height = "";
+  delete el.dataset.ggStripReserve;
 }
 
-/** Horizontal span of the graph workspace: after the left panels, before any right panels. */
-function measureStripWorkspace() {
-  const graph = visiblePanelRect(graphWorkAreaElement());
-  if (!graph) return null;
-  let left = graph.left;
-  let right = graph.right;
-  const pullLeft = (r) => {
-    if (!r || r.width > 720 || r.width < 8) return;
-    if (r.right > left - 4 && r.right < right - 32) left = Math.max(left, r.right);
-  };
-  const pullRight = (r) => {
-    if (!r || r.width > 720 || r.width < 8) return;
-    if (r.left < right + 4 && r.left > left + 32) right = Math.min(right, r.left);
-  };
-  pullLeft(visiblePanelRect(document.getElementById("comfyui-body-left")));
-  pullLeft(visiblePanelRect(document.querySelector(".gg-root.gg-shots")));
-  pullRight(visiblePanelRect(document.getElementById("comfyui-body-right")));
-  // A dock that hangs below the graph would be covered by the strip. Docks that
-  // stay inside the graph sit above the strip and are left at the graph width.
-  for (const pane of document.querySelectorAll(".p-splitterpanel")) {
-    const r = visiblePanelRect(pane);
-    if (!r || r.height < 64 || r.bottom <= graph.bottom + 12) continue;
-    if (r.left >= graph.left + graph.width * 0.5) pullRight(r);
-    else pullLeft(r);
-  }
-  if (right - left < 32) return { left: graph.left, right: graph.right };
-  return { left, right };
-}
-
-/** Sidebars span the strip row; the strip slot stays in the graph column. Cleared on hide. */
-function pinStripGrid() {
-  const left = document.getElementById("comfyui-body-left");
-  const right = document.getElementById("comfyui-body-right");
-  const bottom = stripHost();
-  if (left) left.style.gridRow = "2 / -1";
-  if (right) right.style.gridRow = "2 / -1";
-  if (bottom) bottom.style.gridColumn = "2";
-}
-
-function clearStripGrid() {
-  const left = document.getElementById("comfyui-body-left");
-  const right = document.getElementById("comfyui-body-right");
-  const bottom = stripHost();
-  if (left) left.style.gridRow = "";
-  if (right) right.style.gridRow = "";
-  if (bottom) bottom.style.gridColumn = "";
+function clearStripReserve() {
+  document.querySelectorAll("[data-gg-strip-reserve]").forEach(releaseStripReserve);
   if (ownStripEl) {
-    ownStripEl.style.marginLeft = "";
+    ownStripEl.style.left = "";
     ownStripEl.style.width = "";
+    ownStripEl.style.top = "";
+    ownStripEl.style.marginLeft = "";
   }
 }
 
-function applyStripWorkspace() {
-  if (!isOwnStripShown()) return;
-  pinStripGrid();
+function setReserveStyle(el, prop, value) {
+  if (el.style[prop] !== value) el.style[prop] = value;
+}
+
+/** Keep the strip in the graph column and leave that much column height for it. */
+function placeOwnStrip(heightPx) {
   const el = ownStripEl;
-  const host = stripHost();
-  if (!el || !host) return;
-  const hostRect = host.getBoundingClientRect();
-  const bounds = measureStripWorkspace();
-  if (!bounds || hostRect.width < 8) {
-    el.style.marginLeft = "";
-    el.style.width = "100%";
-    return;
+  if (!el || !el.isConnected || el.hidden) return;
+  const column = graphColumnElement();
+  const gutter = column?.querySelector(':scope > [data-testid="graph-canvas-gutter"]') || null;
+  document.querySelectorAll("[data-gg-strip-reserve]").forEach((node) => {
+    if (node !== column && node !== gutter) releaseStripReserve(node);
+  });
+  if (!column) return;
+  const h = Math.max(32, Math.round(Number(heightPx) || 0));
+  setReserveStyle(column, "boxSizing", "border-box");
+  setReserveStyle(column, "minHeight", "0px");
+  setReserveStyle(column, "paddingBottom", `${h}px`);
+  column.dataset.ggStripReserve = "1";
+  if (gutter) {
+    let used = h;
+    for (const child of column.children) {
+      if (child === gutter) continue;
+      used += child.offsetHeight || 0;
+    }
+    const gs = getComputedStyle(gutter);
+    const margin = (parseFloat(gs.marginTop) || 0) + (parseFloat(gs.marginBottom) || 0);
+    const next = Math.max(80, Math.round(column.clientHeight - used - margin));
+    setReserveStyle(gutter, "boxSizing", "border-box");
+    setReserveStyle(gutter, "minHeight", "0px");
+    const current = parseFloat(gutter.style.height);
+    if (!Number.isFinite(current) || Math.abs(current - next) > 1) gutter.style.height = `${next}px`;
+    gutter.dataset.ggStripReserve = "1";
   }
-  const margin = Math.max(0, Math.round(bounds.left - hostRect.left));
-  const room = Math.max(32, Math.round(hostRect.width - margin));
-  const width = Math.min(room, Math.max(32, Math.round(bounds.right - bounds.left)));
-  const slackRight = Math.round(hostRect.right - bounds.right);
-  if (margin > 1 || slackRight > 1) {
-    el.style.marginLeft = `${margin}px`;
-    el.style.width = `${width}px`;
-  } else {
-    el.style.marginLeft = "";
-    el.style.width = "100%";
-  }
+  const box = column.getBoundingClientRect();
+  setReserveStyle(el, "left", `${Math.round(box.left)}px`);
+  setReserveStyle(el, "width", `${Math.max(32, Math.round(box.width))}px`);
+  setReserveStyle(el, "top", `${Math.round(box.bottom - h)}px`);
+  setReserveStyle(el, "marginLeft", "");
 }
 
 let stripWorkspaceObserver = null;
+let stripDomObserver = null;
 let stripWatched = new WeakSet();
 let stripLayoutLock = false;
 
 function stripWatchTargets() {
   const list = [
-    document.getElementById("comfyui-body-left"),
-    document.getElementById("comfyui-body-right"),
     document.getElementById("graph-canvas-container"),
     document.querySelector(".comfyui-body"),
-    document.querySelector(".gg-root.gg-shots"),
+    document.querySelector(".side-tool-bar-container"),
+    document.querySelector(".graph-canvas-panel"),
+    graphColumnElement(),
   ];
   for (const pane of document.querySelectorAll(".p-splitterpanel")) list.push(pane);
   return list.filter(Boolean);
@@ -7553,14 +7533,45 @@ function onStripWorkspaceResize() {
   stripLayoutLock = true;
   try {
     ensureStripObservers();
-    applyStripWorkspace();
+    placeOwnStrip(parseFloat(ownStripEl?.style.height) || desiredStripHeight());
     refreshStripLayoutDependents();
   } finally {
     stripLayoutLock = false;
   }
 }
 
+function stripMutationMatters(node) {
+  if (!node || node.nodeType !== 1) return false;
+  if (node.dataset?.testid === "graph-canvas-gutter") return true;
+  const cls = typeof node.className === "string" ? node.className : "";
+  return /graph-canvas-panel|p-splitter|p-splitterpanel/.test(cls);
+}
+
+function onStripDomMutation(records) {
+  if (stripLayoutLock || !isOwnStripShown()) return;
+  let hit = false;
+  for (const rec of records) {
+    for (const node of rec.addedNodes) {
+      if (stripMutationMatters(node)) { hit = true; break; }
+    }
+    if (hit) break;
+    for (const node of rec.removedNodes) {
+      if (stripMutationMatters(node)) { hit = true; break; }
+    }
+    if (hit) break;
+  }
+  if (!hit) return;
+  const column = graphColumnElement();
+  if (column?.dataset.ggStripReserve === "1" && column.style.paddingBottom) return;
+  onStripWorkspaceResize();
+}
+
 function ensureStripObservers() {
+  const root = document.getElementById("graph-canvas-container");
+  if (root && !stripDomObserver) {
+    stripDomObserver = new MutationObserver((records) => onStripDomMutation(records));
+    stripDomObserver.observe(root, { childList: true, subtree: true });
+  }
   if (!window.ResizeObserver) return;
   if (!stripWorkspaceObserver) {
     stripWorkspaceObserver = new ResizeObserver(() => onStripWorkspaceResize());
@@ -7575,6 +7586,8 @@ function ensureStripObservers() {
 function clearStripObservers() {
   stripWorkspaceObserver?.disconnect();
   stripWorkspaceObserver = null;
+  stripDomObserver?.disconnect();
+  stripDomObserver = null;
   stripWatched = new WeakSet();
 }
 
@@ -7624,7 +7637,7 @@ function applyOwnStripHeight(explicitPx) {
   const next = desiredStripHeight(explicitPx);
   el.style.height = `${next}px`;
   el.style.flex = "0 0 auto";
-  applyStripWorkspace();
+  placeOwnStrip(next);
 }
 
 function ownStripTop() {
@@ -7645,9 +7658,9 @@ function nativeBottomPanelTop() {
 }
 
 /**
- * Lowest edge our overlays may use. The strip is passed only when it overlaps
- * the graph box (fallback). In the normal slot layout the graph already ends
- * above the strip, so this does not shrink the graph a second time.
+ * Lowest edge our overlays may use. The strip counts when it overlaps the
+ * graph box. The graph column padding already ends the canvas above the strip,
+ * so this does not shrink that area a second time unless they still overlap.
  */
 function overlayBottomLimit(graphRect) {
   const caps = [];
@@ -7723,8 +7736,6 @@ function wireOwnStrip(el) {
 
 function ensureOwnStrip() {
   if (ownStripEl) return ownStripEl;
-  const host = stripHost();
-  if (!host) return null;
   const el = document.createElement("div");
   el.className = "gg-bottom-strip";
   el.setAttribute("role", "region");
@@ -7752,24 +7763,21 @@ function ensureOwnStrip() {
   }
   wireOwnStrip(el);
   ownStripEl = el;
-  host.appendChild(el);
+  document.body.appendChild(el);
   syncOwnStripTabs();
-  pinStripGrid();
   return el;
 }
 
 function showOwnStrip(tries = 0) {
   if (!loadTimelineOpen(localStorage)) return;
-  if (!stripHost()) {
+  if (!graphColumnElement()) {
     if (tries < 30) requestAnimationFrame(() => showOwnStrip(tries + 1));
     return;
   }
   const el = ensureOwnStrip();
   if (!el) return;
-  const host = stripHost();
-  if (el.parentElement !== host) host.appendChild(el);
+  if (el.parentElement !== document.body) document.body.appendChild(el);
   el.hidden = false;
-  pinStripGrid();
   ensureStripObservers();
   applyOwnStripHeight();
   syncOwnStripTabs();
@@ -7777,17 +7785,17 @@ function showOwnStrip(tries = 0) {
     if (!isOwnStripShown()) return;
     ensureStripObservers();
     if (loadStripHeightPx() == null) applyOwnStripHeight();
-    else applyStripWorkspace();
+    else placeOwnStrip(parseFloat(el.style.height) || desiredStripHeight());
     refreshStripLayoutDependents();
   });
   refreshStripLayoutDependents();
 }
 
 function hideOwnStrip() {
-  if (!ownStripEl && !document.getElementById("comfyui-body-left")?.style.gridRow) return;
+  if (!ownStripEl && !document.querySelector("[data-gg-strip-reserve]")) return;
   ownStripDrag = null;
   clearStripObservers();
-  clearStripGrid();
+  clearStripReserve();
   ownStripEl?.remove();
   refreshStripLayoutDependents();
 }

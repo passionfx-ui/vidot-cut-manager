@@ -948,8 +948,8 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-app-controls select:disabled { opacity: 0.55; }
 .gg-app-controls input[type="checkbox"] { margin: 0; }
 
-/* I17: our bottom strip. It lives in #comfyui-body-bottom, which is held to the
-   center grid column only while the strip is open, so left and right panels stay full height. */
+/* I18: fixed to the graph column only. Side panels are not in this box.
+   JS sets left, width, and top from that column, and clears them on close. */
 .gg-bottom-strip {
   --gg-bg: #1b1d22;
   --gg-panel: #23262d;
@@ -957,13 +957,13 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
   --gg-fg: #e6e8ec;
   --gg-dim: #9aa0aa;
   --gg-acc: #f2b84b;
+  position: fixed;
+  z-index: 1000;
+  pointer-events: auto;
   flex: 0 0 auto;
-  align-self: flex-start;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  width: 100%;
-  max-width: 100%;
   min-height: 0;
   background: var(--gg-bg);
   color: var(--gg-fg);
