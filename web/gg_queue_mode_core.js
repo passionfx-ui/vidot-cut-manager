@@ -19,6 +19,18 @@ export function saveQueueMode(localStorage, mode) {
   localStorage?.setItem?.(QUEUE_MODE_LS_KEY, normalizeQueueMode(mode));
 }
 
+/**
+ * Options template copied once into a new cut.
+ * Video when that cut is a video cut, or when the Image/Video/Auto toggle is Video.
+ * @param {string | null | undefined} queueMode
+ * @param {string | null | undefined} cutKind
+ * @returns {"image" | "video"}
+ */
+export function templateKindForNewCut(queueMode, cutKind) {
+  if (queueMode === "video" || cutKind === "video") return "video";
+  return "image";
+}
+
 export function queueStripSelectedVid(cut, { picked = "", open = "" } = {}) {
   const ids = (Array.isArray(cut?.versions_list) ? cut.versions_list : [])
     .filter((v) => v && v.id)

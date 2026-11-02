@@ -99,7 +99,17 @@ async def gg_project_create(request):
     if location is not None and not isinstance(location, str):
         return _err(400, "location must be a string")
     try:
-        res = await asyncio.to_thread(gg_native_api.create_native_project, name.strip(), ref or None, settings, location)
+        first_kind = data.get("kind")
+        if first_kind is not None and first_kind not in ("image", "video"):
+            return _err(400, "kind must be image or video")
+        res = await asyncio.to_thread(
+            gg_native_api.create_native_project,
+            name.strip(),
+            ref or None,
+            settings,
+            location,
+            "video" if first_kind == "video" else None,
+        )
     except ValueError as ex:
         return _err(400, str(ex))
     except Exception as ex:  # noqa: BLE001
@@ -827,7 +837,17 @@ async def gg_cut_add_list(request):
     if workflow is not None and not isinstance(workflow, str):
         return _err(400, "workflow must be a string")
     try:
-        res = await asyncio.to_thread(gg_native_api.native_add_cut_list, pid, data.get("cuts"), workflow, after)
+        list_kind = data.get("kind")
+        if list_kind is not None and list_kind not in ("image", "video"):
+            return _err(400, "kind must be image or video")
+        res = await asyncio.to_thread(
+            gg_native_api.native_add_cut_list,
+            pid,
+            data.get("cuts"),
+            workflow,
+            after,
+            "video" if list_kind == "video" else None,
+        )
     except FileNotFoundError:
         return _err(404, "project not found")
     except ValueError as ex:
@@ -896,10 +916,18 @@ async def gg_cut_add(request):
         return _err(400, "group must be a string")
     if after is not None and not isinstance(after, str):
         return _err(400, "after must be a string")
+    kind = data.get("kind")
+    if kind is not None and kind not in ("image", "video"):
+        return _err(400, "kind must be image or video")
     try:
         if gg_native_api.is_native_pid(pid):
             return web.json_response(await asyncio.to_thread(
-                gg_native_api.native_add_cut, pid, group or None, after or None,
+                gg_native_api.native_add_cut,
+                pid,
+                group or None,
+                after or None,
+                True,
+                "video" if kind == "video" else "image",
             ))
         cut = await asyncio.to_thread(gg_data.add_local_cut, pid, group or None, after or None)
         copied = False

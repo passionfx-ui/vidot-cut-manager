@@ -281,11 +281,12 @@ def create_native_project(
     template_ref: str | None = None,
     settings: dict | None = None,
     location: str | None = None,
+    first_kind: str | None = None,
 ) -> dict:
     """Creates the project folder under the chosen location (or ComfyUI's output directory when omitted),
     sets settings.project_folder, and adds only an `assets` subfolder. Name collisions get ' (2)', ' (3)', …
-    The first cut gets one copy of the Image template chosen in options. If that template
-    is missing, the cut starts empty."""
+    The first cut gets one copy of the Image template chosen in options, or the Video template when
+    `first_kind` is "video". If that template is missing, the cut starts empty."""
     name = (name or "").strip()
     if not name:
         raise ValueError("name required")
@@ -301,7 +302,8 @@ def create_native_project(
         folder = make_unique_project_folder(loc, name, created)
     settings = {**(settings or {}), "project_folder": str(folder)}
     store = native_store()
-    first_graph = copy_new_cut_template({"settings": normalize_settings(settings)}, "image")
+    first_kind_name = "video" if first_kind == "video" else "image"
+    first_graph = copy_new_cut_template({"settings": normalize_settings(settings)}, first_kind_name)
     try:
         doc = store.create_project(name, template_ref=ref, template_graph=first_graph, settings=settings)
     except Exception:
@@ -475,7 +477,16 @@ def native_save_groups(pid: str, groups) -> dict | None:
     return store.to_timeline(pid)
 
 
-def native_add_cut(pid: str, group_id: str | None, after: str | None, copy_template: bool = True) -> dict:
+def native_add_cut(
+    pid: str,
+    group_id: str | None,
+    after: str | None,
+    copy_template: bool = True,
+    kind: str | None = None,
+) -> dict:
+    """Add one cut. Image cuts copy the options Image template once. A video cut (`kind` "video")
+    copies the options Video template once, with the same generation width and height.
+    `copy_template` false (file import) copies neither."""
     store = native_store()
     doc = store.get_project(pid)
     if not doc:
@@ -487,7 +498,8 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None, copy_templ
         for cid, c in (before.get("cuts") or {}).items():
             if isinstance(c, dict) and not c.get("deleted_at"):
                 before_ids.add(cid)
-    graph = copy_new_cut_template(doc, "image") if copy_template else None
+    template_kind = "video" if kind == "video" else "image"
+    graph = copy_new_cut_template(doc, template_kind) if copy_template else None
     doc = store.add_cut(pid, scene_id=scene_id, after=after, template_graph=graph)
     new_id = None
     for cid, c in (doc.get("cuts") or {}).items():
@@ -555,9 +567,16 @@ def _assign_scene_groups(store: LocalStore, pid: str, pairs: list[tuple[str, str
     store.sync_scene_groups(pid, groups)
 
 
-def native_add_cut_list(pid: str, cuts, workflow: str | None = None, after: str | None = None) -> dict:
-    """AI Cut Split / AI Make Cut: one cut per entry, each with a copy of the project's Image template with the
-    description in its prompt node. `workflow` is ignored (every cut starts as an image cut)."""
+def native_add_cut_list(
+    pid: str,
+    cuts,
+    workflow: str | None = None,
+    after: str | None = None,
+    kind: str | None = None,
+) -> dict:
+    """AI Cut Split / AI Make Cut: one cut per entry, each with one copy of the options template and the
+    description in its prompt node. Image cuts use the Image template. `kind` "video" uses the Video
+    template the same way. `workflow` is ignored."""
     try:
         from . import gg_ltx
     except ImportError:
@@ -567,7 +586,9 @@ def native_add_cut_list(pid: str, cuts, workflow: str | None = None, after: str 
     if not doc:
         raise ValueError("project not found")
     rows = gg_ltx.validate_cut_list(cuts)
-    base = copy_new_cut_template(doc, "image")
+    template_kind = "video" if kind == "video" else "image"
+    template_label = "Video template" if template_kind == "video" else "Image template"
+    base = copy_new_cut_template(doc, template_kind)
     entries = []
     if base is None:
         for r in rows:
@@ -579,7 +600,7 @@ def native_add_cut_list(pid: str, cuts, workflow: str | None = None, after: str 
                 gg_wfnodes.set_prompt(g, r["prompt"])
                 entries.append({**r, "graph": g})
         except gg_wfnodes.NodeNotFound as ex:
-            raise ValueError(f"Image template: {ex}") from None
+            raise ValueError(f"{template_label}: {ex}") from None
     _remove_pristine_seed_cuts(store, pid, None)
     _doc, ids = store.add_cuts(pid, entries, after=after if isinstance(after, str) and after else None)
     scene_pairs = [
@@ -596,7 +617,8 @@ def native_import_structure(pid: str, payload: dict) -> dict:
     doc = store.get_project(pid)
     if not doc:
         raise ValueError("project not found")
-    graph = copy_new_cut_template(doc, "image")
+    structure_kind = payload.get("kind") if isinstance(payload, dict) else None
+    graph = copy_new_cut_template(doc, "video" if structure_kind == "video" else "image")
     store.import_structure(
         pid,
         payload.get("scenes"),
@@ -1307,11 +1329,11 @@ def native_import_image_cut(
     after: str | None = None,
     group_id: str | None = None,
 ) -> dict:
-    """Import creates a cut. The options template is not copied into it.
+    """Import creates a cut. The options Image and Video templates are not copied into it.
 
     A ComfyUI workflow embedded in the file becomes that cut's workflow.
     With no embedded workflow the cut workflow stays empty. Add cut and a new
-    project's first cut still copy the options template.
+    project's first cut still copy the options template for that cut's kind.
     """
     src = Path(src)
     if src.suffix.lower() not in _MEDIA_KIND:

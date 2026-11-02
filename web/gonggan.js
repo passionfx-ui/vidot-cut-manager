@@ -163,6 +163,7 @@ import {
 import {
   loadQueueMode,
   saveQueueMode,
+  templateKindForNewCut,
   queueBatchPlan,
   queuePlanTooltip,
   QUEUE_MODE_LABELS,
@@ -1201,6 +1202,7 @@ function openNewProjectModal() {
     submitting = true;
     createBtn.disabled = true;
     try {
+      if (templateKindForNewCut(loadQueueMode(localStorage), null) === "video") req.body.kind = "video";
       const d = await postJson("/gonggan/project/create", req.body);
       saveLastLocation(localStorage, location);
       closeProjectModal();
@@ -4629,6 +4631,8 @@ async function addLocalCut() {
   const body = { pid: state.pid };
   if (group) body.group = group;
   if (after) body.after = after;
+  const newKind = templateKindForNewCut(loadQueueMode(localStorage), state.cutId ? workflowKindForCut(cutById(state.cutId)) : null);
+  if (newKind === "video") body.kind = "video";
   const before = snapshotOrderGroups(state.timeline);
   try {
     const d = await postJson("/gonggan/cut/add", body);
@@ -4659,6 +4663,14 @@ async function addLocalCut() {
   }
 }
 
+/** Confirm label for AI Make Cut: Video template when the new cuts are video cuts, otherwise Image. */
+function cutListTemplateForNewCuts(settings) {
+  const kind = templateKindForNewCut(loadQueueMode(localStorage), state.cutId ? workflowKindForCut(cutById(state.cutId)) : null);
+  if (kind === "video") return cutListWorkflow(settings);
+  const ref = String(settings?.image_template || "").trim();
+  return { id: "", label: `Project Image template (${templateLabel(ref)})` };
+}
+
 /**
  * AI Make Cut create path: confirm `Create N cuts?`, then POST /gonggan/cut/add-list (after the last cut).
  * Returns true when the cuts were created; throws on a server error.
@@ -4668,7 +4680,10 @@ async function createCutsFromList(reqPid, cuts, wf) {
   if (state.pid !== reqPid) return false;
   const order = displayedCutIds();
   const before = snapshotOrderGroups(state.timeline);
-  const d = await postJson("/gonggan/cut/add-list", cutListPayload(reqPid, cuts, wf.id, order[order.length - 1]));
+  const listBody = cutListPayload(reqPid, cuts, wf.id, order[order.length - 1]);
+  const listKind = templateKindForNewCut(loadQueueMode(localStorage), state.cutId ? workflowKindForCut(cutById(state.cutId)) : null);
+  if (listKind === "video") listBody.kind = "video";
+  const d = await postJson("/gonggan/cut/add-list", listBody);
   if (d.timeline && adoptMutationTimeline(d.timeline, reqPid)) bus.dispatchEvent(new Event("timeline"));
   else await loadTimeline();
   const ids = d.cut_ids || [];
@@ -4676,7 +4691,8 @@ async function createCutsFromList(reqPid, cuts, wf) {
     recordShotsEntry(reqPid, { kind: "cuts", op: "add", ids, before, after: snapshotOrderGroups(state.timeline) }, ids.length === 1 ? "Add cut" : `Add ${ids.length} cuts`);
     selectCut(ids[0]);
   }
-  ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, "Each cut has the project's Video template with its prompt field set. Select them and press Queue to render in order.", "ok");
+  const listTemplate = listKind === "video" ? "Video" : "Image";
+  ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, `Each cut has the project's ${listTemplate} template with its prompt field set. Select them and press Queue to render in order.`, "ok");
   return true;
 }
 
@@ -4837,7 +4853,7 @@ function openAiCutSplitModal() {
       return;
     }
     try {
-      if (await createCutsFromList(state.pid, result.cuts, cutListWorkflow(state.timeline?.project?.settings))) {
+      if (await createCutsFromList(state.pid, result.cuts, cutListTemplateForNewCuts(state.timeline?.project?.settings))) {
         if (result.id) localStorage.setItem(aiMakeCutUsedStorageKey(state.pid), result.id);
         clearAiMakeCutJob(localStorage, state.pid);
         result = null;
@@ -5211,6 +5227,8 @@ async function addCutAfter(cutId) {
   const body = { pid: state.pid };
   if (after) body.after = after;
   if (group) body.group = group;
+  const addedKind = templateKindForNewCut(loadQueueMode(localStorage), workflowKindForCut(cutById(cutId)));
+  if (addedKind === "video") body.kind = "video";
   const before = snapshotOrderGroups(state.timeline);
   try {
     const d = await postJson("/gonggan/cut/add", body);
@@ -5842,6 +5860,8 @@ async function addEmptySceneNow() {
 async function addCutToScene(groupId) {
   if (!state.pid) return;
   const body = { pid: state.pid, group: groupId };
+  const sceneKind = templateKindForNewCut(loadQueueMode(localStorage), state.cutId ? workflowKindForCut(cutById(state.cutId)) : null);
+  if (sceneKind === "video") body.kind = "video";
   const before = snapshotOrderGroups(state.timeline);
   try {
     const d = await postJson("/gonggan/cut/add", body);
