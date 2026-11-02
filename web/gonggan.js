@@ -172,6 +172,7 @@ import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
 import {
   graphFitsKind,
   shouldTryEmbeddedRepWorkflow,
+  workflowGraphKind,
   workflowSourceToastDetail,
   VERSION_WF_MISSING,
   findCutVersion,
@@ -3325,6 +3326,10 @@ let wfLastLoadedWorkflowKey = "";
 let wfLastLoadedStructureKey = "";
 /** True while cut data is being written into the open graph (autosave must not treat that as an edit). */
 let ggApplyingCutData = false;
+/** Held for a whole cut switch so the outgoing prompt cannot be saved onto the incoming cut. */
+let ggCutDataLock = 0;
+/** Uploaded Load Image name for the video queue currently being serialized. */
+let ggQueuedStartFile = "";
 /** Snapshot taken just before queuePrompt, attached to the returned prompt_id. */
 let ggPendingQueueSnap = null;
 /** Per-cut negative prompt, seed, input image, and frames. Positive prompt stays on the cut. */
@@ -3864,7 +3869,7 @@ function readCutData(cut) {
   if (frames == null || frames === "") frames = framesForSeconds(cutGenerationSec(cut), 24);
   frames = frames != null && frames !== "" ? Number(frames) : null;
   return {
-    positive: cutGenerationPromptText(cut),
+    positive: cut?.prompt != null ? String(cut.prompt) : "",
     negative: row.negative != null ? String(row.negative) : String(cut?.negative || ""),
     seed: Number.isFinite(seed) ? seed : null,
     inputImage: inputImage || "",
@@ -3937,11 +3942,24 @@ function liveNodeById(id) {
 function setLiveTextNode(id, text) {
   const node = liveNodeById(id);
   if (!node) return;
+  const value = text == null ? "" : String(text);
   const widgets = node.widgets || [];
   const w = widgets.find((x) => x && (x.name === "text" || x.name === "prompt"))
     || widgets.find((x) => x && typeof x.value === "string");
-  if (!w) return;
-  w.value = text == null ? "" : String(text);
+  if (w) {
+    w.value = value;
+    const el = w.element || w.inputEl;
+    if (el && "value" in el && el.value !== value) el.value = value;
+  }
+  if (Array.isArray(node.widgets_values)) {
+    const i = node.widgets_values.findIndex((v) => typeof v === "string");
+    if (i >= 0) node.widgets_values[i] = value;
+  }
+  const named = node.widgets_values_named;
+  if (named && typeof named === "object" && !Array.isArray(named)) {
+    if (typeof named.text === "string") named.text = value;
+    if (typeof named.prompt === "string") named.prompt = value;
+  }
 }
 
 function setLiveSeedNodes(ids, seed) {
@@ -3985,7 +4003,7 @@ function syncPromptFieldFromGraph(cutId, text) {
 }
 
 function syncPromptNodeFromField(cutId, text) {
-  if (ggApplyingCutData) return;
+  if (ggApplyingCutData || ggCutDataLock) return;
   if (wfLastLoadedCutId !== cutId || wfLastLoadedProjectId !== state.pid) return;
   if (!isGongganShotTabOpenAndActive()) return;
   const snap = captureGraphWorkflowSnapshot();
@@ -4044,7 +4062,7 @@ async function applyLiveCutData(cut, data, loadToken) {
 }
 
 async function persistOpenGraphEdits() {
-  if (ggApplyingCutData) return true;
+  if (ggApplyingCutData || ggCutDataLock) return true;
   const cutId = app.graph?.extra?.gonggan?.cutId || "";
   if (!cutId || cutId !== wfLastLoadedCutId || wfLastLoadedProjectId !== state.pid) return true;
   if (!isGongganShotTabOpenAndActive()) return true;
@@ -4104,6 +4122,8 @@ async function openCutOnSharedTemplate(cutId, cutRec, loadToken) {
     ggToast("Auto-save failed. Switch cancelled.", "Could not save this cut. Press Ctrl+S, then switch again.", "warn");
     return "stale";
   }
+  ggCutDataLock++;
+  try {
   const data = readCutData(cutRec);
   const structKey = structureKeyOf(template);
   const openWf = ggOwnedShotWorkflow;
@@ -4120,6 +4140,7 @@ async function openCutOnSharedTemplate(cutId, cutRec, loadToken) {
     await applyLiveCutData(cutRec, data, loadToken);
     if (isLoadTokenStale(loadToken)) return "stale";
     wfLastLoadedStructureKey = structKey;
+    markGraphGongganCut(cutId);
     return "ok";
   }
   const filled = applyCutData(cloneGraph(template), data);
@@ -4130,12 +4151,17 @@ async function openCutOnSharedTemplate(cutId, cutRec, loadToken) {
   markWorkflowLoadComplete(cutId, cutRec, null, kind);
   wfLastLoadedWorkflowKey = structKey;
   wfLastLoadedStructureKey = structKey;
+  markGraphGongganCut(cutId);
   await applyLiveCutData(cutRec, data, loadToken);
   if (isLoadTokenStale(loadToken)) return "stale";
+  markGraphGongganCut(cutId);
   const shown = tabNameForCut(cutRec);
   if (shown && ggOwnedShotWorkflow) ggOwnedShotWorkflow.ggCutDisplayName = shown;
   paintShotTabLabelNow(cutRec);
   return "ok";
+  } finally {
+    ggCutDataLock--;
+  }
 }
 
 async function loadCutWorkflow(cutId, cut, loadToken) {
@@ -8441,14 +8467,42 @@ async function captureFinishedPrompt(promptId) {
     runSnapshots.byVersion[d.version.id] = snap;
     scheduleRunSnapFile();
   }
-  if (d?.ok && !d.duplicate && state.pid === t.projectId) await loadTimeline({ reloadWorkflows: true });
+  if (d?.ok && !d.duplicate && state.pid === t.projectId) {
+    await loadTimeline({ reloadWorkflows: true });
+    if (d.version?.id) selectArrivedVersion(t.projectId, t.cutId, d.version.id);
+  }
+}
+
+/** A finished render becomes the cut's selected output (thumbnail + timeline). Best is unchanged. */
+function selectArrivedVersion(pid, cutId, vid) {
+  if (!pid || !cutId || !vid || state.pid !== pid) return;
+  const cut = cutById(cutId);
+  if (!cut || !(cut.versions_list || []).some((v) => v && v.id === vid)) return;
+  Object.assign(stripPick, { pid, cutId, vid });
+  if (applyDisplayVersionLocally(cut, vid)) {
+    bus.dispatchEvent(new Event("timeline"));
+    clearTimeout(ed.saveTimer);
+    void saveEdit();
+  }
+  bus.dispatchEvent(new Event("select"));
 }
 
 api.addEventListener("gonggan.regen", (e) => {
   const j = e.detail || {};
   syncRegenJobFromServer(j);
   const shown = !j.native || state.pid === j.pid;
-  if (j.status === "done") { sdk.msg = `New version from SDK job ${j.sdk_job_id || ""}`; if (shown) loadTimeline({ reloadWorkflows: true }); }
+  if (j.status === "done") {
+    sdk.msg = `New version from SDK job ${j.sdk_job_id || ""}`;
+    if (shown) {
+      const pid = j.pid || state.pid;
+      const cutId = j.cut_id || "";
+      loadTimeline({ reloadWorkflows: true }).then(() => {
+        const cut = cutId ? cutById(cutId) : null;
+        const vid = j.version_id || j.version?.id || cut?.versions_list?.[0]?.id || "";
+        if (vid) selectArrivedVersion(pid, cutId, vid);
+      }).catch(() => {});
+    }
+  }
   else if (j.status === "error") sdk.msg = "SDK job failed: " + (j.error || "");
   else if (j.status === "running") sdk.msg = "SDK job running…";
   const cut = shown && j.native ? cutById(j.cut_id) : null;
@@ -8666,10 +8720,17 @@ function liveStartImageNode() {
 
 function setLiveLoadImageWidget(node, imageName) {
   const widget = findImageWidget(node);
-  if (!widget) return false;
+  const name = String(imageName || "").trim();
+  if (!widget || !name) return false;
   const values = widget.options?.values;
-  if (Array.isArray(values) && !values.includes(imageName)) values.push(imageName);
-  widget.value = imageName;
+  if (Array.isArray(values) && !values.includes(name)) values.push(name);
+  widget.value = name;
+  if (Array.isArray(node.widgets_values)) {
+    if (node.widgets_values.length) node.widgets_values[0] = name;
+    else node.widgets_values = [name, "image"];
+  }
+  const named = node.widgets_values_named;
+  if (named && typeof named === "object" && !Array.isArray(named)) named.image = name;
   try { app.canvas?.setDirty?.(true, true); } catch (_) {}
   return true;
 }
@@ -8739,23 +8800,64 @@ function rememberRunSnapshot(promptId, snap) {
   scheduleRunSnapFile();
 }
 
+/** The open graph is a video workflow (shared video template), even if the cut's current media is a still. */
+function queueGraphIsVideo(cut) {
+  if (workflowKindForCut(cut) === "video" || wfLastLoadedKind === "video") return true;
+  try {
+    return workflowGraphKind(captureGraphWorkflowSnapshot()) === "video";
+  } catch (_) {
+    return false;
+  }
+}
+
+/** Write the uploaded still into the API prompt ComfyUI is about to send. */
+function patchQueuedStartImage(prompt, imageName) {
+  const output = prompt?.output;
+  const name = String(imageName || "").trim();
+  if (!output || !name) return;
+  const rows = [];
+  for (const [id, node] of Object.entries(output)) {
+    if (!node || node.class_type !== "LoadImage") continue;
+    rows.push({ id: String(id), node, title: String(node._meta?.title || "").trim().toLowerCase() });
+  }
+  if (!rows.length) return;
+  rows.sort((a, b) => {
+    const na = /^\d+$/.test(a.id) ? Number(a.id) : Number.MAX_SAFE_INTEGER;
+    const nb = /^\d+$/.test(b.id) ? Number(b.id) : Number.MAX_SAFE_INTEGER;
+    return na - nb || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  });
+  const titled = rows.filter((r) => r.title === "start image");
+  const hit = titled.length === 1 ? titled[0] : titled.length ? null : rows[0];
+  if (!hit) return;
+  const inputs = hit.node.inputs && typeof hit.node.inputs === "object" ? hit.node.inputs : (hit.node.inputs = {});
+  if (!Array.isArray(inputs.image)) inputs.image = name;
+  const wfNode = Array.isArray(prompt.workflow?.nodes)
+    ? prompt.workflow.nodes.find((n) => n && String(n.id) === hit.id)
+    : null;
+  if (!wfNode) return;
+  if (Array.isArray(wfNode.widgets_values) && wfNode.widgets_values.length) wfNode.widgets_values[0] = name;
+  const named = wfNode.widgets_values_named;
+  if (named && typeof named === "object" && !Array.isArray(named)) named.image = name;
+}
+
 /** Re-inject this cut's prompt and seed (and, for video, its selected image) before the graph is queued. */
 async function injectCutDataForQueue() {
   ggPendingQueueSnap = null;
   const extra = app.graph?.extra?.gonggan;
   const cutId = extra?.cutId;
   const pid = extra?.pid || extra?.projectId;
-  if (!cutId || !pid || pid !== state.pid || !isNativeProject() || !isGongganShotTabOpenAndActive()) return true;
+  if (!cutId || !pid || pid !== state.pid || !isNativeProject()) return true;
+  if (!isGongganShotTabOpenAndActive() && wfLastLoadedCutId !== cutId) return true;
   await persistOpenGraphEdits();
   const cut = cutById(cutId);
   if (!cut) return true;
-  const kind = workflowKindForCut(cut);
+  const video = queueGraphIsVideo(cut);
   const snap = captureGraphWorkflowSnapshot();
   if (!snap || !hasPromptNode(snap)) {
     ggToast("Cannot queue", PROMPT_NODE_MISSING, "warn");
     return false;
   }
-  if (kind === "video" && !hasLoadImageNode(snap)) {
+  if (video && !hasLoadImageNode(snap)) {
     ggToast("Cannot queue", LOAD_IMAGE_NODE_MISSING, "warn");
     return false;
   }
@@ -8769,12 +8871,13 @@ async function injectCutDataForQueue() {
     if (ids.negativeId) setLiveTextNode(ids.negativeId, data.negative);
     setLiveSeedNodes(ids.seedIds, seed);
     if (data.frames != null) setLiveFrames(ids.lengthId, data.frames);
-    if (kind === "video") {
-      await feedVideoCutStartImage();
+    ggQueuedStartFile = "";
+    if (video) {
+      ggQueuedStartFile = await feedVideoCutStartImage() || "";
       const selected = findCutVersion(cut, stripSelectedVersionId(cut));
-      if (!isStillVersion(selected) && isImageFileName(data.inputImage)) {
+      if (!ggQueuedStartFile && !isStillVersion(selected) && isImageFileName(data.inputImage)) {
         const node = liveStartImageNode();
-        if (node) setLiveLoadImageWidget(node, data.inputImage);
+        if (node && setLiveLoadImageWidget(node, data.inputImage)) ggQueuedStartFile = data.inputImage;
       }
     } else if (isImageFileName(data.inputImage)) {
       const node = liveNodeById(ids.imageId) || liveStartImageNode();
@@ -8787,7 +8890,7 @@ async function injectCutDataForQueue() {
   }
   rememberCutExtra(cutId, { seed, negative: data.negative });
   let inputImage = "";
-  if (kind === "video") {
+  if (video) {
     const ver = findCutVersion(cut, stripSelectedVersionId(cut));
     if (isStillVersion(ver)) inputImage = ver.id;
   }
@@ -8816,29 +8919,31 @@ async function feedVideoCutStartImage() {
   const extra = app.graph?.extra?.gonggan;
   const cutId = extra?.cutId;
   const pid = extra?.pid || extra?.projectId;
-  if (!cutId || !pid || pid !== state.pid || !isNativeProject()) return;
+  if (!cutId || !pid || pid !== state.pid || !isNativeProject()) return "";
   const cut = cutById(cutId);
-  if (!cut || workflowKindForCut(cut) !== "video") return;
+  if (!cut || !queueGraphIsVideo(cut)) return "";
   const ver = findCutVersion(cut, stripSelectedVersionId(cut));
   if (!isStillVersion(ver)) {
     console.warn("[gonggan] video queue: no selected image result; queuing without a start frame", cutId);
-    return;
+    return "";
   }
   const node = liveStartImageNode();
   if (!node) {
     console.warn("[gonggan] video queue: no Load Image node; queuing without a start frame", cutId);
-    return;
+    return "";
   }
   let imageName = "";
   try {
     imageName = await copyVersionImageToInput(ver.id);
   } catch (e) {
     console.warn("[gonggan] video queue: could not copy the selected image; queuing as before", cutId, e);
-    return;
+    return "";
   }
   if (!setLiveLoadImageWidget(node, imageName)) {
     console.warn("[gonggan] video queue: Load Image has no image widget; queuing as before", cutId);
+    return "";
   }
+  return imageName;
 }
 
 /** Selected version of the row for this cut (see stripSelectedVid). */
@@ -11609,7 +11714,7 @@ function mountTimeline(el) {
     const ruler = $r(".gg-ruler");
     if (!ruler) return;
     ed.scrubbing = true;
-    ed.scrubResumePlay = play.on;
+    ed.scrubResumePlay = false;
     if (play.on) {
       bumpPlaybackGen(play);
       play.on = false;
@@ -11667,12 +11772,10 @@ function mountTimeline(el) {
       window.removeEventListener("pointercancel", end);
       try { overlay.releasePointerCapture(ev.pointerId); } catch (_) {}
       overlay.remove();
-      const resume = ed.scrubResumePlay;
       ed.scrubResumePlay = false;
       go(ev.clientX || e.clientX);
       paintPlayTransport();
       showFrame(true);
-      if (resume) startPlay();
     };
     try { overlay.setPointerCapture(e.pointerId); } catch (_) {}
     window.addEventListener("pointermove", move);
@@ -12114,14 +12217,36 @@ app.registerExtension({
           ok = await injectCutDataForQueue();
         } catch (e) {
           console.warn("[gonggan] queue inject failed; queuing as before", e);
+          ggQueuedStartFile = "";
         }
         if (!ok) {
           ggApplyingCutData = false;
+          ggQueuedStartFile = "";
           return {};
         }
+        const prevGraphToPrompt = app.graphToPrompt;
+        app.graphToPrompt = async function ggQueueGraphToPrompt(...gargs) {
+          const pending = ggPendingQueueSnap;
+          if (pending) {
+            const live = captureGraphWorkflowSnapshot();
+            const ids = live ? cutSlotIds(live) : null;
+            if (ids?.promptId) setLiveTextNode(ids.promptId, pending.positive);
+            if (ids?.negativeId) setLiveTextNode(ids.negativeId, pending.negative);
+            if (pending.seed != null) setLiveSeedNodes(ids?.seedIds, pending.seed);
+          }
+          if (ggQueuedStartFile) {
+            const node = liveStartImageNode();
+            if (node) setLiveLoadImageWidget(node, ggQueuedStartFile);
+          }
+          const result = await prevGraphToPrompt.apply(app, gargs);
+          if (ggQueuedStartFile) patchQueuedStartImage(result, ggQueuedStartFile);
+          return result;
+        };
         try {
           return await origQueue(...args);
         } finally {
+          app.graphToPrompt = prevGraphToPrompt;
+          ggQueuedStartFile = "";
           restoreSeedControls(ggPendingQueueSnap?.controls);
           if (ggPendingQueueSnap) ggPendingQueueSnap.controls = null;
           ggApplyingCutData = false;

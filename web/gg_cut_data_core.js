@@ -114,7 +114,32 @@ export function findNegativeSlot(graph) {
   return null;
 }
 
+/** ComfyUI restores widgets_values_named over the array, so the named text is the one that shows. */
+function namedTextValue(node) {
+  const named = node?.widgets_values_named;
+  if (!named || typeof named !== "object" || Array.isArray(named)) return null;
+  for (const k of TEXT_KEYS) if (typeof named[k] === "string") return named[k];
+  return null;
+}
+
+function writeNamedText(node, value) {
+  const named = node?.widgets_values_named;
+  if (!named || typeof named !== "object" || Array.isArray(named)) return;
+  let wrote = false;
+  for (const k of TEXT_KEYS) {
+    if (typeof named[k] === "string") {
+      named[k] = value;
+      wrote = true;
+    }
+  }
+  if (!wrote && ("text" in named || "prompt" in named)) {
+    named["text" in named ? "text" : "prompt"] = value;
+  }
+}
+
 function readText(node) {
+  const named = namedTextValue(node);
+  if (named != null) return named;
   const wv = node?.widgets_values;
   if (Array.isArray(wv)) {
     const s = wv.find((v) => typeof v === "string");
@@ -132,6 +157,7 @@ function readText(node) {
 
 function writeText(node, text) {
   const value = text == null ? "" : String(text);
+  writeNamedText(node, value);
   const wv = node?.widgets_values;
   if (Array.isArray(wv)) {
     const i = wv.findIndex((v) => typeof v === "string");
