@@ -802,10 +802,81 @@ function fillHistoryList(list) {
 }
 
 function historyListHtml() {
-  return `<div class="gg-history" aria-label="History">
-    <div class="gg-history-title">History</div>
-    <div class="gg-history-list" role="listbox"></div>
-  </div>`;
+  return `<div class="gg-history-title">History</div>
+    <div class="gg-history-list" role="listbox"></div>`;
+}
+
+let historyPopCleanup = null;
+
+function closeHistoryPopover() {
+  if (historyPopCleanup) {
+    historyPopCleanup();
+    historyPopCleanup = null;
+  }
+  document.querySelectorAll(".gg-history-pop").forEach((el) => el.remove());
+}
+
+function positionHistoryPopover(pop, btn) {
+  const pad = 6;
+  const r = btn.getBoundingClientRect();
+  const w = pop.offsetWidth;
+  const h = pop.offsetHeight;
+  let left = r.right - w;
+  let top = r.bottom + 4;
+  if (left < pad) left = pad;
+  if (left + w > window.innerWidth - pad) left = window.innerWidth - w - pad;
+  if (top + h > window.innerHeight - pad) top = r.top - h - 4;
+  if (top < pad) top = pad;
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.top = `${Math.round(top)}px`;
+}
+
+function openHistoryPopover(btn) {
+  const root = btn.closest(".gg-root");
+  if (!root) return;
+  closeHistoryPopover();
+  const pop = document.createElement("div");
+  pop.className = "gg-history gg-history-pop";
+  pop.setAttribute("role", "dialog");
+  pop.setAttribute("aria-label", "History");
+  pop.innerHTML = historyListHtml();
+  root.appendChild(pop);
+  pop.addEventListener("mousedown", (e) => e.stopPropagation());
+  const list = pop.querySelector(".gg-history-list");
+  fillHistoryList(list);
+  list?.addEventListener("click", (e) => {
+    const step = e.target.closest?.(".gg-history-step");
+    if (!step) return;
+    e.stopPropagation();
+    const index = Number(step.dataset.histIndex);
+    if (!Number.isFinite(index)) return;
+    void jumpProjectHistory(index);
+  });
+  positionHistoryPopover(pop, btn);
+  btn.setAttribute("aria-expanded", "true");
+  const onKey = (e) => {
+    if (e.key !== "Escape") return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeHistoryPopover();
+  };
+  const onPointer = (e) => {
+    if (e.target.closest?.(".gg-history-pop") || e.target.closest?.(".gg-history-btn")) return;
+    closeHistoryPopover();
+  };
+  document.addEventListener("keydown", onKey, true);
+  document.addEventListener("mousedown", onPointer, true);
+  historyPopCleanup = () => {
+    document.removeEventListener("keydown", onKey, true);
+    document.removeEventListener("mousedown", onPointer, true);
+    btn.setAttribute("aria-expanded", "false");
+    pop.remove();
+  };
+}
+
+function toggleHistoryPopover(btn) {
+  if (btn.closest(".gg-root")?.querySelector(".gg-history-pop")) closeHistoryPopover();
+  else openHistoryPopover(btn);
 }
 
 function noteHistoryDropped(rows) {
@@ -8723,8 +8794,8 @@ function mountShots(el) {
       </div>
       <div class="gg-meta">
         <span class="gg-meta-text">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</span>
+        <button type="button" class="gg-btn gg-history-btn" title="History" aria-label="History" aria-haspopup="dialog" aria-expanded="false">History</button>
       </div>
-      ${state.pid ? historyListHtml() : ""}
       <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${listHtml}</div>
       <div class="gg-final-wrap"${viewFinal ? "" : " hidden"}>${viewFinal && tl ? finalCutListHtml(tl) : ""}</div>
       ${SHOW_SEL_BAR ? `<div class="gg-selbar">
@@ -8789,18 +8860,13 @@ function mountShots(el) {
         paintPanel();
       });
     });
-    const histList = root.querySelector(".gg-history-list");
-    if (histList) {
-      fillHistoryList(histList);
-      histList.addEventListener("click", (e) => {
-        const btn = e.target.closest?.(".gg-history-step");
-        if (!btn) return;
-        e.stopPropagation();
-        const index = Number(btn.dataset.histIndex);
-        if (!Number.isFinite(index)) return;
-        void jumpProjectHistory(index);
-      });
-    }
+    closeHistoryPopover();
+    const historyBtn = root.querySelector(".gg-history-btn");
+    historyBtn?.addEventListener("mousedown", (e) => e.stopPropagation());
+    historyBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleHistoryPopover(e.currentTarget);
+    });
     syncTimelineToggleButtons();
     root.querySelector(".gg-timeline-toggle")?.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -9194,6 +9260,7 @@ function mountShots(el) {
   document.addEventListener("keydown", onShotsKey);
   window.addEventListener("keydown", onShotsSelectAllKey, true);
   return () => {
+    closeHistoryPopover();
     shotsUi.inlineRename?.finish(true);
     shotsUi.inlineSceneRename?.finish(true);
     shotsUi.composing = false;
