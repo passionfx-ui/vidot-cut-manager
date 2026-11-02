@@ -279,6 +279,7 @@ import {
   bumpPlaybackGen,
   decideVideoSync,
   guardResolvedPlay,
+  animatedStillMode,
   pauseAllTimelineMedia,
   scheduleVideoPlay,
   registerTimelineMedia,
@@ -286,8 +287,6 @@ import {
   tickIsCurrent,
 } from "./gg_playback_core.js";
 import {
-  animatedScrubFrameIndex,
-  animatedViewerMode,
   decideVideoSyncScrub,
   edgeScrollSpeed,
   followPlayheadScroll,
@@ -301,8 +300,7 @@ import {
   timelineClipTypeBadgeHtml,
   timelineClipTypeClassSuffix,
 } from "./gg_timeline_clip_type_core.js";
-import { animatedWebpFrameBytes, parseAnimatedWebp } from "./gg_webp_anim_core.js";
-import { noMediaText, noMediaThumbClass, playsAsVideo, isAnimatedImage, versionMedia } from "./gg_missing_media_core.js";
+import { noMediaText, noMediaThumbClass, playsAsVideo, versionMedia } from "./gg_missing_media_core.js";
 import {
   needsDurationProbe,
   formatClipDuration,
@@ -10223,163 +10221,46 @@ function showFrame(force) {
     } catch (_) {}
     if (play.on && !ed.scrubbing && viewer?.box) viewer.box.dataset.ggFrame = "";
   }
-  syncAnimatedStill(c, local);
-  if (c && isAnimatedImage(c.media)) {
-    const cache = animScrubBytesCache.get(mediaUrl(c.media.id));
-    const idx = computeScrubFrameIndex(c, local, cache?.ready ? cache : null);
-    if (idx != null) setPreviewFrameIndex(idx);
-  }
+  syncAnimatedStill(c);
   paintHead();
   refreshEditPreviewStill(c);
 }
-
-const animScrubBytesCache = new Map();
-let animScrubPaintGen = 0;
 
 function setPreviewFrameIndex(frameIndex) {
   if (!viewer?.box) return;
   viewer.box.dataset.ggFrame = previewFrameAttr(frameIndex);
 }
 
-function scrubFrameCount(c) {
-  const n = Number(c?.media?.frames);
-  if (n > 0) return n | 0;
-  return 0;
-}
-
-function scrubMetaForFrameIndex(c, local, cache) {
-  return {
-    localSec: local,
-    clipIn: c.in,
-    clipSec: c.sec,
-    sourceSeconds: c.media?.seconds,
-    srcDur: c.src_dur,
-    mediaFrames: scrubFrameCount(c),
-    cacheFrameCount: cache?.frameCount,
-    durationsMs: cache?.durationsMs ?? cache?.parsed?.durationsMs,
-  };
-}
-
-function computeScrubFrameIndex(c, local, cache) {
-  if (!c || !isAnimatedImage(c.media)) return null;
-  return animatedScrubFrameIndex(scrubMetaForFrameIndex(c, local, cache));
-}
-
-async function ensureAnimScrubCache(url, c) {
-  let cache = animScrubBytesCache.get(url);
-  if (cache?.ready) return cache;
-  if (!cache) {
-    cache = {
-      buf: null,
-      parsed: null,
-      decoder: null,
-      frameCount: scrubFrameCount(c),
-      durationsMs: null,
-      ready: false,
-      loading: null,
-    };
-    animScrubBytesCache.set(url, cache);
-  }
-  if (!cache.loading) {
-    cache.loading = (async () => {
-      const res = await fetch(url);
-      const buf = await res.arrayBuffer();
-      cache.buf = buf;
-      cache.parsed = parseAnimatedWebp(buf);
-      if (cache.parsed) {
-        cache.durationsMs = cache.parsed.durationsMs;
-        if (!cache.frameCount) cache.frameCount = cache.parsed.frames;
-      }
-      if (typeof ImageDecoder !== "undefined") {
-        try {
-          cache.decoder = new ImageDecoder({ data: buf, type: "image/webp" });
-          await cache.decoder.completed;
-          const n = cache.decoder.tracks?.selectedTrack?.frameCount;
-          if (n > 0) cache.frameCount = n;
-        } catch (_) {
-          cache.decoder = null;
-        }
-      }
-      if (!cache.frameCount && cache.parsed) cache.frameCount = cache.parsed.frames;
-      cache.ready = true;
-    })();
-  }
-  await cache.loading;
-  return cache;
-}
-
-async function decodeAnimatedScrubFrame(cache, frameIdx) {
-  const frameCount = Math.max(1, cache.frameCount || cache.parsed?.frames || 1);
-  const idx = Math.min(frameCount - 1, Math.max(0, frameIdx | 0));
-  if (cache.decoder) {
-    const result = await cache.decoder.decode({ frameIndex: idx });
-    try {
-      return { bmp: await createImageBitmap(result.image), frameIdx: idx };
-    } finally {
-      result.image.close?.();
-    }
-  }
-  const bytes = cache.parsed?.frameWebps?.[idx] ?? animatedWebpFrameBytes(cache.buf, idx);
-  if (!bytes) throw new Error("frame unavailable");
-  const bmp = await createImageBitmap(new Blob([bytes], { type: "image/webp" }));
-  return { bmp, frameIdx: idx };
-}
-
-async function paintAnimatedScrubFrame(c, local) {
-  if (!viewer?.still || !c?.media || !isAnimatedImage(c.media)) return;
-  const url = mediaUrl(c.media.id);
-  let cache = animScrubBytesCache.get(url);
-  const idxEarly = computeScrubFrameIndex(c, local, cache?.ready ? cache : null);
-  const { still } = viewer;
-  if (idxEarly != null) {
-    const key = `${url}#${idxEarly}`;
-    if (still._ggKey === key && !still.hidden) {
-      setPreviewFrameIndex(idxEarly);
-      mirrorEditPreviewFrame(still, idxEarly);
-      return;
-    }
-  }
-  const gen = ++animScrubPaintGen;
-  try {
-    cache = await ensureAnimScrubCache(url, c);
-    if (gen !== animScrubPaintGen || !viewer) return;
-    const idx = computeScrubFrameIndex(c, local, cache);
-    if (idx == null) return;
-    const key = `${url}#${idx}`;
-    if (still._ggKey === key && !still.hidden) {
-      setPreviewFrameIndex(idx);
-      mirrorEditPreviewFrame(still, idx);
-      return;
-    }
-    const { bmp, frameIdx } = await decodeAnimatedScrubFrame(cache, idx);
-    if (gen !== animScrubPaintGen || !viewer) {
-      bmp.close?.();
-      return;
-    }
-    still.width = bmp.width;
-    still.height = bmp.height;
-    still.getContext("2d").drawImage(bmp, 0, 0);
-    still.hidden = false;
-    still._ggKey = key;
-    mirrorEditPreviewFrame(still, frameIdx);
-    bmp.close?.();
-    setPreviewFrameIndex(frameIdx);
-  } catch (_) {}
-}
-
-/** Animated WebP/GIF clips: playhead-synced decoded frame on canvas (paused, scrub, playback). */
-function syncAnimatedStill(c, local) {
+/**
+ * Animated WebP/GIF "video" versions are drawn with <img>, which has no pause():
+ * the browser keeps animating it no matter what the transport does. While stopped,
+ * show a frozen canvas copy of the current frame instead of the live <img>.
+ */
+function syncAnimatedStill(c) {
   if (!viewer || !viewer.still) return;
   const { img, still } = viewer;
-  const mode = animatedViewerMode(c && c.media, play.on, viewer.mode === "export", ed.scrubbing);
-  if (mode !== "canvas") {
+  const mode = animatedStillMode(c && c.media, play.on, viewer.mode === "export");
+  if (mode !== "freeze") {
     if (!still.hidden) still.hidden = true;
     still._ggKey = "";
-    setPreviewFrameIndex(null);
+    if (mode === "animate" && img.dataset.src) img.hidden = false;
     return;
   }
-  img.hidden = true;
-  paintAnimatedScrubFrame(c, local);
+  const key = img.dataset.src + "|" + play.gen;
+  if (still._ggKey === key && !still.hidden) { img.hidden = true; return; }
+  const draw = () => {
+    if (!img.naturalWidth) return false;
+    still.width = img.naturalWidth;
+    still.height = img.naturalHeight;
+    try { still.getContext("2d").drawImage(img, 0, 0); } catch (_) { return false; }
+    still._ggKey = key;
+    still.hidden = false;
+    img.hidden = true;
+    return true;
+  };
+  if (!(img.complete && draw())) {
+    img.addEventListener("load", () => { if (!play.on) syncAnimatedStill(trackClips()[play.idx]); }, { once: true });
+  }
 }
 
 /** Copy the timeline's decoded frame onto the Edit overlay. The in-panel canvas is display:none in Edit mode. */
@@ -11571,13 +11452,17 @@ function mountTimeline(el) {
     const edgeKick = () => { if (!edgeRaf) edgeRaf = requestAnimationFrame(edgeStep); };
     go(e.clientX);
     const move = (ev) => { lastX = ev.clientX; go(lastX); edgeKick(); };
+    let ended = false;
     const end = (ev) => {
+      if (ended) return;
+      ended = true;
       ed.scrubbing = false;
       if (edgeRaf) cancelAnimationFrame(edgeRaf);
       edgeRaf = 0;
-      overlay.removeEventListener("pointermove", move);
-      overlay.removeEventListener("pointerup", end);
-      overlay.removeEventListener("pointercancel", end);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("mouseup", end);
+      window.removeEventListener("pointercancel", end);
       try { overlay.releasePointerCapture(ev.pointerId); } catch (_) {}
       overlay.remove();
       const resume = ed.scrubResumePlay;
@@ -11588,9 +11473,10 @@ function mountTimeline(el) {
       if (resume) startPlay();
     };
     try { overlay.setPointerCapture(e.pointerId); } catch (_) {}
-    overlay.addEventListener("pointermove", move);
-    overlay.addEventListener("pointerup", end);
-    overlay.addEventListener("pointercancel", end);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("mouseup", end);
+    window.addEventListener("pointercancel", end);
   };
   $r(".gg-ruler").addEventListener("pointerdown", beginTimelineScrub);
   const headLine = $r(".gg-head-line");
