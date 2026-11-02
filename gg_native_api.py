@@ -59,6 +59,14 @@ NATIVE_UNAVAILABLE = "Not available for this project type yet"
 _STORE: LocalStore | None = None
 
 
+def _history():
+    try:
+        from .gg_project import history as history_mod
+    except ImportError:
+        from gg_project import history as history_mod  # type: ignore
+    return history_mod
+
+
 def is_native_pid(pid: str) -> bool:
     """True only for uuid-shaped native ids; legacy ids and anything path-like are not native."""
     return is_uuid_id(pid)
@@ -541,18 +549,22 @@ def native_rename_cut(pid: str, cut_id: str, name: str) -> dict | None:
     store.rename_cut(pid, cut_id, name)
     return {"ok": True, "timeline": store.to_timeline(pid)}
 
-def native_delete_cuts(pid: str, cut_ids: list) -> dict | None:
+def native_delete_cuts(pid: str, cut_ids: list, history_step: str | None = None) -> dict | None:
     store = native_store()
     if store.get_project(pid) is None:
         return None
     store.delete_cuts(pid, cut_ids)
+    if history_step:
+        _history().native_stash_history_files(store._project_dir(pid), history_step, "cuts", cut_ids=cut_ids)
     return {"ok": True, "timeline": store.to_timeline(pid)}
 
 
-def native_restore_cuts(pid: str, cut_ids: list | None) -> dict | None:
+def native_restore_cuts(pid: str, cut_ids: list | None, history_step: str | None = None) -> dict | None:
     store = native_store()
     if store.get_project(pid) is None:
         return None
+    if history_step:
+        _history().native_restore_history_files(store._project_dir(pid), history_step)
     store.restore_cuts(pid, cut_ids)
     return {"ok": True, "timeline": store.to_timeline(pid)}
 
@@ -562,6 +574,37 @@ def native_list_trash(pid: str) -> list | None:
     if store.get_project(pid) is None:
         return None
     return store.list_deleted_cuts(pid)
+
+
+def native_history_get(pid: str) -> dict | None:
+    store = native_store()
+    if store.get_project(pid) is None:
+        return None
+    return _history().load_native_history(store, pid)
+
+
+def native_history_put(pid: str, payload: dict) -> dict | None:
+    store = native_store()
+    if store.get_project(pid) is None:
+        return None
+    return _history().save_native_history(store, pid, payload)
+
+
+def native_delete_version(pid: str, cut_id: str, version_id: str, history_step: str) -> dict | None:
+    store = native_store()
+    if store.get_project(pid) is None:
+        return None
+    _history().native_stash_history_files(store._project_dir(pid), history_step, "version", cut_id=cut_id, version_id=version_id)
+    return {"ok": True, "timeline": store.to_timeline(pid)}
+
+
+def native_restore_version(pid: str, cut_id: str, version_id: str, history_step: str) -> dict | None:
+    store = native_store()
+    if store.get_project(pid) is None:
+        return None
+    del cut_id, version_id
+    _history().native_restore_history_files(store._project_dir(pid), history_step)
+    return {"ok": True, "timeline": store.to_timeline(pid)}
 
 
 def native_update_cut(

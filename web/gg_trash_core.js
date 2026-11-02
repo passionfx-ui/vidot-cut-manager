@@ -12,18 +12,20 @@ export function restoreDeletedCutsMenuLabel(count) {
   return `Restore Deleted Cuts (${n})…`;
 }
 
-/** Toast summary after soft-deleting cuts (Undo available). */
+/** Toast summary after hiding cuts (Undo / History can bring them back). */
 export function movedToTrashToastMessage(count) {
   const n = Math.floor(Number(count));
-  if (!Number.isFinite(n) || n <= 0) return "Moved cuts to Trash";
-  if (n === 1) return "Moved 1 cut to Trash";
-  return `Moved ${n} cuts to Trash`;
+  if (!Number.isFinite(n) || n <= 0) return "Deleted cuts";
+  if (n === 1) return "Deleted 1 cut";
+  return `Deleted ${n} cuts`;
 }
 
-/** Confirm text before soft-deleting cuts (first line = heading). */
+/** Confirm text before hiding cuts (first line = heading). */
 export function deleteCutsConfirmMessage(count) {
   const n = Math.max(1, Math.floor(Number(count)) || 1);
-  return n === 1 ? "Delete 1 cut?\nIt moves to Trash." : `Delete ${n} cuts?\nThey move to Trash.`;
+  return n === 1
+    ? "Delete 1 cut?\nYou can restore it from History."
+    : `Delete ${n} cuts?\nYou can restore them from History.`;
 }
 
 export function normalizeTrashItems(resp) {

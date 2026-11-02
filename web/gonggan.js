@@ -57,10 +57,6 @@ import {
 } from "./gg_trim_core.js";
 import { GAP, layoutTrack, clipAtTime, edgeSnapTargets, snapMoveStart, placeClip, prevClipEnd } from "./gg_tl_place_core.js";
 import {
-  trashButtonLabel,
-  restoreDeletedCutsMenuLabel,
-  normalizeTrashItems,
-  formatTrashItem,
   movedToTrashToastMessage,
   deleteCutsConfirmMessage,
 } from "./gg_trash_core.js";
@@ -441,7 +437,6 @@ import {
   undoKeyAction,
   undoScope,
   nextUndoArea,
-  createUndoHistory,
   sameSnapshot,
   fitOrderGroupsSnapshot,
   shotsCounterpart,
@@ -449,6 +444,13 @@ import {
   snapshotTimelineEdit,
   applyTimelineSnapshot,
 } from "./gg_undo_core.js";
+import {
+  createProjectHistory,
+  historyStepId,
+  fieldHistoryLabel,
+  clampHistorySteps,
+  HISTORY_STEPS_DEFAULT,
+} from "./gg_history_core.js";
 import {
   cutListWorkflow,
   parseCutList,
@@ -561,10 +563,16 @@ const PROGRESS_API_EVENTS = [
 let cutSelAnchor = "";
 const ctxUi = { el: null, sub: null, onDoc: null, onKey: null };
 const reorderUndoBurst = createUndoBurst({ windowMs: 1500 });
-// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y: Shots = cut list order + scenes, cut add/delete, cut rename;
-// Timeline = clip order + trims.
-const shotsHistory = createUndoHistory();
-const timelineHistory = createUndoHistory();
+// One project History for Shots and Timeline. ComfyUI's own graph undo is left alone on the canvas.
+const projectHistory = createProjectHistory({ limit: HISTORY_STEPS_DEFAULT });
+let historyStepsLimit = HISTORY_STEPS_DEFAULT;
+let histEpoch = 0;
+let historyLoadPid = "";
+let historyLoaded = false;
+let historySaveTimer = 0;
+let historyApplying = false;
+const historyPurgeIds = [];
+const fieldHistFrom = new Map();
 let shotsStepChain = Promise.resolve(true);
 let undoLastArea = "";  // "shots" | "timeline" | "other" (canvas etc.) | "" — see nextUndoArea
 const editGate = createEditSaveGate();  // serializes /gonggan/edit, /groups, /edit/reset and guards stale replies
@@ -719,7 +727,7 @@ function adoptMutationTimeline(tl, requestPid) {
 }
 
 async function loadTimeline(opts) {
-  if (!state.pid) { state.timeline = null; bus.dispatchEvent(new Event("timeline")); refreshTrashCount(); return; }
+  if (!state.pid) { state.timeline = null; bus.dispatchEvent(new Event("timeline")); return; }
   const token = timelineGuard.begin(state.pid);
   let next = null;
   let failure = "";
@@ -739,7 +747,7 @@ async function loadTimeline(opts) {
   }
   bus.dispatchEvent(new Event("timeline"));
   syncRandomSeedToolbar(document);
-  refreshTrashCount();
+  void ensureProjectHistory(token.pid);
   void refreshExportOutputPath();
   await reloadOpenCutWorkflowIfRepChanged();
   void offerStoredAiMakeCutResult();
@@ -765,39 +773,112 @@ async function offerStoredAiMakeCutResult() {
   });
 }
 
-function refreshTrashCount() {
-  clearTimeout(trashRefreshTimer);
-  if (!state.pid || !isNativeProject()) {
-    trashCount = 0;
-    bus.dispatchEvent(new Event("trash"));
-    return;
+function paintHistoryLists() {
+  document.querySelectorAll(".gg-root.gg-shots .gg-history-list").forEach((list) => {
+    const root = list.closest(".gg-root");
+    if (root) fillHistoryList(list);
+  });
+}
+
+function fillHistoryList(list) {
+  const rows = state.pid ? projectHistory.rows() : [];
+  const cursor = projectHistory.sizes().cursor;
+  const openCls = cursor < 0 ? " gg-history-current" : "";
+  const open = rows.length
+    ? `<button type="button" class="gg-history-step${openCls}" data-hist-index="-1">Open</button>`
+    : "";
+  const items = rows.map((r) =>
+    `<button type="button" class="gg-history-step${r.current ? " gg-history-current" : ""}${r.future ? " gg-history-future" : ""}" data-hist-index="${r.index}">${esc(r.label)}</button>`).join("");
+  list.innerHTML = rows.length ? open + items : `<div class="gg-history-empty gg-dim">No history yet</div>`;
+  const cur = list.querySelector(".gg-history-current");
+  if (cur) {
+    const top = cur.offsetTop - list.offsetTop;
+    const bottom = top + cur.offsetHeight;
+    if (top < list.scrollTop) list.scrollTop = top;
+    else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
   }
-  trashRefreshTimer = setTimeout(async () => {
-    try {
-      const d = await getJson(`/gonggan/trash?pid=${encodeURIComponent(state.pid)}`);
-      trashCount = normalizeTrashItems(d).length;
-    } catch (_) {
-      trashCount = 0;
+}
+
+function historyListHtml() {
+  return `<div class="gg-history" aria-label="History">
+    <div class="gg-history-title">History</div>
+    <div class="gg-history-list" role="listbox"></div>
+  </div>`;
+}
+
+function noteHistoryDropped(rows) {
+  for (const s of rows || []) {
+    const id = s && s.id;
+    if (id && !historyPurgeIds.includes(id)) historyPurgeIds.push(id);
+  }
+}
+
+function noteHistoryChange() {
+  histEpoch++;
+  bus.dispatchEvent(new Event("history"));
+  scheduleHistorySave();
+}
+
+function scheduleHistorySave() {
+  clearTimeout(historySaveTimer);
+  const pid = state.pid;
+  const epoch = histEpoch;
+  if (!pid) return;
+  historySaveTimer = setTimeout(() => { void saveProjectHistory(pid, epoch); }, 400);
+}
+
+async function saveProjectHistory(pid, epoch) {
+  if (!pid || epoch !== histEpoch || state.pid !== pid) return;
+  const snap = projectHistory.snapshot();
+  try {
+    const purge = historyPurgeIds.slice(0, 500);
+    const saved = await postJson("/gonggan/history", {
+      pid, cursor: snap.cursor, steps: snap.steps, loaded: historyLoaded, purge,
+    });
+    for (let i = historyPurgeIds.length - 1; i >= 0; i--) {
+      if (purge.includes(historyPurgeIds[i])) historyPurgeIds.splice(i, 1);
     }
-    bus.dispatchEvent(new Event("trash"));
-  }, 120);
+    if (epoch !== histEpoch || state.pid !== pid || !saved || saved.ok === false) return;
+    if (typeof saved.limit === "number") {
+      historyStepsLimit = clampHistorySteps(saved.limit);
+      projectHistory.setLimit(historyStepsLimit);
+    }
+    const now = projectHistory.snapshot();
+    if (now.steps.length !== (saved.steps || []).length || now.cursor !== saved.cursor) {
+      projectHistory.load(pid, saved);
+      bus.dispatchEvent(new Event("history"));
+    }
+  } catch (_) {}
 }
 
-function syncTrashButton(root) {
-  const btn = root?.querySelector(".gg-trash-btn");
-  if (!btn) return;
-  const show = isNativeProject() && trashCount > 0;
-  btn.hidden = !show;
-  btn.textContent = trashButtonLabel(trashCount) || "Trash";
+async function ensureProjectHistory(pid) {
+  if (!pid || historyLoadPid === pid) return;
+  historyLoadPid = pid;
+  const epoch = histEpoch;
+  try {
+    const d = await getJson(`/gonggan/history?pid=${encodeURIComponent(pid)}`);
+    if (state.pid !== pid) return;
+    if (typeof d.limit === "number") {
+      historyStepsLimit = clampHistorySteps(d.limit);
+      projectHistory.capOnly(historyStepsLimit);
+    }
+    const dropped = epoch !== histEpoch && projectHistory.sizes().steps
+      ? projectHistory.mergeLoaded(pid, d)
+      : projectHistory.load(pid, d);
+    noteHistoryDropped(dropped);
+    historyLoaded = true;
+    bus.dispatchEvent(new Event("history"));
+    if (dropped.length) scheduleHistorySave();
+  } catch (_) {
+    if (historyLoadPid === pid && state.pid === pid) historyLoadPid = "";
+  }
 }
 
-function trashMenuLabel() {
-  return restoreDeletedCutsMenuLabel(trashCount);
-}
-
-async function restoreCutsByIds(ids, { selectFirst = false } = {}) {
+async function restoreCutsByIds(ids, { selectFirst = false, historyStep = null } = {}) {
   const reqPid = state.pid;
-  const d = await postJson("/gonggan/cut/restore", { pid: reqPid, cuts: ids });
+  const body = { pid: reqPid, cuts: ids };
+  if (historyStep) body.history_step = historyStep;
+  const d = await postJson("/gonggan/cut/restore", body);
   if (d.timeline) {
     adoptMutationTimeline(d.timeline, reqPid);
     state.error = "";
@@ -812,107 +893,18 @@ async function restoreCutsByIds(ids, { selectFirst = false } = {}) {
     bus.dispatchEvent(new Event("timeline"));
     bus.dispatchEvent(new Event("select"));
   }
-  refreshTrashCount();
   return d;
-}
-
-/** Restore + a Shots history entry (Ctrl+Z deletes them again, Ctrl+Y restores them where they were). */
-async function restoreCutsRecorded(ids, opts) {
-  const pid = state.pid;
-  const before = snapshotOrderGroups(state.timeline);
-  const d = await restoreCutsByIds(ids, opts);
-  if (d.timeline) recordShotsEntry(pid, { kind: "cuts", op: "add", ids: [...ids], before, after: snapshotOrderGroups(state.timeline) });
-  return d;
-}
-
-async function openTrashModal() {
-  if (!state.pid || !isNativeProject()) return;
-  let items = [];
-  try {
-    const d = await getJson(`/gonggan/trash?pid=${encodeURIComponent(state.pid)}`);
-    items = normalizeTrashItems(d);
-    trashCount = items.length;
-    bus.dispatchEvent(new Event("trash"));
-  } catch (_) {
-    items = [];
-  }
-  if (!items.length) return;
-
-  const wrap = document.createElement("div");
-  wrap.className = "gg-modal-backdrop";
-  wrap.innerHTML = `
-    <div class="gg-modal gg-modal-trash" role="dialog" aria-label="Trash">
-      <h3 class="gg-modal-title">Trash</h3>
-      <div class="gg-modal-trash-list"></div>
-      <div class="gg-modal-actions">
-        <button type="button" class="gg-btn gg-trash-restore-all">Restore all</button>
-        <button type="button" class="gg-btn gg-modal-cancel">Close</button>
-      </div>
-    </div>`;
-  document.body.appendChild(wrap);
-  const listEl = wrap.querySelector(".gg-modal-trash-list");
-  const close = () => wrap.remove();
-
-  const renderList = () => {
-    if (!listEl) return;
-    const now = Date.now();
-    listEl.innerHTML = items
-      .map((item) => {
-        const { title, sub } = formatTrashItem(item, now);
-        return `<div class="gg-trash-row" data-cut-id="${esc(item.id)}">
-          <div class="gg-trash-info">
-            <div class="gg-trash-name">${esc(title)}</div>
-            <div class="gg-trash-sub">${esc(sub)}</div>
-          </div>
-          <button type="button" class="gg-btn gg-trash-restore-one">Restore</button>
-        </div>`;
-      })
-      .join("");
-    listEl.querySelectorAll(".gg-trash-restore-one").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const row = btn.closest(".gg-trash-row");
-        const cutId = row?.dataset?.cutId;
-        if (!cutId) return;
-        try {
-          await restoreCutsRecorded([cutId]);
-          const d = await getJson(`/gonggan/trash?pid=${encodeURIComponent(state.pid)}`);
-          items = normalizeTrashItems(d);
-          trashCount = items.length;
-          bus.dispatchEvent(new Event("trash"));
-          if (!items.length) close();
-          else renderList();
-        } catch (e) {
-          ggToast("Restore", e.message, "warn");
-        }
-      });
-    });
-  };
-
-  renderList();
-  wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", close);
-  wrap.addEventListener("click", (e) => {
-    if (e.target === wrap) close();
-  });
-  wrap.querySelector(".gg-trash-restore-all")?.addEventListener("click", async () => {
-    const ids = items.map((it) => it.id);
-    if (!ids.length) return;
-    try {
-      await restoreCutsRecorded(ids);
-      items = [];
-      trashCount = 0;
-      bus.dispatchEvent(new Event("trash"));
-      close();
-    } catch (e) {
-      ggToast("Restore", e.message, "warn");
-    }
-  });
 }
 
 function selectProject(pid) {
   if (pid === state.pid) return;
   flushPendingCutFields();
-  shotsHistory.clear();
-  timelineHistory.clear();
+  projectHistory.clear();
+  histEpoch++;
+  historyLoadPid = "";
+  historyLoaded = false;
+  historyPurgeIds.length = 0;
+  clearTimeout(historySaveTimer);
   state.pid = pid;
   state.cutId = "";
   state.cutSel.clear();
@@ -1601,6 +1593,10 @@ function openProjectSettingsModal() {
       ${nat ? genSettingsModalHtml(curSettings) : ""}
       </div>
       <div class="gg-settings-pane" role="tabpanel" id="gg-settings-pane-global" aria-labelledby="gg-settings-tab-global" data-settings-pane="global"${initialTabs.global ? "" : " hidden"}>
+      <label class="gg-modal-field gg-history-steps-field">History steps
+        <input type="number" class="gg-modal-history-steps" min="1" max="500" step="1" value="${HISTORY_STEPS_DEFAULT}" />
+        <span class="gg-modal-hint">How many History steps to keep for each project. Older steps are removed and their hidden files are deleted.</span>
+      </label>
       ${nat && AI_CUT_SPLIT_VISIBLE ? `<label class="gg-modal-field gg-use-ai-field">
         <span class="gg-switch-row">${esc(USE_AI_LABEL)}
           <input type="checkbox" class="gg-switch gg-modal-use-ai" role="switch" disabled />
@@ -1613,8 +1609,8 @@ function openProjectSettingsModal() {
       </label>` : ""}
       </div>
       <div class="gg-modal-actions">
-        <button type="button" class="gg-btn gg-modal-cancel">${nat ? "Cancel" : "Close"}</button>
-        ${nat ? `<button type="submit" class="gg-btn gg-primary">Save</button>` : ""}
+        <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
+        <button type="submit" class="gg-btn gg-primary">Save</button>
       </div>
     </form>`;
   document.body.appendChild(wrap);
@@ -1649,9 +1645,41 @@ function openProjectSettingsModal() {
   }
   wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeProjectModal(); });
   wrap.querySelector(".gg-modal-cancel")?.addEventListener("click", closeProjectModal);
+  const histIn = wrap.querySelector(".gg-modal-history-steps");
+  let historyStepsInitial = historyStepsLimit;
+  if (histIn) {
+    histIn.value = String(historyStepsLimit);
+    void getJson("/gonggan/settings").then((d) => {
+      if (!wrap.isConnected || !histIn) return;
+      historyStepsInitial = clampHistorySteps(d.history_steps);
+      histIn.value = String(historyStepsInitial);
+    }).catch(() => {});
+  }
+  async function saveHistoryStepsIfChanged() {
+    if (!histIn) return false;
+    const next = clampHistorySteps(histIn.value);
+    histIn.value = String(next);
+    if (next === historyStepsInitial) return false;
+    const saved = await postJson("/gonggan/history/settings", { steps: next });
+    historyStepsInitial = clampHistorySteps(saved.history_steps ?? next);
+    historyStepsLimit = historyStepsInitial;
+    const dropped = projectHistory.setLimit(historyStepsLimit);
+    noteHistoryDropped(dropped);
+    if (state.pid && (dropped.length || projectHistory.sizes().steps)) scheduleHistorySave();
+    return true;
+  }
   const folderIn = wrap.querySelector(".gg-modal-folder");
   if (!nat || !folderIn) {
-    form.addEventListener("submit", (e) => e.preventDefault());
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        await saveHistoryStepsIfChanged();
+        closeProjectModal();
+        ggToast("Settings", "Settings saved", "ok");
+      } catch (err) {
+        ggToast("Settings", err.message, "warn");
+      }
+    });
     wrap.querySelector(".gg-tpl-combo")?.focus();
     return;
   }
@@ -1729,8 +1757,16 @@ function openProjectSettingsModal() {
       useAiInitial,
       useAi: useAiIn?.checked,
     });
+    let historyChanged = false;
+    try {
+      historyChanged = await saveHistoryStepsIfChanged();
+    } catch (err) {
+      ggToast("Settings", err.message, "warn");
+      return;
+    }
     if (!patch && !aiPatch) {
       closeProjectModal();
+      if (historyChanged) ggToast("Settings", "Settings saved", "ok");
       return;
     }
     const reqPid = state.pid;
@@ -2274,8 +2310,6 @@ function syncEditedMarkerBeforeSave(cutId, cutRec) {
   }
 }
 let ggToastTimer = 0;
-let trashCount = 0;
-let trashRefreshTimer = 0;
 
 function ggWorkflowStore() {
   return app.extensionManager?.workflow;
@@ -3817,7 +3851,7 @@ async function createCutsFromList(reqPid, cuts, wf) {
   else await loadTimeline();
   const ids = d.cut_ids || [];
   if (ids.length) {
-    recordShotsEntry(reqPid, { kind: "cuts", op: "add", ids, before, after: snapshotOrderGroups(state.timeline) });
+    recordShotsEntry(reqPid, { kind: "cuts", op: "add", ids, before, after: snapshotOrderGroups(state.timeline) }, ids.length === 1 ? "Add cut" : `Add ${ids.length} cuts`);
     selectCut(ids[0]);
   }
   ggToast(`Created ${ids.length} cut${ids.length === 1 ? "" : "s"}`, "Each cut has the project's Video template with its prompt field set. Select them and press Queue to render in order.", "ok");
@@ -4295,10 +4329,12 @@ function cutsForDelete() {
   return ids.length ? ids : (state.cutId ? [state.cutId] : []);
 }
 
-/** Soft delete (to Trash) without a toast or history entry. */
-async function deleteCutsByIds(ids) {
+/** Hide cuts (files go to the project's History folder when historyStep is set). No History entry here. */
+async function deleteCutsByIds(ids, historyStep = null) {
   const reqPid = state.pid;
-  const d = await postJson("/gonggan/cut/delete", { pid: reqPid, cuts: ids });
+  const body = { pid: reqPid, cuts: ids };
+  if (historyStep) body.history_step = historyStep;
+  const d = await postJson("/gonggan/cut/delete", body);
   if (d.timeline) adoptMutationTimeline(d.timeline, reqPid);
   else await loadTimeline();
   state.cutSel.clear();
@@ -4311,7 +4347,6 @@ async function deleteCutsByIds(ids) {
   state.error = "";
   bus.dispatchEvent(new Event("timeline"));
   bus.dispatchEvent(new Event("select"));
-  refreshTrashCount();
   return d;
 }
 
@@ -4321,19 +4356,21 @@ async function deleteSelectedCuts() {
   const deletedIds = [...ids];
   const n = deletedIds.length;
   const reqPid = state.pid;
-  const entry = { kind: "cuts", op: "delete", ids: deletedIds, before: snapshotOrderGroups(state.timeline) };
+  const stepId = historyStepId();
+  const entry = { kind: "cuts", op: "delete", ids: deletedIds, before: snapshotOrderGroups(state.timeline), history_step: stepId };
   try {
-    await deleteCutsByIds(deletedIds);
-    recordShotsEntry(reqPid, entry);
+    await deleteCutsByIds(deletedIds, stepId);
+    recordShotsEntry(reqPid, entry, n === 1 ? "Delete cut" : `Delete ${n} cuts`);
     ggToast(movedToTrashToastMessage(n), "", "ok", {
       actionLabel: "Undo",
       onAction: async () => {
         try {
-          if (shotsHistory.peekUndo(reqPid) === entry) {
-            if (await stepShotsHistory("undo")) ggToast(`Restored ${n} cut(s)`, "", "ok");
+          const top = projectHistory.peekUndo(reqPid);
+          if (top && top.entry === entry) {
+            if (await stepProjectHistory("undo")) ggToast(`Restored ${n} cut(s)`, "", "ok");
             return;
           }
-          await restoreCutsRecorded(deletedIds, { selectFirst: true });
+          await restoreCutsByIds(deletedIds, { selectFirst: true, historyStep: stepId });
           ggToast(`Restored ${n} cut(s)`, "", "ok");
         } catch (e) {
           ggToast("Restore", e.message, "warn");
@@ -4436,21 +4473,30 @@ function takePendingTimelineSave() {
   return saveEditNow;
 }
 
-/** Cut list order + scenes before a Shots edit, for Ctrl+Z. */
-function recordShotsUndo() {
-  if (!state.timeline || !isNativeProject()) return;
-  shotsHistory.record(state.pid, snapshotOrderGroups(state.timeline));
+/** One project-wide History step. `entry` is the diff Ctrl+Z restores. */
+function recordProjectStep(pid, { label, scope, entry }) {
+  if (historyApplying || !pid || pid !== state.pid || !entry) return;
+  noteHistoryDropped(projectHistory.record(pid, { id: entry.history_step || historyStepId(), label, scope, entry }));
+  noteHistoryChange();
 }
 
-/** A cut add / delete / rename entry, only while its project is still the open one. */
-function recordShotsEntry(pid, entry) {
+/** Cut list order + scenes before a Shots edit, for Ctrl+Z. */
+function recordShotsUndo(label = "Edit") {
+  if (!state.timeline || !isNativeProject()) return;
+  const snap = snapshotOrderGroups(state.timeline);
+  if (!snap) return;
+  recordProjectStep(state.pid, { label, scope: "shots", entry: snap });
+}
+
+/** A cut add / delete / rename / info entry, only while its project is still the open one. */
+function recordShotsEntry(pid, entry, label = "Edit") {
   if (!pid || pid !== state.pid || !state.timeline || !isNativeProject()) return;
-  shotsHistory.record(pid, entry);
+  recordProjectStep(pid, { label, scope: "shots", entry });
 }
 
 function recordCutAdded(pid, cutId, before) {
   if (!cutId) return;
-  recordShotsEntry(pid, { kind: "cuts", op: "add", ids: [cutId], before, after: snapshotOrderGroups(state.timeline) });
+  recordShotsEntry(pid, { kind: "cuts", op: "add", ids: [cutId], before, after: snapshotOrderGroups(state.timeline) }, "Add cut");
 }
 
 /** Persist one undo/redo step through the same routes as the edit itself. */
@@ -4463,10 +4509,29 @@ async function runShotsStep(step, pid) {
     return enqueueReorderPersist(() => persistShotsReorder(fit.order, fit.groups));
   }
   try {
-    if (step.type === "restore") await restoreCutsByIds(step.ids, { selectFirst: true });
-    else if (step.type === "delete") await deleteCutsByIds(step.ids);
+    if (step.type === "restore") await restoreCutsByIds(step.ids, { selectFirst: true, historyStep: step.history_step });
+    else if (step.type === "delete") await deleteCutsByIds(step.ids, step.history_step);
     else if (step.type === "rename") {
       await postJson("/gonggan/cut/rename", { pid, cut_id: step.cut_id, name: step.name });
+      await loadTimeline();
+    } else if (step.type === "fields") {
+      await postJson("/gonggan/cut/update", { pid, cut_id: step.cut_id, fields: step.fields });
+      await loadTimeline();
+    } else if (step.type === "pick") {
+      const c = (state.timeline.cuts || []).find((x) => x.id === step.cut_id);
+      if (c && step.clip && typeof step.clip === "object") {
+        if (step.clip.in != null) c.in = step.clip.in;
+        if (step.clip.sec != null) c.sec = step.clip.sec;
+      }
+      await setPick(step.cut_id, step.vid ?? null, { record: false });
+    } else if (step.type === "deleteVersion" || step.type === "restoreVersion") {
+      const path = step.type === "deleteVersion" ? "/gonggan/version/delete" : "/gonggan/version/restore";
+      await postJson(path, {
+        pid,
+        cut_id: step.cut_id,
+        version_id: step.version_id,
+        history_step: step.history_step,
+      });
       await loadTimeline();
     }
     return true;
@@ -4477,30 +4542,79 @@ async function runShotsStep(step, pid) {
   }
 }
 
-async function stepShotsHistoryNow(action) {
-  const tl = state.timeline;
-  if (!tl || !isNativeProject()) return false;
+function historyCurrentFor(step) {
+  if (step?.scope === "timeline") return snapshotTimelineEdit(state.timeline);
+  const layout = snapshotOrderGroups(state.timeline);
+  return step?.entry?.kind ? shotsCounterpart(step.entry, layout) : layout;
+}
+
+function shotsRedoSteps(step) {
+  if (step?.entry?.kind) return shotsUndoSteps(step.entry, "redo");
+  if (step?.after) return [{ type: "layout", snap: step.after }];
+  return [];
+}
+
+async function applyHistoryStep(step, action) {
   const pid = state.pid;
-  const current = snapshotOrderGroups(tl);
-  const counterpart = (entry) => shotsCounterpart(entry, current);
-  const entry = action === "redo" ? shotsHistory.redo(pid, counterpart) : shotsHistory.undo(pid, counterpart);
-  if (!entry) {
-    ggToast(action === "redo" ? "Nothing to redo" : "Nothing to undo", "", "info", { ttlMs: 1500 });
-    return false;
+  if (!step || !state.timeline || state.pid !== pid) return false;
+  if (step.scope === "timeline") {
+    const snap = action === "undo" ? step.entry : step.after;
+    if (!snap || !applyTimelineSnapshot(state.timeline, snap)) return false;
+    recomputeCutStarts();
+    play.idx = -1;
+    scheduleSave();
+    bus.dispatchEvent(new Event("timeline"));
+    return true;
   }
-  reorderUndoBurst.reset();
-  for (const step of shotsUndoSteps(entry, action)) {
-    if (!(await runShotsStep(step, pid))) {
-      shotsHistory.clear();
-      return false;
-    }
+  const parts = action === "undo" ? shotsUndoSteps(step.entry, "undo") : shotsRedoSteps(step);
+  if (!parts.length) return false;
+  for (const part of parts) {
+    if (!(await runShotsStep(part, pid))) return false;
   }
   return true;
 }
 
-/** Ctrl+Z / Ctrl+Shift+Z in Shots, one step at a time (each step reads the list as the previous one left it). */
-function stepShotsHistory(action) {
-  const run = shotsStepChain.then(() => stepShotsHistoryNow(action));
+async function stepProjectHistoryNow(action) {
+  const tl = state.timeline;
+  if (!tl || historyApplying) return false;
+  const pid = state.pid;
+  historyApplying = true;
+  let step = null;
+  try {
+    step = action === "redo" ? projectHistory.redo(pid) : projectHistory.undo(pid, historyCurrentFor);
+    if (!step) {
+      ggToast(action === "redo" ? "Nothing to redo" : "Nothing to undo", "", "info", { ttlMs: 1500 });
+      return false;
+    }
+    reorderUndoBurst.reset();
+    const ok = await applyHistoryStep(step, action);
+    if (!ok) {
+      if (action === "redo") projectHistory.abortRedo();
+      else projectHistory.abortUndo();
+      return false;
+    }
+    noteHistoryChange();
+    return true;
+  } finally {
+    historyApplying = false;
+  }
+}
+
+/** Ctrl+Z / Ctrl+Shift+Z: the newest project edit, whichever panel it came from. */
+function stepProjectHistory(action) {
+  const run = shotsStepChain.then(() => stepProjectHistoryNow(action));
+  shotsStepChain = run.catch(() => false);
+  return run;
+}
+
+async function jumpProjectHistory(index) {
+  const run = shotsStepChain.then(async () => {
+    const ops = projectHistory.planJump(state.pid, index);
+    for (const action of ops) {
+      if (!(await stepProjectHistoryNow(action))) return false;
+    }
+    return true;
+  });
   shotsStepChain = run.catch(() => false);
   return run;
 }
@@ -4512,7 +4626,7 @@ async function commitShotsReorder(order, groups, opts = {}) {
   if (recordUndo) {
     const snap = snapshotOrderGroups(state.timeline);
     if (snap) undoTarget = reorderUndoBurst.push(snap, Date.now());
-    recordShotsUndo();
+    recordShotsUndo("Reorder");
   }
   const ok = await enqueueReorderPersist(() => persistShotsReorder(order, groups));
   if (!ok) return false;
@@ -4524,7 +4638,12 @@ async function commitShotsReorder(order, groups, opts = {}) {
       actionLabel: "Undo",
       onAction: async () => {
         reorderUndoBurst.reset();
-        recordShotsUndo();
+        const top = projectHistory.peekUndo(state.pid);
+        if (top && sameSnapshot(top.entry, undoTarget)) {
+          if (await stepProjectHistory("undo")) ggToast("Undone", "", "ok");
+          return;
+        }
+        recordShotsUndo("Undo");
         const restored = await enqueueReorderPersist(() => persistShotsReorder(undoTarget.order, undoTarget.groups));
         if (restored) ggToast("Undone", "", "ok");
       },
@@ -4581,8 +4700,6 @@ function openCutContextMenu(e, cutId) {
     canMoveDown: canMoveDown(moveOrder, ids),
     inScene: !!(c && c.group_id),
     anyInScene: ids.some((id) => cutById(id)?.group_id),
-    trashLabel: trashMenuLabel(),
-    trashCount,
     queueCount: timelineSelectedCutIds().length || ids.length,
     queuedCount: ids.filter((id) => renderStatus.queuedPromptIds(state.pid, id).length).length,
     failedCount: failedIds.length,
@@ -4618,7 +4735,6 @@ function openCutContextMenu(e, cutId) {
         addCut: () => addCutAfter(cutId),
         aiMakeCut: () => openAiCutSplitModal(),
         del: () => deleteSelectedCuts(),
-        trash: () => openTrashModal(),
       },
       nat ? { moveToScene: buildMoveToSceneSubmenu(ids) } : {},
     ),
@@ -4660,7 +4776,7 @@ async function applyTimelineOrderToCuts() {
     await saveEdit();
   }
   const reqPid = tl.project.id;
-  recordShotsUndo();
+  recordShotsUndo("Apply order");
   await editGate.run(async () => {
     try {
       const data = await postJson("/gonggan/timeline/apply_order", { pid: reqPid });
@@ -4711,19 +4827,11 @@ function openShotsPanelContextMenu(e) {
     const { key: _k, ...ai } = aiMakeCutMenuItem(cutSplitUseAiOn);
     items.push({ ...ai, action: () => openAiCutSplitModal() });
   }
-  if (nat) {
-    items.push({
-      label: trashMenuLabel(),
-      disabled: trashCount <= 0,
-      title: "Deleted cuts – click to restore",
-      action: () => openTrashModal(),
-    });
-  }
   showCtxMenu(e.clientX, e.clientY, items);
 }
 
 async function ungroupSceneGroup(groupId) {
-  recordShotsUndo();
+  recordShotsUndo("Delete scene");
   await persistGroups(groupsClone().filter((g) => g.id !== groupId));
 }
 
@@ -4791,7 +4899,7 @@ async function createSceneGroup(cutIds) {
   groups.push({ id: newSceneGroupId(), name: resolveSceneName(state.timeline?.groups, title), cut_ids: ids, collapsed: false });
   state.cutSel.clear();
   cutSelAnchor = "";
-  recordShotsUndo();
+  recordShotsUndo("New scene");
   await persistGroups(groups);
 }
 
@@ -4810,7 +4918,7 @@ async function addEmptySceneNow() {
   const tl = state.timeline;
   if (!tl || !state.pid || !isNativeProject()) return false;
   const { groups, scene } = withNewEmptyScene(groupsClone(), newSceneGroupId());
-  recordShotsUndo();
+  recordShotsUndo("New scene");
   try {
     await persistGroups(groups);
   } catch (e) {
@@ -4850,7 +4958,7 @@ async function ungroupCuts(cutIds) {
   const ids = cutIds && cutIds.length ? cutIds : cutSelIds();
   state.cutSel.clear();
   cutSelAnchor = "";
-  recordShotsUndo();
+  recordShotsUndo("Remove from scene");
   await persistGroups(stripCutsFromGroups(groupsClone(), ids));
 }
 
@@ -4872,7 +4980,7 @@ async function saveCutName(cutId, name) {
     await postJson("/gonggan/cut/rename", { pid, cut_id: cutId, name });
     await loadTimeline();
     const to = cutById(cutId)?.name ?? name;
-    if (from && to !== from) recordShotsEntry(pid, { kind: "rename", cut_id: cutId, from, to });
+    if (from && to !== from) recordShotsEntry(pid, { kind: "rename", cut_id: cutId, from, to }, "Rename");
   } catch (err) {
     const hint = err.status === 404 || err.status === 405 ? "Restart ComfyUI to enable renaming." : err.message;
     ggToast("Cut", hint, "warn");
@@ -4886,7 +4994,7 @@ async function saveSceneGroupName(groupId, name) {
   const hit = groups.find((x) => x.id === groupId);
   if (!hit) return;
   hit.name = name;
-  recordShotsUndo();
+  recordShotsUndo("Rename scene");
   try {
     await persistGroups(groups);
   } catch (err) {
@@ -4909,8 +5017,8 @@ async function renameSceneGroup(groupId) {
 }
 
 async function deleteSceneGroup(groupId) {
-  if (!(await askConfirm({ message: "Delete this scene? (Cuts become ungrouped)", danger: true }))) return;
-  recordShotsUndo();
+  if (!(await askConfirm({ message: "Delete this scene?\nCuts become ungrouped. You can restore it from History.", danger: true }))) return;
+  recordShotsUndo("Delete scene");
   await persistGroups(groupsClone().filter((g) => g.id !== groupId));
 }
 
@@ -4930,7 +5038,7 @@ async function assignCutsToGroup(groupId, cutIds) {
   g.cut_ids = orderCutIds([...(g.cut_ids || []), ...ids]);
   state.cutSel.clear();
   cutSelAnchor = "";
-  recordShotsUndo();
+  recordShotsUndo("Move to scene");
   await persistGroups(groups);
 }
 
@@ -4958,7 +5066,7 @@ async function splitSceneHere(cutId) {
   }
   let groups = stripCutsFromGroups(groupsClone(), moveIds);
   groups.push({ id: "s" + Date.now(), name: sceneName, cut_ids: moveIds, collapsed: false });
-  recordShotsUndo();
+  recordShotsUndo("New scene");
   await persistGroups(groups);
 }
 
@@ -5927,6 +6035,20 @@ async function saveCutFields(cutId, fields, reqPid = state.pid) {
         if (!Object.keys(bucket).length) delete cutFieldUi.unsaved[cutId];
       }
       refreshFieldTextUnsavedClasses();
+      const hist = takeFieldHistory(cutId);
+      if (hist && reqPid === state.pid && !historyApplying) {
+        const fromFields = {};
+        const toFields = {};
+        for (const k of Object.keys(fields)) {
+          if (Object.prototype.hasOwnProperty.call(hist.from, k) && hist.from[k] !== fields[k]) {
+            fromFields[k] = hist.from[k];
+            toFields[k] = fields[k];
+          }
+        }
+        if (Object.keys(fromFields).length) {
+          recordShotsEntry(reqPid, { kind: "fields", cut_id: cutId, from: fromFields, to: toFields }, fieldHistoryLabel(toFields));
+        }
+      }
     }
   } catch (e) {
     const kind = classifySaveFailure(e.status);
@@ -5957,7 +6079,29 @@ async function saveCutFields(cutId, fields, reqPid = state.pid) {
   }
 }
 
-function scheduleCutFieldSave(cutId, fields) {
+function noteFieldHistory(cutId, from, fields) {
+  if (historyApplying || !cutId) return;
+  let row = fieldHistFrom.get(cutId);
+  if (!row) {
+    row = { from: {}, to: {} };
+    fieldHistFrom.set(cutId, row);
+  }
+  if (from && typeof from === "object") {
+    for (const k of Object.keys(from)) {
+      if (!Object.prototype.hasOwnProperty.call(row.from, k)) row.from[k] = from[k];
+    }
+  }
+  Object.assign(row.to, fields || {});
+}
+
+function takeFieldHistory(cutId) {
+  const row = fieldHistFrom.get(cutId);
+  fieldHistFrom.delete(cutId);
+  return row || null;
+}
+
+function scheduleCutFieldSave(cutId, fields, from) {
+  noteFieldHistory(cutId, from, fields);
   cutFieldUi.unsaved[cutId] = { ...(cutFieldUi.unsaved[cutId] || {}), ...fields };
   refreshFieldTextUnsavedClasses();
   clearTimeout(cutFieldUi.timer);
@@ -6010,9 +6154,10 @@ function exportCaptionsSrt() {
 function toggleNeedsRedo(cutId) {
   const c = cutByIdTimeline(cutId);
   if (!c || !isNativeProject()) return;
-  const next = !c.needs_redo;
+  const prev = !!c.needs_redo;
+  const next = !prev;
   c.needs_redo = next;
-  scheduleCutFieldSave(cutId, { needs_redo: next });
+  scheduleCutFieldSave(cutId, { needs_redo: next }, { needs_redo: prev });
   bus.dispatchEvent(new Event("timeline"));
 }
 
@@ -6084,8 +6229,9 @@ function bindCutPanelFields(panel, c) {
     endChk.disabled = !nat;
     endChk.title = nat ? "End card (no length warning)" : roTip;
     endChk.addEventListener("change", () => {
-      c.end_card = endChk.checked;
-      scheduleCutFieldSave(c.id, { end_card: endChk.checked });
+      const next = endChk.checked;
+      c.end_card = next;
+      scheduleCutFieldSave(c.id, { end_card: next }, { end_card: !next });
       refreshCutRowBadges(c.id);
       bus.dispatchEvent(new Event("timeline"));
     });
@@ -6095,8 +6241,9 @@ function bindCutPanelFields(panel, c) {
     redoChk.disabled = !nat;
     redoChk.title = nat ? "Flag for redo" : roTip;
     redoChk.addEventListener("change", () => {
-      c.needs_redo = redoChk.checked;
-      scheduleCutFieldSave(c.id, { needs_redo: redoChk.checked });
+      const next = redoChk.checked;
+      c.needs_redo = next;
+      scheduleCutFieldSave(c.id, { needs_redo: next }, { needs_redo: !next });
       refreshCutRowBadges(c.id);
       bus.dispatchEvent(new Event("timeline"));
     });
@@ -6294,11 +6441,11 @@ function openFieldExpandModal(ta, cutId) {
         if (c) {
           if (kind === "caption") {
             c.caption = text;
-            scheduleCutFieldSave(cutId, { caption: text });
+            scheduleCutFieldSave(cutId, { caption: text }, { caption: initial });
             paintViewerCaption();
           } else {
             c.prompt = text;
-            scheduleCutFieldSave(cutId, { prompt: text });
+            scheduleCutFieldSave(cutId, { prompt: text }, { prompt: initial });
           }
         }
         void flushPendingCutFields();
@@ -6608,8 +6755,8 @@ function onTimelineToggleKey(e) {
 }
 
 // Window capture, like Shots Ctrl+A: ComfyUI's own Ctrl+Z (graph undo) must not run while the pointer or
-// focus is in Shots / Timeline, or one of them was clicked last; otherwise (canvas clicked last, inputs,
-// menus, dialogs) the key is left alone.
+// focus is in Shots / Timeline, or one of them was clicked last. One project History undoes the newest
+// edit from either panel. Canvas, inputs, menus and dialogs keep the key.
 function onUndoRedoKey(e) {
   const action = undoKeyAction(e);
   if (!action) return;
@@ -6634,8 +6781,7 @@ function onUndoRedoKey(e) {
   e.preventDefault();
   e.stopPropagation();
   if (e.repeat || ed.dragging || shotsUi.dragSession) return;
-  if (scope === "timeline") stepTimelineHistory(action);
-  else void stepShotsHistory(action);
+  void stepProjectHistory(action);
 }
 
 function trackUndoArea(e) {
@@ -7025,7 +7171,7 @@ function toggleBest(cutId, vid) {
   void setPick(cutId, c.pick === vid ? null : vid);
 }
 
-async function setPick(cutId, vid) {
+async function setPick(cutId, vid, opts = {}) {
   const c = cutsNow().find((x) => x.id === cutId);
   if (!c) return;
   const prev = {
@@ -7043,6 +7189,16 @@ async function setPick(cutId, vid) {
   clearTimeout(ed.saveTimer);
   const ok = await saveEdit();
   if (ok) {
+    if (opts.record !== false && isNativeProject() && !historyApplying) {
+      recordShotsEntry(state.pid, {
+        kind: "pick",
+        cut_id: cutId,
+        from: prev.pick ?? null,
+        to: vid ?? null,
+        fromClip: { in: prev.in, sec: prev.sec },
+        toClip: { in: c.in, sec: c.sec },
+      }, vid ? "Set Best" : "Clear Best");
+    }
     if (
       cutId === wfLastLoadedCutId &&
       state.pid === wfLastLoadedProjectId &&
@@ -7067,6 +7223,25 @@ async function setPick(cutId, vid) {
   bus.dispatchEvent(new Event("select"));
   const msg = (state.error || "").replace(/^Save failed:\s*/, "") || "unknown error";
   ggToast("Promote failed", `Reverted to the previous version: ${msg}`, "warn");
+}
+
+async function deleteVersion(cutId, versionId) {
+  if (!state.pid || !cutId || !versionId || !isNativeProject()) return;
+  const stepId = historyStepId();
+  const pid = state.pid;
+  try {
+    const d = await postJson("/gonggan/version/delete", {
+      pid, cut_id: cutId, version_id: versionId, history_step: stepId,
+    });
+    if (d.timeline) adoptMutationTimeline(d.timeline, pid);
+    else await loadTimeline();
+    recordShotsEntry(pid, {
+      kind: "version", op: "delete", cut_id: cutId, version_id: versionId, history_step: stepId,
+    }, "Delete version");
+    bus.dispatchEvent(new Event("timeline"));
+  } catch (e) {
+    ggToast("Delete version", e.message, "warn");
+  }
 }
 
 async function regenCut(cutId) {
@@ -7807,6 +7982,11 @@ async function importVersionFiles(pid, cutId, files) {
         if (res.status === 404 || res.status === 405) throw new Error("Restart ComfyUI to enable Import");
         if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
         added++;
+        const vid = data.version && data.version.id;
+        if (vid && state.pid === pid) {
+          const stepId = historyStepId();
+          recordShotsEntry(pid, { kind: "version", op: "add", cut_id: cutId, version_id: vid, history_step: stepId }, "Import version");
+        }
       } catch (e) {
         failed.push(`${file.name}: ${e.message}`);
       }
@@ -8026,7 +8206,10 @@ function mountShots(el) {
       wrap.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        showCtxMenu(e.clientX, e.clientY, attachMenuActions(versionStripMenuItems(row), { best: () => setPick(c.id, vid) }));
+        showCtxMenu(e.clientX, e.clientY, attachMenuActions(versionStripMenuItems(row), {
+          best: () => setPick(c.id, vid),
+          del: () => { void deleteVersion(c.id, vid); },
+        }));
       });
     });
   };
@@ -8141,11 +8324,13 @@ function mountShots(el) {
     const c = cutByIdTimeline(cap.cutId);
     if (c) {
       if (cap.field === "caption" && captionEditChanged(c, cap.value)) {
+        const prev = c.caption;
         c.caption = cap.value;
-        scheduleCutFieldSave(cap.cutId, { caption: cap.value });
+        scheduleCutFieldSave(cap.cutId, { caption: cap.value }, { caption: prev });
       } else if (cap.field === "prompt" && String(c.prompt || "") !== cap.value) {
+        const prev = c.prompt;
         c.prompt = cap.value;
-        scheduleCutFieldSave(cap.cutId, { prompt: cap.value });
+        scheduleCutFieldSave(cap.cutId, { prompt: cap.value }, { prompt: prev });
       }
     }
     const nat = isNativeProject() && !ta.disabled;
@@ -8306,12 +8491,14 @@ function mountShots(el) {
         const c = cutByIdTimeline(id);
         const kind = fieldTextKind(ta);
         if (c && kind === "caption") {
+          const prev = c.caption;
           c.caption = ta.value;
-          scheduleCutFieldSave(id, { caption: ta.value });
+          scheduleCutFieldSave(id, { caption: ta.value }, { caption: prev });
           paintViewerCaption();
         } else if (c && kind === "prompt") {
+          const prev = c.prompt;
           c.prompt = ta.value;
-          scheduleCutFieldSave(id, { prompt: ta.value });
+          scheduleCutFieldSave(id, { prompt: ta.value }, { prompt: prev });
         }
         autoSizeFieldTextarea(ta);
       });
@@ -8441,8 +8628,8 @@ function mountShots(el) {
       </div>
       <div class="gg-meta">
         <span class="gg-meta-text">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</span>
-        <button type="button" class="gg-btn gg-trash-btn" hidden title="Deleted cuts – click to restore">${esc(trashButtonLabel(trashCount))}</button>
       </div>
+      ${state.pid ? historyListHtml() : ""}
       <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${listHtml}</div>
       <div class="gg-final-wrap"${viewFinal ? "" : " hidden"}>${viewFinal && tl ? finalCutListHtml(tl) : ""}</div>
       ${SHOW_SEL_BAR ? `<div class="gg-selbar">
@@ -8507,8 +8694,18 @@ function mountShots(el) {
         paintPanel();
       });
     });
-    root.querySelector(".gg-trash-btn")?.addEventListener("click", () => openTrashModal());
-    syncTrashButton(root);
+    const histList = root.querySelector(".gg-history-list");
+    if (histList) {
+      fillHistoryList(histList);
+      histList.addEventListener("click", (e) => {
+        const btn = e.target.closest?.(".gg-history-step");
+        if (!btn) return;
+        e.stopPropagation();
+        const index = Number(btn.dataset.histIndex);
+        if (!Number.isFinite(index)) return;
+        void jumpProjectHistory(index);
+      });
+    }
     syncTimelineToggleButtons();
     root.querySelector(".gg-timeline-toggle")?.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -8733,7 +8930,10 @@ function mountShots(el) {
     paint();
     paintAllRenderStatus();
   });
-  bus.addEventListener("trash", () => syncTrashButton(root));
+  bus.addEventListener("history", () => {
+    const list = root.querySelector(".gg-history-list");
+    if (list) fillHistoryList(list);
+  });
   const onUseAi = () => syncAiSplitButton(root);
   bus.addEventListener("cut-split-use-ai", onUseAi);
   bus.addEventListener("template", onTemplate);
@@ -9004,27 +9204,10 @@ function scheduleSave() {
 }
 
 /** `before` = snapshotTimelineEdit() taken before the edit; recorded only if the edit changed something. */
-function recordTimelineUndo(before) {
-  if (!before || !state.timeline) return;
+function recordTimelineUndo(before, label = "Edit timeline") {
+  if (!before || !state.timeline || historyApplying) return;
   if (sameSnapshot(before, snapshotTimelineEdit(state.timeline))) return;
-  timelineHistory.record(state.pid, before);
-}
-
-/** Ctrl+Z / Ctrl+Shift+Z in the Timeline: put clip order + trims back and save through POST /gonggan/edit. */
-function stepTimelineHistory(action) {
-  const tl = state.timeline;
-  if (!tl || ed.dragging) return;
-  const current = snapshotTimelineEdit(tl);
-  const snap = action === "redo" ? timelineHistory.redo(state.pid, current) : timelineHistory.undo(state.pid, current);
-  if (!snap) {
-    ggToast(action === "redo" ? "Nothing to redo" : "Nothing to undo", "", "info", { ttlMs: 1500 });
-    return;
-  }
-  if (!applyTimelineSnapshot(tl, snap)) return;
-  recomputeCutStarts();
-  play.idx = -1;
-  scheduleSave();
-  bus.dispatchEvent(new Event("timeline"));
+  recordProjectStep(state.pid, { label, scope: "timeline", entry: before });
 }
 
 // Data safety: a timeline edit made just before the page is hidden or closed is saved right away.
@@ -9094,7 +9277,7 @@ async function resetEdit() {
       const data = await res.json();
       if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
       editGate.bump();
-      if (adoptMutationTimeline(data, tl.project.id)) recordTimelineUndo(before);
+      if (adoptMutationTimeline(data, tl.project.id)) recordTimelineUndo(before, "Reset timeline");
       state.error = "";
     } catch (e) {
       state.error = sentence("Reset failed: " + e.message, "Try again.");
@@ -9625,7 +9808,7 @@ function bindTrim(root) {
         c.edited = true;
         play.idx = -1;
         if (startIn !== c.in || startSec !== c.sec) {
-          recordTimelineUndo(before);
+          recordTimelineUndo(before, "Trim");
           scheduleSave();
         }
         setTimeout(() => { const tip = root.querySelector(".gg-tip"); if (tip && !ed.dragging) tip.textContent = ""; }, 2500);
@@ -9682,7 +9865,7 @@ function bindReorder(root) {
           const [m] = cuts.splice(from, 1);
           cuts.splice(target > from ? target - 1 : target, 0, m);
           cuts.forEach((c, i) => { c.pos = i; });
-          recordTimelineUndo(before);
+          recordTimelineUndo(before, "Reorder clips");
           play.idx = -1;
           scheduleSave();
         }
@@ -9737,7 +9920,7 @@ function bindMove(root) {
           tl.track_order = res.order;
           for (const x of clips) if (res.starts[x.id] != null) x.start = res.starts[x.id];
           recomputeCutStarts();
-          recordTimelineUndo(before);
+          recordTimelineUndo(before, "Move clip");
           play.idx = -1;
           scheduleSave();
         }

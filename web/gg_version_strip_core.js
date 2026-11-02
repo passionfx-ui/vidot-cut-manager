@@ -124,7 +124,10 @@ export function stripHeaderState() {
 /** Right-click menu for one row thumbnail. Best is only ever set, never cleared (same as the cut panel). */
 export function versionStripMenuItems(row) {
   const best = !!row?.best;
-  return [{ key: "best", label: SET_BEST_LABEL, disabled: best, title: best ? "Already Best" : "" }];
+  return [
+    { key: "best", label: SET_BEST_LABEL, disabled: best, title: best ? "Already Best" : "" },
+    { key: "del", label: "Delete", title: "Hide this version. History can restore it." },
+  ];
 }
 
 /** Header Import button (and the cut menu item): native projects with a selected cut only. */

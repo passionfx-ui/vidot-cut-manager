@@ -183,13 +183,37 @@ export function shotsUndoSteps(entry, action) {
   if (!entry) return [];
   const redo = action === "redo";
   if (entry.kind === "rename") return [{ type: "rename", cut_id: entry.cut_id, name: redo ? entry.to : entry.from }];
+  if (entry.kind === "fields") {
+    const fields = redo ? entry.to : entry.from;
+    if (!entry.cut_id || !fields || typeof fields !== "object") return [];
+    return [{ type: "fields", cut_id: entry.cut_id, fields }];
+  }
+  if (entry.kind === "pick") {
+    return [{
+      type: "pick",
+      cut_id: entry.cut_id,
+      vid: redo ? entry.to : entry.from,
+      clip: redo ? entry.toClip : entry.fromClip,
+    }];
+  }
+  if (entry.kind === "version") {
+    const hide = entry.op === "delete" ? redo : !redo;
+    return [{
+      type: hide ? "deleteVersion" : "restoreVersion",
+      cut_id: entry.cut_id,
+      version_id: entry.version_id,
+      history_step: entry.history_step,
+    }];
+  }
   if (entry.kind === "cuts") {
     const ids = [...(entry.ids || [])];
     if (!ids.length) return [];
     const bringBack = entry.op === "delete" ? !redo : redo;
-    if (!bringBack) return [{ type: "delete", ids }];
+    const history_step = entry.history_step || null;
+    if (!bringBack) return [{ type: "delete", ids, history_step }];
     const layout = entry.op === "delete" ? entry.before : entry.after;
-    return layout ? [{ type: "restore", ids }, { type: "layout", snap: layout }] : [{ type: "restore", ids }];
+    const restore = { type: "restore", ids, history_step };
+    return layout ? [restore, { type: "layout", snap: layout }] : [restore];
   }
   return [{ type: "layout", snap: entry }];
 }

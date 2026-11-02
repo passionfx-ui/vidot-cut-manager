@@ -4,14 +4,11 @@ import { queueButtonState } from "./gg_batch_render_core.js";
 import { importButtonState, IMPORT_MENU_LABEL } from "./gg_version_strip_core.js";
 import { aiCutSplitButtonState } from "./gg_cut_split_model_core.js";
 import { AI_MAKE_CUT_LABEL } from "./gg_cut_list_core.js";
-import { restoreDeletedCutsMenuLabel } from "./gg_trash_core.js";
-
 export const SINGLE_CUT_TIP = "Select a single cut";
 export const SDK_BUSY_TIP = "Comfy SDK is busy";
 export const SDK_OFF_TIP = "Comfy SDK not ready";
 export const BUSY_TIP = "Busy, try again in a moment";
 export const REGEN_EMPTY_TIP = "Empty cut: no workflow to queue";
-export const TRASH_TIP = "Deleted cuts – click to restore";
 export const I2V_NO_IMAGE_TIP = "This cut has no image version yet";
 export const MAKE_SCENE_LABEL = "Make Scene from Selection";
 export const REMOVE_FROM_SCENE_LABEL = "Remove from Scene";
@@ -64,7 +61,7 @@ export function cutActionItems(ctx = {}) {
 /**
  * @param {{ native?: boolean, multi?: boolean, needsRedo?: boolean, sdkBusy?: boolean, sdkOk?: boolean,
  *   emptyCut?: boolean, readonlyTip?: string, canMoveUp?: boolean, canMoveDown?: boolean, inScene?: boolean,
- *   anyInScene?: boolean, trashLabel?: string, trashCount?: number, queueCount?: number, queuedCount?: number,
+ *   anyInScene?: boolean, queueCount?: number, queuedCount?: number,
  *   failedCount?: number, hasImage?: boolean, importBusy?: boolean, hasVersion?: boolean, aiMakeCut?: boolean,
  *   useAi?: boolean, hasListCuts?: boolean }} ctx
  */
@@ -122,12 +119,6 @@ export function cutCardMenuItems(ctx = {}) {
     MENU_SEPARATOR,
     a.rename,
     a.del,
-    {
-      key: "trash",
-      label: ctx.trashLabel || restoreDeletedCutsMenuLabel(0),
-      disabled: !nat || !((ctx.trashCount || 0) > 0),
-      title: nat ? TRASH_TIP : ctx.readonlyTip || "",
-    },
   ];
 }
 

@@ -31,6 +31,21 @@ def _err(status: int, message: str) -> web.Response:
     return web.json_response({"ok": False, "message": message}, status=status)
 
 
+def _history_mod():
+    try:
+        from .gg_project import history as history_mod
+    except ImportError:
+        from gg_project import history as history_mod  # type: ignore
+    return history_mod
+
+
+def _history_steps_limit() -> int:
+    try:
+        return _history_mod().history_steps_limit()
+    except Exception:  # noqa: BLE001
+        return 50
+
+
 @routes.get("/gonggan/settings")
 async def gg_settings(request):
     s = gg_data.load_settings()
@@ -54,6 +69,7 @@ async def gg_settings(request):
         "user_dir": where,
         "native_projects_dir": native_projects,
         "default_project_location": default_project_location,
+        "history_steps": _history_steps_limit(),
     })
 
 
@@ -491,7 +507,10 @@ async def gg_cut_delete(request):
         return _err(400, "cuts required")
     try:
         if gg_native_api.is_native_pid(pid):
-            res = await asyncio.to_thread(gg_native_api.native_delete_cuts, pid, cuts)
+            step = data.get("history_step")
+            if step is not None and not isinstance(step, str):
+                return _err(400, "history_step must be a string")
+            res = await asyncio.to_thread(gg_native_api.native_delete_cuts, pid, cuts, step)
             if res is None:
                 return _err(404, "project not found")
             return web.json_response(res)
@@ -517,7 +536,10 @@ async def gg_cut_restore(request):
         return _err(400, "cuts must be a list")
     try:
         if gg_native_api.is_native_pid(pid):
-            res = await asyncio.to_thread(gg_native_api.native_restore_cuts, pid, cuts)
+            step = data.get("history_step")
+            if step is not None and not isinstance(step, str):
+                return _err(400, "history_step must be a string")
+            res = await asyncio.to_thread(gg_native_api.native_restore_cuts, pid, cuts, step)
             if res is None:
                 return _err(404, "project not found")
             return web.json_response(res)
@@ -550,6 +572,112 @@ async def gg_trash_list(request):
         log.exception("[gonggan-cut] trash list failed")
         return _err(500, str(ex))
     return web.json_response({"ok": True, "items": items})
+
+
+@routes.get("/gonggan/history")
+async def gg_history_get(request):
+    pid = request.query.get("pid", "")
+    if not pid:
+        return _err(400, "pid required")
+    try:
+        if gg_native_api.is_native_pid(pid):
+            doc = await asyncio.to_thread(gg_native_api.native_history_get, pid)
+            if doc is None:
+                return _err(404, "project not found")
+        else:
+            doc = await asyncio.to_thread(_history_mod().load_legacy_history, pid)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] history load failed")
+        return _err(500, str(ex))
+    return web.json_response(doc)
+
+
+@routes.post("/gonggan/history")
+async def gg_history_put(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    try:
+        if gg_native_api.is_native_pid(pid):
+            doc = await asyncio.to_thread(gg_native_api.native_history_put, pid, data)
+            if doc is None:
+                return _err(404, "project not found")
+        else:
+            doc = await asyncio.to_thread(_history_mod().save_legacy_history, pid, data)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] history save failed")
+        return _err(500, str(ex))
+    return web.json_response(doc)
+
+
+@routes.post("/gonggan/history/settings")
+async def gg_history_settings(request):
+    data = await _json_body(request)
+    try:
+        limit = await asyncio.to_thread(_history_mod().save_history_steps, data.get("steps"))
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] history settings failed")
+        return _err(500, str(ex))
+    return web.json_response({"ok": True, "history_steps": limit})
+
+
+@routes.post("/gonggan/version/delete")
+async def gg_version_delete(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    cut_id = data.get("cut_id")
+    version_id = data.get("version_id")
+    step = data.get("history_step")
+    if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
+        return _err(400, "pid required")
+    if not isinstance(cut_id, str) or not cut_id or not isinstance(version_id, str) or not version_id:
+        return _err(400, "cut_id and version_id required")
+    if not isinstance(step, str) or not step:
+        return _err(400, "history_step required")
+    try:
+        res = await asyncio.to_thread(gg_native_api.native_delete_version, pid, cut_id, version_id, step)
+    except FileNotFoundError:
+        return _err(404, "version not found")
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] version delete failed")
+        return _err(500, str(ex))
+    if res is None:
+        return _err(404, "project not found")
+    return web.json_response(res)
+
+
+@routes.post("/gonggan/version/restore")
+async def gg_version_restore(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    cut_id = data.get("cut_id")
+    version_id = data.get("version_id")
+    step = data.get("history_step")
+    if not isinstance(pid, str) or not gg_native_api.is_native_pid(pid):
+        return _err(400, "pid required")
+    if not isinstance(cut_id, str) or not cut_id or not isinstance(version_id, str) or not version_id:
+        return _err(400, "cut_id and version_id required")
+    if not isinstance(step, str) or not step:
+        return _err(400, "history_step required")
+    try:
+        res = await asyncio.to_thread(gg_native_api.native_restore_version, pid, cut_id, version_id, step)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] version restore failed")
+        return _err(500, str(ex))
+    if res is None:
+        return _err(404, "project not found")
+    return web.json_response(res)
 
 
 @routes.post("/gonggan/cut/update")

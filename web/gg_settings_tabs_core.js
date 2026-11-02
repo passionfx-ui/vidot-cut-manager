@@ -10,13 +10,13 @@ export const SETTINGS_TAB_LABELS = {
 
 /**
  * Markers that must sit in that pane of openProjectSettingsModal.
- * Global = app-wide (gonggan_settings.json): Use AI, the AI model, scanned model folders.
+ * Global = app-wide (gonggan_settings.json): Use AI, the AI model, scanned model folders, History steps.
  * This Project = saved on the project: output folder, templates, generation.
  * An empty project folder still means the plugin default; there is no second output-folder key.
  */
 export const SETTINGS_PANE_MARKERS = {
   project: ["gg-modal-folder", "genSettingsModalHtml", "templateFieldHtml"],
-  global: ["gg-use-ai-field", "gg-cut-split-model-field", "gg-ai-model-dirs"],
+  global: ["gg-use-ai-field", "gg-cut-split-model-field", "gg-ai-model-dirs", "gg-history-steps-field"],
 };
 
 /** Existing controls. Unknown ids are not assigned. */
@@ -24,6 +24,7 @@ const CONTROL_TAB = {
   use_ai: SETTINGS_TAB_GLOBAL,
   ai_model: SETTINGS_TAB_GLOBAL,
   ai_model_folders: SETTINGS_TAB_GLOBAL,
+  history_steps: SETTINGS_TAB_GLOBAL,
   gen_aspect: SETTINGS_TAB_PROJECT,
   resolution: SETTINGS_TAB_PROJECT,
   custom_size: SETTINGS_TAB_PROJECT,
