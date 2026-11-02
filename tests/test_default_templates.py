@@ -166,8 +166,14 @@ class StartImageNodeTests(unittest.TestCase):
         api = {"5": {"class_type": "LoadImage", "inputs": {"image": "fox.jpg"}, "_meta": {"title": "Start Image"}}}
         self.assertEqual(wn.set_start_image(api, "gonggan/a.png"), "5")
         self.assertEqual(api["5"]["inputs"]["image"], "gonggan/a.png")
-        with self.assertRaises(ValueError):
-            wn.set_start_image(_ui([{"id": 1, "type": "LoadImage"}]), "x.png")
+        ui = _ui([{
+            "id": 1, "type": "LoadImage", "title": "Start Image",
+            "widgets_values": ["fox.jpg", "image"],
+            "widgets_values_named": {"image": "fox.jpg", "upload": "image"},
+        }])
+        self.assertEqual(wn.set_start_image(ui, "gonggan/start_v.png"), "1")
+        self.assertEqual(ui["nodes"][0]["widgets_values"][0], "gonggan/start_v.png")
+        self.assertEqual(ui["nodes"][0]["widgets_values_named"]["image"], "gonggan/start_v.png")
 
 
 class ProjectDefaultsBase(unittest.TestCase):

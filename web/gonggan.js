@@ -183,6 +183,7 @@ import {
   versionWorkflowSourceOrder,
   workflowFromVersionRecord,
 } from "./gg_rep_wf_core.js";
+import { syncSavedVideoStartImage } from "./gg_start_image_core.js";
 import {
   cutHeaderParts,
   formatShotTabLabel,
@@ -2753,6 +2754,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   const loadTarget = existingAtPath || loadName;
   ensureWorkflowManagerActive();
   if (isLoadTokenStale(loadToken)) return false;
+  syncSavedVideoStartImage(workflow);
   const tabCountBefore = (ws?.openWorkflows || []).length;
   const wantTypes = workflowNodeTypes(workflow);
   try {

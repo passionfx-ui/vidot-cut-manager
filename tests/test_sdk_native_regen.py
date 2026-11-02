@@ -218,5 +218,29 @@ class NativeRunTests(NativeBase):
         run.assert_not_called()
 
 
+class SavedVideoStartImageTests(NativeBase):
+    def _saved(self, plan):
+        return json.loads((self.regen_dir / f"{plan['plan']}.json").read_text(encoding="utf-8"))
+
+    def test_regen_wires_cut_image_into_saved_start_image(self):
+        saved = {
+            "78": {"class_type": "LoadImage", "inputs": {"image": "fox.jpg"}, "_meta": {"title": "Start Image"}},
+            "41": {"class_type": "SaveAnimatedWEBP", "inputs": {"images": ["78", 0], "filename_prefix": "x"}},
+        }
+        vid = self._version("clip.mp4", saved)
+        with mock.patch.object(na, "pick_start_version", return_value=({"id": "still1"}, self.root / "a.png")), \
+                mock.patch.object(na, "stage_start_image", return_value="gonggan/start_still1.png") as stage:
+            plan = gg_sdk.native_regen_video_plan(self.pid, self.cut, vid["id"], new_seed=False)
+        stage.assert_called_once()
+        self.assertEqual(self._saved(plan)["78"]["inputs"]["image"], "gonggan/start_still1.png")
+        self.assertEqual(saved["78"]["inputs"]["image"], "fox.jpg")
+
+    def test_regen_without_start_image_node_is_unchanged(self):
+        saved = {"41": {"class_type": "SaveAnimatedWEBP", "inputs": {"filename_prefix": "x"}}}
+        vid = self._version("t2v.mp4", saved)
+        plan = gg_sdk.native_regen_video_plan(self.pid, self.cut, vid["id"], new_seed=False)
+        self.assertEqual(self._saved(plan)["41"]["inputs"]["filename_prefix"], "x")
+
+
 if __name__ == "__main__":
     unittest.main()

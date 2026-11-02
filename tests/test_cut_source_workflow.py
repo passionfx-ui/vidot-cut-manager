@@ -166,7 +166,9 @@ class NativeCutSourceIntegrationTests(unittest.TestCase):
     def test_video_tab_gets_start_image_and_description(self):
         """Make Video tab: project Video template, selected image in Start Image, description in Prompt."""
         video_tpl = {"nodes": [
-            {"id": 1, "type": "LoadImage", "title": "Start Image", "widgets_values": ["old.png", "image"]},
+            {"id": 1, "type": "LoadImage", "title": "Start Image",
+             "widgets_values": ["old.png", "image"],
+             "widgets_values_named": {"image": "old.png", "upload": "image"}},
             {"id": 2, "type": "CLIPTextEncode", "title": "Prompt", "widgets_values": ["old"]},
         ], "links": [], "version": 0.4}
         doc = self.store.create_project("P")
@@ -179,6 +181,7 @@ class NativeCutSourceIntegrationTests(unittest.TestCase):
             data = na.native_cut_source_workflow(pid, cut_id, kind="video")
         nodes = {n["id"]: n for n in data["workflow"]["nodes"]}
         self.assertEqual(nodes[1]["widgets_values"][0], f"gonggan/start_{v_img['id']}.png")
+        self.assertEqual(nodes[1]["widgets_values_named"]["image"], f"gonggan/start_{v_img['id']}.png")
         self.assertEqual(nodes[2]["widgets_values"][0], "a cat runs")
         self.assertEqual(video_tpl["nodes"][1]["widgets_values"][0], "old")
         # image request still opens the image workflow

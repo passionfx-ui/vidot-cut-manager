@@ -156,11 +156,33 @@ def find_start_image_node(graph: dict, *, titled_only: bool = False) -> tuple[st
     raise NodeNotFound(START_IMAGE_MISSING)
 
 
+def _write_ui_image_value(node: dict, image_name: str) -> None:
+    """Write the filename into both widget stores. Saved graphs restore widgets_values_named over the array."""
+    wv = node.get("widgets_values")
+    if isinstance(wv, dict):
+        wv["image"] = image_name
+    elif isinstance(wv, list) and wv:
+        wv[0] = image_name
+    else:
+        node["widgets_values"] = [image_name, "image"]
+    named = node.get("widgets_values_named")
+    if not isinstance(named, dict):
+        named = {}
+        node["widgets_values_named"] = named
+    named["image"] = image_name
+    if named.get("upload") is None:
+        named["upload"] = "image"
+
+
 def set_start_image(graph: dict, image_name: str, *, titled_only: bool = False) -> str:
-    """Point the start image node of an API prompt at `image_name` (a ComfyUI input file); returns the node id."""
-    if is_ui(graph):
-        raise ValueError("convert the workflow to API format first")
+    """Point the start image node at `image_name` (a ComfyUI input file); returns the node id.
+
+    UI graphs get widgets_values and widgets_values_named (ComfyUI restores the named file).
+    API prompts get inputs.image."""
     nid, node = find_start_image_node(graph, titled_only=titled_only)
+    if is_ui(graph):
+        _write_ui_image_value(node, image_name)
+        return nid
     inputs = node.setdefault("inputs", {})
     if isinstance(inputs.get("image"), list):
         raise NodeNotFound(f"The {START_IMAGE_TITLE} node gets its image from another node; it must be a Load Image node.")

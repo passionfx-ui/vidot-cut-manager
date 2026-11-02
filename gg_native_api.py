@@ -702,15 +702,7 @@ def _video_tab_workflow(pid: str, cut_id: str, doc: dict, cut: dict) -> dict | N
     try:
         ver, path = pick_start_version(pid, cut_id)
         image = stage_start_image(path, ver["id"])
-        if gg_wfnodes.is_ui(g):
-            _nid, node = gg_wfnodes.find_start_image_node(g)
-            wv = node.get("widgets_values")
-            if isinstance(wv, list) and wv:
-                wv[0] = image
-            else:
-                node["widgets_values"] = [image, "image"]
-        else:
-            gg_wfnodes.set_start_image(g, image)
+        gg_wfnodes.set_start_image(g, image)
     except (ValueError, OSError, ImportError):
         pass
     return g

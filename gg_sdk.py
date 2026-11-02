@@ -412,6 +412,20 @@ def native_plan(pid: str, cut_id: str, *, new_seed: bool, canvas: dict | None = 
             **({"start_version": start} if start else {})}
 
 
+def _wire_saved_video_start_image(na, pid: str, cut_id: str, wf: dict) -> None:
+    """Saved video workflows keep whatever file was in Start Image. Point that node at the cut's still image."""
+    try:
+        na.gg_wfnodes.find_start_image_node(wf)
+    except na.gg_wfnodes.NodeNotFound:
+        return
+    try:
+        ver, path = na.pick_start_version(pid, cut_id)
+        image = na.stage_start_image(path, ver["id"])
+        na.gg_wfnodes.set_start_image(wf, image)
+    except (na.gg_wfnodes.NodeNotFound, ValueError, OSError):
+        return
+
+
 def native_regen_video_plan(pid: str, cut_id: str, video_vid: str, *, new_seed: bool = False) -> dict:
     """Regenerate a selected video version: its saved/API workflow with Queue or new seeds."""
     na = _native_api()
@@ -457,6 +471,7 @@ def native_regen_video_plan(pid: str, cut_id: str, video_vid: str, *, new_seed: 
     if gg_ltx.workflow_has_ltx_length(wf):
         wf = na._apply_cut_prompt_to_workflow(wf, cut, require=True, video=True)
     wf = copy.deepcopy(wf)
+    _wire_saved_video_start_image(na, pid, cut_id, wf)
     gen_size = _project_gen_size(doc, wf, video=True)
     if new_seed:
         wf, seeds = randomize_seeds(wf)

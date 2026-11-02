@@ -124,14 +124,21 @@ def ui_to_api(graph: dict, mappings: dict | None = None) -> dict:
             raise ValueError(f'node {nid} "{ntype}" is not a known node type')
         inputs: dict[str, Any] = {}
         vals = n.get("widgets_values")
+        named = n.get("widgets_values_named") if isinstance(n.get("widgets_values_named"), dict) else {}
         if isinstance(vals, dict):
             inputs.update({name: vals[name] for name, _d, _x in spec if name in vals})
+            for name, _d, _x in spec:
+                if inputs.get(name) in (None, "") and named.get(name) not in (None, ""):
+                    inputs[name] = named[name]
         else:
             vals = vals if isinstance(vals, list) else []
             pos = 0
             for name, default, extra in spec:
-                if pos < len(vals):
-                    inputs[name] = vals[pos]
+                got = vals[pos] if pos < len(vals) else None
+                if got in (None, "") and named.get(name) not in (None, ""):
+                    got = named[name]
+                if got not in (None, ""):
+                    inputs[name] = got
                 elif default is not None:
                     inputs[name] = default
                 pos += 1 + extra

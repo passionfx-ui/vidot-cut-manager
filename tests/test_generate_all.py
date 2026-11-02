@@ -56,6 +56,15 @@ class ConvertTests(unittest.TestCase):
         self.assertEqual(api["78"]["inputs"], {"image": "fox.jpg"})
         self.assertEqual(api["82"]["inputs"], {"img_compression": 40, "image": ["78", 0]})
 
+    def test_named_widget_fills_empty_start_image(self):
+        g = {"nodes": [{
+            "id": 78, "type": "LoadImage", "mode": 0, "title": "Start Image",
+            "widgets_values": [],
+            "widgets_values_named": {"image": "gonggan/start_cut.png", "upload": "image"},
+        }], "links": []}
+        api = gg_wfconvert.ui_to_api(g, mappings={})
+        self.assertEqual(api["78"]["inputs"]["image"], "gonggan/start_cut.png")
+
     def test_uses_comfyui_input_types_when_available(self):
         class KSampler:
             @classmethod
