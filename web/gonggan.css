@@ -523,16 +523,9 @@
 .gg-shots .gg-cut-fields textarea[readonly] { opacity: 0.92; cursor: default; }
 
 /* Timeline bottom panel: viewer (left) + editor (right) */
-.gg-timeline { display: flex; flex-direction: column; background: var(--gg-bg); outline: none; min-height: 220px; height: 100%; max-height: 100%; overflow: hidden; box-sizing: border-box; }
-.gg-timeline .gg-tl-resize {
-  flex: 0 0 8px;
-  min-height: 8px;
-  cursor: ns-resize;
-  background: linear-gradient(var(--gg-line), var(--gg-line)) center/100% 1px no-repeat;
-  touch-action: none;
-  user-select: none;
-}
-.gg-timeline .gg-tl-resize:hover { background-color: rgba(110, 224, 122, 0.12); }
+.gg-timeline { display: flex; flex-direction: column; background: var(--gg-bg); outline: none; min-height: 0; height: auto; max-height: none; overflow: hidden; box-sizing: border-box; }
+.gg-timeline .gg-tl-resize { display: none; pointer-events: none; flex: 0 0 0; height: 0; min-height: 0; }
+html.gg-bottom-anchored [data-testid="graph-canvas-gutter"] { pointer-events: none; cursor: default; flex-basis: 0; height: 0; min-height: 0; overflow: hidden; }
 .gg-timeline .gg-tl-main { display: flex; flex-direction: row; flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .gg-tl-scrub-overlay,
 .gg-tl-drag-overlay { position: fixed; inset: 0; z-index: 100000; touch-action: none; }
@@ -596,13 +589,13 @@
 .gg-timeline .gg-play-btn { min-width: 40px; font-size: 13px; }
 .gg-timeline .gg-clock { font-variant-numeric: tabular-nums; font-family: ui-monospace, Consolas, monospace; flex: 1; }
 .gg-root .gg-btn.gg-on { border-color: var(--gg-acc); color: var(--gg-acc); }
-.gg-timeline .gg-editor { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.gg-timeline .gg-editor { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 .gg-timeline .gg-tl-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 4px 8px; border-bottom: 1px solid var(--gg-line); }
 .gg-timeline .gg-tl-title { font-weight: 600; white-space: nowrap; }
 .gg-timeline .gg-tl-info { color: var(--gg-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .gg-timeline .gg-tip { flex: 1 1 0; min-width: 0; color: var(--gg-acc); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gg-timeline .gg-error[hidden] { display: none; }
-.gg-timeline .gg-tl-scroll { overflow-x: auto; overflow-y: hidden; flex: 1; padding: 0 8px 6px; scrollbar-width: none; }
+.gg-timeline .gg-tl-scroll { overflow-x: auto; overflow-y: hidden; flex: 1; min-height: 0; padding: 0 8px 6px; scrollbar-width: none; }
 .gg-timeline .gg-tl-scroll::-webkit-scrollbar { display: none; }
 .gg-timeline .gg-zoombar { position: relative; flex: 0 0 auto; height: 12px; margin: 0 8px 6px; border: 1px solid var(--gg-line); border-radius: 7px; background: rgba(0,0,0,.25); }
 .gg-timeline .gg-zb-thumb { position: absolute; top: 0; bottom: 0; left: 0; width: 100%; min-width: 0; box-sizing: border-box; border-radius: 6px; background: #4a5160; cursor: grab; touch-action: none; user-select: none; }

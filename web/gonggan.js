@@ -352,26 +352,19 @@ import {
   PROJECT_NAME_MAX_LEN,
 } from "./gg_ask_text_core.js";
 import {
-  TIMELINE_MIN_HEIGHT,
   loadTimelineOpen,
   saveTimelineOpen,
-  loadTimelineHeight,
-  saveTimelineHeight,
-  clampHeight,
-  firstShowTimelineHeight,
-  capMeasuredTimelineForFirstShow,
-  bottomPanelPercent,
-  bottomPanelSplitterTotal,
-  timelineHeightFromDrag,
-  timelineHeightFromPointer,
-  timelinePanelChrome,
-  timelineLayoutChrome,
-  panelHeightForTimelineHeight,
   shouldIgnoreShortcut,
   pluginKeyScopeActive,
   timelineShortcutAllowed,
   timelineToggleTooltip,
 } from "./gg_timeline_toggle_core.js";
+import {
+  fixedTimelineBodyHeight,
+  fixedPanelChrome,
+  fixedBottomPanelHeight,
+  anchoredBottomPanelBox,
+} from "./gg_bottom_panel_layout_core.js";
 import {
   JOB_HISTORY_DOCK_SETTING_ID,
   readHeldDock,
@@ -5971,70 +5964,14 @@ function comfyPromptDialogOpen() {
   return !!document.querySelector(".p-dialog-mask, .p-dialog-enter-active, .p-dialog-visible");
 }
 
-function measureTimelineHeight() {
-  const el = document.querySelector(".gg-timeline");
-  const panel = document.querySelector(".bottom-panel");
-  if (!el || !el.isConnected || !isTimelinePanelOpen()) return 0;
-  const cap = clampHeight(1e9, window.innerHeight, TIMELINE_MIN_HEIGHT);
-  const styled = parseInt(el.style.height, 10);
-  if (Number.isFinite(styled) && styled > 0) return styled;
-  if (panel) {
-    const chrome = measureTimelinePanelChrome(panel, el);
-    const fromPanel = panel.getBoundingClientRect().height - chrome;
-    if (fromPanel > TIMELINE_MIN_HEIGHT - 1) return Math.min(fromPanel, cap);
-  }
-  return Math.min(el.getBoundingClientRect().height, cap);
-}
-
-function measureTimelinePanelChrome(panel, timelineEl) {
-  if (!panel || !timelineEl) return 0;
-  const pr = panel.getBoundingClientRect();
-  const tr = timelineEl.getBoundingClientRect();
-  const layout = timelineLayoutChrome(
-    { top: pr.top, bottom: pr.bottom },
-    { top: tr.top, bottom: tr.bottom },
-  );
-  return Math.max(layout, timelinePanelChrome(pr.height, tr.height));
-}
-
-/** @param {number|null|undefined} fixedChrome px from drag start; omit to measure live chrome */
-function applyTimelinePanelHeight(panel, timelineEl, timelineWant, fixedChrome = undefined, forceExact = false) {
-  if (!panel || !timelineEl) return TIMELINE_MIN_HEIGHT;
-  const wantT = clampHeight(timelineWant, window.innerHeight, TIMELINE_MIN_HEIGHT);
-  const chrome =
-    fixedChrome != null && Number.isFinite(Number(fixedChrome))
-      ? Math.max(0, Number(fixedChrome))
-      : measureTimelinePanelChrome(panel, timelineEl);
-  const nestedPane = panel.closest(".p-splitterpanel-nested");
-  const nestedH = nestedPane?.getBoundingClientRect().height || 0;
-  let fitT = wantT;
-  if (nestedH > 0) fitT = Math.min(fitT, Math.max(TIMELINE_MIN_HEIGHT, nestedH - chrome));
-  let panelWant = Math.min(
-    panelHeightForTimelineHeight(fitT, chrome),
-    nestedH > 0 ? nestedH : panelHeightForTimelineHeight(fitT, chrome),
-  );
-  shrinkBottomPanelTo(panel, panelWant);
-  panel.style.minHeight = "";
-  const panelH = panel.getBoundingClientRect().height;
-  const liveChrome = measureTimelinePanelChrome(panel, timelineEl);
-  const syncT = forceExact
-    ? fitT
-    : Math.min(fitT, Math.max(TIMELINE_MIN_HEIGHT, panelH - liveChrome));
-  timelineEl.style.height = `${syncT}px`;
-  timelineEl.style.minHeight = `${syncT}px`;
-  timelineEl.style.flex = "0 0 auto";
-  return syncT;
-}
-
 let timelineHeightRestoreRaf = 0;
-let timelineRestoreFrames = 0;
 let timelineHeightObserver = null;
-// No saved height yet: the first Timeline show shrinks ComfyUI's default bottom panel height by half.
-let timelineFirstShowPending = loadTimelineHeight(localStorage) == null;
 let timelineEditModeOn = loadEditPreviewMode(localStorage);
 let editPreviewLayoutRaf = 0;
 let editPreviewObserver = null;
 let editPreviewLoadToken = 0;
+let bottomAnchorLock = false;
+let bottomAnchorHoldOff = false;
 
 function canvasSplitter() {
   const panel = document.querySelector(".bottom-panel");
@@ -6044,69 +5981,120 @@ function canvasSplitter() {
   return gutter?.closest(".p-splitter") || null;
 }
 
-/** Resize bottom panel to `want` px (splitter % within nested canvas pane). */
-function shrinkBottomPanelTo(panel, want) {
-  const splitter = canvasSplitter();
-  const nestedPane = panel?.closest(".p-splitterpanel-nested");
-  const total = bottomPanelSplitterTotal(
-    nestedPane?.getBoundingClientRect().height,
-    splitter?.getBoundingClientRect().height,
-  );
-  if (!splitter || total <= 40) return;
-  const cappedWant = Math.min(Number(want) || 0, total - 40);
-  if (cappedWant < TIMELINE_MIN_HEIGHT - 1) return;
-  const panes = [...splitter.children].filter((x) => x.getAttribute("data-pc-name") === "splitterpanel");
-  const bi = panes.indexOf(panel);
-  if (panes.length !== 2 || bi < 0) return;
-  const bottomPct = bottomPanelPercent(cappedWant, total);
-  const basis = (el, pct) => {
-    const cur = el.style.flexBasis || "";
-    el.style.flexBasis = /^calc\(\s*[\d.]+%/.test(cur) ? cur.replace(/^calc\(\s*[\d.]+%/, `calc(${pct}%`) : `${pct}%`;
-  };
-  basis(panes[bi], bottomPct);
-  basis(panes[1 - bi], 100 - bottomPct);
-  try {
-    localStorage.setItem("bottom-panel-splitter", JSON.stringify(bi === 1 ? [100 - bottomPct, bottomPct] : [bottomPct, 100 - bottomPct]));
-  } catch (_) {}
+function bottomPanelShown() {
+  return !!app.extensionManager?.bottomPanel?.bottomPanelVisible;
 }
 
-function applyStoredTimelinePanelHeight() {
-  if (!isTimelinePanelOpen()) return;
+function rememberInlineStyle(el) {
+  if (!el || el.dataset.ggStyleSaved === "1") return;
+  el.dataset.ggStyleSaved = "1";
+  el.dataset.ggStylePrev = el.getAttribute("style") || "";
+}
+
+function restoreInlineStyle(el) {
+  if (!el || el.dataset.ggStyleSaved !== "1") return;
+  const prev = el.dataset.ggStylePrev || "";
+  if (prev) el.setAttribute("style", prev);
+  else el.removeAttribute("style");
+  delete el.dataset.ggStyleSaved;
+  delete el.dataset.ggStylePrev;
+}
+
+function clearAnchoredBottomPanel() {
+  document.documentElement.classList.remove("gg-bottom-anchored");
   const panel = document.querySelector(".bottom-panel");
-  const timelineEl = document.querySelector(".gg-timeline");
-  if (!panel || !timelineEl) return;
-  const curT = measureTimelineHeight();
-  if (timelineFirstShowPending) {
-    if (curT < 60) return;  // not laid out yet
-    const nestedPane = panel.closest(".p-splitterpanel-nested");
-    const nestedH = nestedPane?.getBoundingClientRect().height || 0;
-    if (nestedH < 80) return;
-    const chrome = measureTimelinePanelChrome(panel, timelineEl);
-    const nestedAvail = Math.max(0, nestedH - chrome);
-    const baseT = capMeasuredTimelineForFirstShow(curT, nestedAvail);
-    const wantT = firstShowTimelineHeight(baseT, window.innerHeight);
-    timelineFirstShowPending = false;
-    if (wantT < baseT - 8) applyTimelinePanelHeight(panel, timelineEl, wantT);
-    else applyTimelinePanelHeight(panel, timelineEl, baseT);
-    saveTimelineHeight(localStorage, measureTimelineHeight() || wantT);
-    window.dispatchEvent(new Event("resize"));
+  const splitter = canvasSplitter();
+  const gutter = document.querySelector('[data-testid="graph-canvas-gutter"]');
+  restoreInlineStyle(panel);
+  restoreInlineStyle(splitter);
+  restoreInlineStyle(gutter);
+  if (panel) delete panel.dataset.ggBottomAnchor;
+}
+
+function readAnchorChrome(panel, timelineEl) {
+  const pr = panel.getBoundingClientRect();
+  const tr = timelineEl.getBoundingClientRect();
+  const tablist = panel.querySelector("[role='tablist']");
+  const tabH = tablist ? tablist.getBoundingClientRect().height : 0;
+  return fixedPanelChrome({ top: pr.top, bottom: pr.bottom }, { top: tr.top, bottom: tr.bottom }, tabH);
+}
+
+/** Fixed height, no resize handle, glued to the screen bottom. Edit mode uses the same height. */
+function applyAnchoredBottomPanel() {
+  if (bottomAnchorLock || bottomAnchorHoldOff) return;
+  const panel = document.querySelector(".bottom-panel");
+  if (!panel || !bottomPanelShown()) {
+    if (panel?.dataset.ggBottomAnchor === "1") clearAnchoredBottomPanel();
     return;
   }
-  const stored = loadTimelineHeight(localStorage);
-  const wantT = clampHeight(stored || TIMELINE_MIN_HEIGHT, window.innerHeight, TIMELINE_MIN_HEIGHT);
-  if (Math.abs(curT - wantT) <= 8) return;
-  applyTimelinePanelHeight(panel, timelineEl, wantT, undefined, true);
-  window.dispatchEvent(new Event("resize"));
+  const timelineEl = document.querySelector(".gg-timeline");
+  if (!timelineEl || !timelineEl.getClientRects().length) return;
+  const chrome = readAnchorChrome(panel, timelineEl);
+  const body = fixedTimelineBodyHeight();
+  const panelH = fixedBottomPanelHeight(chrome, timelineEditModeOn);
+  const splitter = canvasSplitter();
+  const sr = splitter?.getBoundingClientRect();
+  const pr = panel.getBoundingClientRect();
+  const box = anchoredBottomPanelBox({
+    viewportHeight: window.innerHeight,
+    height: panelH,
+    left: sr && sr.width > 8 ? sr.left : pr.left,
+    width: sr && sr.width > 8 ? sr.width : pr.width,
+  });
+  if (box.width < 8) return;
+  const padOk = !splitter || (parseFloat(splitter.style.paddingBottom) || 0) === box.height;
+  const placed =
+    panel.dataset.ggBottomAnchor === "1" &&
+    Math.abs(pr.height - box.height) <= 1 &&
+    Math.abs(pr.left - box.left) <= 1 &&
+    Math.abs(pr.width - box.width) <= 1 &&
+    Math.abs(window.innerHeight - pr.bottom - box.bottom) <= 1;
+  const timelineSized = Math.abs((parseFloat(timelineEl.style.height) || 0) - body) <= 0.5;
+  if (placed && timelineSized && padOk) return;
+  bottomAnchorLock = true;
+  try {
+    timelineEl.style.height = `${body}px`;
+    timelineEl.style.minHeight = `${body}px`;
+    timelineEl.style.maxHeight = `${body}px`;
+    timelineEl.style.flex = "0 0 auto";
+    rememberInlineStyle(panel);
+    rememberInlineStyle(splitter);
+    panel.dataset.ggBottomAnchor = "1";
+    panel.style.setProperty("position", box.position, "important");
+    panel.style.setProperty("bottom", `${box.bottom}px`, "important");
+    panel.style.setProperty("left", `${box.left}px`, "important");
+    panel.style.setProperty("width", `${box.width}px`, "important");
+    panel.style.setProperty("height", `${box.height}px`, "important");
+    panel.style.setProperty("min-height", `${box.height}px`, "important");
+    panel.style.setProperty("max-height", `${box.height}px`, "important");
+    panel.style.setProperty("flex-shrink", "0", "important");
+    panel.style.setProperty("z-index", "20", "important");
+    document.documentElement.classList.add("gg-bottom-anchored");
+    if (splitter) {
+      splitter.style.setProperty("box-sizing", "border-box", "important");
+      splitter.style.setProperty("padding-bottom", `${box.height}px`, "important");
+    }
+    const gutter = document.querySelector('[data-testid="graph-canvas-gutter"]');
+    if (gutter) {
+      rememberInlineStyle(gutter);
+      gutter.style.setProperty("pointer-events", "none", "important");
+      gutter.style.setProperty("flex-basis", "0px", "important");
+      gutter.style.setProperty("height", "0px", "important");
+      gutter.style.setProperty("min-height", "0px", "important");
+      gutter.style.setProperty("overflow", "hidden", "important");
+      gutter.style.setProperty("margin", "0", "important");
+    }
+  } finally {
+    bottomAnchorLock = false;
+  }
 }
 
 function scheduleRestoreTimelinePanelHeight() {
   cancelAnimationFrame(timelineHeightRestoreRaf);
   let frames = 0;
-  timelineRestoreFrames = 12;
   const step = () => {
-    applyStoredTimelinePanelHeight();
+    applyAnchoredBottomPanel();
     frames += 1;
-    timelineRestoreFrames = Math.max(0, 12 - frames);
     if (frames < 12) timelineHeightRestoreRaf = requestAnimationFrame(step);
   };
   timelineHeightRestoreRaf = requestAnimationFrame(step);
@@ -6117,17 +6105,23 @@ function startTimelineHeightObserver() {
   const panel = document.querySelector(".bottom-panel");
   if (!panel || !window.ResizeObserver) return;
   timelineHeightObserver = new ResizeObserver(() => {
-    if (!isTimelinePanelOpen() || timelineFirstShowPending || ed.tlResizing || timelineRestoreFrames > 0) return;
-    const timelineEl = document.querySelector(".gg-timeline");
-    if (!timelineEl) return;
-    const h = measureTimelineHeight();
-    const styled = parseInt(timelineEl.style.height, 10);
-    if (Number.isFinite(styled) && styled > 0 && h < styled - 12) return;
-    if (h >= TIMELINE_MIN_HEIGHT) {
-      saveTimelineHeight(localStorage, clampHeight(h, window.innerHeight, TIMELINE_MIN_HEIGHT));
+    if (bottomAnchorLock || bottomAnchorHoldOff) return;
+    if (!bottomPanelShown()) {
+      if (panel.dataset.ggBottomAnchor === "1") clearAnchoredBottomPanel();
+      return;
     }
+    applyAnchoredBottomPanel();
   });
   timelineHeightObserver.observe(panel);
+  const splitter = canvasSplitter();
+  if (splitter) timelineHeightObserver.observe(splitter);
+}
+
+if (!globalThis.__ggBottomPanelAnchorResize) {
+  globalThis.__ggBottomPanelAnchorResize = true;
+  window.addEventListener("resize", () => {
+    applyAnchoredBottomPanel();
+  });
 }
 
 function syncTimelineToggleButtons() {
@@ -6140,6 +6134,7 @@ function syncTimelineToggleButtons() {
 }
 
 function openTimelinePanelInternal() {
+  bottomAnchorHoldOff = false;
   const cmd = app.extensionManager?.command;
   if (!cmd?.execute) return;
   if (isTimelinePanelOpen()) {
@@ -6160,10 +6155,9 @@ function closeTimelinePanel() {
   const cmd = app.extensionManager?.command;
   if (!cmd?.execute) return;
   if (!isTimelinePanelOpen()) return;
-  const h = measureTimelineHeight();
-  if (h >= TIMELINE_MIN_HEIGHT && !timelineFirstShowPending) {
-    saveTimelineHeight(localStorage, clampHeight(h, window.innerHeight, TIMELINE_MIN_HEIGHT));
-  }
+  bottomAnchorHoldOff = true;
+  cancelAnimationFrame(timelineHeightRestoreRaf);
+  clearAnchoredBottomPanel();
   cmd.execute(`Workspace.ToggleBottomPanelTab.${TIMELINE_TAB}`);
 }
 
@@ -9874,12 +9868,13 @@ function mountTimeline(el) {
   const root = document.createElement("div");
   root.className = "gg-root gg-timeline";
   root.tabIndex = -1;
-  root.style.height = `${TIMELINE_MIN_HEIGHT}px`;
-  root.style.minHeight = `${TIMELINE_MIN_HEIGHT}px`;
+  const timelineBodyPx = fixedTimelineBodyHeight();
+  root.style.height = `${timelineBodyPx}px`;
+  root.style.minHeight = `${timelineBodyPx}px`;
+  root.style.maxHeight = `${timelineBodyPx}px`;
   root.style.flex = "0 0 auto";
   el.appendChild(root);
   root.innerHTML = `
-    <div class="gg-tl-resize" title="Drag to resize timeline" role="separator" aria-label="Drag to resize timeline"></div>
     <div class="gg-tl-main">
     <div class="gg-viewer">
       <div class="gg-screen">
@@ -10042,75 +10037,6 @@ function mountTimeline(el) {
   const zoomRo = window.ResizeObserver ? new ResizeObserver(() => paintZoomBar(root)) : null;
   if (zoomRo) { zoomRo.observe(tlWrap); zoomRo.observe(zoomBar); }
   $r(".gg-reset").addEventListener("click", resetEdit);
-  const bindTimelineResize = () => {
-    const handle = $r(".gg-tl-resize");
-    if (!handle || handle._ggResizeBound) return;
-    handle._ggResizeBound = true;
-    handle.addEventListener("pointerdown", (e) => {
-      if (e.button) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const panel = document.querySelector(".bottom-panel");
-      const timelineEl = handle.closest(".gg-timeline");
-      if (!panel || !timelineEl) return;
-      const startY = e.clientY;
-      const startTimelineH = Math.max(
-        timelineEl.getBoundingClientRect().height,
-        measureTimelineHeight() || 0,
-      );
-      const startChrome = measureTimelinePanelChrome(panel, timelineEl);
-      const overlay = document.createElement("div");
-      overlay.className = "gg-tl-drag-overlay";
-      document.body.appendChild(overlay);
-      ed.tlResizing = true;
-      let raf = 0;
-      let pendingY = startY;
-      let lastDragWant = startTimelineH;
-      const apply = (y) => {
-        let wantT = timelineHeightFromPointer(startTimelineH, startY, y, window.innerHeight);
-        lastDragWant = wantT;
-        applyTimelinePanelHeight(panel, timelineEl, wantT, startChrome, true);
-        fit();
-      };
-      const move = (ev) => {
-        pendingY = ev.clientY;
-        if (raf) return;
-        raf = requestAnimationFrame(() => { raf = 0; apply(pendingY); });
-      };
-      const up = (ev) => {
-        overlay.removeEventListener("pointermove", move);
-        overlay.removeEventListener("pointerup", up);
-        overlay.removeEventListener("pointercancel", up);
-        window.removeEventListener("pointermove", move, true);
-        window.removeEventListener("mousemove", move, true);
-        window.removeEventListener("pointerup", up, true);
-        window.removeEventListener("mouseup", up, true);
-        window.removeEventListener("pointercancel", up, true);
-        try { overlay.releasePointerCapture(ev.pointerId); } catch (_) {}
-        overlay.remove();
-        if (raf) cancelAnimationFrame(raf);
-        apply(ev.clientY ?? pendingY);
-        const h = measureTimelineHeight();
-        saveTimelineHeight(
-          localStorage,
-          clampHeight(h || lastDragWant, window.innerHeight, TIMELINE_MIN_HEIGHT),
-        );
-        window.dispatchEvent(new Event("resize"));
-        ed.tlResizing = false;
-      };
-      try { overlay.setPointerCapture(e.pointerId); } catch (_) {}
-      overlay.addEventListener("pointermove", move);
-      overlay.addEventListener("pointerup", up);
-      overlay.addEventListener("pointercancel", up);
-      window.addEventListener("pointermove", move, true);
-      window.addEventListener("mousemove", move, true);
-      window.addEventListener("pointerup", up, true);
-      window.addEventListener("mouseup", up, true);
-      window.addEventListener("pointercancel", up, true);
-      apply(startY);
-    });
-  };
-  bindTimelineResize();
   scheduleRestoreTimelinePanelHeight();
   const beginTimelineScrub = (e) => {
     if (e.button) return;
@@ -10195,9 +10121,10 @@ function mountTimeline(el) {
   });
   const host = el.parentElement || el;
   const fit = () => {
-    const h = root.getBoundingClientRect().height || host.clientHeight || TIMELINE_MIN_HEIGHT;
+    const bodyH = fixedTimelineBodyHeight();
+    const h = root.getBoundingClientRect().height || host.clientHeight || bodyH;
     const scr = root.querySelector(".gg-screen");
-    const w = Math.max(200, Math.min(host.clientWidth * 0.4, ((h || TIMELINE_MIN_HEIGHT) - 46) * 16 / 9));
+    const w = Math.max(200, Math.min(host.clientWidth * 0.4, ((h || bodyH) - 46) * 16 / 9));
     if (scr) { scr.style.width = Math.round(w) + "px"; scr.style.height = Math.round(w * 9 / 16) + "px"; }
   };
   const ro = window.ResizeObserver ? new ResizeObserver(fit) : null;

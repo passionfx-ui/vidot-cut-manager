@@ -1,0 +1,110 @@
+/** Bottom-panel layout (G2): fixed height, no resize, anchored to the screen bottom. */
+
+export const BOTTOM_PANEL_RESIZABLE = false;
+
+/** Bottom gap at or under this size is panel padding. A taller gap is empty space, not chrome. */
+export const BOTTOM_PAD_CHROME_MAX = 24;
+
+export const TL_FONT_PX = 12;
+export const TL_LINE_HEIGHT = 1.35;
+export const TL_BTN_PAD_Y = 4;
+export const TL_BTN_BORDER_Y = 2;
+export const TL_TOOLS_PAD_Y = 8;
+export const TL_TOOLS_BORDER_Y = 1;
+export const TL_RULER_PX = 20;
+export const TL_TRACK_MIN_PX = 84;
+export const TL_TRACK_MARGIN_TOP_PX = 6;
+export const TL_SCROLL_PAD_BOTTOM_PX = 6;
+/** Horizontal scrollbar (the timeline zoom bar). */
+export const TL_SCROLLBAR_PX = 12;
+export const TL_SCROLLBAR_MARGIN_BOTTOM_PX = 6;
+export const TL_VIEWER_PAD_Y = 12;
+export const TL_SCREEN_MIN_PX = 112;
+export const TL_TRANSPORT_PX = 28;
+export const TL_TRANSPORT_MARGIN_TOP_PX = 6;
+
+/** One tools row: padding, border, and one button line. */
+export function timelineControlRowPx() {
+  const line = Math.ceil(TL_FONT_PX * TL_LINE_HEIGHT);
+  return TL_TOOLS_PAD_Y + TL_TOOLS_BORDER_Y + line + TL_BTN_PAD_Y + TL_BTN_BORDER_Y;
+}
+
+/** Ruler, track, and the scroll padding above the scrollbar. */
+export function timelineTrackStackPx() {
+  return TL_RULER_PX + TL_TRACK_MARGIN_TOP_PX + TL_TRACK_MIN_PX + TL_SCROLL_PAD_BOTTOM_PX;
+}
+
+/** Zoom-bar box plus the margin under it, so overflow does not cut the scrollbar. */
+export function timelineScrollbarBlockPx() {
+  return TL_SCROLLBAR_PX + TL_SCROLLBAR_MARGIN_BOTTOM_PX;
+}
+
+export function timelineEditorBodyPx() {
+  return timelineControlRowPx() + timelineTrackStackPx() + timelineScrollbarBlockPx();
+}
+
+export function timelineViewerBodyPx() {
+  return TL_VIEWER_PAD_Y + TL_SCREEN_MIN_PX + TL_TRANSPORT_MARGIN_TOP_PX + TL_TRANSPORT_PX;
+}
+
+/** Timeline body. Tall enough for the horizontal scrollbar, and no taller. */
+export function fixedTimelineBodyHeight() {
+  return Math.max(timelineEditorBodyPx(), timelineViewerBodyPx());
+}
+
+/**
+ * Tab strip above the timeline, plus a small bottom pad.
+ * Empty space under a short timeline is not chrome.
+ * @param {{ top?: number, bottom?: number }} panelRect
+ * @param {{ top?: number, bottom?: number }} timelineRect
+ * @param {number} [tabListHeight]
+ */
+export function fixedPanelChrome(panelRect, timelineRect, tabListHeight = 0) {
+  const panelTop = Number(panelRect?.top) || 0;
+  const panelBottom = Number(panelRect?.bottom) || 0;
+  const timelineTop = Number(timelineRect?.top) || 0;
+  const timelineBottom = Number(timelineRect?.bottom) || 0;
+  const top = Math.max(0, timelineTop - panelTop);
+  const bottom = Math.max(0, panelBottom - timelineBottom);
+  const tabs = Math.max(0, Number(tabListHeight) || 0);
+  const topChrome = Math.max(top, tabs);
+  const bottomChrome = bottom > 0 && bottom <= BOTTOM_PAD_CHROME_MAX ? bottom : 0;
+  return Math.round(topChrome + bottomChrome);
+}
+
+/**
+ * Bottom panel height for the timeline body plus chrome.
+ * Edit mode uses the same height (the preview is an overlay).
+ * @param {number} chromePx
+ * @param {boolean} [_editMode]
+ */
+export function fixedBottomPanelHeight(chromePx, _editMode = false) {
+  void _editMode;
+  const chrome = Math.max(0, Math.round(Number(chromePx) || 0));
+  return fixedTimelineBodyHeight() + chrome;
+}
+
+/**
+ * Screen-bottom anchor. A floating window's measured box is ignored.
+ * @param {{ viewportHeight: number, height: number, left?: number, width?: number, bottomGap?: number, measuredHeight?: number, measuredTop?: number }} box
+ */
+export function anchoredBottomPanelBox({
+  viewportHeight,
+  height,
+  left = 0,
+  width = 0,
+  bottomGap = 0,
+} = {}) {
+  const h = Math.max(0, Math.round(Number(height) || 0));
+  const vh = Math.max(0, Math.round(Number(viewportHeight) || 0));
+  const gap = Math.max(0, Math.round(Number(bottomGap) || 0));
+  return {
+    position: "fixed",
+    bottom: gap,
+    top: Math.max(0, vh - gap - h),
+    left: Math.round(Number(left) || 0),
+    width: Math.max(0, Math.round(Number(width) || 0)),
+    height: h,
+    resizable: BOTTOM_PANEL_RESIZABLE,
+  };
+}
