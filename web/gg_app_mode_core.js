@@ -114,3 +114,23 @@ export function linearOutputIds(workflow) {
   if (!linear || typeof linear !== "object" || !Array.isArray(linear.outputs)) return null;
   return linear.outputs.map((id) => String(id));
 }
+
+/**
+ * ComfyUI opens App mode when extra.linearMode is true, and the graph editor when it is false.
+ * A missing flag does not choose a mode. Cut copies set true to false and keep linearData.
+ * @param {object | null | undefined} workflow mutated in place
+ * @returns {boolean} true when linearMode was true
+ */
+export function clearLinearMode(workflow) {
+  const extra = workflow?.extra;
+  if (!extra || typeof extra !== "object" || Array.isArray(extra)) return false;
+  if (extra.linearMode !== true) return false;
+  extra.linearMode = false;
+  return true;
+}
+
+/** The workflow names a graph/app choice (true or false). */
+export function hasLinearModeFlag(workflow) {
+  const extra = workflow?.extra;
+  return !!extra && typeof extra === "object" && !Array.isArray(extra) && typeof extra.linearMode === "boolean";
+}

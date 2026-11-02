@@ -353,10 +353,9 @@ import {
   templateComboItems,
   templateLabel,
   isBuiltinTemplate,
-  isAppWorkflowFile,
-  appWorkflowPaths,
+  templateListPaths,
 } from "./gg_template_pick_core.js";
-import { linearBindings, linearOutputIds, linearPromptLabel } from "./gg_app_mode_core.js";
+import { clearLinearMode, hasLinearModeFlag, linearBindings, linearOutputIds, linearPromptLabel } from "./gg_app_mode_core.js";
 import { comboFilter, comboActiveIndex, comboKey, comboTypedValue } from "./gg_combo_core.js";
 import {
   folderAddressTarget,
@@ -3102,6 +3101,15 @@ async function pointTemporaryShotTabAt(wf, loadName) {
   }
 }
 
+/** ComfyUI keeps App mode on a reused shot tab unless this workflow object says graph. */
+function pinLoadedWorkflowToGraph(workflow) {
+  if (!workflow || typeof workflow !== "object") return;
+  try {
+    workflow.initialMode = "graph";
+    workflow.activeMode = "graph";
+  } catch (_) {}
+}
+
 /** The tab loadGraphData just filled. A path string can open a different temporary than the path we asked for. */
 function claimLoadedShotTab(loadName, reused) {
   if (reused && typeof reused === "object") {
@@ -3152,15 +3160,23 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   ensureWorkflowManagerActive();
   if (isLoadTokenStale(loadToken)) return false;
   syncSavedVideoStartImage(workflow);
-  const wantTypes = workflowNodeTypes(workflow);
+  // App templates set extra.linearMode. False opens the graph editor; linearData stays.
+  const opensInGraph = hasLinearModeFlag(workflow);
+  let graphToLoad = workflow;
+  if (workflow?.extra?.linearMode === true) {
+    graphToLoad = cloneGraph(workflow) || workflow;
+    clearLinearMode(graphToLoad);
+  }
+  if (opensInGraph) pinLoadedWorkflowToGraph(loadTarget);
+  const wantTypes = workflowNodeTypes(graphToLoad);
   try {
     if (isUiWorkflowGraph(workflow)) {
       if (typeof app.loadGraphData !== "function") return false;
-      await app.loadGraphData(workflow, true, true, loadTarget, { deferWarnings: true });
+      await app.loadGraphData(graphToLoad, true, true, loadTarget, { deferWarnings: true });
     } else if (typeof app.loadApiJson === "function") {
-      await app.loadApiJson(workflow, loadTarget, { deferWarnings: true });
+      await app.loadApiJson(graphToLoad, loadTarget, { deferWarnings: true });
     } else if (typeof app.loadGraphData === "function") {
-      await app.loadGraphData(workflow, true, true, loadTarget, { deferWarnings: true });
+      await app.loadGraphData(graphToLoad, true, true, loadTarget, { deferWarnings: true });
     } else {
       return false;
     }
@@ -3182,6 +3198,10 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
     return false;
   }
   claimLoadedShotTab(loadName, reusedTab);
+  if (opensInGraph) {
+    pinLoadedWorkflowToGraph(ggOwnedShotWorkflow);
+    clearLinearMode(app.graph);
+  }
   await pointTemporaryShotTabAt(ggOwnedShotWorkflow, loadName);
   if (isLoadTokenStale(loadToken)) {
     invalidateLoadedCutWorkflow();
@@ -4236,6 +4256,7 @@ async function saveCutWorkflowNow(cutId, { flush = false } = {}) {
   const graphCut = app.graph?.extra?.gonggan?.cutId || "";
   if (graphCut !== cutId || wfLastLoadedCutId !== cutId || wfLastLoadedProjectId !== state.pid) return true;
   if (!isGongganShotTabOpenAndActive()) return true;
+  clearLinearMode(app.graph);
   const current = captureGraphWorkflowSnapshot();
   if (!current || !Array.isArray(current.nodes)) return true;
   const baseline = ggWorkflowBaselines.get(cutId) || null;
@@ -4253,6 +4274,7 @@ async function saveCutWorkflowNow(cutId, { flush = false } = {}) {
   if (!changed) return true;
   const copy = cloneGraph(current);
   if (!copy) return false;
+  clearLinearMode(copy);
   const pid = state.pid;
   const key = cutWorkflowKey(pid, cutId);
   cutWorkflowMap.set(key, copy);
@@ -4536,7 +4558,7 @@ function syncTplUseLastButton(root) {
   const btn = root?.querySelector(".gg-tpl-use-last");
   if (!btn) return;
   const last = loadLastTemplate(localStorage);
-  const show = !projectTemplateRef && typeof last === "string" && !!last && (isAppWorkflowFile(last) || isBuiltinTemplate(last));
+  const show = !projectTemplateRef && typeof last === "string" && !!last && (userWorkflowPaths.includes(last) || isBuiltinTemplate(last));
   btn.hidden = !show;
   if (!show) return;
   btn.title = `Link last used template: ${templateLabel(last)}`;
@@ -5511,7 +5533,7 @@ function templateChoicesForCut(cutId) {
   const used = new Set(
     [settings.image_template, settings.video_template].map((r) => String(r || "").trim()).filter(Boolean),
   );
-  for (const p of appWorkflowPaths(userWorkflowPaths)) {
+  for (const p of templateListPaths(userWorkflowPaths)) {
     if (used.has(p)) continue;
     used.add(p);
     items.push({
@@ -5520,7 +5542,7 @@ function templateChoicesForCut(cutId) {
       action: () => { void loadTemplateIntoCut(cutId, p); },
     });
   }
-  if (!items.length) return [{ label: "No app templates", disabled: true }];
+  if (!items.length) return [{ label: "No templates", disabled: true }];
   return items;
 }
 

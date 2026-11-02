@@ -124,6 +124,21 @@ def merge_projects_list(share_payload: dict) -> dict:
     return out
 
 
+def clear_cut_linear_mode(graph: dict) -> dict:
+    """A cut copy opens in the graph editor.
+
+    ComfyUI treats extra.linearMode true as App mode and false as the graph editor.
+    linearData stays so prompt binding and output filtering still work.
+    This only changes the object it is given. It does not write a template file.
+    """
+    if not isinstance(graph, dict):
+        return graph
+    extra = graph.get("extra")
+    if isinstance(extra, dict) and extra.get("linearMode") is True:
+        extra["linearMode"] = False
+    return graph
+
+
 def resolve_template_graph(template_ref: str | None) -> dict | None:
     if not template_ref:
         return None
@@ -212,7 +227,7 @@ def copy_new_cut_template(doc: dict, kind: str = "image") -> dict | None:
             kind_name, ref,
         )
         return None
-    return copy.deepcopy(graph)
+    return clear_cut_linear_mode(copy.deepcopy(graph))
 
 
 def project_video_template(doc: dict) -> tuple[str, dict]:
@@ -564,6 +579,8 @@ def native_add_reference(pid: str, name: str, category: str) -> dict | None:
     if not isinstance(name, str) or not name.strip() or len(name.strip()) > 80:
         raise ValueError("name must be 1-80 characters")
     graph = project_template_graph(doc, "image")
+    if isinstance(graph, dict):
+        graph = clear_cut_linear_mode(copy.deepcopy(graph))
     c = store.add_reference(pid, name, category, template_graph=graph or None)
     return {"ok": True, "reference": {"id": c["id"], "name": c["name"], "category": c["category"]}, "timeline": store.to_timeline(pid)}
 
@@ -664,6 +681,7 @@ def native_set_cut_workflow(pid: str, cut_id: str, workflow: dict) -> dict:
         raise ValueError("project not found")
     if not isinstance(workflow, dict):
         raise ValueError("workflow must be an object")
+    clear_cut_linear_mode(workflow)
     store.set_cut_workflow(pid, cut_id, workflow)
     return {"ok": True}
 
