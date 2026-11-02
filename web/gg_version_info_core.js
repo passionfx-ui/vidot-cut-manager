@@ -73,15 +73,13 @@ export function versionInfoFields(v, cut, probed, projectFps) {
 
 /** @param {ReturnType<typeof versionInfoFields>} f */
 export function versionInfoPanelRows(f) {
-  const rows = [
+  // Same rows for image and video so the panel size does not change. N/A values are "-".
+  return [
     { label: INFO_LABEL_TYPE, value: f.type || "-" },
     { label: INFO_LABEL_RESOLUTION, value: f.resolution || "-" },
+    { label: INFO_LABEL_DURATION, value: f.showVideoTiming ? (f.duration || "-") : "-" },
+    { label: INFO_LABEL_FPS, value: f.showVideoTiming ? (f.fps || "-") : "-" },
+    { label: INFO_LABEL_SEED, value: f.seed || "-" },
+    { label: INFO_LABEL_WORKFLOW, value: f.workflow || "-" },
   ];
-  if (f.showVideoTiming) {
-    rows.push({ label: INFO_LABEL_DURATION, value: f.duration || "-" });
-    rows.push({ label: INFO_LABEL_FPS, value: f.fps || "-" });
-  }
-  rows.push({ label: INFO_LABEL_SEED, value: f.seed || "-" });
-  rows.push({ label: INFO_LABEL_WORKFLOW, value: f.workflow || "-" });
-  return rows;
 }

@@ -7911,12 +7911,14 @@ function statusPanelShellHtml() {
           <ul class="gg-job-queue-list"></ul>
         </div>
         <div class="gg-sp-actions">
-          <span class="gg-render-badge gg-render-global" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
-          <span class="gg-batch-prog" hidden></span>
-          <span class="gg-genall-prog" hidden></span>
-          <label class="gg-random-seed" title="When on, each Queue run uses new random sampler seeds">
-            <input type="checkbox" class="gg-random-seed-cb" /> ${esc(RANDOM_SEED_LABEL)}
-          </label>
+          <div class="gg-sp-side">
+            <span class="gg-render-badge gg-render-global" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
+            <span class="gg-batch-prog" hidden></span>
+            <span class="gg-genall-prog" hidden></span>
+            <label class="gg-random-seed" title="When on, each Queue run uses new random sampler seeds">
+              <input type="checkbox" class="gg-random-seed-cb" /> ${esc(RANDOM_SEED_LABEL)}
+            </label>
+          </div>
           <div class="gg-queue-mode" role="group" aria-label="Queue mode">
             ${QUEUE_MODES.map((m) => `<button type="button" class="gg-btn gg-qm-seg${m === "auto" ? " gg-on" : ""}" data-mode="${esc(m)}" aria-pressed="${m === "auto" ? "true" : "false"}">${esc(QUEUE_MODE_LABELS[m])}</button>`).join("")}
           </div>

@@ -13,7 +13,7 @@ describe("version_info_core", () => {
     assert.equal(versionDisplayType({ kind: "image", missing: true }), "-");
   });
 
-  it("hides duration/fps for image rows and omits file name and creation time", () => {
+  it("keeps duration/fps rows for images as a dash and omits file name and creation time", () => {
     const img = versionInfoFields(
       { id: "a", kind: "image", width: 100, height: 50, seed: 7, model: "Z-Image", filename: "a.png", created: 1 },
       cut,
@@ -21,9 +21,9 @@ describe("version_info_core", () => {
       24,
     );
     const rows = versionInfoPanelRows(img);
-    assert.deepEqual(rows.map((r) => r.label), ["Type", "Resolution", "Seed", "Workflow"]);
-    assert.deepEqual(rows.map((r) => r.value), ["image", "100×50", "7", "Z-Image"]);
-    assert.ok(!rows.some((r) => r.label === "Duration" || r.label === "FPS"));
+    assert.deepEqual(rows.map((r) => r.label), ["Type", "Resolution", "Duration", "FPS", "Seed", "Workflow"]);
+    assert.deepEqual(rows.map((r) => r.value), ["image", "100×50", "-", "-", "7", "Z-Image"]);
+    assert.ok(!rows.some((r) => /filename|created|a\.png/i.test(r.label) || r.value === "a.png"));
   });
 
   it("shows duration and fps for video, unknown values as dash", () => {

@@ -123,7 +123,10 @@
 .gg-shots .gg-cutpanel .gg-job-row { display: flex; align-items: baseline; gap: 6px; padding: 1px 0; font-size: 10px; line-height: 13px; color: var(--gg-dim); font-variant-numeric: tabular-nums; }
 .gg-shots .gg-cutpanel .gg-job-cut { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--gg-fg); }
 .gg-shots .gg-cutpanel .gg-job-st { flex: 0 0 auto; white-space: nowrap; }
-.gg-shots .gg-cutpanel .gg-sp-actions { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.gg-shots .gg-cutpanel .gg-sp-actions { flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; align-items: center; justify-content: flex-end; column-gap: 8px; row-gap: 4px; min-width: 0; overflow: hidden; }
+.gg-shots .gg-cutpanel .gg-sp-actions .gg-sp-side { grid-column: 1; grid-row: 2; display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; white-space: nowrap; }
+.gg-shots .gg-cutpanel .gg-sp-actions .gg-queue-mode { grid-column: 2; grid-row: 1; justify-self: end; }
+.gg-shots .gg-cutpanel .gg-sp-actions .gg-queue-btn { grid-column: 2; grid-row: 2; justify-self: end; }
 .gg-shots .gg-queue-btn { flex: 0 0 auto; font-size: 14px; font-weight: 600; padding: 4px 20px; }
 .gg-shots .gg-queue-btn.gg-queue-stop { color: #ffc4c4; border-color: #7a3a3a; }
 .gg-root.gg-shots .gg-btn.gg-queue-btn:disabled { opacity: 0.4; cursor: default; border-color: var(--gg-line); }
@@ -774,10 +777,10 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-shots .gg-vstrip .gg-vs-import-tile:disabled { opacity: 0.45; cursor: default; }
 .gg-shots .gg-vstrip .gg-vs-star { position: absolute; left: 2px; top: 2px; z-index: 2; width: 18px; height: 18px; padding: 0; border: none; border-radius: 2px; background: rgba(0,0,0,.55); color: #ccc; font-size: 12px; line-height: 16px; cursor: pointer; }
 .gg-shots .gg-vstrip .gg-vs-star.gg-on { color: #e8c547; }
-.gg-shots .gg-vs-info { flex: 0 0 auto; display: grid; grid-template-columns: auto 1fr; column-gap: 10px; row-gap: 2px; padding: 4px 8px 6px; font-size: 11px; border-top: 1px solid var(--gg-line); min-height: 52px; }
-.gg-shots .gg-vs-info-k { color: var(--gg-dim); white-space: nowrap; }
+.gg-shots .gg-vs-info { flex: 0 0 105px; display: grid; grid-template-columns: 80px minmax(0, 1fr); grid-template-rows: repeat(6, 14px); column-gap: 10px; row-gap: 2px; box-sizing: border-box; width: 100%; height: 105px; min-height: 105px; max-height: 105px; padding: 4px 8px 6px; overflow: hidden; font-size: 11px; line-height: 14px; border-top: 1px solid var(--gg-line); }
+.gg-shots .gg-vs-info-k { color: var(--gg-dim); white-space: nowrap; overflow: hidden; }
 .gg-shots .gg-vs-info-v { color: var(--gg-fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gg-shots .gg-vs-info-empty { padding: 4px 8px; font-size: 11px; }
+.gg-shots .gg-vs-info-empty { grid-column: 1 / -1; padding: 0; font-size: 11px; line-height: 14px; }
 .gg-shots .gg-vstrip .gg-ver-wrap .gg-ver { outline: none; box-shadow: none; border-color: var(--gg-line); }
 .gg-shots .gg-vstrip .gg-vs-best .gg-ver { border: 2px solid #e8c547; }
 /* 0.9.135: a black video (auto-retried) is Failed: red border, dimmed; the reason is in the tooltip */
@@ -788,7 +791,7 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-shots .gg-vs-empty { padding: 0 2px; font-size: 10px; white-space: nowrap; }
 .gg-shots .gg-cutpanel .gg-sp-actions .gg-random-seed { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; font-size: 11px; color: var(--gg-dim); white-space: nowrap; user-select: none; cursor: pointer; }
 .gg-shots .gg-cutpanel .gg-sp-actions .gg-random-seed input { margin: 0; cursor: pointer; }
-.gg-shots .gg-cutpanel .gg-sp-actions .gg-queue-mode { display: inline-flex; align-items: stretch; flex: 0 0 auto; margin-right: 4px; border: 1px solid var(--gg-line); border-radius: 4px; overflow: hidden; }
+.gg-shots .gg-cutpanel .gg-sp-actions .gg-queue-mode { display: inline-flex; align-items: stretch; flex: 0 0 auto; margin-right: 0; border: 1px solid var(--gg-line); border-radius: 4px; overflow: hidden; }
 .gg-shots .gg-cutpanel .gg-sp-actions .gg-qm-seg { flex: 0 0 auto; font-size: 11px; font-weight: 600; padding: 4px 10px; border: none; border-radius: 0; background: transparent; color: var(--gg-dim); min-width: 0; }
 .gg-shots .gg-cutpanel .gg-sp-actions .gg-qm-seg + .gg-qm-seg { border-left: 1px solid var(--gg-line); }
 .gg-shots .gg-cutpanel .gg-sp-actions .gg-qm-seg.gg-on { background: var(--gg-accent, #3d7dd6); color: #fff; }
