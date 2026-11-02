@@ -413,6 +413,7 @@ import {
   SETTINGS_TAB_PROJECT,
   settingsTabPanes,
 } from "./gg_settings_tabs_core.js";
+import { dialogEscapeAction, modalEscapeState } from "./gg_dialog_escape_core.js";
 import {
   cutSplitModelOptions,
   cutSplitModelOptionsHtml,
@@ -937,13 +938,51 @@ function projectOptionLabel(p) {
 }
 
 let projectModalEl = null;
+let projectModalEsc = null;
 
 function projectCaptionLang() {
   return normalizeProjectSettings(state.timeline?.project?.settings).caption_lang;
 }
 
+function unbindProjectModalEscape() {
+  if (!projectModalEsc) return;
+  document.removeEventListener("keydown", projectModalEsc, true);
+  projectModalEsc = null;
+}
+
+/** Escape cancels Settings / New Project (no save). Capture so an open menu is seen before it handles the key. */
+function bindProjectModalEscape(wrap) {
+  unbindProjectModalEscape();
+  projectModalEsc = (e) => {
+    if (projectModalEl !== wrap || !wrap.isConnected) return;
+    const backdrops = [...document.querySelectorAll(".gg-modal-backdrop")];
+    const sel = e.target?.closest?.("select");
+    let selectOpen = false;
+    if (sel && wrap.contains(sel)) {
+      try { selectOpen = sel.matches(":open"); } catch (_) { selectOpen = false; }
+    }
+    const view = modalEscapeState({
+      backdropCount: backdrops.length,
+      dialogIndex: backdrops.indexOf(wrap),
+      expandedCombos: wrap.querySelectorAll('.gg-tpl-combo[aria-expanded="true"]').length,
+      selectOpen,
+    });
+    const act = dialogEscapeAction({
+      key: e.key,
+      defaultPrevented: e.defaultPrevented,
+      ...view,
+    });
+    if (act !== "close") return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeProjectModal();
+  };
+  document.addEventListener("keydown", projectModalEsc, true);
+}
+
 function closeProjectModal() {
   closeFolderPicker();
+  unbindProjectModalEscape();
   if (projectModalEl) {
     projectModalEl.remove();
     projectModalEl = null;
@@ -978,6 +1017,7 @@ function openNewProjectModal() {
     </form>`;
   document.body.appendChild(wrap);
   projectModalEl = wrap;
+  bindProjectModalEscape(wrap);
   const form = wrap.querySelector("form");
   const nameIn = wrap.querySelector(".gg-modal-name");
   const locIn = wrap.querySelector(".gg-modal-folder");
@@ -1558,6 +1598,7 @@ function openProjectSettingsModal() {
     </form>`;
   document.body.appendChild(wrap);
   projectModalEl = wrap;
+  bindProjectModalEscape(wrap);
   const showSettingsTab = (id) => {
     const panes = settingsTabPanes(id);
     wrap.querySelectorAll("[data-settings-tab]").forEach((btn) => {
