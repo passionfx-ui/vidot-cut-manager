@@ -7127,7 +7127,18 @@ function clearAnchoredBottomPanel() {
   const panel = document.querySelector(".bottom-panel");
   const splitter = canvasSplitter();
   const gutter = document.querySelector('[data-testid="graph-canvas-gutter"]');
-  restoreInlineStyle(panel);
+  // Hidden panel: drop only the props we set. Restoring the saved style attribute
+  // would wipe the frontend's inline display:none and leave an empty frame.
+  if (panel && !bottomPanelShown()) {
+    for (const prop of [
+      "position", "bottom", "left", "width", "height",
+      "min-height", "max-height", "flex-shrink", "z-index",
+    ]) panel.style.removeProperty(prop);
+    delete panel.dataset.ggStyleSaved;
+    delete panel.dataset.ggStylePrev;
+  } else {
+    restoreInlineStyle(panel);
+  }
   restoreInlineStyle(splitter);
   restoreInlineStyle(gutter);
   if (panel) delete panel.dataset.ggBottomAnchor;
