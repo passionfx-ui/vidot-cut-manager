@@ -125,6 +125,11 @@ export function stripHeaderState() {
 export function versionStripMenuItems(row) {
   const best = !!row?.best;
   return [
+    {
+      key: "loadWf",
+      label: "Load workflow from this take",
+      title: "Make this take's stored workflow the current workflow of the cut",
+    },
     { key: "best", label: SET_BEST_LABEL, disabled: best, title: best ? "Already Best" : "" },
     { key: "del", label: "Delete", title: "Hide this version. History can restore it." },
   ];

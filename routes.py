@@ -446,6 +446,16 @@ async def gg_template_get(request):
     pid = request.query.get("pid", "")
     if not pid:
         return _err(400, "pid required")
+    ref = (request.query.get("ref") or "").strip()
+    if ref:
+        try:
+            wf = await asyncio.to_thread(gg_template.read_workflow_ref, ref)
+        except ValueError as ex:
+            return _err(404, str(ex))
+        except Exception as ex:  # noqa: BLE001
+            log.exception("[gonggan-cut] template get failed")
+            return _err(500, str(ex))
+        return web.json_response({"ok": True, "ref": ref, "exists": True, "workflow": wf})
     try:
         if gg_native_api.is_native_pid(pid):
             info = await asyncio.to_thread(gg_native_api.native_template_info, pid)
@@ -680,6 +690,25 @@ async def gg_version_restore(request):
     return web.json_response(res)
 
 
+@routes.post("/gonggan/cut/workflow")
+async def gg_cut_workflow(request):
+    """Save the full graph as this cut's current workflow. Other cuts and templates are not changed."""
+    data = await _json_body(request)
+    pid, cid, wf = data.get("pid"), data.get("cut_id"), data.get("workflow")
+    if not isinstance(pid, str) or not isinstance(cid, str) or not gg_native_api.is_native_pid(pid):
+        return _err(400, "pid and cut_id required")
+    if not isinstance(wf, dict):
+        return _err(400, "workflow must be an object")
+    try:
+        res = await asyncio.to_thread(gg_native_api.native_set_cut_workflow, pid, cid, wf)
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] cut workflow save failed")
+        return _err(500, str(ex))
+    return web.json_response(res)
+
+
 @routes.post("/gonggan/cut/update")
 async def gg_cut_update(request):
     data = await _json_body(request)
@@ -873,11 +902,7 @@ async def gg_cut_add(request):
                 gg_native_api.native_add_cut, pid, group or None, after or None,
             ))
         cut = await asyncio.to_thread(gg_data.add_local_cut, pid, group or None, after or None)
-        tpl = await asyncio.to_thread(gg_template.get_template, pid)
         copied = False
-        if tpl:
-            await asyncio.to_thread(gg_wfstore.save_initial_workflow, pid, cut["id"], tpl, "template")
-            copied = True
         tl = await asyncio.to_thread(gg_data.timeline, pid)
     except ValueError as ex:
         return _err(400, str(ex))
@@ -1199,8 +1224,23 @@ async def gg_send_output(request):
     return web.json_response(res, status=200 if res.get("ok") else 404)
 
 
+def _capture_number(value, lo, hi, integer=False):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value != value or abs(value) == float("inf"):
+        return None
+    if integer:
+        if isinstance(value, float) and not value.is_integer():
+            return None
+        value = int(value)
+        if value < lo or value > hi:
+            return None
+        return value
+    return float(value)
+
+
 def _capture_gen(data: dict) -> dict | None:
-    """Prompt, seed, and input image the browser injected for this queued run."""
+    """Prompt, numbers, and input images stored with the Take for this queued run."""
     if not isinstance(data, dict):
         return None
     gen: dict = {}
@@ -1221,6 +1261,36 @@ def _capture_gen(data: dict) -> dict | None:
         gen["seed"] = int(seed)
     if isinstance(data.get("input_image"), str):
         gen["input_image"] = data["input_image"][:500]
+    steps = _capture_number(data.get("steps"), 1, 100000, integer=True)
+    if steps is not None:
+        gen["steps"] = steps
+    cfg = _capture_number(data.get("cfg"), None, None)
+    if cfg is not None:
+        gen["cfg"] = cfg
+    frames = _capture_number(data.get("frames"), 1, 100000, integer=True)
+    if frames is not None:
+        gen["frames"] = frames
+    numerics = data.get("numerics")
+    if isinstance(numerics, dict):
+        clean = {}
+        for key, value in numerics.items():
+            if len(clean) >= 40:
+                break
+            if not isinstance(key, str) or isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if value != value or abs(value) == float("inf"):
+                continue
+            clean[key[:40]] = value
+        if clean:
+            gen["numerics"] = clean
+    images = data.get("input_images")
+    if isinstance(images, list):
+        names = [s[:500] for s in images if isinstance(s, str) and s][:20]
+        if names:
+            gen["input_images"] = names
+    source = data.get("source_image_take")
+    if isinstance(source, str) and source.strip():
+        gen["source_image_take"] = source.strip()[:80]
     return gen or None
 
 
@@ -1233,8 +1303,9 @@ async def gg_capture_output(request):
         return _err(400, "pid and cut_id required")
     try:
         gen = _capture_gen(data)
+        ui = data.get("workflow") if isinstance(data.get("workflow"), dict) else None
         res = await asyncio.to_thread(
-            gg_native_api.native_capture_prompt_output, pid, cid, prompt_id, gen=gen,
+            gg_native_api.native_capture_prompt_output, pid, cid, prompt_id, gen=gen, ui_workflow=ui,
         )
     except ValueError as ex:
         return _err(400, str(ex))

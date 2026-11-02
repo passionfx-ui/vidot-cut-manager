@@ -192,6 +192,7 @@ import {
   cloneGraph,
   cutSlotIds,
   extractCutData,
+  extractTakeSnapshot,
   framesForSeconds,
   hasLoadImageNode,
   hasPromptNode,
@@ -299,6 +300,7 @@ import {
 } from "./gg_timeline_scrub_core.js";
 import { routeTimelineClipPointerDown } from "./gg_timeline_pointer_core.js";
 import { isSceneRunStart, showTimelineSceneBand } from "./gg_timeline_scene_core.js";
+import { loadTakeWorkflowLabel, mergeLegacyTake, sceneHue, takeNoun, takesNoun } from "./gg_take_core.js";
 import {
   timelineClipTypeBadgeHtml,
   timelineClipTypeClassSuffix,
@@ -362,8 +364,10 @@ import {
   startPathCandidates,
 } from "./gg_folder_pick_core.js";
 import {
+  emptyCutBlankGraph,
   isEmptyCutSourcePayload,
   resolveEmptyCutWorkflow,
+  workflowNodeCount,
 } from "./gg_empty_cut_core.js";
 import {
   normalizeNameInput,
@@ -2652,6 +2656,7 @@ function setupWipPeriodicAutosave() {
   window.addEventListener("pagehide", () => {
     flushPendingCutFields();
     flushTimelineEdit();
+    flushCutWorkflowFiles();
     runGongganWipAutosave({ force: true }).catch(() => {});
   });
 }
@@ -3531,11 +3536,7 @@ async function tryLoadEmbeddedRepWorkflow(cutId, cutRec, loadToken, effectiveKin
 
 async function loadEmptyCutWorkflow(cutId, cutRec, loadToken, title) {
   if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
-  let templateWf = null;
-  try {
-    templateWf = await fetchProjectTemplatePayload();
-  } catch (_) {}
-  const { kind, workflow } = resolveEmptyCutWorkflow({ templateWorkflow: templateWf });
+  const { kind, workflow } = resolveEmptyCutWorkflow({ templateWorkflow: null });
   const loaded = await loadWorkflowIntoDedicatedTab(workflow, cutRec, loadToken);
   if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
   if (ggCutSwitchAutosaveBlocked) return false;
@@ -3586,33 +3587,23 @@ async function storeCutWorkflow(cut, gen, forceKind) {
   try {
     const data = await fetchCutSourceWorkflowPayload(cut.id, cut, kind);
     if (projectMemory.generation() !== gen) return null;
-    if (data?.workflow) {
+    if (data?.workflow && data.source !== "template") {
       entry = {
         kind,
         workflow: data.workflow,
         source: data.source || "stored",
-        fallback: data.fallback || "",
+        fallback: "",
         key: workflowContentKey(data.workflow),
       };
-    } else if (isEmptyCutSourcePayload(data)) {
-      entry = { kind, workflow: null, source: "empty", fallback: "", key: "", empty: true };
+    } else {
+      const blank = emptyCutBlankGraph();
+      entry = { kind, workflow: blank, source: "empty", fallback: "", key: workflowContentKey(blank), empty: true };
     }
   } catch (e) {
     if (projectMemory.generation() !== gen) return null;
     if (e?.status === 404) {
-      try {
-        const hit = await fetchCutWorkflowPayload(cut.id);
-        if (projectMemory.generation() !== gen) return null;
-        if (hit.ok && hit.data?.workflow && graphFitsKind(hit.data.workflow, kind)) {
-          entry = { kind, workflow: hit.data.workflow, source: "draft", fallback: "", key: workflowContentKey(hit.data.workflow) };
-        }
-      } catch (_) {}
-      if (!entry.workflow) {
-        const tpl = projectMemory.template();
-        if (tpl && graphFitsKind(tpl, kind)) {
-          entry = { kind, workflow: tpl, source: "template", fallback: "", key: workflowContentKey(tpl) };
-        }
-      }
+      const blank = emptyCutBlankGraph();
+      entry = { kind, workflow: blank, source: "empty", fallback: "", key: workflowContentKey(blank), empty: true };
     }
   }
   if (projectMemory.generation() !== gen) return null;
@@ -3688,21 +3679,11 @@ async function openStoredCutWorkflow(cutId, cutRec, loadToken, entry) {
   let toastDetail = entry?.source === "wip" ? "restored edits" : (SOURCE_TOAST[entry?.source] || entry?.source || "stored");
   let toastKind = entry?.source === "wip" ? "info" : "ok";
   if (entry?.fallback) toastDetail = workflowSourceToastDetail(SOURCE_TOAST[entry.source] || toastDetail, entry.fallback);
-  if (!workflow) {
-    let templateWf = kind === "video" ? null : projectMemory.template();
-    if (kind !== "video" && !templateWf) {
-      const pending = projectMemory.templateInflight();
-      if (pending) {
-        await pending;
-        if (isLoadTokenStale(loadToken)) return;
-        templateWf = projectMemory.template();
-      }
-    }
-    const resolved = resolveEmptyCutWorkflow({ templateWorkflow: templateWf });
-    workflow = resolved.workflow;
-    toastSummary = resolved.kind === "template" ? "template" : "Shot";
-    toastDetail = resolved.kind === "template" ? "project template" : "empty canvas";
-    toastKind = resolved.kind === "template" ? "ok" : "info";
+  if (!workflow || workflowNodeCount(workflow) === 0) {
+    workflow = emptyCutBlankGraph();
+    toastSummary = "Shot";
+    toastDetail = "empty canvas";
+    toastKind = "info";
   }
   if (isLoadTokenStale(loadToken)) return;
   const key = workflowContentKey(workflow);
@@ -3842,7 +3823,7 @@ async function pushCutExtra(cutId, patch) {
 function rememberCutExtra(cutId, patch) {
   if (!cutId || !patch) return;
   const row = { ...(cutDataMap.get(cutId) || {}) };
-  for (const key of ["negative", "seed", "input_image", "frames"]) {
+  for (const key of ["negative", "seed", "input_image", "frames", "image_take", "video_take"]) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) row[key] = patch[key];
   }
   cutDataMap.set(cutId, row);
@@ -3854,15 +3835,36 @@ function rememberCutExtra(cutId, patch) {
     if (patch.frames != null) c.frames = patch.frames;
   }
   scheduleCutDataFile();
-  void pushCutExtra(cutId, patch);
+  const serverPatch = {};
+  for (const key of ["negative", "seed", "input_image", "frames"]) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) serverPatch[key] = patch[key];
+  }
+  if (Object.keys(serverPatch).length) void pushCutExtra(cutId, serverPatch);
+}
+
+/** The still image Take used as a video's start frame. A selected video Take is never used. */
+function selectedImageTakeId(cut) {
+  if (!cut) return "";
+  const row = cutDataMap.get(cut.id) || {};
+  const picked = row.image_take || "";
+  if (picked && isStillVersion(findCutVersion(cut, picked))) return picked;
+  const stills = (cut.versions_list || []).filter(isStillVersion);
+  return stills[0]?.id || "";
+}
+
+function noteTakeKind(cut, vid) {
+  if (!cut || !vid) return;
+  const ver = findCutVersion(cut, vid);
+  if (!ver) return;
+  if (isStillVersion(ver)) rememberCutExtra(cut.id, { image_take: vid });
+  else if (ver.kind === "video" || ver.animated) rememberCutExtra(cut.id, { video_take: vid });
 }
 
 function readCutData(cut) {
   const row = cut?.id ? cutDataMap.get(cut.id) || {} : {};
-  const sel = stripSelectedVersionId(cut);
-  const selected = findCutVersion(cut, sel);
   const storedImage = row.input_image != null ? row.input_image : (cut?.input_image || "");
-  const inputImage = isStillVersion(selected) ? selected.id : (storedImage || "");
+  const imageTake = selectedImageTakeId(cut);
+  const inputImage = imageTake || storedImage || "";
   let seed = row.seed != null ? row.seed : cut?.seed;
   seed = seed != null && seed !== "" ? Number(seed) : null;
   let frames = row.frames != null ? row.frames : cut?.frames;
@@ -4061,107 +4063,133 @@ async function applyLiveCutData(cut, data, loadToken) {
   if (!isLoadTokenStale(loadToken) && cut?.id) rememberWorkflowBaselineFromActiveGraph(cut.id);
 }
 
-async function persistOpenGraphEdits() {
-  if (ggApplyingCutData || ggCutDataLock) return true;
-  const cutId = app.graph?.extra?.gonggan?.cutId || "";
-  if (!cutId || cutId !== wfLastLoadedCutId || wfLastLoadedProjectId !== state.pid) return true;
+function cutWorkflowKey(pid, cutId) {
+  return `${pid}\n${cutId}`;
+}
+
+function cutWorkflowRel(pid, cutId) {
+  return `workflows/gonggan/${pid}/cut-workflows/${cutId}.json`;
+}
+
+/** cutId -> full graph saved this session. */
+const cutWorkflowMap = new Map();
+const cutWorkflowTimers = new Map();
+
+function scheduleCutWorkflowFile(cutId) {
+  const pid = state.pid;
+  const key = cutWorkflowKey(pid, cutId);
+  clearTimeout(cutWorkflowTimers.get(key));
+  cutWorkflowTimers.set(key, setTimeout(() => {
+    cutWorkflowTimers.delete(key);
+    const wf = cutWorkflowMap.get(key);
+    if (!wf || pid !== state.pid) return;
+    writeUserdataJson(cutWorkflowRel(pid, cutId), { workflow: wf, updated: Date.now() }).catch((e) => {
+      console.warn("[gonggan] cut workflow save failed", e);
+    });
+  }, 400));
+}
+
+function flushCutWorkflowFiles() {
+  const pid = state.pid;
+  if (!pid) return;
+  for (const [key, timer] of cutWorkflowTimers) {
+    if (!key.startsWith(`${pid}\n`)) continue;
+    clearTimeout(timer);
+    cutWorkflowTimers.delete(key);
+    const wf = cutWorkflowMap.get(key);
+    const cutId = key.slice(pid.length + 1);
+    if (wf) {
+      writeUserdataJson(cutWorkflowRel(pid, cutId), { workflow: wf, updated: Date.now() }).catch(() => {});
+    }
+  }
+}
+
+function pushCutWorkflow(pid, cutId, workflow) {
+  postJson("/gonggan/cut/workflow", { pid, cut_id: cutId, workflow }).catch((e) => {
+    if (e?.status && e.status !== 404) console.warn("[gonggan] cut workflow route", e);
+  });
+}
+
+/**
+ * Write the live graph onto `cutId` only.
+ * Refuses the write when the open graph belongs to a different cut, so a switch cannot
+ * store the outgoing graph as the incoming cut.
+ */
+async function saveCutWorkflowNow(cutId, { flush = false } = {}) {
+  if (!cutId || ggApplyingCutData) return true;
+  const graphCut = app.graph?.extra?.gonggan?.cutId || "";
+  if (graphCut !== cutId || wfLastLoadedCutId !== cutId || wfLastLoadedProjectId !== state.pid) return true;
   if (!isGongganShotTabOpenAndActive()) return true;
   const current = captureGraphWorkflowSnapshot();
-  const baseline = ggWorkflowBaselines.get(cutId) || (ggWorkflowBaselineCutId === cutId ? ggWorkflowBaseline : null);
-  if (!current || !baseline || !Array.isArray(current.nodes) || !current.nodes.length) return true;
-  const now = extractCutData(current);
-  const prev = extractCutData(baseline);
-  let structureChanged = false;
-  try {
-    structureChanged = structureKeyOf(current) !== structureKeyOf(baseline);
-  } catch {
-    structureChanged = true;
-  }
-  const seedChanged = (now.seed == null) !== (prev.seed == null) || Number(now.seed) !== Number(prev.seed);
-  const framesChanged = (now.frames == null) !== (prev.frames == null) || Number(now.frames) !== Number(prev.frames);
-  const dataChanged = now.positive !== prev.positive || now.negative !== prev.negative
-    || seedChanged || now.inputImage !== prev.inputImage || framesChanged;
-  if (!structureChanged && !dataChanged) return true;
-  try {
-    if (now.positive !== prev.positive) syncPromptFieldFromGraph(cutId, now.positive);
-    const extra = {};
-    if (now.negative !== prev.negative) extra.negative = now.negative;
-    if (seedChanged && now.seed != null) extra.seed = now.seed;
-    if (now.inputImage !== prev.inputImage) extra.input_image = now.inputImage;
-    if (framesChanged && now.frames != null) extra.frames = now.frames;
-    if (Object.keys(extra).length) rememberCutExtra(cutId, extra);
-    if (structureChanged) {
-      const kind = wfLastLoadedKind === "video" ? "video" : "image";
-      let copy = cloneGraph(current);
-      if (copy) {
-        const prev = projectMemory.kindTemplate(kind);
-        copy = prev ? applyCutData(copy, extractCutData(prev)) : stripCutData(copy);
-      }
-      if (copy) {
-        projectMemory.setKindTemplate(kind, copy, projectMemory.generation());
-        await writeUserdataJson(templateFileRel(state.pid, kind), copy);
-      }
+  if (!current || !Array.isArray(current.nodes)) return true;
+  const baseline = ggWorkflowBaselines.get(cutId) || null;
+  let changed = !baseline;
+  if (baseline) {
+    try {
+      changed = workflowContentKey(current) !== workflowContentKey(baseline);
+    } catch {
+      changed = true;
     }
-    rememberWorkflowBaselineForCut(cutId, current);
+    const now = extractCutData(current);
+    const prev = extractCutData(baseline);
+    if (now.positive !== prev.positive) syncPromptFieldFromGraph(cutId, now.positive);
+  }
+  if (!changed) return true;
+  const copy = cloneGraph(current);
+  if (!copy) return false;
+  const pid = state.pid;
+  const key = cutWorkflowKey(pid, cutId);
+  cutWorkflowMap.set(key, copy);
+  rememberWorkflowInMemory(cutId, cutById(cutId), copy);
+  rememberWorkflowBaselineForCut(cutId, copy);
+  pushCutWorkflow(pid, cutId, copy);
+  if (!flush) {
+    scheduleCutWorkflowFile(cutId);
+    return true;
+  }
+  clearTimeout(cutWorkflowTimers.get(key));
+  cutWorkflowTimers.delete(key);
+  try {
+    await writeUserdataJson(cutWorkflowRel(pid, cutId), { workflow: copy, updated: Date.now() });
     return true;
   } catch (e) {
-    console.warn("[gonggan] template save failed", e);
+    console.warn("[gonggan] cut workflow save failed", e);
     return false;
   }
 }
 
-async function openCutOnSharedTemplate(cutId, cutRec, loadToken) {
-  const kind = workflowKindForCut(cutRec);
-  const template = await ensureKindTemplate(kind, cutRec);
-  if (isLoadTokenStale(loadToken)) return "stale";
-  if (!template) return "miss";
-  const saved = await persistOpenGraphEdits();
-  if (isLoadTokenStale(loadToken)) return "stale";
-  if (saved === false) {
-    ggCutSwitchAutosaveBlocked = true;
-    ggToast("Auto-save failed. Switch cancelled.", "Could not save this cut. Press Ctrl+S, then switch again.", "warn");
-    return "stale";
+async function persistOpenGraphEdits() {
+  if (ggApplyingCutData || ggCutDataLock) return true;
+  const cutId = app.graph?.extra?.gonggan?.cutId || "";
+  if (!cutId) return true;
+  return saveCutWorkflowNow(cutId);
+}
+
+/** I9 shared-template injection is off. Cut switch loads the cut's own graph. */
+async function openCutOnSharedTemplate() {
+  return "miss";
+}
+
+async function resolveCutOwnWorkflow(cut) {
+  const pid = state.pid;
+  const key = cutWorkflowKey(pid, cut.id);
+  if (cutWorkflowMap.has(key)) return cutWorkflowMap.get(key);
+  const file = await readUserdataJson(cutWorkflowRel(pid, cut.id));
+  if (file && isWorkflowGraph(file.workflow)) {
+    cutWorkflowMap.set(key, file.workflow);
+    return file.workflow;
   }
-  ggCutDataLock++;
   try {
-  const data = readCutData(cutRec);
-  const structKey = structureKeyOf(template);
-  const openWf = ggOwnedShotWorkflow;
-  const openDirty = !!(openWf && workflowTabNeedsAutosave(openWf, autosaveContextForWorkflow(openWf)));
-  const sameStructure = !openDirty && shouldReuseOpenWorkflow({
-    tabActive: isGongganShotTabOpenAndActive(),
-    openKind: wfLastLoadedKind,
-    openKey: wfLastLoadedStructureKey,
-    nextKind: kind,
-    nextKey: structKey,
-  });
-  if (sameStructure) {
-    if (!(await retargetOpenShotTab(cutRec, kind, structKey, loadToken))) return "stale";
-    await applyLiveCutData(cutRec, data, loadToken);
-    if (isLoadTokenStale(loadToken)) return "stale";
-    wfLastLoadedStructureKey = structKey;
-    markGraphGongganCut(cutId);
-    return "ok";
-  }
-  const filled = applyCutData(cloneGraph(template), data);
-  if (!filled) return "miss";
-  ggCutSwitchAutosaveBlocked = false;
-  const loaded = await loadWorkflowIntoDedicatedTab(filled, cutRec, loadToken);
-  if (isLoadTokenStale(loadToken) || ggCutSwitchAutosaveBlocked || !loaded) return "stale";
-  markWorkflowLoadComplete(cutId, cutRec, null, kind);
-  wfLastLoadedWorkflowKey = structKey;
-  wfLastLoadedStructureKey = structKey;
-  markGraphGongganCut(cutId);
-  await applyLiveCutData(cutRec, data, loadToken);
-  if (isLoadTokenStale(loadToken)) return "stale";
-  markGraphGongganCut(cutId);
-  const shown = tabNameForCut(cutRec);
-  if (shown && ggOwnedShotWorkflow) ggOwnedShotWorkflow.ggCutDisplayName = shown;
-  paintShotTabLabelNow(cutRec);
-  return "ok";
-  } finally {
-    ggCutDataLock--;
-  }
+    const json = await fetchCutWorkingCopyJson(cut);
+    if (json && shouldRestoreWip(json, { cutId: cut.id, baseKey: cutBaseKey(cut) }) && isWorkflowGraph(json)) {
+      return json;
+    }
+  } catch (_) {}
+  try {
+    const data = await fetchCutSourceWorkflowPayload(cut.id, cut);
+    if (data?.workflow && data.source !== "template" && isWorkflowGraph(data.workflow)) return data.workflow;
+  } catch (_) {}
+  return emptyCutBlankGraph();
 }
 
 async function loadCutWorkflow(cutId, cut, loadToken) {
@@ -4170,43 +4198,68 @@ async function loadCutWorkflow(cutId, cut, loadToken) {
   if (isLoadTokenStale(loadToken)) return;
   const cutRec = cut || cutById(cutId);
   if (!cutRec) return;
-  const shared = await openCutOnSharedTemplate(cutId, cutRec, loadToken);
-  if (shared === "stale" || isLoadTokenStale(loadToken)) return;
-  if (shared === "ok") return;
-  const kind = workflowKindForCut(cutRec);
-  const gen = projectMemory.generation();
-  let entry = projectMemory.getWorkflow(cutId);
-  if (workflowEntryReady(entry, kind)) {
-    if (shouldSkipWorkflowReload(cutId) && (!entry.key || entry.key === wfLastLoadedWorkflowKey)) return;
-    // This cut's graph is already on the tab (including unsaved edits). Do not reload it from memory.
-    if (
-      wfLastLoadedCutId === cutId &&
-      wfLastLoadedProjectId === state.pid &&
-      wfLastLoadedKind === kind &&
-      isGongganShotTabOpenAndActive() &&
-      (!entry.key || entry.key === wfLastLoadedWorkflowKey)
-    ) return;
-  } else {
-    const pending = projectMemory.inflight(cutId);
-    if (pending) {
-      await pending;
-    } else {
-      const p = storeCutWorkflow(cutRec, gen, kind);
-      projectMemory.track(cutId, p);
-      await p;
-    }
-    if (isLoadTokenStale(loadToken) || projectMemory.generation() !== gen) return;
-    entry = projectMemory.getWorkflow(cutId);
-    if (entry && entry.kind !== kind) {
-      const p = storeCutWorkflow(cutRec, gen, kind);
-      projectMemory.track(cutId, p);
-      await p;
-      if (isLoadTokenStale(loadToken) || projectMemory.generation() !== gen) return;
-      entry = projectMemory.getWorkflow(cutId);
+  if (
+    wfLastLoadedCutId === cutId &&
+    wfLastLoadedProjectId === state.pid &&
+    isGongganShotTabOpenAndActive()
+  ) return;
+  const outgoingId = wfLastLoadedCutId;
+  if (
+    outgoingId &&
+    outgoingId !== cutId &&
+    wfLastLoadedProjectId === state.pid &&
+    app.graph?.extra?.gonggan?.cutId === outgoingId
+  ) {
+    const saved = await saveCutWorkflowNow(outgoingId, { flush: true });
+    if (isLoadTokenStale(loadToken)) return;
+    if (saved === false) {
+      ggCutSwitchAutosaveBlocked = true;
+      ggToast("Auto-save failed. Switch cancelled.", "Could not save this cut. Press Ctrl+S, then switch again.", "warn");
+      return;
     }
   }
   if (isLoadTokenStale(loadToken)) return;
-  await openStoredCutWorkflow(cutId, cutRec, loadToken, entry);
+  ggCutDataLock++;
+  try {
+    const workflow = await resolveCutOwnWorkflow(cutRec);
+    if (isLoadTokenStale(loadToken)) return;
+    const kind = workflowKindForCut(cutRec);
+    const entry = {
+      kind,
+      workflow: workflow || emptyCutBlankGraph(),
+      source: workflowNodeCount(workflow) ? "stored" : "empty",
+      fallback: "",
+      key: workflowContentKey(workflow || emptyCutBlankGraph()),
+      empty: workflowNodeCount(workflow) === 0,
+    };
+    projectMemory.setWorkflow(cutId, entry, projectMemory.generation());
+    await openStoredCutWorkflow(cutId, cutRec, loadToken, entry);
+    if (!isLoadTokenStale(loadToken)) await adoptStoredCutFieldsIfBlank(cutRec, loadToken);
+  } finally {
+    ggCutDataLock--;
+  }
+}
+
+/** If this cut's graph has no prompt yet, copy the cut's saved prompt and seed in once. */
+async function adoptStoredCutFieldsIfBlank(cut, loadToken) {
+  if (!cut || isLoadTokenStale(loadToken)) return;
+  if (wfLastLoadedCutId !== cut.id || app.graph?.extra?.gonggan?.cutId !== cut.id) return;
+  const snap = captureGraphWorkflowSnapshot();
+  if (!snap || !Array.isArray(snap.nodes) || !snap.nodes.length) return;
+  const now = extractCutData(snap);
+  if (now.positive) return;
+  const data = readCutData(cut);
+  if (!data.positive && !data.negative && data.seed == null) return;
+  const ids = cutSlotIds(snap);
+  ggApplyingCutData = true;
+  try {
+    if (ids.promptId && data.positive) setLiveTextNode(ids.promptId, data.positive);
+    if (ids.negativeId && data.negative) setLiveTextNode(ids.negativeId, data.negative);
+    if (data.seed != null && ids.seedIds?.length) setLiveSeedNodes(ids.seedIds, data.seed);
+  } finally {
+    ggApplyingCutData = false;
+  }
+  await saveCutWorkflowNow(cut.id);
 }
 
 async function fetchEmbeddedVersionWorkflow(vid) {
@@ -4226,48 +4279,47 @@ async function fetchStoredVersionWorkflow(cutId, vid) {
 
 const VERSION_SOURCE_DETAIL = { embedded: "embedded in result", stored: "stored version workflow" };
 
-/** Thumbnail click: put that result's prompt, seed, and input image back on the cut, then show the shared template. */
-async function loadVersionWorkflow(cutId, vid, loadToken) {
+/** Explicit "Load workflow from this take": that Take's graph becomes this cut's current workflow. */
+async function loadWorkflowFromTake(cutId, vid) {
   const cut = cutById(cutId);
-  const ver = findCutVersion(cut, vid);
-  if (!cut || !ver) return;
-  let snap = ver.gen && typeof ver.gen === "object" ? ver.gen : runSnapshots.byVersion?.[vid];
-  if (!snap) {
-    let wf = null;
-    try {
-      wf = await fetchEmbeddedVersionWorkflow(vid);
-      if (!wf) wf = await fetchStoredVersionWorkflow(cutId, vid);
-    } catch (e) {
-      console.warn("[gonggan] version data failed", e);
-    }
-    if (isLoadTokenStale(loadToken)) return;
-    if (wf) {
-      const data = extractCutData(wf);
-      if (hasPromptNode(wf) || data.seed != null || data.inputImage) snap = data;
-    }
+  if (!cut || !vid || !isNativeProject()) return;
+  const label = loadTakeWorkflowLabel(captionLangNow());
+  let wf = null;
+  try {
+    const snap = runSnapshots.byVersion?.[vid];
+    const merged = mergeLegacyTake(findCutVersion(cut, vid)?.gen, snap);
+    if (merged.workflow && isWorkflowGraph(merged.workflow)) wf = merged.workflow;
+    if (!wf) wf = await fetchEmbeddedVersionWorkflow(vid);
+    if (!wf) wf = await fetchStoredVersionWorkflow(cutId, vid);
+  } catch (e) {
+    console.warn("[gonggan] take workflow failed", e);
   }
-  if (isLoadTokenStale(loadToken)) return;
-  if (snap) {
-    const positive = snap.positive != null ? snap.positive : snap.prompt;
-    if (positive != null) {
-      const before = cut.prompt;
-      cut.prompt = String(positive);
-      scheduleCutFieldSave(cutId, { prompt: cut.prompt }, { prompt: before || "" });
-      const ta = document.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cutId)}"] .gg-prompt-text`);
-      if (ta && document.activeElement !== ta) ta.value = cut.prompt;
-    }
-    const extra = {};
-    if (snap.negative != null) extra.negative = String(snap.negative);
-    if (snap.seed != null && snap.seed !== "") extra.seed = Number(snap.seed);
-    const image = snap.input_image != null ? snap.input_image : snap.inputImage;
-    if (image != null) extra.input_image = String(image);
-    if (Object.keys(extra).length) rememberCutExtra(cutId, extra);
+  if (!wf || !isWorkflowGraph(wf)) {
+    ggToast(label, "This take has no stored workflow.", "warn");
+    return;
   }
-  if (isLoadTokenStale(loadToken)) return;
-  await loadCutWorkflow(cutId, cut, loadToken);
-  if (isLoadTokenStale(loadToken)) return;
-  wfOpenVersion = { projectId: state.pid, cutId, vid };
-  bus.dispatchEvent(new Event("gg-opentab"));
+  const outgoingId = wfLastLoadedCutId;
+  if (outgoingId && outgoingId !== cutId && app.graph?.extra?.gonggan?.cutId === outgoingId) {
+    await saveCutWorkflowNow(outgoingId, { flush: true });
+  }
+  const loadToken = ++wfLoadToken;
+  ggCutDataLock++;
+  try {
+    const loaded = await loadWorkflowIntoDedicatedTab(cloneGraph(wf), cut, loadToken);
+    if (isLoadTokenStale(loadToken) || !loaded) return;
+    markWorkflowLoadComplete(cutId, cut);
+    markGraphGongganCut(cutId);
+    wfOpenVersion = { projectId: state.pid, cutId, vid };
+    await saveCutWorkflowNow(cutId, { flush: true });
+    ggToast(label, shotTitle(cut), "ok");
+    bus.dispatchEvent(new Event("gg-opentab"));
+  } finally {
+    ggCutDataLock--;
+  }
+}
+
+async function loadVersionWorkflow(cutId, vid) {
+  await loadWorkflowFromTake(cutId, vid);
 }
 
 /** A version with no workflow of its own: open the cut's workflow of that version's kind (image or video). */
@@ -5291,6 +5343,7 @@ function cutMenuCtx(cutId, multi) {
     sdkBusy: !!sdk.busy,
     sdkOk: !!(sdk.st && sdk.st.ok),
     emptyCut: native && regenEmptyCut(cutId),
+    workflowEmpty: cutWorkflowIsEmpty(cutId),
     importBusy: stripImportBusy,
     readonlyTip: NATIVE_READONLY_TIP,
   };
@@ -5303,6 +5356,72 @@ function cutMenuActions(cutId) {
     regen: () => (isNativeProject() ? regenNativeCut(cutId) : regenCut(cutId)),
     send: () => sendLastOutput(cutId),
   };
+}
+
+function cutWorkflowIsEmpty(cutId) {
+  const key = cutWorkflowKey(state.pid, cutId);
+  if (cutWorkflowMap.has(key)) return workflowNodeCount(cutWorkflowMap.get(key)) === 0;
+  const live = liveCutGraphNodeCount(cutId);
+  if (live != null) return live === 0;
+  return false;
+}
+
+function templateChoicesForCut(cutId) {
+  const settings = state.timeline?.project?.settings || {};
+  return [
+    { label: "Image template", action: () => { void loadTemplateIntoCut(cutId, settings.image_template); } },
+    { label: "Video template", action: () => { void loadTemplateIntoCut(cutId, settings.video_template); } },
+  ];
+}
+
+async function fetchTemplateGraph(ref) {
+  const wanted = String(ref || "").trim();
+  if (!wanted) return null;
+  const pid = state.pid;
+  try {
+    const d = await getJson(`/gonggan/template?pid=${encodeURIComponent(pid)}&ref=${encodeURIComponent(wanted)}`);
+    if (d && d.ref === wanted && isWorkflowGraph(d.workflow)) return d.workflow;
+  } catch (_) {}
+  if (!wanted.startsWith("builtin:")) {
+    const wf = await readUserdataJson(`workflows/${wanted.replace(/^workflows\//, "")}`);
+    if (isWorkflowGraph(wf)) return wf;
+  }
+  const kind = wanted.includes("video") ? "video" : "image";
+  const saved = await readUserdataJson(templateFileRel(pid, kind));
+  return isWorkflowGraph(saved) ? saved : null;
+}
+
+/** Copy a template into an empty cut. The template file itself is not changed. */
+async function loadTemplateIntoCut(cutId, ref) {
+  const cut = cutById(cutId);
+  if (!cut || !isNativeProject()) return;
+  if (!cutWorkflowIsEmpty(cutId)) {
+    ggToast("Load template", "This cut already has a workflow.", "warn");
+    return;
+  }
+  const graph = await fetchTemplateGraph(ref);
+  if (!graph) {
+    ggToast("Load template", "Could not read that template.", "warn");
+    return;
+  }
+  const filled = applyCutData(cloneGraph(graph), readCutData(cut)) || graph;
+  const loadToken = ++wfLoadToken;
+  ggCutDataLock++;
+  try {
+    const loaded = await loadWorkflowIntoDedicatedTab(filled, cut, loadToken);
+    if (isLoadTokenStale(loadToken) || !loaded) return;
+    markWorkflowLoadComplete(cutId, cut);
+    markGraphGongganCut(cutId);
+    if (queueGraphIsVideo(cut)) {
+      ggApplyingCutData = true;
+      try { await feedVideoCutStartImage(); } catch (_) {}
+      ggApplyingCutData = false;
+    }
+    await saveCutWorkflowNow(cutId, { flush: true });
+    ggToast("Load template", shotTitle(cut), "ok");
+  } finally {
+    ggCutDataLock--;
+  }
 }
 
 function openCutContextMenu(e, cutId) {
@@ -5355,10 +5474,14 @@ function openCutContextMenu(e, cutId) {
         split: () => splitSceneHere(cutId),
         ungroup: () => ungroupCuts(ids),
         addCut: () => addCutAfter(cutId),
+        loadTemplate: () => loadTemplateIntoCut(cutId),
         aiMakeCut: () => openAiCutSplitModal(),
         del: () => deleteSelectedCuts(),
       },
-      nat ? { moveToScene: buildMoveToSceneSubmenu(ids) } : {},
+      {
+        ...(nat ? { moveToScene: buildMoveToSceneSubmenu(ids) } : {}),
+        loadTemplate: templateChoicesForCut(cutId),
+      },
     ),
   );
 }
@@ -5693,9 +5816,11 @@ async function splitSceneHere(cutId) {
 }
 
 function groupColor(id) {
-  let h = 0;
-  for (let i = 0; i < (id || "").length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-  return [42, 88, 148, 118, 168, 28, 198][Math.abs(h) % 7];
+  return sceneHue(id);
+}
+
+function captionLangNow() {
+  return state.timeline?.project?.settings?.caption_lang || "";
 }
 
 function markGraphGongganCut(cutId) {
@@ -7158,7 +7283,7 @@ function clearAnchoredBottomPanel() {
   if (panel && !bottomPanelShown()) {
     for (const prop of [
       "position", "bottom", "left", "width", "height",
-      "min-height", "max-height", "flex-shrink", "z-index",
+      "min-height", "max-height", "flex-shrink", "z-index", "overflow",
     ]) panel.style.removeProperty(prop);
     delete panel.dataset.ggStyleSaved;
     delete panel.dataset.ggStylePrev;
@@ -7210,19 +7335,31 @@ function applyEditModeTimelineRow(root) {
   }
 }
 
-/** Fixed height, no resize handle, glued to the screen bottom. Edit mode uses the same height. */
+/** Fixed height, no resize handle, glued to the screen bottom. Edit mode, Export, and Logs use the same height. */
 function applyAnchoredBottomPanel() {
-  if (bottomAnchorLock || bottomAnchorHoldOff) return;
+  if (bottomAnchorLock) return;
   const panel = document.querySelector(".bottom-panel");
   if (!panel || !bottomPanelShown()) {
-    if (panel?.dataset.ggBottomAnchor === "1") clearAnchoredBottomPanel();
+    if (!bottomAnchorHoldOff && panel?.dataset.ggBottomAnchor === "1") clearAnchoredBottomPanel();
     return;
   }
+  if (bottomAnchorHoldOff && isTimelinePanelOpen()) return;
   const timelineEl = document.querySelector(".gg-timeline");
-  if (!timelineEl || !timelineEl.getClientRects().length) return;
-  const chrome = readAnchorChrome(panel, timelineEl);
-  const body = fixedTimelineBodyHeight();
+  const timelineVisible = !!(timelineEl && timelineEl.getClientRects().length);
+  let chrome = 0;
+  if (timelineVisible) {
+    chrome = readAnchorChrome(panel, timelineEl);
+    if (chrome > 0) panel.dataset.ggAnchorChrome = String(chrome);
+  } else {
+    const cached = Number(panel.dataset.ggAnchorChrome);
+    if (Number.isFinite(cached) && cached > 0) chrome = cached;
+    else {
+      const tablist = panel.querySelector("[role='tablist']");
+      chrome = tablist ? Math.round(tablist.getBoundingClientRect().height) : 0;
+    }
+  }
   const panelH = fixedBottomPanelHeight(chrome, timelineEditModeOn);
+  const body = Math.max(fixedTimelineBodyHeight(), panelH - chrome);
   const splitter = canvasSplitter();
   const sr = splitter?.getBoundingClientRect();
   const pr = panel.getBoundingClientRect();
@@ -7240,14 +7377,16 @@ function applyAnchoredBottomPanel() {
     Math.abs(pr.left - box.left) <= 1 &&
     Math.abs(pr.width - box.width) <= 1 &&
     Math.abs(window.innerHeight - pr.bottom - box.bottom) <= 1;
-  const timelineSized = Math.abs((parseFloat(timelineEl.style.height) || 0) - body) <= 0.5;
+  const timelineSized = !timelineVisible || Math.abs((parseFloat(timelineEl.style.height) || 0) - body) <= 0.5;
   if (placed && timelineSized && padOk) return;
   bottomAnchorLock = true;
   try {
-    timelineEl.style.height = `${body}px`;
-    timelineEl.style.minHeight = `${body}px`;
-    timelineEl.style.maxHeight = `${body}px`;
-    timelineEl.style.flex = "0 0 auto";
+    if (timelineVisible) {
+      timelineEl.style.height = `${body}px`;
+      timelineEl.style.minHeight = `${body}px`;
+      timelineEl.style.maxHeight = `${body}px`;
+      timelineEl.style.flex = "0 0 auto";
+    }
     rememberInlineStyle(panel);
     rememberInlineStyle(splitter);
     panel.dataset.ggBottomAnchor = "1";
@@ -7260,6 +7399,7 @@ function applyAnchoredBottomPanel() {
     panel.style.setProperty("max-height", `${box.height}px`, "important");
     panel.style.setProperty("flex-shrink", "0", "important");
     panel.style.setProperty("z-index", "20", "important");
+    panel.style.setProperty("overflow", "auto", "important");
     document.documentElement.classList.add("gg-bottom-anchored");
     if (splitter) {
       splitter.style.setProperty("box-sizing", "border-box", "important");
@@ -8014,8 +8154,7 @@ async function imageToVideoCut(cutId, { startVid = "" } = {}) {
   }
   const title = shotTitle(cut);
   const pid = state.pid;
-  const open = wfOpenVersion;
-  const selectedVid = startVid || (open && open.projectId === pid && open.cutId === cutId ? open.vid : "");
+  const selectedVid = startVid || selectedImageTakeId(cut);
   const what = startVid ? MAKE_VIDEO_LABEL : "Image to Video";
   sdk.busy = "regen";
   sdk.regenCutId = cutId;
@@ -8041,12 +8180,6 @@ async function imageToVideoCut(cutId, { startVid = "" } = {}) {
     void refreshRegenJob();
     sdk.msg = `Queued through Comfy SDK: ${title} (${what})`;
     ggToast("Queued", `${title}: ${what} (Comfy SDK)`, "ok");
-    if (wfLastLoadedCutId === cutId && wfLastLoadedProjectId === pid && isGongganShotTabOpenAndActive()) {
-      ggMakeVideoCutId = cutId;
-      wfLastLoadedCutId = "";
-      const cutNow = cutById(cutId);
-      if (cutNow) await loadCutWorkflow(cutId, cutNow, ++wfLoadToken);
-    }
   } catch (e) {
     sdk.msg = `${what} failed: ${i2vErrorMessage(e)}`;
     ggToast(what, `${title} — ${i2vErrorMessage(e)}`, "warn");
@@ -8157,11 +8290,7 @@ function queueButtonClick() {
   }
   const ids = timelineSelectedCutIds();
   if (!ids.length || !isNativeProject()) return;
-  const plan = queuePlanForSelectedIds(ids);
-  if (!plan.actionable) return;
-  const newSeed = queueRandomSeedOn(localStorage, state.timeline?.project?.settings);
-  if (plan.jobs.length === 1) return void runQueueJobItem(plan.jobs[0], { newSeed });
-  return startGenerateAll(ids, { items: plan.jobs, randomSeed: newSeed });
+  return void queueSelectedCuts(ids);
 }
 
 /** Every cut of the shown native project in Shots list order (collapsed scenes included). */
@@ -8435,10 +8564,18 @@ async function captureFinishedPrompt(promptId) {
   try {
     const body = { pid: t.projectId, cut_id: t.cutId, prompt_id: String(promptId) };
     if (snap) {
-      body.prompt = snap.positive || "";
-      body.negative = snap.negative || "";
-      if (snap.seed != null && snap.seed !== "") body.seed = snap.seed;
-      body.input_image = snap.input_image || "";
+      const merged = mergeLegacyTake(null, snap);
+      body.prompt = merged.positive || "";
+      body.negative = merged.negative || "";
+      if (merged.seed != null && merged.seed !== "") body.seed = merged.seed;
+      if (merged.steps != null) body.steps = merged.steps;
+      if (merged.cfg != null) body.cfg = merged.cfg;
+      if (merged.frames != null) body.frames = merged.frames;
+      if (merged.numerics && Object.keys(merged.numerics).length) body.numerics = merged.numerics;
+      body.input_image = merged.inputImage || "";
+      if (merged.inputImages?.length) body.input_images = merged.inputImages;
+      if (merged.sourceImageTake) body.source_image_take = merged.sourceImageTake;
+      if (merged.workflow) body.workflow = merged.workflow;
     }
     res = await api.fetchApi("/gonggan/capture-output", {
       method: "POST",
@@ -8479,6 +8616,7 @@ function selectArrivedVersion(pid, cutId, vid) {
   const cut = cutById(cutId);
   if (!cut || !(cut.versions_list || []).some((v) => v && v.id === vid)) return;
   Object.assign(stripPick, { pid, cutId, vid });
+  noteTakeKind(cut, vid);
   if (applyDisplayVersionLocally(cut, vid)) {
     bus.dispatchEvent(new Event("timeline"));
     clearTimeout(ed.saveTimer);
@@ -8790,13 +8928,9 @@ function randomQueueSeed() {
 function rememberRunSnapshot(promptId, snap) {
   if (!promptId || !snap?.cutId) return;
   if (!runSnapshots.byPrompt) runSnapshots.byPrompt = {};
-  runSnapshots.byPrompt[String(promptId)] = {
-    cutId: snap.cutId,
-    positive: snap.positive || "",
-    negative: snap.negative || "",
-    seed: snap.seed,
-    input_image: snap.input_image || "",
-  };
+  const { controls, ...rest } = snap;
+  void controls;
+  runSnapshots.byPrompt[String(promptId)] = { ...rest };
   scheduleRunSnapFile();
 }
 
@@ -8840,7 +8974,7 @@ function patchQueuedStartImage(prompt, imageName) {
   if (named && typeof named === "object" && !Array.isArray(named)) named.image = name;
 }
 
-/** Re-inject this cut's prompt and seed (and, for video, its selected image) before the graph is queued. */
+/** Queue the graph that is open. A video graph also receives the cut's selected image Take. */
 async function injectCutDataForQueue() {
   ggPendingQueueSnap = null;
   const extra = app.graph?.extra?.gonggan;
@@ -8852,59 +8986,41 @@ async function injectCutDataForQueue() {
   const cut = cutById(cutId);
   if (!cut) return true;
   const video = queueGraphIsVideo(cut);
-  const snap = captureGraphWorkflowSnapshot();
-  if (!snap || !hasPromptNode(snap)) {
-    ggToast("Cannot queue", PROMPT_NODE_MISSING, "warn");
-    return false;
-  }
-  if (video && !hasLoadImageNode(snap)) {
-    ggToast("Cannot queue", LOAD_IMAGE_NODE_MISSING, "warn");
-    return false;
-  }
-  const data = readCutData(cut);
-  const seed = projectRandomSeedOn() ? randomQueueSeed() : (data.seed != null ? data.seed : randomQueueSeed());
-  const ids = cutSlotIds(snap);
-  const controls = pinSeedControls();
+  const controls = projectRandomSeedOn() ? pinSeedControls() : [];
+  let sourceImageTake = "";
   ggApplyingCutData = true;
   try {
-    if (ids.promptId) setLiveTextNode(ids.promptId, data.positive);
-    if (ids.negativeId) setLiveTextNode(ids.negativeId, data.negative);
-    setLiveSeedNodes(ids.seedIds, seed);
-    if (data.frames != null) setLiveFrames(ids.lengthId, data.frames);
+    if (projectRandomSeedOn()) {
+      const live = captureGraphWorkflowSnapshot();
+      const ids = live ? cutSlotIds(live) : null;
+      if (ids) setLiveSeedNodes(ids.seedIds, randomQueueSeed());
+    }
     ggQueuedStartFile = "";
     if (video) {
+      sourceImageTake = selectedImageTakeId(cut);
       ggQueuedStartFile = await feedVideoCutStartImage() || "";
-      const selected = findCutVersion(cut, stripSelectedVersionId(cut));
-      if (!ggQueuedStartFile && !isStillVersion(selected) && isImageFileName(data.inputImage)) {
-        const node = liveStartImageNode();
-        if (node && setLiveLoadImageWidget(node, data.inputImage)) ggQueuedStartFile = data.inputImage;
-      }
-    } else if (isImageFileName(data.inputImage)) {
-      const node = liveNodeById(ids.imageId) || liveStartImageNode();
-      if (node) setLiveLoadImageWidget(node, data.inputImage);
     }
   } catch (e) {
     restoreSeedControls(controls);
     ggApplyingCutData = false;
     throw e;
   }
-  rememberCutExtra(cutId, { seed, negative: data.negative });
-  let inputImage = "";
-  if (video) {
-    const ver = findCutVersion(cut, stripSelectedVersionId(cut));
-    if (isStillVersion(ver)) inputImage = ver.id;
-  }
-  if (!inputImage) {
-    const after = captureGraphWorkflowSnapshot();
-    inputImage = after ? extractCutData(after).inputImage || "" : "";
-  }
+  const after = captureGraphWorkflowSnapshot();
+  const take = extractTakeSnapshot(after);
   ggPendingQueueSnap = {
     cutId,
     pid,
-    positive: data.positive || "",
-    negative: data.negative || "",
-    seed,
-    input_image: inputImage,
+    positive: take.positive || "",
+    negative: take.negative || "",
+    seed: take.seed,
+    steps: take.steps,
+    cfg: take.cfg,
+    frames: take.frames,
+    numerics: take.numerics || {},
+    input_image: take.inputImage || "",
+    input_images: take.inputImages || [],
+    workflow: after ? cloneGraph(after) : null,
+    source_image_take: video ? sourceImageTake : "",
     controls,
   };
   return true;
@@ -8922,7 +9038,7 @@ async function feedVideoCutStartImage() {
   if (!cutId || !pid || pid !== state.pid || !isNativeProject()) return "";
   const cut = cutById(cutId);
   if (!cut || !queueGraphIsVideo(cut)) return "";
-  const ver = findCutVersion(cut, stripSelectedVersionId(cut));
+  const ver = findCutVersion(cut, selectedImageTakeId(cut));
   if (!isStillVersion(ver)) {
     console.warn("[gonggan] video queue: no selected image result; queuing without a start frame", cutId);
     return "";
@@ -8957,12 +9073,12 @@ function stripSelectedVersionId(c) {
 
 /** Thumbnails of the selected cut's versions (+ import tile first); Best via star or border. */
 function versionStripHtml(c, selVid) {
-  if (!c) return '<div class="gg-vs-empty gg-dim">Select a cut to see its versions</div>';
+  if (!c) return `<div class="gg-vs-empty gg-dim">Select a cut to see its ${esc(takesNoun(captionLangNow()))}</div>`;
   const importSt = importButtonState({ hasCut: !!c, native: isNativeProject(), busy: stripImportBusy });
   const tileDis = importSt.disabled ? " disabled" : "";
   const tile = `<button type="button" class="gg-vs-import-tile"${tileDis} title="${esc(IMPORT_TILE_TIP)}">+</button>`;
   const rows = versionStripRows(c, stripProbe.dur);
-  if (!rows.length) return tile + '<div class="gg-vs-empty gg-dim">No versions</div>';
+  if (!rows.length) return tile + `<div class="gg-vs-empty gg-dim">No ${esc(takesNoun(captionLangNow()))}</div>`;
   const tabOpen = ownedShotTabOpen();
   const byId = new Map((c.versions_list || []).map((v) => [v.id, v]));
   const thumbs = rows.map((r) => {
@@ -8987,14 +9103,20 @@ function versionStripHtml(c, selVid) {
 }
 
 function versionInfoPanelHtml(c, selVid) {
-  if (!c || !selVid) return '<div class="gg-vs-info-empty gg-dim">Select a version thumbnail</div>';
+  const noun = takeNoun(captionLangNow());
+  if (!c || !selVid) return `<div class="gg-vs-info-empty gg-dim">Select a ${esc(noun)}</div>`;
   const v = (c.versions_list || []).find((x) => x && x.id === selVid);
+  const view = v ? { ...v, seed: v.seed != null ? v.seed : v.gen?.seed } : v;
   const pf = Number(state.timeline?.project?.settings?.fps);
-  const fields = versionInfoFields(v, c, stripProbe.dur, Number.isFinite(pf) ? pf : undefined);
+  const fields = versionInfoFields(view, c, stripProbe.dur, Number.isFinite(pf) ? pf : undefined);
   const rows = versionInfoPanelRows(fields);
-  return rows.map(({ label, value }) =>
-    `<span class="gg-vs-info-k">${esc(label)}</span><span class="gg-vs-info-v">${esc(value)}</span>`,
-  ).join("");
+  const loadLabel = loadTakeWorkflowLabel(captionLangNow());
+  return rows.map(({ label, value }) => {
+    if (label === "Workflow") {
+      return `<span class="gg-vs-info-k">${esc(label)}</span><button type="button" class="gg-btn gg-load-take" title="${esc(loadLabel)}">${esc(loadLabel)}</button>`;
+    }
+    return `<span class="gg-vs-info-k">${esc(label)}</span><span class="gg-vs-info-v">${esc(value)}</span>`;
+  }).join("");
 }
 
 const ICON_SVG_ATTRS = 'width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
@@ -9158,7 +9280,11 @@ function mountShots(el) {
       wrap.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        showCtxMenu(e.clientX, e.clientY, attachMenuActions(versionStripMenuItems(row), {
+        const menuItems = versionStripMenuItems(row).map((it) => (
+          it.key === "loadWf" ? { ...it, label: loadTakeWorkflowLabel(captionLangNow()) } : it
+        ));
+        showCtxMenu(e.clientX, e.clientY, attachMenuActions(menuItems, {
+          loadWf: () => { void loadWorkflowFromTake(c.id, vid); },
           best: () => setPick(c.id, vid),
           del: () => { void deleteVersion(c.id, vid); },
         }));
@@ -9166,11 +9292,11 @@ function mountShots(el) {
     });
   };
   const stripCut = () => (state.timeline ? state.timeline.cuts.find((x) => x.id === state.cutId) || null : null);
-  /** Thumbnail click: displayed version (preview + timeline) and open in the shot tab. */
+  /** Thumbnail click: select this Take. The cut workflow stays until "Load workflow from this take". */
   const selectStripVersion = (cutId, vid) => {
     Object.assign(stripPick, { pid: state.pid, cutId, vid });
+    noteTakeKind(cutById(cutId), vid);
     void setDisplayVersion(cutId, vid);
-    openVersionWorkflow(cutId, vid);
     paintVersionStrip();
   };
   const paintVersionStrip = () => {
@@ -9201,6 +9327,10 @@ function mountShots(el) {
       if (info.dataset.html !== ihtml) {
         info.dataset.html = ihtml;
         info.innerHTML = ihtml;
+        info.querySelector(".gg-load-take")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (c && selVid) void loadWorkflowFromTake(c.id, selVid);
+        });
       }
     }
   };
@@ -9227,7 +9357,11 @@ function mountShots(el) {
     panel.querySelectorAll(".gg-ver-wrap > .gg-ver").forEach((t) => t.addEventListener("click", (e) => {
       e.stopPropagation();
       const vid = t.closest(".gg-ver-wrap")?.dataset?.vid;
-      if (c && vid) openVersionWorkflow(c.id, vid);
+      if (c && vid) {
+        Object.assign(stripPick, { pid: state.pid, cutId: c.id, vid });
+        noteTakeKind(c, vid);
+        void setDisplayVersion(c.id, vid);
+      }
     }));
     panel.querySelector(".gg-regen")?.addEventListener("click", () => regenCut(c.id));
     panel.querySelector(".gg-send")?.addEventListener("click", () => sendLastOutput(c.id));
@@ -9592,7 +9726,7 @@ function mountShots(el) {
         <button type="button" class="gg-btn gg-sel-x" disabled title="Clear selection">×</button>
       </div>` : ""}
       ${iconRowHtml()}
-      <div class="gg-vstrip" role="group" aria-label="Versions"${tl && !viewFinal ? "" : " hidden"}>
+      <div class="gg-vstrip" role="group" aria-label="${esc(takesNoun(captionLangNow()))}"${tl && !viewFinal ? "" : " hidden"}>
         <div class="gg-vs-body">
           <div class="gg-vs-list"></div>
           <button type="button" class="gg-btn gg-vs-newest" hidden title="Back to newest" aria-label="Back to newest">‹</button>
@@ -12226,14 +12360,6 @@ app.registerExtension({
         }
         const prevGraphToPrompt = app.graphToPrompt;
         app.graphToPrompt = async function ggQueueGraphToPrompt(...gargs) {
-          const pending = ggPendingQueueSnap;
-          if (pending) {
-            const live = captureGraphWorkflowSnapshot();
-            const ids = live ? cutSlotIds(live) : null;
-            if (ids?.promptId) setLiveTextNode(ids.promptId, pending.positive);
-            if (ids?.negativeId) setLiveTextNode(ids.negativeId, pending.negative);
-            if (pending.seed != null) setLiveSeedNodes(ids?.seedIds, pending.seed);
-          }
           if (ggQueuedStartFile) {
             const node = liveStartImageNode();
             if (node) setLiveLoadImageWidget(node, ggQueuedStartFile);
@@ -12251,7 +12377,7 @@ app.registerExtension({
           if (ggPendingQueueSnap) ggPendingQueueSnap.controls = null;
           ggApplyingCutData = false;
           const cutId = app.graph?.extra?.gonggan?.cutId;
-          if (cutId) rememberWorkflowBaselineFromActiveGraph(cutId);
+          if (cutId) await saveCutWorkflowNow(cutId);
         }
       };
     }
@@ -12308,8 +12434,12 @@ if (!globalThis.__ggBottomPanelCloseWatch) {
   globalThis.__ggBottomPanelCloseWatch = setInterval(() => {
     try {
       const panel = document.querySelector(".bottom-panel");
-      if (panel?.dataset.ggBottomAnchor !== "1") return;
-      if (isTimelinePanelOpen()) return;
+      if (!panel) return;
+      if (bottomPanelShown()) {
+        applyAnchoredBottomPanel();
+        return;
+      }
+      if (panel.dataset.ggBottomAnchor !== "1") return;
       clearAnchoredBottomPanel();
       if (!app.extensionManager?.bottomPanel?.bottomPanelVisible && loadTimelineOpen(localStorage)) {
         saveTimelineOpen(localStorage, false);

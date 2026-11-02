@@ -260,6 +260,13 @@ def _reference_views(root: Path, project: dict[str, Any]) -> list[dict[str, Any]
     return out
 
 
+def _version_gen_view(ver: dict[str, Any]) -> dict[str, Any] | None:
+    gen = _version_gen(ver) or {}
+    if isinstance(ver.get("workflow_sha"), str) and ver.get("workflow_sha"):
+        gen["has_workflow"] = True
+    return gen or None
+
+
 def _version_gen(ver: dict[str, Any]) -> dict[str, Any] | None:
     """Prompt, seed, and input image stored with the run that made this version."""
     run = ver.get("run") if isinstance(ver.get("run"), dict) else {}
@@ -275,6 +282,22 @@ def _version_gen(ver: dict[str, Any]) -> dict[str, Any] | None:
         gen["seed"] = seed
     if isinstance(run.get("input_image"), str):
         gen["input_image"] = run["input_image"]
+    for key in ("steps", "frames"):
+        n = run.get(key)
+        if isinstance(n, int) and not isinstance(n, bool):
+            gen[key] = n
+    cfg = run.get("cfg")
+    if isinstance(cfg, (int, float)) and not isinstance(cfg, bool):
+        gen["cfg"] = cfg
+    numerics = run.get("numerics")
+    if isinstance(numerics, dict):
+        gen["numerics"] = {k: v for k, v in numerics.items() if isinstance(k, str) and isinstance(v, (int, float)) and not isinstance(v, bool)}
+    images = run.get("input_images")
+    if isinstance(images, list):
+        gen["input_images"] = [s for s in images if isinstance(s, str)]
+    source = run.get("source_image_take")
+    if isinstance(source, str) and source:
+        gen["source_image_take"] = source
     return gen or None
 
 
@@ -350,7 +373,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
                 "missing": jobs[v["id"]] is None,
                 "failed": bool(v.get("failed")),
                 "error": v.get("error") if isinstance(v.get("error"), str) else "",
-                "gen": _version_gen(v),
+                "gen": _version_gen_view(v),
             }
             for v in versions
         ]

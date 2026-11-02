@@ -201,15 +201,12 @@ def create_native_project(
 ) -> dict:
     """Creates the project folder under the chosen location (or ComfyUI's output directory when omitted),
     sets settings.project_folder, and adds only an `assets` subfolder. Name collisions get ' (2)', ' (3)', …
-    The first cut starts from the Default template when given, else from the Image template."""
+    The first cut starts empty. Templates stay a starting point the user can load later."""
     name = (name or "").strip()
     if not name:
         raise ValueError("name required")
     check_template_settings(settings)
     ref = (template_ref or "").strip() or None
-    graph = resolve_template_graph(ref) if ref else None
-    if graph is None:
-        graph = resolve_template_graph(normalize_settings(settings)["image_template"])
     created: list[Path] = []
     explicit = location is not None and bool(str(location).strip())
     loc = str(location).strip() if explicit else str(comfyui_output_directory())
@@ -221,7 +218,7 @@ def create_native_project(
     settings = {**(settings or {}), "project_folder": str(folder)}
     store = native_store()
     try:
-        doc = store.create_project(name, template_ref=ref, template_graph=graph, settings=settings)
+        doc = store.create_project(name, template_ref=ref, template_graph=None, settings=settings)
     except Exception:
         for d in reversed(created):
             try:
@@ -398,7 +395,6 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
     doc = store.get_project(pid)
     if not doc:
         raise ValueError("project not found")
-    graph = project_template_graph(doc, "image")
     scene_id = group_id if isinstance(group_id, str) and group_id else None
     before = store.get_project(pid)
     before_ids = set()
@@ -406,7 +402,7 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
         for cid, c in (before.get("cuts") or {}).items():
             if isinstance(c, dict) and not c.get("deleted_at"):
                 before_ids.add(cid)
-    doc = store.add_cut(pid, scene_id=scene_id, after=after, template_graph=graph)
+    doc = store.add_cut(pid, scene_id=scene_id, after=after, template_graph=None)
     new_id = None
     for cid, c in (doc.get("cuts") or {}).items():
         if cid not in before_ids and isinstance(c, dict) and not c.get("deleted_at"):
@@ -417,7 +413,7 @@ def native_add_cut(pid: str, group_id: str | None, after: str | None) -> dict:
     return {
         "ok": True,
         "cut": {"id": new_id, "name": cut_entry.get("name")} if cut_entry else None,
-        "template_copied": graph is not None,
+        "template_copied": False,
         "timeline": tl,
     }
 
@@ -624,6 +620,17 @@ def native_update_cut(
     return {"ok": True, "timeline": store.to_timeline(pid)}
 
 
+def native_set_cut_workflow(pid: str, cut_id: str, workflow: dict) -> dict:
+    """Save the full graph as this cut's current workflow. Does not touch templates or other cuts."""
+    store = native_store()
+    if store.get_project(pid) is None:
+        raise ValueError("project not found")
+    if not isinstance(workflow, dict):
+        raise ValueError("workflow must be an object")
+    store.set_cut_workflow(pid, cut_id, workflow)
+    return {"ok": True}
+
+
 def native_update_project(
     pid: str,
     fields: dict,
@@ -690,13 +697,8 @@ def _workflow_from_sha(store: LocalStore, pid: str, sha: str | None) -> dict | N
 
 
 def native_cut_source_workflow(pid: str, cut_id: str, kind: str | None = None, by_kind: bool = True) -> dict:
-    """The workflow to open for a cut. With `by_kind` (the editor), a selected image opens an image graph and a
-    video a video graph: the project Image / Video template stands in when the cut has none of that kind."""
-    try:
-        from .gg_project.cut_source import normalize_media_kind, resolve_native_cut_source
-    except ImportError:  # unittest / plain script
-        from gg_project.cut_source import normalize_media_kind, resolve_native_cut_source  # type: ignore
-
+    """The cut's own saved graph. Templates and other cuts' graphs are not substituted."""
+    del kind, by_kind
     store = native_store()
     doc = store.get_project(pid)
     if not doc:
@@ -705,27 +707,11 @@ def native_cut_source_workflow(pid: str, cut_id: str, kind: str | None = None, b
     cut = cuts.get(cut_id) if isinstance(cuts, dict) else None
     if not cut or cut.get("deleted_at"):
         raise ValueError("cut not found")
-    req = normalize_media_kind(kind)
-    versions = store.list_versions(pid, cut_id)
-
-    def get_workflow(sha: str | None) -> dict | None:
-        return _workflow_from_sha(store, pid, sha)
-
-    def kind_template(kind: str) -> dict | None:
-        if kind == "video":
-            return _video_tab_workflow(pid, cut_id, doc, cut)
-        return project_template_graph(doc, "image")
-
-    tpl = native_template_info(pid).get("workflow")
-    return resolve_native_cut_source(
-        cut,
-        versions,
-        get_workflow,
-        tpl if isinstance(tpl, dict) else None,
-        requested_kind=req,
-        is_ui_workflow=gg_template._is_ui_workflow,
-        kind_template=kind_template if by_kind else None,
-    )
+    wf = _workflow_from_sha(store, pid, cut.get("workflow_sha"))
+    if isinstance(wf, dict) and wf:
+        kind_name = "ui" if gg_template._is_ui_workflow(wf) else "api"
+        return {"ok": True, "source": "stored", "workflow": wf, "kind": kind_name, "kind_used": None, "fallback": None}
+    return {"ok": True, "source": None, "workflow": None, "kind": None, "kind_used": None, "fallback": None}
 
 
 def _video_tab_workflow(pid: str, cut_id: str, doc: dict, cut: dict) -> dict | None:
@@ -816,9 +802,7 @@ def native_cut_api_workflow(pid: str, cut_id: str, canvas: dict | None = None, c
         return {"workflow": canvas, "source": "canvas"}
     source = src.get("source") or "stored"
     if not wf:
-        wf, source = project_template_graph(store.get_project(pid), "image"), "template"
-        if not wf:
-            raise NativeWorkflowError("empty", "This cut has no workflow yet. Not queued.")
+        raise NativeWorkflowError("empty", "This cut has no workflow yet. Not queued.")
     if not versions:
         try:
             from . import gg_ltx
@@ -1156,14 +1140,17 @@ def native_send_last_output(pid: str, cut_id: str) -> dict:
 
 
 def _add_output_version(pid: str, cut_id: str, lo: dict, api_workflow: dict | None = None,
-                        gen: dict | None = None) -> dict:
+                        gen: dict | None = None, ui_workflow: dict | None = None) -> dict:
     path = Path(lo["path"])
     meta = gg_wfstore.extract_png_meta(path) if path.suffix.lower() == ".png" else {}
     ui = meta.get("workflow") if isinstance(meta.get("workflow"), dict) else None
     api = meta.get("prompt") if isinstance(meta.get("prompt"), dict) else None
     if api_workflow is not None and isinstance(api_workflow, dict):
         api = api_workflow
-    workflow = ui or api
+    if isinstance(ui_workflow, dict) and ui_workflow:
+        workflow = ui_workflow
+    else:
+        workflow = ui or api
     ver = native_store().add_version(
         pid,
         cut_id,
@@ -1196,7 +1183,7 @@ _CAPTURE_LOCK = threading.Lock()
 
 def native_capture_prompt_output(
     pid: str, cut_id: str, prompt_id: str, wait_sec: float = 5.0, poll_sec: float = 0.25,
-    api_workflow: dict | None = None, gen: dict | None = None,
+    api_workflow: dict | None = None, gen: dict | None = None, ui_workflow: dict | None = None,
 ) -> dict:
     """A finished run queued from a cut becomes a version of that cut (once per prompt id).
 
@@ -1230,4 +1217,9 @@ def native_capture_prompt_output(
             run = ver.get("run") if isinstance(ver.get("run"), dict) else {}
             if run.get("prompt_id") == prompt_id:
                 return {"ok": True, "version": ver, "output": lo, "duplicate": True}
-        return {"ok": True, "version": _add_output_version(pid, cut_id, lo, api_workflow, gen), "output": lo, "duplicate": False}
+        return {
+            "ok": True,
+            "version": _add_output_version(pid, cut_id, lo, api_workflow, gen, ui_workflow),
+            "output": lo,
+            "duplicate": False,
+        }

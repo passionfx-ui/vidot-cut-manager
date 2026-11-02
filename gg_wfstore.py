@@ -265,26 +265,15 @@ def _workflow_payload(rec: dict) -> tuple[dict | None, str]:
 
 
 def cut_source_workflow(pid: str, cut_id: str) -> dict:
-    """Resolve stored version → project template → draft workflow for a cut."""
-    from . import gg_template
-    from . import gg_sdk
-
+    """The cut's own initial graph, if one was saved. No template and no draft are filled in."""
     pid = _check_pid(pid)
     cut_id = _check_cut(cut_id)
-    stored = latest_cut_workflow(pid, cut_id)
+    stored = get_initial_workflow(pid, cut_id)
     if stored:
         wf, kind = _workflow_payload(stored)
         if wf:
             return {"ok": True, "source": "stored", "workflow": wf, "kind": kind}
-    tpl = gg_template.get_template(pid)
-    if tpl:
-        kind = "ui" if gg_template._is_ui_workflow(tpl) else "api"
-        return {"ok": True, "source": "template", "workflow": tpl, "kind": kind}
-    try:
-        p = gg_sdk.cut_workflow(pid, cut_id, None, save_file=False)
-    except ValueError:
-        return {"ok": True, "source": None, "workflow": None, "kind": None}
-    return {"ok": True, "source": "draft", "workflow": p["workflow"], "kind": "api"}
+    return {"ok": True, "source": None, "workflow": None, "kind": None}
 
 
 def backfill(pid: str | None = None, dry_run: bool = False) -> dict:

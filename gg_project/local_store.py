@@ -682,6 +682,23 @@ class LocalStore:
             self._save_project_doc(pid, doc, "update_cut", cut_id)
             return doc
 
+    def set_cut_workflow(self, pid: str, cut_id: str, workflow: dict) -> dict[str, Any]:
+        """Store this cut's current graph. Other cuts and template files are left as they are."""
+        if not isinstance(workflow, dict):
+            raise ValueError("workflow must be an object")
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                raise FileNotFoundError(pid)
+            c = self._cuts_map(doc).get(cut_id)
+            if not c or c.get("deleted_at"):
+                raise ValueError("cut not found")
+            c["workflow_sha"] = self.put_blob(pid, workflow)
+            bump_entity(c)
+            self._bump_project(doc)
+            self._save_project_doc(pid, doc, "set_cut_workflow", cut_id)
+            return doc
+
     def update_project(
         self,
         pid: str,

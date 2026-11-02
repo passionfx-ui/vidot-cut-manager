@@ -2,6 +2,9 @@
 
 export const BOTTOM_PANEL_RESIZABLE = false;
 
+/** I14: the default panel is 1.2 times the previous fixed height. Export and Logs keep this height. */
+export const BOTTOM_PANEL_HEIGHT_SCALE = 1.2;
+
 /** Bottom gap at or under this size is panel padding. A taller gap is empty space, not chrome. */
 export const BOTTOM_PAD_CHROME_MAX = 24;
 
@@ -85,8 +88,13 @@ export function normalModePreviewSize({ bodyHeight = 0, hostWidth = 0 } = {}) {
  * inside, and taller when the normal-mode preview needs it. The extra pixels
  * go to the timeline track; the scrollbar stays the last row.
  */
-export function fixedTimelineBodyHeight() {
+/** Timeline body before the I14 height scale. */
+export function unscaledTimelineBodyHeight() {
   return Math.max(timelineEditorBodyPx(), timelineViewerBodyPx());
+}
+
+export function fixedTimelineBodyHeight() {
+  return Math.round(unscaledTimelineBodyHeight() * BOTTOM_PANEL_HEIGHT_SCALE);
 }
 
 /**
@@ -118,7 +126,8 @@ export function fixedPanelChrome(panelRect, timelineRect, tabListHeight = 0) {
 export function fixedBottomPanelHeight(chromePx, _editMode = false) {
   void _editMode;
   const chrome = Math.max(0, Math.round(Number(chromePx) || 0));
-  return fixedTimelineBodyHeight() + chrome;
+  const base = unscaledTimelineBodyHeight() + chrome;
+  return Math.round(base * BOTTOM_PANEL_HEIGHT_SCALE);
 }
 
 /**

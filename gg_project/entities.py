@@ -124,5 +124,50 @@ def new_version(
         image = gen.get("input_image")
         if isinstance(image, str):
             run["input_image"] = image[:500]
+        _copy_take_fields(run, gen)
     v["run"] = run
     return v
+
+
+def _copy_take_fields(run: dict[str, Any], gen: dict[str, Any]) -> None:
+    """Extra Take fields. Unknown or oversized values are skipped. The full graph stays in the workflow blob."""
+    steps = _take_int(gen.get("steps"), 1, 100000)
+    if steps is not None:
+        run["steps"] = steps
+    cfg = gen.get("cfg")
+    if isinstance(cfg, (int, float)) and not isinstance(cfg, bool) and cfg == cfg and abs(cfg) != float("inf"):
+        run["cfg"] = float(cfg)
+    frames = _take_int(gen.get("frames"), 1, 100000)
+    if frames is not None:
+        run["frames"] = frames
+    numerics = gen.get("numerics")
+    if isinstance(numerics, dict):
+        clean: dict[str, int | float] = {}
+        for key, value in numerics.items():
+            if len(clean) >= 40:
+                break
+            if not isinstance(key, str) or isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            if value != value or abs(value) == float("inf"):
+                continue
+            clean[key[:40]] = value
+        if clean:
+            run["numerics"] = clean
+    images = gen.get("input_images")
+    if isinstance(images, list):
+        names = [s[:500] for s in images if isinstance(s, str) and s][:20]
+        if names:
+            run["input_images"] = names
+    source = gen.get("source_image_take")
+    if isinstance(source, str) and source.strip():
+        run["source_image_take"] = source.strip()[:80]
+
+
+def _take_int(value: Any, lo: int, hi: int) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, int) and lo <= value <= hi:
+        return value
+    return None

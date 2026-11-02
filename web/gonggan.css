@@ -655,8 +655,8 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-timeline .gg-clip.gg-play .gg-clip-type-badge {
   border-color: #6ee07a;
 }
-.gg-timeline .gg-clip.gg-in-scene { box-shadow: inset 0 3px 0 hsl(var(--gg-grp, 200) 50% 42% / .85); }
-.gg-timeline .gg-scene-band { position: absolute; left: 0; right: 0; top: 0; z-index: 2; font-size: 9px; padding: 1px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: hsl(var(--gg-grp, 200) 45% 32% / .92); pointer-events: none; }
+.gg-timeline .gg-clip.gg-in-scene { background-color: hsl(var(--gg-grp, 200) 42% 26% / .88); box-shadow: inset 5px 0 0 hsl(var(--gg-grp, 200) 70% 58%); }
+.gg-timeline .gg-scene-band { position: absolute; left: 0; right: 0; top: 0; z-index: 2; font-size: 9px; padding: 1px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #f7f9fc; background: hsl(var(--gg-grp, 200) 48% 34%); pointer-events: none; }
 .gg-timeline .gg-in-scene .gg-clip-label { top: 14px; }
 .gg-timeline .gg-clip.gg-moved { box-shadow: inset 0 -3px 0 #4bb3f2; }
 .gg-timeline .gg-clip.gg-on { outline: 2px solid var(--gg-acc); outline-offset: -2px; z-index: 1; }
@@ -793,6 +793,7 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-shots .gg-vs-info-k { color: var(--gg-dim); white-space: nowrap; overflow: hidden; }
 .gg-shots .gg-vs-info-v { color: var(--gg-fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gg-shots .gg-vs-info-empty { grid-column: 1 / -1; padding: 0; font-size: 11px; line-height: 14px; }
+.gg-shots .gg-load-take { justify-self: start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 14px; height: 14px; padding: 0 6px; }
 .gg-shots .gg-vstrip .gg-ver-wrap .gg-ver { outline: none; box-shadow: none; border-color: var(--gg-line); }
 .gg-shots .gg-vstrip .gg-vs-best .gg-ver { border: 2px solid #e8c547; }
 /* 0.9.135: a black video (auto-retried) is Failed: red border, dimmed; the reason is in the tooltip */

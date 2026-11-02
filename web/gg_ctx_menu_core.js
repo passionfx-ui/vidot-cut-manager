@@ -63,7 +63,7 @@ export function cutActionItems(ctx = {}) {
  *   emptyCut?: boolean, readonlyTip?: string, canMoveUp?: boolean, canMoveDown?: boolean, inScene?: boolean,
  *   anyInScene?: boolean, queueCount?: number, queuedCount?: number,
  *   failedCount?: number, hasImage?: boolean, importBusy?: boolean, hasVersion?: boolean, aiMakeCut?: boolean,
- *   useAi?: boolean, hasListCuts?: boolean }} ctx
+ *   useAi?: boolean, hasListCuts?: boolean, workflowEmpty?: boolean }} ctx
  */
 export function cutCardMenuItems(ctx = {}) {
   const nat = !!ctx.native;
@@ -89,6 +89,12 @@ export function cutCardMenuItems(ctx = {}) {
     { key: "group", label: MAKE_SCENE_LABEL },
     MENU_SEPARATOR,
     { key: "addCut", label: "Add Cut" },
+    {
+      key: "loadTemplate",
+      label: "Load template…",
+      disabled: !ctx.workflowEmpty,
+      title: ctx.workflowEmpty ? "Copy a template into this empty cut" : "This cut already has a workflow",
+    },
     ...(nat && ctx.aiMakeCut ? [aiMakeCutMenuItem(ctx.useAi)] : []),
     importItem,
     MENU_SEPARATOR,

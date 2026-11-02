@@ -1,9 +1,7 @@
 /**
- * Per-cut data on a shared image/video template (pure, no DOM).
- *
- * The template holds structure. A cut holds positive and negative prompt, seed,
- * input image, and length/frames. Those slots are stripped when comparing structure
- * and written back when a cut is shown or queued.
+ * Read and write prompt, seed, image, and length slots on a graph (pure, no DOM).
+ * A cut's current workflow is the whole graph. These helpers record a Take and,
+ * when the user loads a template into an empty cut, copy the cut's text in once.
  */
 
 const SKIPPED_MODES = new Set([2, 4]);
@@ -395,6 +393,56 @@ export function stripCutData(graph) {
   if (image) writeImageName(image.node, "");
   for (const item of lengthNodes(g)) writeFrames(item.node, 0);
   return g;
+}
+
+function collectNamedNumbers(node, into) {
+  const named = node?.widgets_values_named;
+  if (named && typeof named === "object" && !Array.isArray(named)) {
+    for (const [key, value] of Object.entries(named)) {
+      if (typeof value === "number" && Number.isFinite(value) && into[key] == null) into[key] = value;
+    }
+  }
+  const inputs = node?.inputs;
+  if (inputs && typeof inputs === "object" && !Array.isArray(inputs)) {
+    for (const [key, value] of Object.entries(inputs)) {
+      if (typeof value === "number" && Number.isFinite(value) && into[key] == null) into[key] = value;
+    }
+  }
+}
+
+/**
+ * Everything a Take keeps from the graph that produced it.
+ * Prompts, the numeric widgets (seed, steps, cfg, length, and the rest), and input images.
+ * @param {object | null | undefined} graph
+ */
+export function extractTakeSnapshot(graph) {
+  const base = extractCutData(graph);
+  const numerics = {};
+  const inputImages = [];
+  for (const item of listedNodes(graph)) {
+    collectNamedNumbers(item.node, numerics);
+    if (nodeType(item.node) === "LoadImage") {
+      const name = readImageName(item.node);
+      if (name && !inputImages.includes(name)) inputImages.push(name);
+    }
+  }
+  if (base.seed != null && numerics.seed == null) numerics.seed = base.seed;
+  if (base.frames != null && numerics.length == null && numerics.frames == null) numerics.length = base.frames;
+  if (!inputImages.length && base.inputImage) inputImages.push(base.inputImage);
+  const steps = typeof numerics.steps === "number" ? numerics.steps : null;
+  const cfg = typeof numerics.cfg === "number" ? numerics.cfg : null;
+  const frames = base.frames != null ? base.frames : (typeof numerics.length === "number" ? numerics.length : null);
+  return {
+    positive: base.positive,
+    negative: base.negative,
+    seed: base.seed,
+    steps,
+    cfg,
+    frames,
+    numerics,
+    inputImage: base.inputImage || inputImages[0] || "",
+    inputImages,
+  };
 }
 
 export function hasPromptNode(graph) {
