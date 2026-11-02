@@ -170,17 +170,6 @@ def _widget_index(node_type: str, widget_name: str) -> int | None:
     return None
 
 
-def _linked_widget(node: dict, widget_name: str) -> bool:
-    for inp in node.get("inputs") or []:
-        if not isinstance(inp, dict) or inp.get("link") is None:
-            continue
-        widget = inp.get("widget") if isinstance(inp.get("widget"), dict) else {}
-        linked_name = widget.get("name") or inp.get("name")
-        if linked_name == widget_name:
-            return True
-    return False
-
-
 def _active(node: dict) -> bool:
     return node.get("mode") not in _INACTIVE_MODES
 
@@ -227,10 +216,23 @@ def _ancestors(start_ids: list[str], incoming: dict[str, list[str]]) -> set[str]
     return seen
 
 
+def _named_values_index(node: dict, widget_name: str) -> int | None:
+    """Index of a widget in widgets_values when that list follows widgets_values_named key order.
+
+    Subgraph nodes serialize promoted inputs that way: text, width, height, … so width is not slot 0.
+    """
+    named = node.get("widgets_values_named")
+    values = node.get("widgets_values")
+    if not isinstance(named, dict) or not isinstance(values, list) or widget_name not in named:
+        return None
+    idx = list(named).index(widget_name)
+    if idx < len(values):
+        return idx
+    return None
+
+
 def _write_widget(node: dict, widget_name: str, number: int) -> bool:
-    """Write one named widget. A linked socket keeps its link (the link wins at run time)."""
-    if _linked_widget(node, widget_name):
-        return False
+    """Write one named widget. A linked socket keeps its link (the link still wins at run time)."""
     wrote = False
     values = node.get("widgets_values")
     if isinstance(values, dict):
@@ -246,6 +248,8 @@ def _write_widget(node: dict, widget_name: str, number: int) -> bool:
         wrote = True
     if isinstance(values, list):
         idx = _widget_index(_node_type(node), widget_name)
+        if idx is None:
+            idx = _named_values_index(node, widget_name)
         if idx is None and widget_name in ("width", "value") and values and _is_number(values[0]):
             idx = 0
         elif idx is None and widget_name == "height" and len(values) > 1 and _is_number(values[1]):
@@ -541,18 +545,27 @@ def apply_new_cut_generation_size(
     """Write generation width/height into a copied template. Mutates `graph`.
 
     App templates (`.app.json` / linearMode) use linearData inputs named width and height.
-    Other templates set width and height on latent / video size nodes that feed a sampler.
+    Latent / video size nodes that feed a sampler are set as well, including a linked
+    latent inside a subgraph (the link stays; the stored width and height match).
     When an app template has no such inputs, the size-node path is used.
     When no sampler can be seen, every size node is set.
     """
     if not isinstance(graph, dict):
         return []
+    written: list[dict[str, Any]] = []
     if app:
-        written = _apply_linear_size(graph, width, height)
-        if written:
-            return written
+        written.extend(_apply_linear_size(graph, width, height))
+    # Size nodes too: an app input often only promotes width/height, and the latent
+    # node inside the subgraph still holds the template size (its sockets stay linked).
     if isinstance(graph.get("nodes"), list):
-        return _apply_ui_size_nodes(graph, width, height)
-    if graph and "nodes" not in graph:
-        return _apply_api_size_nodes(graph, width, height)
-    return []
+        covered = {
+            (row.get("graph"), row.get("id"))
+            for row in written
+            if row.get("width") is not None and row.get("height") is not None
+        }
+        for row in _apply_ui_size_nodes(graph, width, height):
+            if (row.get("graph"), row.get("id")) not in covered:
+                written.append(row)
+    elif not written and graph and "nodes" not in graph:
+        written.extend(_apply_api_size_nodes(graph, width, height))
+    return written
