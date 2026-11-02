@@ -7505,6 +7505,7 @@ function comfyPromptDialogOpen() {
 }
 
 let timelineEditModeOn = loadEditPreviewMode(localStorage);
+document.documentElement.classList.toggle(EDIT_MODE_ON_CLASS, !!timelineEditModeOn);
 let editPreviewLayoutRaf = 0;
 let editPreviewObserver = null;
 let editPreviewLoadToken = 0;
@@ -7793,6 +7794,7 @@ function overlayBottomLimit(graphRect) {
 
 function refreshStripLayoutDependents() {
   try { paintAppControls(); } catch (_) {}
+  placeEditTakesStrip();
   if (timelineEditModeOn) scheduleEditPreviewLayout();
 }
 
@@ -7866,6 +7868,12 @@ function ensureOwnStrip() {
       <button type="button" class="gg-strip-close" aria-label="Collapse" title="Collapse">×</button>
     </div>
     <div class="gg-strip-body"></div>`;
+  // Attach before the tabs mount so Edit-on-by-default can lay out the preview
+  // in the same turn. Mount used to run while ownStripEl was still unset, so
+  // isTimelinePanelOpen() was false and the preview never started.
+  ownStripEl = el;
+  document.body.appendChild(el);
+  applyOwnStripHeight();
   const body = el.querySelector(".gg-strip-body");
   for (const tab of [
     { id: TIMELINE_TAB, mount: mountTimeline },
@@ -7880,8 +7888,6 @@ function ensureOwnStrip() {
     tab.mount(pane);
   }
   wireOwnStrip(el);
-  ownStripEl = el;
-  document.body.appendChild(el);
   syncOwnStripTabs();
   return el;
 }
@@ -9819,7 +9825,7 @@ function placeAppControls(el) {
     shotsRect: shots ? shots.getBoundingClientRect() : null,
     rightPanelLeft: sides.right,
     rightDockerLeft: docker,
-    bottomPanelTop: overlayBottomLimit(graph),
+    bottomPanelTop: editOverlayBottom(graph),
   });
   if (!area) return false;
   const width = Math.min(240, Math.max(168, Math.round(area.width * 0.32)));
@@ -10662,6 +10668,7 @@ function mountShots(el) {
     syncProgressWireState();
     applyPlayCutHighlight();
     fit();
+    placeEditTakesStrip();
   };
   repaintAfterCompose = () => {
     setTimeout(() => {
@@ -12548,8 +12555,118 @@ function unbindEditPreviewObserver() {
   editPreviewObserver = null;
 }
 
+/** Thumbnail row height. Matches `.gg-vs-body`. The info grid stays in the shots column. */
+const EDIT_TAKES_ROW_PX = 72;
+/** Room left for the canvas toolbar when it cannot be measured yet. */
+const EDIT_TAKES_TOOLBAR_FALLBACK_PX = 56;
+
+function clearEditTakesDock(body) {
+  const el = body || document.querySelector(".gg-shots .gg-vs-body");
+  if (!el) return;
+  el.classList.remove("gg-vs-dock");
+  el.style.position = "";
+  el.style.left = "";
+  el.style.width = "";
+  el.style.top = "";
+  el.style.height = "";
+  el.style.zIndex = "";
+  el.style.boxSizing = "";
+}
+
+/** Top of the floating canvas toolbar (zoom / fit / minimap), not a selection toolbox. */
+function measureCanvasToolbarTop(graphRect) {
+  const panel = document.querySelector(".graph-canvas-panel");
+  if (!panel || !graphRect) return null;
+  let top = null;
+  for (const el of panel.querySelectorAll('[role="toolbar"]')) {
+    const hostClass = typeof el.parentElement?.className === "string" ? el.parentElement.className : "";
+    if (!hostClass.includes("bottom-0")) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 80 || r.height < 20 || r.height > 96) continue;
+    if (r.bottom < graphRect.top + 40) continue;
+    if (r.left > graphRect.right - 8 || r.right < graphRect.left + 8) continue;
+    top = top == null ? r.top : Math.min(top, r.top);
+  }
+  return top;
+}
+
+/**
+ * In Edit mode, with Timeline open, pin the take thumbnail row in the graph
+ * column, directly under the preview and above the timeline. It stays above
+ * the canvas toolbar. Other modes leave the row in the shots column.
+ * @returns {number|null} top of the docked row, or null when it is not docked
+ */
+function placeEditTakesStrip() {
+  const body = document.querySelector(".gg-root.gg-shots .gg-vstrip .gg-vs-body");
+  const strip = body?.closest(".gg-vstrip");
+  const show = !!(
+    timelineEditModeOn
+    && isTimelinePanelOpen()
+    && body
+    && strip
+    && !strip.hidden
+  );
+  if (!show) {
+    clearEditTakesDock(body);
+    return null;
+  }
+  const column = graphColumnElement();
+  const graph = editPreviewBox(graphWorkAreaElement()) || (column ? editPreviewBox(column) : null);
+  if (!column || !graph) {
+    clearEditTakesDock(body);
+    return null;
+  }
+  const col = column.getBoundingClientRect();
+  const sides = measureEditPreviewSides(graph);
+  const barBottom = measureEditPreviewToolbarBottom(graph);
+  const docker = measureRightDockerLeft(graph, barBottom ?? graph.top);
+  let left = col.left;
+  let right = col.right;
+  if (sides.left != null) left = Math.max(left, sides.left);
+  if (sides.right != null) right = Math.min(right, sides.right);
+  if (docker != null) right = Math.min(right, docker);
+  const width = right - left;
+  if (width < 48) {
+    clearEditTakesDock(body);
+    return null;
+  }
+  const gap = 4;
+  const timelineTop = ownStripTop();
+  const toolbarTop = measureCanvasToolbarTop(graph);
+  let bottomEdge = timelineTop != null ? timelineTop - gap : graph.bottom - gap;
+  if (toolbarTop != null) bottomEdge = Math.min(bottomEdge, toolbarTop - gap);
+  else bottomEdge -= EDIT_TAKES_TOOLBAR_FALLBACK_PX;
+  const minTop = (barBottom != null ? barBottom : graph.top) + gap;
+  let top = Math.round(bottomEdge - EDIT_TAKES_ROW_PX);
+  if (top < minTop) top = Math.round(minTop);
+  body.classList.add("gg-vs-dock");
+  body.style.position = "fixed";
+  body.style.boxSizing = "border-box";
+  body.style.zIndex = "2300";
+  body.style.left = `${Math.round(left)}px`;
+  body.style.width = `${Math.max(48, Math.round(width))}px`;
+  body.style.top = `${top}px`;
+  body.style.height = `${EDIT_TAKES_ROW_PX}px`;
+  return top;
+}
+
+/** Preview stops at the docked take row when that row is on screen. */
+function editOverlayBottom(graph) {
+  const caps = [];
+  const base = overlayBottomLimit(graph);
+  if (base != null) caps.push(base);
+  const dock = document.querySelector(".gg-vs-body.gg-vs-dock");
+  if (dock) {
+    const top = dock.getBoundingClientRect().top;
+    if (Number.isFinite(top) && top > 0) caps.push(top);
+  }
+  if (!caps.length) return null;
+  return Math.min(...caps);
+}
+
 function applyEditPreviewLayout() {
   document.documentElement.classList.toggle(EDIT_MODE_ON_CLASS, !!timelineEditModeOn);
+  placeEditTakesStrip();
   if (!timelineEditModeOn || !isTimelinePanelOpen()) {
     document.querySelector(".gg-edit-preview")?.remove();
     return;
@@ -12567,7 +12684,7 @@ function applyEditPreviewLayout() {
     shotsRect: sides.left != null ? { right: sides.left, width: 100 } : null,
     rightPanelLeft: sides.right,
     rightDockerLeft: measureRightDockerLeft(graph, toolbarBottom ?? graph.top),
-    bottomPanelTop: overlayBottomLimit(graph),
+    bottomPanelTop: editOverlayBottom(graph),
   });
   if (!rect) {
     document.querySelector(".gg-edit-preview")?.remove();
@@ -12603,6 +12720,7 @@ function setTimelineEditMode(on) {
   } else {
     unbindEditPreviewObserver();
     document.querySelector(".gg-edit-preview")?.remove();
+    placeEditTakesStrip();
   }
 }
 

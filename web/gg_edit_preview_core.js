@@ -4,6 +4,8 @@ import { isAnimatedImage, playsAsVideo } from "./gg_missing_media_core.js";
 import { sourceTimeAtClip, videoPreviewFrameIndex } from "./gg_timeline_scrub_core.js";
 
 export const TIMELINE_EDIT_MODE_KEY = "gg.timelineEditMode";
+/** Written only when the user toggles Edit after I26. Missing means default Edit. */
+export const TIMELINE_EDIT_MODE_CHOICE_KEY = "gg.timelineEditMode.i26";
 export const EDIT_MODE_LABEL = "Edit Mode";
 export const EDIT_MODE_ON_CLASS = "gg-edit-mode-on";
 export const EDIT_PREVIEW_GAP_PX = 4;
@@ -12,21 +14,27 @@ function normalizeEditPreviewMode(v) {
   return v === true || v === "true" || v === "1" || v === 1;
 }
 
+/**
+ * Edit is the default when Cut Manager opens and nothing has been chosen yet.
+ * A value saved before I26 is not a choice. After the user toggles, that choice is kept.
+ */
 export function loadEditPreviewMode(storage) {
   try {
-    if (!storage) return false;
-    const raw = storage.getItem(TIMELINE_EDIT_MODE_KEY);
-    if (raw == null) return false;
-    return normalizeEditPreviewMode(raw);
+    if (!storage) return true;
+    const choice = storage.getItem(TIMELINE_EDIT_MODE_CHOICE_KEY);
+    if (choice == null || choice === "") return true;
+    return normalizeEditPreviewMode(choice);
   } catch (_) {
-    return false;
+    return true;
   }
 }
 
 export function saveEditPreviewMode(storage, on) {
   try {
     if (!storage) return;
-    storage.setItem(TIMELINE_EDIT_MODE_KEY, normalizeEditPreviewMode(on) ? "1" : "0");
+    const v = normalizeEditPreviewMode(on) ? "1" : "0";
+    storage.setItem(TIMELINE_EDIT_MODE_KEY, v);
+    storage.setItem(TIMELINE_EDIT_MODE_CHOICE_KEY, v);
   } catch (_) {}
 }
 
