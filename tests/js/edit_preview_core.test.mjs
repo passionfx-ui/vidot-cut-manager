@@ -5,6 +5,7 @@ import {
   EDIT_PREVIEW_GAP_PX,
   editPreviewOverlayRect,
   editPreviewStill,
+  editPreviewSwap,
   loadEditPreviewMode,
   saveEditPreviewMode,
 } from "../../web/gg_edit_preview_core.js";
@@ -42,6 +43,97 @@ describe("edit preview still", () => {
     assert.equal(editPreviewStill(null), null);
     assert.equal(editPreviewStill({}), null);
     assert.equal(editPreviewStill({ id: "", kind: "image" }), null);
+  });
+});
+
+describe("edit preview cut change", () => {
+  const image = (id) => ({ id, kind: "image" });
+  const video = (id, extra) => ({ id, kind: "video", ...extra });
+
+  it("swaps to the new cut and clears the previous frame before the new still loads", () => {
+    const shown = { cutId: "a", mediaId: "m1", url: "/media/m1", loaded: true };
+    const next = editPreviewSwap(shown, {
+      cutId: "b",
+      media: image("m2"),
+      url: "/media/m2",
+    });
+    assert.equal(next.cutId, "b");
+    assert.equal(next.mediaId, "m2");
+    assert.equal(next.url, "/media/m2");
+    assert.equal(next.changed, true);
+    assert.equal(next.clearPrevious, true);
+    assert.deepEqual(next.srcSteps, ["clear", "/media/m2"]);
+    assert.equal(next.showImage, false);
+    assert.equal(next.showEmpty, false);
+  });
+
+  it("clears a video or animated poster the same way, and does not keep the old frame", () => {
+    const shown = { cutId: "a", mediaId: "m1", url: "/media/m1", loaded: true };
+    const videoNext = editPreviewSwap(shown, {
+      cutId: "v",
+      media: video("vid"),
+      url: "/poster/vid",
+    });
+    assert.equal(videoNext.kind, "poster");
+    assert.equal(videoNext.clearPrevious, true);
+    assert.deepEqual(videoNext.srcSteps, ["clear", "/poster/vid"]);
+    assert.equal(videoNext.showImage, false);
+
+    const animNext = editPreviewSwap(
+      { cutId: "v", mediaId: "vid", url: "/poster/vid", loaded: true },
+      { cutId: "w", media: video("webp", { animated: true }), url: "/poster/webp" },
+    );
+    assert.equal(animNext.kind, "poster");
+    assert.equal(animNext.clearPrevious, true);
+    assert.deepEqual(animNext.srcSteps, ["clear", "/poster/webp"]);
+    assert.equal(animNext.showImage, false);
+  });
+
+  it("clears again when the cut changes even if the still url is unchanged", () => {
+    const shown = { cutId: "a", mediaId: "m1", url: "/media/m1", loaded: true };
+    const next = editPreviewSwap(shown, { cutId: "b", media: image("m1"), url: "/media/m1" });
+    assert.equal(next.changed, true);
+    assert.equal(next.clearPrevious, true);
+    assert.deepEqual(next.srcSteps, ["clear", "/media/m1"]);
+    assert.equal(next.showImage, false);
+  });
+
+  it("shows the new still only after it has loaded", () => {
+    const loading = { cutId: "b", mediaId: "m2", url: "/media/m2", loaded: false };
+    const waiting = editPreviewSwap(loading, { cutId: "b", media: image("m2"), url: "/media/m2" });
+    assert.equal(waiting.changed, false);
+    assert.equal(waiting.clearPrevious, false);
+    assert.deepEqual(waiting.srcSteps, []);
+    assert.equal(waiting.showImage, false);
+
+    const ready = editPreviewSwap(
+      { ...loading, loaded: true },
+      { cutId: "b", media: image("m2"), url: "/media/m2" },
+    );
+    assert.equal(ready.showImage, true);
+    assert.equal(ready.clearPrevious, false);
+    assert.deepEqual(ready.srcSteps, []);
+  });
+
+  it("clears the frame when the new cut has no media", () => {
+    const shown = { cutId: "a", mediaId: "m1", url: "/media/m1", loaded: true };
+    const next = editPreviewSwap(shown, { cutId: "c", media: null, url: "/ignored" });
+    assert.equal(next.changed, true);
+    assert.equal(next.clearPrevious, true);
+    assert.deepEqual(next.srcSteps, ["clear"]);
+    assert.equal(next.showImage, false);
+    assert.equal(next.showEmpty, true);
+    assert.equal(next.url, "");
+    assert.equal(next.mediaId, "");
+  });
+
+  it("leaves the current still up when the same cut is painted again", () => {
+    const shown = { cutId: "a", mediaId: "m1", url: "/media/m1", loaded: true };
+    const next = editPreviewSwap(shown, { cutId: "a", media: image("m1"), url: "/media/m1" });
+    assert.equal(next.changed, false);
+    assert.equal(next.clearPrevious, false);
+    assert.equal(next.showImage, true);
+    assert.deepEqual(next.srcSteps, []);
   });
 });
 

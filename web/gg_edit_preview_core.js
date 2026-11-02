@@ -40,6 +40,47 @@ export function editPreviewStill(media) {
 }
 
 /**
+ * What the edit preview should do when the current cut changes.
+ * A different cut always clears the previous frame first. The new still stays
+ * hidden until that same still is already loaded, so the old picture cannot linger.
+ * Painting the same not-yet-loaded still again does not restart the load.
+ *
+ * @param {null|{cutId?: string, mediaId?: string, url?: string, loaded?: boolean}} shown
+ * @param {{cutId?: string, media?: object|null, url?: string}} next
+ */
+export function editPreviewSwap(shown, next) {
+  const spec = editPreviewStill(next?.media ?? null);
+  const cutId = next?.cutId != null ? String(next.cutId) : "";
+  const mediaId = spec ? spec.id : "";
+  const kind = spec ? spec.kind : "";
+  const url = spec && next?.url ? String(next.url) : "";
+  const prevUrl = shown?.url ? String(shown.url) : "";
+  const prevCut = shown?.cutId != null ? String(shown.cutId) : "";
+  const prevMedia = shown?.mediaId != null ? String(shown.mediaId) : "";
+  const same = !!url && prevUrl === url && prevMedia === mediaId && prevCut === cutId;
+  const showImage = same && !!shown?.loaded;
+  let srcSteps = [];
+  if (!showImage) {
+    if (!url) {
+      if (prevUrl) srcSteps = ["clear"];
+    } else if (!same) {
+      srcSteps = prevUrl ? ["clear", url] : [url];
+    }
+  }
+  return {
+    cutId,
+    mediaId,
+    kind,
+    url,
+    changed: !same,
+    clearPrevious: srcSteps[0] === "clear",
+    showImage,
+    showEmpty: !spec,
+    srcSteps,
+  };
+}
+
+/**
  * Preview window on the graph.
  * Top is just below the graph toolbar (Run bar and the right-docker buttons in that row).
  * Bottom is just above the bottom panel.

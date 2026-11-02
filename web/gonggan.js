@@ -370,6 +370,7 @@ import {
   EDIT_MODE_ON_CLASS,
   editPreviewOverlayRect,
   editPreviewStill,
+  editPreviewSwap,
   loadEditPreviewMode,
   saveEditPreviewMode,
 } from "./gg_edit_preview_core.js";
@@ -5890,6 +5891,7 @@ let timelineFirstShowPending = loadTimelineHeight(localStorage) == null;
 let timelineEditModeOn = loadEditPreviewMode(localStorage);
 let editPreviewLayoutRaf = 0;
 let editPreviewObserver = null;
+let editPreviewLoadToken = 0;
 
 function canvasSplitter() {
   const panel = document.querySelector(".bottom-panel");
@@ -9228,34 +9230,81 @@ function refreshEditPreviewStill(cut) {
   const el = document.querySelector(".gg-edit-preview");
   if (!el) return;
   const c = cut === undefined ? currentEditPreviewCut() : cut;
-  const sig = c?.media?.id ? `${c.id}:${c.media.id}:${c.media.kind || ""}` : (c?.id || "");
-  if (sig && el.dataset.stillSig === sig) return;
-  el.dataset.stillSig = sig;
+  const spec = editPreviewStill(c?.media);
+  const url = spec ? (spec.kind === "poster" ? posterUrl(spec.id) : mediaUrl(spec.id)) : "";
+  const cutId = c?.id != null ? String(c.id) : "";
+  const mediaId = spec?.id || "";
+  if (
+    url &&
+    el.dataset.previewReady === "1" &&
+    el.dataset.previewCut === cutId &&
+    el.dataset.previewMedia === mediaId &&
+    el.dataset.previewUrl === url
+  ) {
+    return;
+  }
   const img = el.querySelector("img");
   const label = el.querySelector(".gg-edit-preview-label");
   const empty = el.querySelector(".gg-edit-preview-empty");
   const labels = computeCutLabels(state.timeline || { cuts: [] });
   const name = c ? `${cutDisplayLabel(c, labels)} ${c.name || ""}`.trim() : "";
-  if (label) label.textContent = name;
-  el.setAttribute("aria-label", name ? `Edit preview, ${name}` : "Edit preview");
-  const spec = editPreviewStill(c?.media);
+  if (label && label.textContent !== name) label.textContent = name;
+  const aria = name ? `Edit preview, ${name}` : "Edit preview";
+  if (el.getAttribute("aria-label") !== aria) el.setAttribute("aria-label", aria);
+  const plan = editPreviewSwap(
+    {
+      cutId: el.dataset.previewCut || "",
+      mediaId: el.dataset.previewMedia || "",
+      url: el.dataset.previewUrl || "",
+      loaded: el.dataset.previewReady === "1",
+    },
+    { cutId, media: c?.media || null, url },
+  );
+  el.dataset.previewCut = plan.cutId;
+  el.dataset.previewMedia = plan.mediaId;
+  el.dataset.previewUrl = plan.url;
   if (!img || !empty) return;
-  if (!spec) {
-    img.hidden = true;
-    img.removeAttribute("src");
-    delete img.dataset.src;
-    empty.hidden = false;
-    empty.textContent = c ? noMediaText(cutDisplayLabel(c, labels), c.name) : "";
+  if (plan.showImage) {
+    el.dataset.previewReady = "1";
+    img.hidden = false;
+    empty.hidden = true;
     return;
   }
-  const url = spec.kind === "poster" ? posterUrl(spec.id) : mediaUrl(spec.id);
-  if (img.dataset.src !== url) {
-    img.dataset.src = url;
-    img.src = url;
-    img.alt = name;
+  // Hide first so the previous bitmap cannot stay on screen while the new still loads.
+  el.dataset.previewReady = "0";
+  img.hidden = true;
+  if (plan.showEmpty) {
+    empty.hidden = false;
+    empty.textContent = c ? noMediaText(cutDisplayLabel(c, labels), c.name) : "";
+  } else {
+    empty.hidden = true;
+    empty.textContent = "";
   }
-  img.hidden = false;
-  empty.hidden = true;
+  if (!plan.srcSteps.length) return;
+  const token = ++editPreviewLoadToken;
+  let assigned = "";
+  for (const step of plan.srcSteps) {
+    if (step === "clear") {
+      img.removeAttribute("src");
+      delete img.dataset.src;
+    } else {
+      assigned = step;
+    }
+  }
+  if (!assigned) return;
+  img.alt = name;
+  img.dataset.src = assigned;
+  const reveal = () => {
+    if (token !== editPreviewLoadToken) return;
+    if (img.dataset.src !== assigned) return;
+    if (el.dataset.previewUrl !== assigned) return;
+    el.dataset.previewReady = "1";
+    img.hidden = false;
+    empty.hidden = true;
+  };
+  img.addEventListener("load", reveal, { once: true });
+  img.src = assigned;
+  if (img.complete && img.naturalWidth > 0) reveal();
 }
 
 function bindEditPreviewObserver() {
@@ -9761,6 +9810,7 @@ function mountTimeline(el) {
         showFrame(true);
       }
     }
+    if (!play.on) refreshEditPreviewStill(state.cutId ? cutById(state.cutId) || null : null);
   };
   const onProjects = () => { stopPlay(); play.t = 0; paintTimelineNativeLocks(); };
   bus.addEventListener("timeline", onTimeline);
