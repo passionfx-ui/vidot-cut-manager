@@ -10737,3 +10737,19 @@ app.registerExtension({
     });
   },
 });
+
+/* I2c: native bottom-panel X leaves our anchored (fixed) frame behind; clear it when the timeline tab is no longer shown. */
+if (!globalThis.__ggBottomPanelCloseWatch) {
+  globalThis.__ggBottomPanelCloseWatch = setInterval(() => {
+    try {
+      const panel = document.querySelector(".bottom-panel");
+      if (panel?.dataset.ggBottomAnchor !== "1") return;
+      if (isTimelinePanelOpen()) return;
+      clearAnchoredBottomPanel();
+      if (!app.extensionManager?.bottomPanel?.bottomPanelVisible && loadTimelineOpen(localStorage)) {
+        saveTimelineOpen(localStorage, false);
+        syncTimelineToggleButtons();
+      }
+    } catch (_) {}
+  }, 300);
+}
