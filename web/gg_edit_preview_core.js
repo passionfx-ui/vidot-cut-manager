@@ -1,6 +1,6 @@
 /** Edit toggle: preview over the graph (pure, no DOM). */
 
-import { isAnimatedImage, playsAsVideo } from "./gg_missing_media_core.js";
+import { playsAsVideo } from "./gg_missing_media_core.js";
 import { sourceTimeAtClip, videoPreviewFrameIndex } from "./gg_timeline_scrub_core.js";
 
 export const TIMELINE_EDIT_MODE_KEY = "gg.timelineEditMode";
@@ -89,7 +89,7 @@ export function editPreviewSwap(shown, next) {
  * time into the clip, and the frame index uses the same 24 fps display count as
  * the timeline. Moving along the same video does not reload the file. A different
  * cut clears the previous picture first. Still images stay still. Animated clips
- * use the same playhead frames as the timeline preview (mode "frames"), not a frozen poster.
+ * stay on their poster (the timeline WebP preview is a separate path).
  *
  * @param {null|{mode?: string, cutId?: string, mediaId?: string, url?: string, loaded?: boolean}} shown
  * @param {{cutId?: string, media?: object|null, url?: string, posterUrl?: string, clipIn?: number, localSec?: number}} next
@@ -99,29 +99,6 @@ export function editPreviewAtPlayhead(shown, next) {
   const cutId = next?.cutId != null ? String(next.cutId) : "";
   if (playsAsVideo(media) && media.id != null && String(media.id) !== "") {
     return editPreviewVideoFollow(shown, next, cutId);
-  }
-  if (isAnimatedImage(media)) {
-    const url = next?.url ? String(next.url) : "";
-    const prevUrl = shown?.url ? String(shown.url) : "";
-    const prevCut = shown?.cutId != null ? String(shown.cutId) : "";
-    const prevMedia = shown?.mediaId != null ? String(shown.mediaId) : "";
-    const same = !!url && shown?.mode === "frames" && prevUrl === url && prevMedia === String(media.id) && prevCut === cutId;
-    return {
-      mode: "frames",
-      cutId,
-      mediaId: String(media.id),
-      kind: "frames",
-      url,
-      want: null,
-      frame: null,
-      changed: !same,
-      clearPrevious: false,
-      showImage: false,
-      showVideo: false,
-      showEmpty: false,
-      hideVideo: shown?.mode === "video",
-      srcSteps: [],
-    };
   }
 
   const spec = editPreviewStill(media);
