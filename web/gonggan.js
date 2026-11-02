@@ -965,6 +965,7 @@ function openNewProjectModal() {
       </label>
       ${templateFieldHtml("image")}
       ${templateFieldHtml("video")}
+      ${genSettingsModalHtml(DEFAULT_PROJECT_SETTINGS)}
       <div class="gg-modal-actions">
         <button type="button" class="gg-btn gg-modal-cancel">Cancel</button>
         <button type="submit" class="gg-btn gg-primary gg-modal-create">Create</button>
@@ -1018,6 +1019,8 @@ function openNewProjectModal() {
   };
   locIn.value = loadLastLocation(localStorage);
   syncPath();
+  wrap.querySelector(".gg-modal-gen-res")?.addEventListener("change", () => syncGenResolutionFields(wrap));
+  wrap.querySelector(".gg-modal-gen-aspect")?.addEventListener("change", () => syncGenResolutionFields(wrap));
   nameIn.addEventListener("input", syncPath);
   locIn.addEventListener("input", () => { locErr.textContent = ""; syncPath(); });
   wrap.querySelector(".gg-modal-folder-browse")?.addEventListener("click", () => {
@@ -1039,6 +1042,13 @@ function openNewProjectModal() {
       location: locIn.value,
       imageTemplate: kindTemplates.image,
       videoTemplate: kindTemplates.video,
+      gen: genFormFromResolutionChoice({
+        gen_aspect: wrap.querySelector(".gg-modal-gen-aspect")?.value,
+        resolution: wrap.querySelector(".gg-modal-gen-res")?.value,
+        width: wrap.querySelector(".gg-modal-gen-width")?.value,
+        height: wrap.querySelector(".gg-modal-gen-height")?.value,
+        random_seed: !!wrap.querySelector(".gg-modal-random-seed")?.checked,
+      }),
     });
     if (req.error) {
       if (req.field === "location") showLocErr(req.error);

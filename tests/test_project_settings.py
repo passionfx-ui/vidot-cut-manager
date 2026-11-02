@@ -154,6 +154,43 @@ class ProjectSettingsTests(unittest.TestCase):
         self.assertEqual(tl2["project"]["settings"]["cut_seconds"], 8.0)
         self.assertEqual(tl2["project"]["settings"]["fps"], 30)
 
+    def test_new_project_generation_settings_are_stored(self):
+        """H4: aspect, resolution (preset or custom), and seed chosen for a new project are saved."""
+        defaults = {
+            "image_template": "builtin:image",
+            "video_template": "builtin:video-ltx",
+            "gen_aspect": "16:9",
+            "aspect": "16:9",
+            "resolution_short": 720,
+            "random_seed": True,
+            "width": 1280,
+            "height": 720,
+        }
+        res = na.create_native_project("H4defaults", settings=defaults, location=self._tmp.name)
+        s = na.native_timeline(res["project"]["id"])["project"]["settings"]
+        for key in ("gen_aspect", "aspect", "resolution_short", "random_seed", "width", "height"):
+            self.assertEqual(s[key], defaults[key])
+            self.assertEqual(s[key], DEFAULT_PROJECT_SETTINGS[key])
+
+        custom = {
+            "image_template": "builtin:image",
+            "video_template": "builtin:video-ltx",
+            "gen_aspect": "9:16",
+            "aspect": "9:16",
+            "resolution_short": "custom",
+            "random_seed": False,
+            "width": 641,
+            "height": 481,
+        }
+        res2 = na.create_native_project("H4custom", settings=custom, location=self._tmp.name)
+        s2 = na.native_timeline(res2["project"]["id"])["project"]["settings"]
+        self.assertEqual(s2["gen_aspect"], "9:16")
+        self.assertEqual(s2["aspect"], "9:16")
+        self.assertEqual(s2["resolution_short"], "custom")
+        self.assertEqual(s2["width"], 640)
+        self.assertEqual(s2["height"], 480)
+        self.assertIs(s2["random_seed"], False)
+
     def test_new_cut_uses_cut_seconds(self):
         doc = self.store.create_project("Len", settings={"cut_seconds": 7.5})
         pid = doc["id"]

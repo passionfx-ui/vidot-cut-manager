@@ -1,5 +1,6 @@
-/** Pure helpers for the New Project window: name, location, Image / Video template (no DOM). */
+/** Pure helpers for the New Project window: name, location, Image / Video template, generation settings (no DOM). */
 
+import { normalizeGenSettings } from "./gg_gen_settings_core.js";
 import { DEFAULT_IMAGE_TEMPLATE, DEFAULT_VIDEO_TEMPLATE } from "./gg_template_pick_core.js";
 import { containsForbiddenUserText } from "./gg_ui_text_core.js";
 
@@ -59,11 +60,29 @@ export function projectFolderPath(location, name) {
 }
 
 /**
+ * Generation settings for a new project. Empty input uses the same defaults as project settings
+ * (16:9, 720 short side → 1280×720, random seed on). Presets derive width/height; custom keeps the entered size.
+ * @param {object} [gen] form from genFormFromResolutionChoice, or {}
+ */
+export function newProjectGenerationSettings(gen) {
+  const n = normalizeGenSettings(gen && typeof gen === "object" ? gen : {});
+  return {
+    gen_aspect: n.gen_aspect,
+    aspect: n.gen_aspect,
+    resolution_short: n.resolution_short,
+    random_seed: n.random_seed,
+    width: n.width,
+    height: n.height,
+  };
+}
+
+/**
  * Validate the window and build the POST /gonggan/project/create body. The Image / Video templates go into the
- * project settings (blank = the built-in defaults).
- * @param {{ name?: string, location?: string, template?: string, imageTemplate?: string, videoTemplate?: string }} v
+ * project settings (blank = the built-in defaults). When `gen` is given, generation settings are saved too.
+ * @param {{ name?: string, location?: string, template?: string, imageTemplate?: string, videoTemplate?: string,
+ *   gen?: object }} v
  * @returns {{ error: string, field: "name"|"location" } | { body: { name: string, location?: string,
- *   settings: { image_template: string, video_template: string } } }}
+ *   settings: Record<string, unknown> } }}
  */
 export function newProjectRequest(v = {}) {
   const name = String(v.name ?? "").trim();
@@ -73,6 +92,7 @@ export function newProjectRequest(v = {}) {
     image_template: String(v.imageTemplate ?? "").trim() || DEFAULT_IMAGE_TEMPLATE,
     video_template: String(v.videoTemplate ?? "").trim() || DEFAULT_VIDEO_TEMPLATE,
   };
+  if (v.gen != null) Object.assign(settings, newProjectGenerationSettings(v.gen));
   const body = { name, settings };
   if (location) body.location = location;
   return { body };
