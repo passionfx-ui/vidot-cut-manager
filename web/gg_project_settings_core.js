@@ -5,9 +5,13 @@ import {
   GEN_ASPECT_RATIOS,
   GEN_SHORT_SIDE_OPTIONS,
   GEN_SHORT_SIDE_LABELS,
+  GEN_RESOLUTION_CUSTOM,
   dimensionsFromGenSettings,
   normalizeGenSettings,
   genSettingsModalPatch,
+  genFormFromResolutionChoice,
+  resolutionDropdownItems,
+  resolutionChoiceValue,
   randomSeedFromProjectSettings,
 } from "./gg_gen_settings_core.js";
 
@@ -15,9 +19,13 @@ export {
   GEN_ASPECT_RATIOS,
   GEN_SHORT_SIDE_OPTIONS,
   GEN_SHORT_SIDE_LABELS,
+  GEN_RESOLUTION_CUSTOM,
   dimensionsFromGenSettings,
   normalizeGenSettings,
   genSettingsModalPatch,
+  genFormFromResolutionChoice,
+  resolutionDropdownItems,
+  resolutionChoiceValue,
   randomSeedFromProjectSettings,
 };
 
@@ -139,7 +147,7 @@ export function clampTemplateRef(value, fallback) {
  * Settings patch for the Project Settings modal: Output folder and the Image / Video templates, only the keys
  * that changed (other stored keys are left as they are).
  * @param {{ image_template?: string, video_template?: string }} [templates] omitted keys are not changed
- * @param {{ gen_aspect?: string, resolution_short?: number, random_seed?: boolean }} [genForm] omitted = leave generation settings
+ * @param {{ gen_aspect?: string, resolution_short?: number|string, width?: number, height?: number, random_seed?: boolean }} [genForm] omitted = leave generation settings
  * @returns {{ project_folder?: string, image_template?: string, video_template?: string } | null} null when nothing changed
  */
 export function projectSettingsModalPatch(current, folderValue, templates = {}, genForm = undefined) {

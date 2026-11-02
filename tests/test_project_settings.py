@@ -87,6 +87,61 @@ class ProjectSettingsTests(unittest.TestCase):
         self.assertEqual(s2["cut_seconds"], 2.0)
         self.assertEqual(s2["width"], 720)
 
+    def test_resolution_presets_and_custom_size(self):
+        from gg_project.project_settings import GEN_SHORT_SIDES
+
+        self.assertEqual(
+            GEN_SHORT_SIDES,
+            (384, 480, 512, 576, 640, 720, 768, 832, 960, 1024, 1080, 1280, 1440, 2160),
+        )
+        preset = normalize_settings({"gen_aspect": "16:9", "resolution_short": 1080})
+        self.assertEqual(preset["resolution_short"], 1080)
+        self.assertEqual(preset["width"], 1920)
+        self.assertEqual(preset["height"], 1080)
+        old = normalize_settings({"aspect": "16:9", "resolution_short": 720, "width": 1280, "height": 720})
+        self.assertEqual(old["resolution_short"], 720)
+        self.assertEqual(old["width"], 1280)
+        self.assertEqual(old["height"], 720)
+        custom = normalize_settings({
+            "gen_aspect": "16:9",
+            "resolution_short": "custom",
+            "width": 1001,
+            "height": 503,
+        })
+        self.assertEqual(custom["resolution_short"], "custom")
+        self.assertEqual(custom["gen_aspect"], "16:9")
+        self.assertEqual(custom["width"], 1000)
+        self.assertEqual(custom["height"], 496)
+        kept = normalize_settings({**custom, "gen_aspect": "1:1"})
+        self.assertEqual(kept["resolution_short"], "custom")
+        self.assertEqual(kept["width"], 1000)
+        self.assertEqual(kept["height"], 496)
+        self.assertEqual(kept["gen_aspect"], "1:1")
+
+    def test_custom_resolution_persists_on_project(self):
+        res = na.create_native_project("CustomRes", settings={
+            "gen_aspect": "4:3",
+            "resolution_short": "custom",
+            "width": 1001,
+            "height": 503,
+        })
+        pid = res["project"]["id"]
+        s = na.native_timeline(pid)["project"]["settings"]
+        self.assertEqual(s["resolution_short"], "custom")
+        self.assertEqual(s["width"], 1000)
+        self.assertEqual(s["height"], 496)
+        na.native_update_project(pid, {"settings": {"gen_aspect": "1:1"}})
+        s2 = na.native_timeline(pid)["project"]["settings"]
+        self.assertEqual(s2["gen_aspect"], "1:1")
+        self.assertEqual(s2["resolution_short"], "custom")
+        self.assertEqual(s2["width"], 1000)
+        self.assertEqual(s2["height"], 496)
+        na.native_update_project(pid, {"settings": {"resolution_short": "custom", "width": 833, "height": 647}})
+        s3 = na.native_timeline(pid)["project"]["settings"]
+        self.assertEqual(s3["width"], 832)
+        self.assertEqual(s3["height"], 640)
+        self.assertEqual(s3["resolution_short"], "custom")
+
     def test_native_create_update_round_trip(self):
         settings = {"gen_aspect": "1:1", "resolution_short": 512, "fps": 25, "cut_seconds": 6}
         res = na.create_native_project("Round", settings=settings)

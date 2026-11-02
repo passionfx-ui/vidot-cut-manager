@@ -401,8 +401,11 @@ import {
   projectSettingsModalPatch,
   folderCheckErrorText,
   GEN_ASPECT_RATIOS,
-  GEN_SHORT_SIDE_OPTIONS,
-  GEN_SHORT_SIDE_LABELS,
+  GEN_RESOLUTION_CUSTOM,
+  dimensionsFromGenSettings,
+  genFormFromResolutionChoice,
+  resolutionDropdownItems,
+  resolutionChoiceValue,
   randomSeedFromProjectSettings,
 } from "./gg_project_settings_core.js";
 import {
@@ -1443,13 +1446,28 @@ async function persistRandomSeedToProject(on) {
   }
 }
 
+function syncGenResolutionFields(wrap) {
+  const sel = wrap.querySelector(".gg-modal-gen-res");
+  const box = wrap.querySelector(".gg-gen-custom");
+  if (!sel || !box) return;
+  const custom = sel.value === GEN_RESOLUTION_CUSTOM;
+  box.hidden = !custom;
+  if (custom) return;
+  const dims = dimensionsFromGenSettings(wrap.querySelector(".gg-modal-gen-aspect")?.value, sel.value);
+  const wIn = wrap.querySelector(".gg-modal-gen-width");
+  const hIn = wrap.querySelector(".gg-modal-gen-height");
+  if (wIn) wIn.value = String(dims.width);
+  if (hIn) hIn.value = String(dims.height);
+}
+
 function genSettingsModalHtml(curSettings) {
   const s = normalizeProjectSettings(curSettings);
   const aspectOpts = GEN_ASPECT_RATIOS.map(
     (a) => `<option value="${esc(a)}"${a === s.gen_aspect ? " selected" : ""}>${esc(a)}</option>`,
   ).join("");
-  const resOpts = GEN_SHORT_SIDE_OPTIONS.map(
-    (n) => `<option value="${n}"${n === s.resolution_short ? " selected" : ""}>${esc(GEN_SHORT_SIDE_LABELS[n] || String(n))}</option>`,
+  const choice = resolutionChoiceValue(s.resolution_short);
+  const resOpts = resolutionDropdownItems().map(
+    (item) => `<option value="${esc(item.value)}"${item.value === choice ? " selected" : ""}>${esc(item.label)}</option>`,
   ).join("");
   return `<fieldset class="gg-gen-settings">
     <legend>Generation</legend>
@@ -1458,8 +1476,19 @@ function genSettingsModalHtml(curSettings) {
     </label>
     <label class="gg-modal-field">Resolution
       <select class="gg-modal-gen-res">${resOpts}</select>
-      <span class="gg-modal-hint">Short side of the frame; width and height follow the aspect ratio (multiples of 8).</span>
+      <span class="gg-modal-hint">Short side presets follow the aspect ratio. Custom uses the width and height you enter. Sizes snap to multiples of 8.</span>
     </label>
+    <div class="gg-gen-custom"${choice === GEN_RESOLUTION_CUSTOM ? "" : " hidden"}>
+      <div class="gg-gen-custom-dims">
+        <label class="gg-modal-field">Width
+          <input type="number" class="gg-modal-gen-width" min="8" max="4096" step="8" value="${Number(s.width) || 0}" />
+        </label>
+        <label class="gg-modal-field">Height
+          <input type="number" class="gg-modal-gen-height" min="8" max="4096" step="8" value="${Number(s.height) || 0}" />
+        </label>
+      </div>
+      <span class="gg-modal-hint">Saved with this project. Aspect ratio does not change a custom size.</span>
+    </div>
     <label class="gg-modal-field gg-modal-random-seed-field">
       <span class="gg-switch-row"><input type="checkbox" class="gg-modal-random-seed"${s.random_seed ? " checked" : ""} /> ${esc(RANDOM_SEED_LABEL)}</span>
       <span class="gg-modal-hint">Same as the Queue toolbar toggle: new sampler seeds per job when on.</span>
@@ -1536,6 +1565,8 @@ function openProjectSettingsModal() {
     saveRandomSeedOn(localStorage, !!modalRandomSeed.checked);
     syncRandomSeedToolbar(document);
   });
+  wrap.querySelector(".gg-modal-gen-res")?.addEventListener("change", () => syncGenResolutionFields(wrap));
+  wrap.querySelector(".gg-modal-gen-aspect")?.addEventListener("change", () => syncGenResolutionFields(wrap));
   wrap.querySelector(".gg-modal-folder-browse")?.addEventListener("click", () => {
     openFolderPicker(folderIn.value, (path) => {
       if (!wrap.isConnected) return;
@@ -1582,11 +1613,13 @@ function openProjectSettingsModal() {
     const patch = projectSettingsModalPatch(curSettings, folderIn.value, {
       image_template: kindTemplates.image,
       video_template: kindTemplates.video,
-    }, {
+    }, genFormFromResolutionChoice({
       gen_aspect: wrap.querySelector(".gg-modal-gen-aspect")?.value,
-      resolution_short: Number(wrap.querySelector(".gg-modal-gen-res")?.value),
+      resolution: wrap.querySelector(".gg-modal-gen-res")?.value,
+      width: wrap.querySelector(".gg-modal-gen-width")?.value,
+      height: wrap.querySelector(".gg-modal-gen-height")?.value,
       random_seed: !!wrap.querySelector(".gg-modal-random-seed")?.checked,
-    });
+    }));
     const aiPatch = cutSplitSettingsPatch({
       modelInitial,
       model: modelSel?.value,

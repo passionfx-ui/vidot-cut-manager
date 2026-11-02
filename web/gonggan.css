@@ -826,6 +826,11 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-proj-settings-modal .gg-modal-field { margin-bottom: 14px; }
 .gg-gen-settings { border: 0; margin: 0 0 4px; padding: 0; min-inline-size: 0; }
 .gg-gen-settings > legend { font-size: 12px; font-weight: 600; color: var(--gg-fg, #e6e8ec); padding: 0; margin-bottom: 6px; }
+.gg-gen-custom { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.gg-gen-custom[hidden] { display: none; }
+.gg-gen-custom-dims { display: flex; gap: 8px; }
+.gg-gen-custom-dims .gg-modal-field { flex: 1; margin-bottom: 0; }
+.gg-gen-custom input[type="number"] { width: 100%; box-sizing: border-box; }
 .gg-modal-field input.gg-modal-random-seed { width: auto; margin: 0; padding: 0; border: 0; background: transparent; flex: 0 0 auto; }
 .gg-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--gg-fg, #e6e8ec); font-size: 12px; }
 .gg-modal-field input.gg-switch { appearance: none; -webkit-appearance: none; position: relative; width: 32px; height: 18px; margin: 0; padding: 0; border-radius: 9px; border: 1px solid var(--gg-line, #353a44); background: #3a3f4a; cursor: pointer; flex: 0 0 auto; transition: background .15s; }

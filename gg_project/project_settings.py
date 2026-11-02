@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 GEN_ASPECT_RATIOS = ("16:9", "9:16", "1:1", "4:3", "3:4", "21:9")
-GEN_SHORT_SIDES = (512, 720, 1080)
+GEN_SHORT_SIDES = (384, 480, 512, 576, 640, 720, 768, 832, 960, 1024, 1080, 1280, 1440, 2160)
+GEN_RESOLUTION_CUSTOM = "custom"
 
 RESOLUTION_PRESETS: list[dict[str, Any]] = [
     {"aspect": "16:9", "width": 1280, "height": 720, "label": "16:9 1280×720"},
@@ -115,6 +116,10 @@ def _round_gen_dim(value: Any, round_to: int = 8) -> int:
     return (v // round_to) * round_to
 
 
+def _is_custom_resolution(value: Any) -> bool:
+    return str(value or "").strip().lower() == GEN_RESOLUTION_CUSTOM
+
+
 def _infer_resolution_short(aspect: Any, width: Any, height: Any) -> int:
     a = _clamp_gen_aspect(aspect)
     aw_s, ah_s = a.split(":", 1)
@@ -132,7 +137,7 @@ def _clamp_gen_aspect(value: Any) -> str:
     return s if s in GEN_ASPECT_RATIOS else str(DEFAULT_PROJECT_SETTINGS["gen_aspect"])
 
 
-def _clamp_resolution_short(value: Any) -> int:
+def _clamp_preset_short(value: Any) -> int:
     try:
         v = int(round(float(value)))
     except (TypeError, ValueError):
@@ -151,7 +156,7 @@ def _clamp_random_seed(value: Any) -> bool:
 def dimensions_from_gen_settings(aspect: Any, short_side: Any, *, round_to: int = 8) -> dict[str, int]:
     """Width/height from aspect + short-side preset (landscape: height=short; portrait: width=short)."""
     a = _clamp_gen_aspect(aspect)
-    short = _clamp_resolution_short(short_side)
+    short = _clamp_preset_short(short_side)
     aw_s, ah_s = a.split(":", 1)
     aw, ah = int(aw_s or 16), int(ah_s or 9)
     if aw >= ah:
@@ -419,13 +424,20 @@ def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
         if key in src:
             out[key] = src[key]
     gen_aspect = _clamp_gen_aspect(src.get("gen_aspect") or src.get("aspect") or out.get("gen_aspect") or out.get("aspect"))
-    if "resolution_short" in src:
-        resolution_short = _clamp_resolution_short(src["resolution_short"])
-    elif "width" in src or "height" in src:
-        resolution_short = _infer_resolution_short(gen_aspect, src.get("width", out.get("width")), src.get("height", out.get("height")))
+    if "resolution_short" in src and _is_custom_resolution(src.get("resolution_short")):
+        resolution_short: int | str = GEN_RESOLUTION_CUSTOM
+        width = _round_gen_dim(src.get("width", out.get("width")))
+        height = _round_gen_dim(src.get("height", out.get("height")))
     else:
-        resolution_short = _clamp_resolution_short(out.get("resolution_short"))
-    dims = dimensions_from_gen_settings(gen_aspect, resolution_short)
+        if "resolution_short" in src:
+            resolution_short = _clamp_preset_short(src["resolution_short"])
+        elif "width" in src or "height" in src:
+            resolution_short = _infer_resolution_short(gen_aspect, src.get("width", out.get("width")), src.get("height", out.get("height")))
+        else:
+            resolution_short = _clamp_preset_short(out.get("resolution_short"))
+        dims = dimensions_from_gen_settings(gen_aspect, resolution_short)
+        width = dims["width"]
+        height = dims["height"]
     out["gen_aspect"] = gen_aspect
     out["aspect"] = gen_aspect
     out["resolution_short"] = resolution_short
@@ -433,8 +445,8 @@ def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
         out["random_seed"] = _clamp_random_seed(src["random_seed"])
     elif "random_seed" not in (raw or {}):
         out.setdefault("random_seed", bool(DEFAULT_PROJECT_SETTINGS["random_seed"]))
-    out["width"] = dims["width"]
-    out["height"] = dims["height"]
+    out["width"] = width
+    out["height"] = height
     out["fps"] = _clamp_fps(out.get("fps"))
     out["cut_seconds"] = _clamp_cut_seconds(out.get("cut_seconds"))
     out["caption_lang"] = _clamp_caption_lang(out.get("caption_lang"))
