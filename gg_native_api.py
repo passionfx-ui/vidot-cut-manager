@@ -227,7 +227,43 @@ def copy_new_cut_template(doc: dict, kind: str = "image") -> dict | None:
             kind_name, ref,
         )
         return None
-    return clear_cut_linear_mode(copy.deepcopy(graph))
+    copied = copy.deepcopy(graph)
+    _stamp_new_cut_generation_size(copied, doc, kind_name, ref)
+    return clear_cut_linear_mode(copied)
+
+
+def _stamp_new_cut_generation_size(graph: dict, doc: dict, kind_name: str, ref: str) -> None:
+    """Write this project's generation width and height into a new cut's template copy.
+
+    Existing cuts are not opened. The template file on disk is not written.
+    """
+    try:
+        import gg_workflow_size as gws
+    except ImportError:
+        from . import gg_workflow_size as gws  # type: ignore
+    settings = normalize_settings(doc.get("settings") if isinstance(doc, dict) else None)
+    width, height = int(settings["width"]), int(settings["height"])
+    app = gws.template_is_app(ref, graph)
+    written = gws.apply_new_cut_generation_size(graph, width, height, app=app)
+    if not written:
+        log.warning(
+            "[gonggan-cut] new %s cut: generation size %sx%s not written; no matching nodes in %s",
+            kind_name, width, height, ref,
+        )
+        return
+    parts = []
+    for node in written:
+        where = f" subgraph {node['graph']}" if node.get("graph") else ""
+        dims = []
+        if node.get("width") is not None:
+            dims.append(f"width {node['width']}")
+        if node.get("height") is not None:
+            dims.append(f"height {node['height']}")
+        parts.append(f"node {node['id']} ({node['type']}){where} {', '.join(dims)} via {node['via']}")
+    log.info(
+        "[gonggan-cut] new %s cut: generation size %sx%s set on %s",
+        kind_name, width, height, "; ".join(parts),
+    )
 
 
 def project_video_template(doc: dict) -> tuple[str, dict]:
