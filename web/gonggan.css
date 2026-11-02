@@ -690,6 +690,24 @@
 .gg-timeline .gg-ex-bad .gg-ex-fill { background: #e05a5a; }
 .gg-timeline .gg-ex-text { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .gg-timeline .gg-ex-path { flex: 1 1 100%; order: 10; min-width: 0; color: var(--gg-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: copy; }
+.gg-export-panel { display: flex; flex-direction: column; background: var(--gg-bg); min-height: 120px; box-sizing: border-box; }
+.gg-export-panel .gg-export-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 8px 10px; border-bottom: 1px solid var(--gg-line); }
+.gg-export-panel .gg-export-title { font-weight: 600; margin-right: 4px; }
+.gg-export-panel .gg-ex-out { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 10px; border-bottom: 1px solid var(--gg-line); }
+.gg-export-panel .gg-ex-out-label { font-weight: 600; font-size: 12px; white-space: nowrap; }
+.gg-export-panel .gg-ex-out-path { flex: 1 1 200px; min-width: 0; font-size: 11px; color: var(--gg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gg-export-panel .gg-ex-out-err:empty { display: none; }
+.gg-export-panel .gg-ex-preset { background: var(--gg-panel); color: var(--gg-fg); border: 1px solid var(--gg-line); border-radius: 4px; padding: 1px 2px; }
+.gg-export-panel .gg-ex-snd { display: inline-flex; align-items: center; gap: 3px; color: var(--gg-dim); white-space: nowrap; }
+.gg-export-panel .gg-ex-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--gg-line); background: #1f2329; }
+.gg-export-panel .gg-ex-row[hidden] { display: none; }
+.gg-export-panel .gg-ex-row [hidden] { display: none !important; }
+.gg-export-panel .gg-ex-bar { flex: 0 0 180px; height: 8px; border-radius: 4px; background: #2d323b; overflow: hidden; }
+.gg-export-panel .gg-ex-fill { height: 100%; width: 0; background: var(--gg-acc); transition: width .3s; }
+.gg-export-panel .gg-ex-done .gg-ex-fill { background: #6ee07a; }
+.gg-export-panel .gg-ex-bad .gg-ex-fill { background: #e05a5a; }
+.gg-export-panel .gg-ex-text { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.gg-export-panel .gg-ex-path { flex: 1 1 100%; order: 10; min-width: 0; color: var(--gg-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: copy; }
 
 /* SDK + versions (Shots) */
 .gg-shots .gg-sdk-slot { display: inline-flex; align-items: center; }

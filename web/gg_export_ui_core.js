@@ -3,8 +3,8 @@
 export const EXPORT_PLAY_LABEL = "Play";
 export const EXPORT_PLAY_TIP = "Play the exported mp4 in the preview panel";
 export const EXPORT_FOLDER_LABEL = "Show in Folder";
-export const EXPORT_FOLDER_TIP = "Open the project edit folder in Windows Explorer";
-export const EXPORT_FOLDER_TIP_NO_FILE = "Export an mp4 first";
+export const EXPORT_FOLDER_TIP = "Open the output folder in Explorer";
+export const EXPORT_FOLDER_TIP_NO_FILE = "Choose an output folder first";
 export const EXPORT_DONE_TOAST_TITLE = "Export complete";
 export const EXPORT_FAIL_TOAST_TITLE = "Export failed";
 
@@ -25,5 +25,5 @@ export function exportPanelActions(job) {
 
 export function exportDoneToastBody(file) {
   const name = typeof file === "string" && file ? file : "timeline.mp4";
-  return `${name} saved in the project edit folder.`;
+  return `${name} saved in the output folder.`;
 }

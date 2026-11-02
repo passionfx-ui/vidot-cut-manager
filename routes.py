@@ -17,11 +17,11 @@ from . import gg_wfstore
 try:
     from .gg_project import ConflictError
     from .gg_project.folder_list import folder_list_response
-    from .gg_project.project_settings import check_output_folder, comfyui_output_directory
+    from .gg_project.project_settings import check_output_folder, check_export_output_folder, comfyui_output_directory
 except ImportError:  # unittest / plain script
     from gg_project import ConflictError  # type: ignore
     from gg_project.folder_list import folder_list_response  # type: ignore
-    from gg_project.project_settings import check_output_folder, comfyui_output_directory  # type: ignore
+    from gg_project.project_settings import check_output_folder, check_export_output_folder, comfyui_output_directory  # type: ignore
 
 routes = PromptServer.instance.routes
 log = logging.getLogger("gonggan-cut")
@@ -312,6 +312,37 @@ def _notify(job: dict) -> None:
 gg_export._notify = _notify
 
 
+def _request_is_local(request) -> bool:
+    peer = request.remote or ""
+    if peer in ("127.0.0.1", "::1"):
+        return True
+    host = (request.host or "").split(":")[0].lower()
+    return host in ("127.0.0.1", "localhost")
+
+
+@routes.get("/gonggan/export/output-path")
+async def gg_export_output_path(request):
+    pid = request.query.get("pid", "")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    if not gg_native_api.is_native_pid(pid):
+        return _err(400, "pid required")
+    res = await asyncio.to_thread(gg_native_api.native_export_output_path, pid)
+    if res is None:
+        return _err(404, "project not found")
+    return web.json_response(res)
+
+
+@routes.post("/gonggan/export/folder/check")
+async def gg_export_folder_check(request):
+    data = await _json_body(request)
+    path = data.get("path")
+    if path is not None and not isinstance(path, str):
+        return _err(400, "path must be a string")
+    res = await asyncio.to_thread(check_export_output_folder, path or "")
+    return web.json_response(res, status=200 if res.get("ok") else 400)
+
+
 @routes.post("/gonggan/export")
 async def gg_export_start(request):
     data = await _json_body(request)
@@ -323,6 +354,17 @@ async def gg_export_start(request):
         got = await asyncio.to_thread(gg_native_api.native_export_timeline, pid)
         if got is None:
             return _err(404, "project not found")
+        doc = gg_native_api.native_store().get_project(pid)
+        settings = (doc or {}).get("settings") if doc else None
+        try:
+            from .gg_project.project_settings import normalize_settings
+        except ImportError:
+            from gg_project.project_settings import normalize_settings  # type: ignore
+        ef = normalize_settings(settings if isinstance(settings, dict) else None).get("export_folder") or ""
+        if ef:
+            chk = await asyncio.to_thread(check_export_output_folder, ef)
+            if not chk.get("ok"):
+                return _err(400, chk.get("message") or "Invalid export folder")
         extra = {"tl": got[0], "out_dir": got[1], "resolve": gg_native_api.native_media_path}
     try:
         res = await asyncio.to_thread(
@@ -360,6 +402,8 @@ async def gg_export_reveal(request):
         return _err(400, "pid required")
     name = data.get("name") if isinstance(data.get("name"), str) else None
     res = await asyncio.to_thread(gg_export.reveal_project_export, pid, name)
+    if res.get("ok") and not _request_is_local(request):
+        res = {**res, "remote_host": True}
     return web.json_response(res, status=200 if res.get("ok") else 404)
 
 

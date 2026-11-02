@@ -21,7 +21,8 @@ try:
         make_unique_project_folder,
         normalize_settings,
         project_folder_path,
-        project_mp4_export_dir,
+        mp4_export_dir_for_project,
+        check_export_output_folder,
     )
     from .gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids
     from .gg_project.media_anim import animation_info
@@ -39,7 +40,8 @@ except ImportError:  # unittest / plain script
         make_unique_project_folder,
         normalize_settings,
         project_folder_path,
-        project_mp4_export_dir,
+        mp4_export_dir_for_project,
+        check_export_output_folder,
     )
     from gg_project.hidden_projects import HIDDEN_FILE_NAME, filter_hidden, load_hidden_ids  # type: ignore
     from gg_project.media_anim import animation_info  # type: ignore
@@ -125,6 +127,12 @@ _TEMPLATE_SETTING_LABELS = {"image_template": "Image template", "video_template"
 
 def check_template_settings(settings: dict | None) -> None:
     """Each Image / Video template given in `settings` must be a built-in or an existing user workflow."""
+    if isinstance(settings, dict) and "export_folder" in settings:
+        ef = settings.get("export_folder")
+        if ef:
+            res = check_export_output_folder(ef)
+            if not res.get("ok"):
+                raise ValueError(res.get("message") or "Invalid export folder")
     for key in TEMPLATE_SETTING_KEYS:
         ref = (settings or {}).get(key) if isinstance(settings, dict) else None
         if ref is None or (isinstance(ref, str) and not ref.strip()):
@@ -235,6 +243,22 @@ def restore_native_project(pid: str) -> dict:
     return {"ok": True}
 
 
+def native_export_output_path(pid: str) -> dict | None:
+    store = native_store()
+    doc = store.get_project(pid)
+    got = native_export_timeline(pid)
+    if not doc or got is None:
+        return None
+    settings = normalize_settings(doc.get("settings"))
+    effective = got[1].resolve()
+    return {
+        "ok": True,
+        "export_folder": settings.get("export_folder") or "",
+        "effective_path": str(effective),
+        "comfy_output": str(comfyui_output_directory()),
+    }
+
+
 def native_timeline(pid: str) -> dict | None:
     return native_store().to_timeline(pid)
 
@@ -268,7 +292,8 @@ def native_export_timeline(pid: str) -> tuple[dict, Path] | None:
         c["media"] = {"id": best["id"], "kind": kind}
     folder = normalize_settings(doc.get("settings")).get("project_folder")
     base = Path(folder) if folder else store._project_dir(pid)
-    return tl, project_mp4_export_dir(base)
+    out_dir = mp4_export_dir_for_project(doc.get("settings"), base)
+    return tl, out_dir
 
 
 def native_save_edit(pid: str, order, clips) -> dict | None:

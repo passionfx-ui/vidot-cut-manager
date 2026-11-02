@@ -75,5 +75,25 @@ class CheckOutputFolderTests(unittest.TestCase):
         self.assertFalse(check_output_folder(str(self.root / "trailing."))["ok"])
 
 
+class ExportOutputFolderTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_export_requires_existing_writable(self):
+        from gg_project.project_settings import check_export_output_folder
+
+        self.assertTrue(check_export_output_folder("")["ok"])
+        missing = check_export_output_folder(str(self.root / "nope"))
+        self.assertFalse(missing["ok"])
+        self.assertIn("does not exist", missing["message"])
+        target = self.root / "writable"
+        target.mkdir()
+        self.assertTrue(check_export_output_folder(str(target))["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

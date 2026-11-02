@@ -25,7 +25,7 @@ describe("export_ui_core", () => {
     assert.equal(done.folderDisabled, false);
   });
 
-  it("done toast mentions edit folder", () => {
-    assert.match(exportDoneToastBody("cut.mp4"), /edit folder/);
+  it("done toast mentions output folder", () => {
+    assert.match(exportDoneToastBody("cut.mp4"), /output folder/);
   });
 });

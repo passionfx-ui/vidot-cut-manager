@@ -52,6 +52,7 @@ export const DEFAULT_PROJECT_SETTINGS = {
   cut_seconds: 3,
   caption_lang: "English",
   project_folder: "",
+  export_folder: "",
   image_template: DEFAULT_IMAGE_TEMPLATE,
   video_template: DEFAULT_VIDEO_TEMPLATE,
 };
@@ -67,6 +68,7 @@ const SETTING_KEYS = [
   "cut_seconds",
   "caption_lang",
   "project_folder",
+  "export_folder",
   "image_template",
   "video_template",
 ];
@@ -185,6 +187,7 @@ export function normalizeProjectSettings(raw) {
   out.cut_seconds = clampCutSeconds(out.cut_seconds);
   out.caption_lang = clampCaptionLang(out.caption_lang);
   out.project_folder = clampProjectFolder(out.project_folder);
+  out.export_folder = clampProjectFolder(out.export_folder);
   out.image_template = clampTemplateRef(out.image_template, DEFAULT_IMAGE_TEMPLATE);
   out.video_template = clampTemplateRef(out.video_template, DEFAULT_VIDEO_TEMPLATE);
   return out;

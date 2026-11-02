@@ -405,13 +405,33 @@ def export_file(name: str) -> Path | None:
 
 
 def _open_folder(folder: Path) -> None:
+    run_explorer_reveal(folder, None)
+
+
+def explorer_reveal_args(folder: Path, file: Path | None = None) -> list[str]:
+    """Build subprocess args to open Explorer (Windows) or the platform file manager."""
     folder = folder.resolve()
     if os.name == "nt":
-        os.startfile(folder)  # noqa: S606
-    else:
-        import sys
-        cmd = ["open", str(folder)] if sys.platform == "darwin" else ["xdg-open", str(folder)]
-        subprocess.run(cmd, check=False, creationflags=_flags() if os.name == "nt" else 0)
+        if file is not None and file.is_file():
+            return ["explorer", f"/select,{file.resolve()}"]
+        return ["explorer", str(folder)]
+    import sys
+    if sys.platform == "darwin":
+        if file is not None and file.is_file():
+            return ["open", "-R", str(file.resolve())]
+        return ["open", str(folder)]
+    if file is not None and file.is_file():
+        return ["xdg-open", str(file.parent)]
+    return ["xdg-open", str(folder)]
+
+
+def run_explorer_reveal(folder: Path, file: Path | None = None) -> list[str]:
+    folder = folder.resolve()
+    if not folder.is_dir():
+        raise OSError("Folder not found")
+    args = explorer_reveal_args(folder, file)
+    subprocess.run(args, check=False, creationflags=_flags() if os.name == "nt" else 0)
+    return args
 
 
 def _allowed_export_folder(pid: str, folder: Path) -> bool:
@@ -424,12 +444,12 @@ def _allowed_export_folder(pid: str, folder: Path) -> bool:
         got = na.native_export_timeline(pid)
         if got is None:
             return False
-        base = got[1].resolve()
+        allowed = got[1].resolve()
         try:
-            folder.relative_to(base if base.is_dir() else base.parent)
+            folder.relative_to(allowed)
             return True
         except ValueError:
-            return folder == base or folder == base.parent
+            return folder == allowed
     leg = output_dir().resolve()
     try:
         folder.relative_to(leg)
@@ -443,6 +463,7 @@ def reveal_project_export(pid: str, file_name: str | None = None) -> dict:
     if not isinstance(pid, str) or not pid:
         return {"ok": False, "message": "pid required"}
     folder: Path | None = None
+    select_file: Path | None = None
     with _lock:
         job = dict(_job)
     if job.get("pid") == pid and job.get("status") == "done" and job.get("path"):
@@ -451,6 +472,7 @@ def reveal_project_export(pid: str, file_name: str | None = None) -> dict:
         out = Path(job["path"])
         if out.is_file():
             folder = out.parent
+            select_file = out
     if folder is None:
         try:
             from . import gg_native_api as na
@@ -460,12 +482,22 @@ def reveal_project_export(pid: str, file_name: str | None = None) -> dict:
         if got is None:
             return {"ok": False, "message": "project not found"}
         folder = got[1]
+        if file_name:
+            candidate = (folder / file_name).resolve()
+            if candidate.is_file():
+                select_file = candidate
     folder = folder.resolve()
+    if not folder.is_dir():
+        return {"ok": False, "message": "Folder not found"}
     if not _allowed_export_folder(pid, folder):
         return {"ok": False, "message": "folder not allowed"}
-    folder.mkdir(parents=True, exist_ok=True)
     try:
-        _open_folder(folder)
+        args = run_explorer_reveal(folder, select_file)
     except OSError as ex:
         return {"ok": False, "message": str(ex)[-200:]}
-    return {"ok": True, "path": str(folder)}
+    return {
+        "ok": True,
+        "path": str(folder),
+        "selected": str(select_file.resolve()) if select_file else None,
+        "args": args,
+    }

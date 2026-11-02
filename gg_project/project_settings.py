@@ -36,6 +36,7 @@ DEFAULT_PROJECT_SETTINGS: dict[str, Any] = {
     "cut_seconds": 3.0,
     "caption_lang": "English",
     "project_folder": "",
+    "export_folder": "",
     "image_template": DEFAULT_IMAGE_TEMPLATE,
     "video_template": DEFAULT_VIDEO_TEMPLATE,
 }
@@ -52,6 +53,7 @@ _SETTING_KEYS = frozenset(
         "cut_seconds",
         "caption_lang",
         "project_folder",
+        "export_folder",
         "image_template",
         "video_template",
     }
@@ -221,6 +223,29 @@ def check_output_folder(value: Any) -> dict[str, Any]:
     except OSError as ex:
         return fail(f"Cannot use this folder: {ex}")
     return {"ok": True, "path": path, "exists": False}
+
+
+def check_export_output_folder(value: Any) -> dict[str, Any]:
+    """Export tab output folder: empty = project default; otherwise must exist and be writable."""
+    base = check_output_folder(value)
+    if not base.get("ok"):
+        return base
+    if not base.get("path"):
+        return {"ok": True, "path": "", "use_default": True}
+    p = Path(base["path"]).expanduser()
+    if not p.is_dir():
+        return {"ok": False, "path": base["path"], "message": "This folder does not exist"}
+    if not os.access(p, os.W_OK):
+        return {"ok": False, "path": base["path"], "message": "This folder is not writable"}
+    return {"ok": True, "path": base["path"], "exists": True}
+
+
+def mp4_export_dir_for_project(settings: dict[str, Any] | None, project_base: Path) -> Path:
+    s = normalize_settings(settings)
+    custom = (s.get("export_folder") or "").strip()
+    if custom:
+        return Path(custom).expanduser()
+    return project_mp4_export_dir(project_base)
 
 
 PROJECT_ASSETS_DIR = "assets"
@@ -414,6 +439,7 @@ def normalize_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     out["cut_seconds"] = _clamp_cut_seconds(out.get("cut_seconds"))
     out["caption_lang"] = _clamp_caption_lang(out.get("caption_lang"))
     out["project_folder"] = _clamp_project_folder(out.get("project_folder"))
+    out["export_folder"] = _clamp_project_folder(out.get("export_folder"))
     out["image_template"] = _clamp_template_ref(out.get("image_template"), DEFAULT_IMAGE_TEMPLATE)
     out["video_template"] = _clamp_template_ref(out.get("video_template"), DEFAULT_VIDEO_TEMPLATE)
     return out

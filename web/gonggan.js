@@ -120,7 +120,7 @@ import {
   workflowLabel,
 } from "./gg_autosave_core.js";
 import { sentence } from "./gg_text_core.js";
-import { sanitizeUserMessage } from "./gg_ui_text_core.js";
+import { sanitizeUserMessage, sanitizeUserPath } from "./gg_ui_text_core.js";
 import {
   filterTabsNeedingAutosave,
   workflowTabNeedsAutosave,
@@ -233,6 +233,12 @@ import {
   EXPORT_DONE_TOAST_TITLE,
   EXPORT_FAIL_TOAST_TITLE,
 } from "./gg_export_ui_core.js";
+import {
+  EXPORT_REMOTE_EXPLORER_MSG,
+  exportFolderCheckError,
+  exportOutputDisplayPath,
+} from "./gg_export_folder_core.js";
+import { EXPORT_TAB_ID, EXPORT_TAB_TITLE } from "./gg_export_tab_core.js";
 import {
   rowContentKind,
   cutRowShellHtml,
@@ -469,6 +475,7 @@ import {
 const EXT = "gonggan.cut";
 const PID_KEY = "gg.pid";
 const TIMELINE_TAB = "gg-timeline";
+const EXPORT_TAB = EXPORT_TAB_ID;
 const SHOTS_TAB = "gg-shots";
 /** Lower-left cut panel (versions, End card, Needs redo, Regen, Send last output). Still rendered, only hidden. */
 const SHOW_CUT_PANEL = false;
@@ -717,6 +724,7 @@ async function loadTimeline() {
   bus.dispatchEvent(new Event("timeline"));
   syncRandomSeedToolbar(document);
   refreshTrashCount();
+  void refreshExportOutputPath();
   await reloadOpenCutWorkflowIfRepChanged();
   void offerStoredAiMakeCutResult();
 }
@@ -9816,6 +9824,54 @@ if (!globalThis.__ggEditPreviewResize) {
   });
 }
 
+function mountExport(el) {
+  el.innerHTML = "";
+  const root = document.createElement("div");
+  root.className = "gg-root gg-export-panel";
+  el.appendChild(root);
+  root.innerHTML = `
+    <div class="gg-export-tools">
+      <span class="gg-export-title">Timeline mp4</span>
+      <select class="gg-ex-preset" title="Export size">
+        <option value="480p">480p</option><option value="720p" selected>720p</option><option value="1080p">1080p</option>
+      </select>
+      <label class="gg-ex-snd" title="Include clip audio (silence for stills)"><input type="checkbox" class="gg-ex-sound" checked /> audio</label>
+      <button type="button" class="gg-btn gg-export gg-primary" title="Render the timeline to one mp4 (CPU, ffmpeg)">Export mp4</button>
+    </div>
+    <div class="gg-ex-out">
+      <span class="gg-ex-out-label">Output folder</span>
+      <span class="gg-ex-out-path"></span>
+      <button type="button" class="gg-btn gg-ex-out-browse" title="Choose where Export mp4 saves files">Browse…</button>
+      <button type="button" class="gg-btn gg-ex-show-folder" title="Show the output folder in Explorer">Show in folder</button>
+    </div>
+    <p class="gg-ex-out-err gg-modal-hint gg-split-err" aria-live="polite"></p>
+    <div class="gg-ex-row" hidden>
+      <div class="gg-ex-bar"><div class="gg-ex-fill"></div></div>
+      <span class="gg-ex-text"></span>
+      <button type="button" class="gg-btn gg-ex-cancel">Cancel</button>
+      <button type="button" class="gg-btn gg-ex-play" disabled title="Export an mp4 first">${EXPORT_PLAY_LABEL}</button>
+      <button type="button" class="gg-btn gg-ex-folder" disabled title="Export an mp4 first">${EXPORT_FOLDER_LABEL}</button>
+      <span class="gg-ex-path" title="Click to copy path"></span>
+      <button type="button" class="gg-btn gg-ex-close" title="Hide">×</button>
+    </div>`;
+  const $r = (q) => root.querySelector(q);
+  $r(".gg-export").addEventListener("click", () => startExport($r(".gg-ex-preset").value, $r(".gg-ex-sound").checked));
+  $r(".gg-ex-out-browse").addEventListener("click", () => {
+    openFolderPicker(exp.exportFolder || exp.outputPath || "", (path) => { void saveExportFolder(path); });
+  });
+  $r(".gg-ex-show-folder").addEventListener("click", () => { void showExportOutputFolder(); });
+  $r(".gg-ex-cancel").addEventListener("click", cancelExport);
+  $r(".gg-ex-play").addEventListener("click", () => { if (exp.job?.status === "done") showExport(exp.job); });
+  $r(".gg-ex-folder").addEventListener("click", () => { void showExportOutputFolder(true); });
+  $r(".gg-ex-close").addEventListener("click", () => { exp.hidden = true; paintExport(); });
+  $r(".gg-ex-path").addEventListener("click", (e) => { navigator.clipboard?.writeText(e.target.textContent).catch(() => {}); });
+  paintExportPanelLocks();
+  paintExport();
+  void refreshExport();
+  void refreshExportOutputPath();
+  return () => {};
+}
+
 function mountTimeline(el) {
   el.innerHTML = "";
   const root = document.createElement("div");
@@ -9852,21 +9908,6 @@ function mountTimeline(el) {
         <button type="button" class="gg-btn gg-edit-mode" title="Current cut over the graph. Video follows the playhead." aria-pressed="false">${EDIT_MODE_LABEL}</button>
         <button class="gg-btn gg-snap" title="Snap: 1 s steps (off = 0.1 s)">Snap</button>
         <button class="gg-btn gg-reset" title="Reset to original order and lengths">Reset</button>
-        <span class="gg-sep"></span>
-        <select class="gg-ex-preset" title="Export size">
-          <option value="480p">480p</option><option value="720p" selected>720p</option><option value="1080p">1080p</option>
-        </select>
-        <label class="gg-ex-snd" title="Include clip audio (silence for stills)"><input type="checkbox" class="gg-ex-sound" checked /> audio</label>
-        <button class="gg-btn gg-export gg-primary" title="Render the timeline to one mp4 (CPU, ffmpeg)">Export mp4</button>
-      </div>
-      <div class="gg-ex-row" hidden>
-        <div class="gg-ex-bar"><div class="gg-ex-fill"></div></div>
-        <span class="gg-ex-text"></span>
-        <button class="gg-btn gg-ex-cancel">Cancel</button>
-        <button type="button" class="gg-btn gg-ex-play" disabled title="Export an mp4 first">${EXPORT_PLAY_LABEL}</button>
-        <button type="button" class="gg-btn gg-ex-folder" disabled title="Export an mp4 first">${EXPORT_FOLDER_LABEL}</button>
-        <span class="gg-ex-path" title="Click to copy path"></span>
-        <button class="gg-btn gg-ex-close" title="Hide">×</button>
       </div>
       <div class="gg-error" hidden></div>
       <div class="gg-tl-scroll">
@@ -10004,12 +10045,6 @@ function mountTimeline(el) {
   const zoomRo = window.ResizeObserver ? new ResizeObserver(() => paintZoomBar(root)) : null;
   if (zoomRo) { zoomRo.observe(tlWrap); zoomRo.observe(zoomBar); }
   $r(".gg-reset").addEventListener("click", resetEdit);
-  $r(".gg-export").addEventListener("click", () => startExport($r(".gg-ex-preset").value, $r(".gg-ex-sound").checked));
-  $r(".gg-ex-cancel").addEventListener("click", cancelExport);
-  $r(".gg-ex-play").addEventListener("click", () => { if (exp.job?.status === "done") showExport(exp.job); });
-  $r(".gg-ex-folder").addEventListener("click", () => revealExportFolder());
-  $r(".gg-ex-close").addEventListener("click", () => { exp.hidden = true; paintExport(); });
-  $r(".gg-ex-path").addEventListener("click", (e) => { navigator.clipboard?.writeText(e.target.textContent).catch(() => {}); });
   const bindTimelineResize = () => {
     const handle = $r(".gg-tl-resize");
     if (!handle || handle._ggResizeBound) return;
@@ -10271,7 +10306,7 @@ function mountTimeline(el) {
 }
 
 // ---- export ----
-const exp = { job: null, poll: 0, hidden: false };
+const exp = { job: null, poll: 0, hidden: false, exportFolder: "", outputPath: "", outputErr: "" };
 const exportUrl = (name) => api.apiURL("/gonggan/export/file?name=" + encodeURIComponent(name));
 const fmtMB = (b) => (b / 1048576).toFixed(1) + " MB";
 
@@ -10295,20 +10330,96 @@ async function refreshExport() {
   try { const d = await getJson("/gonggan/export/status"); onExportJob(d.job); } catch (_) {}
 }
 
-function paintTimelineNativeLocks() {
-  const nat = isNativeProject();
-  const tip = "Not available for this project yet";
-  document.querySelectorAll(".gg-timeline .gg-export").forEach((btn) => {
+function paintExportPanelLocks() {
+  document.querySelectorAll(".gg-export-panel .gg-export").forEach((btn) => {
     btn.disabled = false;
     btn.title = "Render the timeline to one mp4 (CPU, ffmpeg)";
   });
+  document.querySelectorAll(".gg-export-panel .gg-ex-preset, .gg-export-panel .gg-ex-sound").forEach((el) => {
+    el.disabled = false;
+  });
+}
+
+function paintTimelineNativeLocks() {
+  const nat = isNativeProject();
   document.querySelectorAll(".gg-timeline .gg-reset").forEach((btn) => {
     btn.disabled = false;
     btn.title = nat ? "Rebuild the timeline from the cut list (order, original lengths, no gaps)" : "Reset to original order and lengths";
   });
-  document.querySelectorAll(".gg-timeline .gg-ex-preset, .gg-timeline .gg-ex-sound").forEach((el) => {
-    el.disabled = false;
-  });
+  paintExportPanelLocks();
+}
+
+function paintExportOutputFolder() {
+  const root = document.querySelector(".gg-export-panel");
+  if (!root) return;
+  const pathEl = root.querySelector(".gg-ex-out-path");
+  const errEl = root.querySelector(".gg-ex-out-err");
+  const showBtn = root.querySelector(".gg-ex-show-folder");
+  if (!pathEl) return;
+  const display = exportOutputDisplayPath({ exportFolder: exp.exportFolder, effectivePath: exp.outputPath });
+  pathEl.textContent = display;
+  const tip = sanitizeUserPath(exp.exportFolder || exp.outputPath || "");
+  pathEl.title = tip || display;
+  if (errEl) errEl.textContent = exp.outputErr || "";
+  if (showBtn) showBtn.disabled = !(exp.outputPath || exp.exportFolder);
+}
+
+async function refreshExportOutputPath() {
+  const tl = state.timeline;
+  if (!tl?.project?.id) return;
+  try {
+    const data = await getJson(`/gonggan/export/output-path?pid=${encodeURIComponent(tl.project.id)}`);
+    exp.exportFolder = data.export_folder || "";
+    exp.outputPath = data.effective_path || "";
+    paintExportOutputFolder();
+  } catch (_) {}
+}
+
+async function saveExportFolder(path) {
+  const tl = state.timeline;
+  if (!tl?.project?.id) return false;
+  const trimmed = String(path ?? "").trim();
+  try {
+    await postJson("/gonggan/export/folder/check", { path: trimmed });
+  } catch (e) {
+    exp.outputErr = sanitizeUserMessage(e.message || exportFolderCheckError({ ok: false }));
+    paintExportOutputFolder();
+    return false;
+  }
+  try {
+    const data = await postJson("/gonggan/project/update", {
+      pid: tl.project.id,
+      fields: { settings: { export_folder: trimmed } },
+    });
+    if (data.timeline) state.timeline = data.timeline;
+    exp.outputErr = "";
+    await refreshExportOutputPath();
+    return true;
+  } catch (e) {
+    exp.outputErr = sanitizeUserMessage(e.message || "Could not save export folder");
+    paintExportOutputFolder();
+    return false;
+  }
+}
+
+async function showExportOutputFolder(withLastFile = false) {
+  const tl = state.timeline;
+  if (!tl?.project?.id) return;
+  const job = exp.job;
+  const body = { pid: tl.project.id };
+  if (withLastFile && job?.status === "done" && job.file) body.name = job.file;
+  try {
+    const res = await api.fetchApi("/gonggan/export/reveal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.message || `HTTP ${res.status}`);
+    if (data.remote_host) ggToast("", EXPORT_REMOTE_EXPLORER_MSG, "info");
+  } catch (e) {
+    ggToast("Show in folder", sentence(String(e.message || e), "Restart ComfyUI once if this button was just added."), "warn");
+  }
 }
 
 async function startExport(preset, sound) {
@@ -10320,6 +10431,17 @@ async function startExport(preset, sound) {
   clearTimeout(ed.saveTimer);
   if (ed.saving || ed.saveTimer) await saveEdit();   // export what is on screen
   stopPlay();
+  if (exp.exportFolder) {
+    try {
+      await postJson("/gonggan/export/folder/check", { path: exp.exportFolder });
+    } catch (e) {
+      exp.outputErr = sanitizeUserMessage(e.message || "Invalid export folder");
+      paintExportOutputFolder();
+      state.error = sentence("Export did not start: " + exp.outputErr, "Choose a writable folder and try again.");
+      bus.dispatchEvent(new Event("timeline"));
+      return;
+    }
+  }
   try {
     const res = await api.fetchApi("/gonggan/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -10340,23 +10462,6 @@ async function cancelExport() {
   refreshExport();
 }
 
-async function revealExportFolder() {
-  const job = exp.job;
-  const tl = state.timeline;
-  if (!job || job.status !== "done" || !tl) return;
-  try {
-    const res = await api.fetchApi("/gonggan/export/reveal", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pid: tl.project.id, name: job.file || null }),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.message || `HTTP ${res.status}`);
-  } catch (e) {
-    ggToast("Show in Folder", sentence(String(e.message || e), "Restart ComfyUI once if this button was just added."), "warn");
-  }
-}
-
 function showExport(job) {
   if (!viewer || !job || job.status !== "done") return;
   stopPlay();
@@ -10374,8 +10479,9 @@ function showExport(job) {
 }
 
 function paintExport() {
-  const root = document.querySelector(".gg-timeline");
+  const root = document.querySelector(".gg-export-panel");
   if (!root) return;
+  paintExportOutputFolder();
   const row = root.querySelector(".gg-ex-row");
   const job = exp.job;
   const btn = root.querySelector(".gg-export");
@@ -10461,6 +10567,7 @@ app.registerExtension({
   name: EXT,
   bottomPanelTabs: [
     { id: TIMELINE_TAB, title: "Timeline", type: "custom", icon: "pi pi-video", render: (el) => mountTimeline(el) },
+    { id: EXPORT_TAB, title: EXPORT_TAB_TITLE, type: "custom", icon: "pi pi-download", render: (el) => mountExport(el) },
   ],
   async setup() {
     globalThis.__gongganCutAutosaveOnSwitch = "0.8.2";
