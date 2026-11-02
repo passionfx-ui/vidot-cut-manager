@@ -1,10 +1,9 @@
-/** Version row below the Shots icon row: a fixed header (Best, Make Video, Import) over the selected cut's
- * versions, newest on the left (no DOM). */
+/** Version row below the Shots icon row: import tile and thumbnails (newest on the left), no DOM. */
 
 import { versionRepState } from "./gg_cuts_core.js";
 
 export const SET_BEST_LABEL = "Set as Best";
-export const IMPORT_TILE_TIP = "Import image or video";
+export const IMPORT_TILE_TIP = "Import";
 export const IMPORT_MENU_LABEL = "Import Media…";
 export const IMPORT_ACCEPT = "image/*,video/*";
 /** Back-to-newest arrow appears once the row is scrolled right past this many pixels. */
@@ -113,16 +112,12 @@ export function makeVideoPlanOk(plan, startVid) {
   return !startVid || plan?.start_version === startVid;
 }
 
-/**
- * The three header buttons above the row (Best, Make Video, Import) for the selected cut and version.
- * @param {{ cut?: object|null, vid?: string, native?: boolean, sdkBusy?: boolean, importBusy?: boolean }} ctx
- */
-export function stripHeaderState({ cut = null, vid = "", native = false, sdkBusy = false, importBusy = false } = {}) {
-  const version = (Array.isArray(cut?.versions_list) ? cut.versions_list : []).find((v) => v && v.id && v.id === vid) || null;
+/** @deprecated header row removed; import tile + star on thumbnails */
+export function stripHeaderState() {
   return {
-    best: bestButtonState({ cut, vid: version ? vid : "" }),
-    video: makeVideoButtonState({ cut, version, native, busy: sdkBusy }),
-    import: importButtonState({ hasCut: !!cut, native, busy: importBusy }),
+    best: { disabled: true, pressed: false, title: "" },
+    video: { disabled: true, title: "" },
+    import: importButtonState({ hasCut: false, native: false }),
   };
 }
 

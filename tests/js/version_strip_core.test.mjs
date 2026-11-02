@@ -97,7 +97,7 @@ describe("versionStripRows", () => {
     const rows = versionStripRows(cut({ pick: "v2", media: { id: "v2", kind: "image" } }));
     assert.deepEqual(rows.map((r) => [r.id, r.best, r.latest]), [["v3", false, false], ["v2", true, false], ["v1", false, false]]);
     assert.equal(rows[1].state, "Best");
-    assert.ok(rows.every((r) => !("starTitle" in r)), "no star on thumbnails (0.9.125)");
+    assert.ok(rows.every((r) => !("starTitle" in r)), "row data has no starTitle (star is markup)");
   });
 
   it("is empty for no cut or no versions", () => {
@@ -195,20 +195,10 @@ describe("version row header: Best, Make Video, Import (0.9.125)", () => {
     assert.equal(makeVideoButtonState({ ...on, busy: true }).disabled, true);
   });
 
-  it("stripHeaderState wires the three buttons to the selected version", () => {
-    const c = cut({ pick: "v2", media: { id: "v2", kind: "image" } });
-    const s = stripHeaderState({ cut: c, vid: "v2", native: true });
-    assert.equal(s.best.pressed, true);
-    assert.equal(s.video.disabled, false);
-    assert.deepEqual(s.import, { disabled: false, title: IMPORT_TILE_TIP });
-    const v = stripHeaderState({ cut: c, vid: "v3", native: true, sdkBusy: false });
-    assert.equal(v.best.pressed, false);
-    assert.equal(v.video.disabled, true, "selected is a video");
-    assert.equal(stripHeaderState({ cut: c, vid: "v2", native: true, sdkBusy: true }).video.disabled, true);
-    assert.equal(stripHeaderState({ cut: c, vid: "v2", native: true, importBusy: true }).import.disabled, true);
-    const none = stripHeaderState({});
-    assert.ok(none.best.disabled && none.video.disabled && none.import.disabled);
-    assert.equal(stripHeaderState({ cut: c, vid: "nope", native: true }).best.disabled, true, "unknown version");
+  it("stripHeaderState is a deprecated stub after the header row was removed", () => {
+    const s = stripHeaderState({ cut: cut({ pick: "v2" }), vid: "v2", native: true });
+    assert.ok(s.best.disabled && s.video.disabled && s.import.disabled);
+    assert.equal(s.best.pressed, false);
   });
 
   it("Make Video refuses a plan that starts from another image (server without start_vid)", () => {
@@ -243,10 +233,10 @@ describe("Image to Video (right-click, 0.9.117) and Make Video", () => {
     assert.equal(cutHasStartImage({ versions_list: [{ id: "a1", kind: "image", animated: true }] }), false);
   });
 
-  it("no separate Image to Video button in the row; Make Video runs imageToVideoCut on the selected image", () => {
+  it("no separate Image to Video button in the row; imageToVideoCut stays in the cut menu", () => {
     assert.ok(!js.includes("gg-vs-i2v") && !css.includes("gg-vs-i2v"), "Image to Video button removed");
     assert.ok(!js.includes("versionStripLeadingHtml"));
-    assert.match(js, /on\("\.gg-vs-video-btn", \(c, vid\) => void imageToVideoCut\(c\.id, \{ startVid: vid \}\)\)/);
+    assert.ok(!js.includes('on(".gg-vs-video-btn"'), "header Make Video button removed");
     const body = fnBody("imageToVideoCut");
     assert.match(js, /async function imageToVideoCut\(cutId, \{ startVid = "" \} = \{\}\)/);
     assert.match(body, /"\/gonggan\/image-to-video"/);
@@ -263,35 +253,36 @@ describe("Image to Video (right-click, 0.9.117) and Make Video", () => {
   });
 });
 
-describe("version row header wiring (0.9.125)", () => {
+describe("version strip wiring", () => {
   const fnBody = (name) => {
     const at = js.indexOf(`function ${name}(`);
     assert.ok(at >= 0, `${name} not found`);
     return js.slice(at, js.indexOf("\n}\n", at));
   };
 
-  it("header sits above the scrolling body inside the row; Best, Make Video, Import in that order", () => {
-    assert.match(js, /\$\{iconRowHtml\(\)\}\s*<div class="gg-vstrip"[^>]*>\s*\$\{versionStripHeadHtml\(\)\}\s*<div class="gg-vs-body">\s*<div class="gg-vs-list"><\/div>/);
-    const head = fnBody("versionStripHeadHtml");
-    const order = ["gg-vs-best-btn", "gg-vs-video-btn", "gg-vs-import-btn"].map((c) => head.indexOf(c));
-    assert.ok(order.every((i, n) => i > 0 && (n === 0 || i > order[n - 1])), String(order));
-    assert.match(head, /BEST_BUTTON_LABEL[\s\S]*MAKE_VIDEO_LABEL[\s\S]*IMPORT_BUTTON_LABEL/);
-  });
-
-  it("header never scrolls; only the thumbnail list scrolls sideways", () => {
-    assert.match(css, /\.gg-shots \.gg-vs-head \{[^}]*flex: 0 0 auto;[^}]*height: \d+px;[^}]*overflow: hidden;/);
+  it("no header button row; import tile and info panel sit in the strip", () => {
+    assert.ok(!js.includes("versionStripHeadHtml"), "header html removed");
+    assert.ok(!js.includes("bindStripHeader"), "header bindings removed");
+    assert.match(js, /\$\{iconRowHtml\(\)\}\s*<div class="gg-vstrip"[^>]*>\s*<div class="gg-vs-body">\s*<div class="gg-vs-list"><\/div>/);
+    assert.match(js, /<div class="gg-vs-info" aria-live="polite"><\/div>/);
+    assert.match(css, /\.gg-shots \.gg-vs-head \{[^}]*display: none;/);
     assert.match(css, /\.gg-shots \.gg-vstrip \{[^}]*display: flex; flex-direction: column;/);
     assert.match(css, /\.gg-shots \.gg-vs-body \{[^}]*position: relative;[^}]*min-height: 0;/);
   });
 
-  it("buttons: Best toggles, Make Video starts from the selected image, Import is the existing import", () => {
-    const at = js.indexOf("const bindStripHeader");
-    const body = js.slice(at, js.indexOf("const paintVersionStrip", at));
-    assert.match(body, /toggleBest\(c\.id, vid\)/);
-    assert.match(body, /on\("\.gg-vs-import-btn", \(c\) => pickVersionImportFiles\(c\.id\)\)/);
+  it("import tile, star Best, and info panel are wired in bindStripItems / paintVersionStrip", () => {
+    const at = js.indexOf("const bindStripItems");
+    const body = js.slice(at, js.indexOf("const stripCut", at));
+    assert.match(body, /gg-vs-import-tile[\s\S]*pickVersionImportFiles\(c\.id\)/);
+    assert.match(body, /gg-vs-star[\s\S]*toggleBest\(c\.id, vid\)/);
     assert.match(body, /if \(e\.currentTarget\.disabled\) return;/);
+    const paint = js.slice(js.indexOf("const paintVersionStrip"), js.indexOf("const paintPanel", js.indexOf("const paintVersionStrip")));
+    assert.match(paint, /versionInfoPanelHtml\(c, selVid\)/);
+    const info = fnBody("versionInfoPanelHtml");
+    assert.match(info, /gg-vs-info-k/);
+    assert.match(info, /gg-vs-info-v/);
+    assert.ok(!info.includes("filename") && !info.includes("created"), "info panel does not show file name or creation time");
     assert.match(fnBody("toggleBest"), /setPick\(cutId, c\.pick === vid \? null : vid\)/);
-    assert.match(js, /const syncStripHeader = [\s\S]*?stripHeaderState\(\{ cut: c, vid: selVid, native: isNativeProject\(\), sdkBusy: !!sdk\.busy, importBusy: stripImportBusy \}\)/);
   });
 
   it("clearing Best makes the newest version current again (local, same as the server)", () => {
@@ -309,13 +300,13 @@ describe("gonggan.js wiring (0.9.118)", () => {
   };
 
   it("the row sits directly below the icon row (New scene / New cut), then the status panel (2026-10-31 decision)", () => {
-    assert.match(js, /\$\{iconRowHtml\(\)\}\s*<div class="gg-vstrip"[^>]*>\s*\$\{versionStripHeadHtml\(\)\}\s*<div class="gg-vs-body">\s*<div class="gg-vs-list"><\/div>\s*<button[^>]*class="gg-btn gg-vs-newest"[^>]*>[^<]*<\/button>\s*<\/div>\s*<\/div>\s*<div class="gg-cutpanel">/);
+    assert.match(js, /\$\{iconRowHtml\(\)\}\s*<div class="gg-vstrip"[^>]*>\s*<div class="gg-vs-body">\s*<div class="gg-vs-list"><\/div>\s*<button[^>]*class="gg-btn gg-vs-newest"[^>]*>[^<]*<\/button>\s*<\/div>\s*<div class="gg-vs-info" aria-live="polite"><\/div>\s*<\/div>\s*<div class="gg-cutpanel">/);
     assert.match(js, /^const SHOW_SEL_BAR = false;$/m);
     assert.ok(!js.includes("gg-list-row") && !css.includes("gg-list-row"), "vertical strip layout removed");
   });
 
-  it("the row is horizontal, fixed height and scrolls sideways only", () => {
-    assert.match(css, /\.gg-shots \.gg-vstrip \{[^}]*flex: 0 0 auto;[^}]*height: \d+px;/);
+  it("the thumbnail list is horizontal and scrolls sideways only", () => {
+    assert.match(css, /\.gg-shots \.gg-vstrip \{[^}]*flex: 0 0 auto;/);
     assert.match(css, /\.gg-shots \.gg-vs-list \{[^}]*overflow-x: auto; overflow-y: hidden;[^}]*flex-direction: row;/);
   });
 
@@ -328,8 +319,7 @@ describe("gonggan.js wiring (0.9.118)", () => {
   it("thumb click sets the displayed version (timeline + preview) and opens the workflow; Best stays separate", () => {
     const at = js.indexOf("const bindStripItems");
     const body = js.slice(at, js.indexOf("const paintVersionStrip", at));
-    assert.match(body, /wrap\.addEventListener\("click", \(e\) => \{\s*e\.stopPropagation\(\);\s*selectStripVersion\(c\.id, vid\);\s*\}\);/);
-    assert.ok(!/setPick|toggleBest/.test(body.slice(0, body.indexOf("contextmenu"))), "a click never changes Best");
+    assert.match(body, /if \(e\.target\.closest\("\.gg-vs-star"\)\) return;\s*e\.stopPropagation\(\);\s*selectStripVersion\(c\.id, vid\);/);
     assert.match(body, /versionStripMenuItems\(row\), \{ best: \(\) => setPick\(c\.id, vid\) \}/);
     assert.match(body, /const selectStripVersion = \(cutId, vid\) => \{\s*Object\.assign\(stripPick, \{ pid: state\.pid, cutId, vid \}\);\s*void setDisplayVersion\(cutId, vid\);/);
     assert.match(js, /async function setDisplayVersion\(cutId, vid\)/);
@@ -337,12 +327,13 @@ describe("gonggan.js wiring (0.9.118)", () => {
     assert.match(js, /display: c\.display \|\| null/);
   });
 
-  it("thumbnails carry no icons: no star, no play badge, no + tile; Best = highlighted border; video keeps its length", () => {
+  it("import + tile first, star sets Best, duration on video; Best = highlighted border", () => {
     const html = fnBody("versionStripHtml");
     assert.match(html, /versionThumbParts\(/);
-    for (const gone of ["gg-vs-star", "★", "☆", "▶", "gg-vs-plus", "gg-badge"]) assert.ok(!html.includes(gone), gone);
-    for (const gone of ["gg-vs-star", "gg-vs-plus", ".gg-vs-import {"]) assert.ok(!css.includes(gone), gone);
-    assert.ok(!js.includes("gg-vs-star") && !js.includes("gg-ver-wrap gg-vs-import"), "star / + tile markup removed");
+    assert.match(html, /gg-vs-import-tile/);
+    assert.match(html, /gg-vs-star/);
+    for (const gone of ["☆", "▶", "gg-vs-plus", "gg-badge"]) assert.ok(!html.includes(gone), gone);
+    assert.match(css, /\.gg-shots \.gg-vstrip \.gg-vs-import-tile/);
     assert.match(html, /\$\{r\.best \? " gg-vs-best" : ""\}\$\{sel && !r\.best \? " gg-vs-sel" : ""\}/);
     assert.match(html, /\$\{r\.video \? `<span class="gg-vs-dur"/);
     assert.match(css, new RegExp(`\\.gg-shots \\.gg-vstrip \\.gg-vs-best \\.gg-ver \\{ border: 2px solid ${BEST_THUMB_BORDER.replace("#", "\\#")}; \\}`));
@@ -352,11 +343,11 @@ describe("gonggan.js wiring (0.9.118)", () => {
     assert.match(js.slice(at, at + 1200), /bindThumbFallbacks\(list\)/);
   });
 
-  it("thumbnails are about 20% larger than 0.9.118 (72x44)", () => {
+  it("thumbnails are about 20% larger than 86x53", () => {
     const w = Number(css.match(/\.gg-shots \.gg-vstrip \.gg-ver-wrap \{[^}]*width: (\d+)px/)?.[1]);
     const h = Number(css.match(/\.gg-shots \.gg-vstrip \.gg-ver \{[^}]*height: (\d+)px/)?.[1]);
-    assert.ok(w >= 84 && w <= 90, `width ${w}`);
-    assert.ok(h >= 51 && h <= 55, `height ${h}`);
+    assert.ok(w >= 100 && w <= 106, `width ${w}`);
+    assert.ok(h >= 62 && h <= 66, `height ${h}`);
   });
 
   it("no visible Regen; Queue uses mode plan and Random seed", () => {

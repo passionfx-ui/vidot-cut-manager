@@ -414,7 +414,7 @@ async function main() {
     const vStar = serverVers[3];
     await page.click(`${STRIP} .gg-ver-wrap[data-vid="${vStar}"] > .gg-ver`);
     await waitStrip(page, (s, v) => document.querySelector(`${s} .gg-ver-wrap[data-vid="${v}"]`)?.classList.contains("gg-vs-sel"), vStar, "click did not select the thumbnail");
-    await page.click(`${STRIP} .gg-vs-head .gg-vs-best-btn`);
+    await page.click(`${STRIP} .gg-ver-wrap[data-vid="${vStar}"] .gg-vs-star`);
     await waitStrip(page, (s, v) => document.querySelector(`${s} .gg-ver-wrap[data-vid="${v}"]`)?.classList.contains("gg-rep"), vStar, "Best did not set Best");
     await waitServerPick(page, pid, cutA, vStar);
     st = await stripState(page);

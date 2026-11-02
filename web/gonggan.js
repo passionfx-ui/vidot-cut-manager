@@ -295,15 +295,16 @@ import {
   stripScrollLeft,
   wheelToScrollLeft,
   IMPORT_ACCEPT,
+  IMPORT_TILE_TIP,
   cutHasStartImage,
   stripSelectedVid,
-  stripHeaderState,
-  BEST_BUTTON_LABEL,
+  SET_BEST_LABEL,
+  importButtonState,
   MAKE_VIDEO_LABEL,
-  IMPORT_BUTTON_LABEL,
   makeVideoPlanOk,
   MAKE_VIDEO_OLD_SERVER,
 } from "./gg_version_strip_core.js";
+import { versionInfoFields, versionInfoPanelRows } from "./gg_version_info_core.js";
 import { resolveSendTarget } from "./gg_send_target_core.js";
 import { batchProgressView, createRenderStatus, promptCutTarget, renderBadgeView, renderGlobalView } from "./gg_render_status_core.js";
 import { captureRouteMissing, captureToast, createAutoCapture } from "./gg_auto_capture_core.js";
@@ -7427,35 +7428,42 @@ function stripSelectedVersionId(c) {
   return stripSelectedVid(c, { picked, open });
 }
 
-/** Fixed header above the thumbnails: Best, Make Video, Import (state set by syncStripHeader). */
-function versionStripHeadHtml() {
-  const btn = (cls, label) => `<button type="button" class="gg-btn gg-vs-hbtn ${cls}" disabled>${esc(label)}</button>`;
-  return `<div class="gg-vs-head">
-          ${btn("gg-vs-best-btn", BEST_BUTTON_LABEL)}
-          ${btn("gg-vs-video-btn", MAKE_VIDEO_LABEL)}
-          ${btn("gg-vs-import-btn", IMPORT_BUTTON_LABEL)}
-        </div>`;
-}
-
-/** Thumbnails of the selected cut's versions, newest on the left; Best = highlighted border, no icons on them. */
+/** Thumbnails of the selected cut's versions (+ import tile first); Best via star or border. */
 function versionStripHtml(c, selVid) {
   if (!c) return '<div class="gg-vs-empty gg-dim">Select a cut to see its versions</div>';
+  const importSt = importButtonState({ hasCut: !!c, native: isNativeProject(), busy: stripImportBusy });
+  const tileDis = importSt.disabled ? " disabled" : "";
+  const tile = `<button type="button" class="gg-vs-import-tile"${tileDis} title="${esc(IMPORT_TILE_TIP)}">+</button>`;
   const rows = versionStripRows(c, stripProbe.dur);
-  if (!rows.length) return '<div class="gg-vs-empty gg-dim">No versions</div>';
+  if (!rows.length) return tile + '<div class="gg-vs-empty gg-dim">No versions</div>';
   const tabOpen = ownedShotTabOpen();
   const byId = new Map((c.versions_list || []).map((v) => [v.id, v]));
-  return rows.map((r) => {
+  const thumbs = rows.map((r) => {
     const { wrapCls, tip, img } = versionThumbParts(c, byId.get(r.id), tabOpen);
     const title = r.state ? `${r.state} · ${tip}` : tip;
     const sel = r.id === selVid;
     const failed = !!byId.get(r.id)?.failed;
+    const starOn = r.best ? " gg-on" : "";
     return `<div class="${wrapCls} gg-vs-item${failed ? " gg-vs-failed" : ""}${r.best ? " gg-vs-best" : ""}${sel && !r.best ? " gg-vs-sel" : ""}" data-vid="${esc(r.id)}"${sel ? ' aria-selected="true"' : ""}>
       <div class="gg-ver" title="${esc(title)}">
+        <button type="button" class="gg-vs-star${starOn}" title="${esc(SET_BEST_LABEL)}" aria-pressed="${r.best ? "true" : "false"}">★</button>
         ${img}
         ${r.video ? `<span class="gg-vs-dur"${r.duration ? "" : " hidden"}>${esc(r.duration)}</span>` : ""}
       </div>
     </div>`;
   }).join("");
+  return tile + thumbs;
+}
+
+function versionInfoPanelHtml(c, selVid) {
+  if (!c || !selVid) return '<div class="gg-vs-info-empty gg-dim">Select a version thumbnail</div>';
+  const v = (c.versions_list || []).find((x) => x && x.id === selVid);
+  const pf = Number(state.timeline?.project?.settings?.fps);
+  const fields = versionInfoFields(v, c, stripProbe.dur, Number.isFinite(pf) ? pf : undefined);
+  const rows = versionInfoPanelRows(fields);
+  return rows.map(({ label, value }) =>
+    `<span class="gg-vs-info-k">${esc(label)}</span><span class="gg-vs-info-v">${esc(value)}</span>`,
+  ).join("");
 }
 
 const ICON_SVG_ATTRS = 'width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
@@ -7590,11 +7598,22 @@ function mountShots(el) {
   };
   const bindStripItems = (list, c) => {
     const rows = new Map(versionStripRows(c, stripProbe.dur).map((r) => [r.id, r]));
+    list.querySelector(".gg-vs-import-tile")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (e.currentTarget.disabled) return;
+      pickVersionImportFiles(c.id);
+    });
     list.querySelectorAll(".gg-ver-wrap").forEach((wrap) => {
       const vid = wrap.dataset.vid;
       const row = rows.get(vid);
       if (!row) return;
+      wrap.querySelector(".gg-vs-star")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        Object.assign(stripPick, { pid: state.pid, cutId: c.id, vid });
+        toggleBest(c.id, vid);
+      });
       wrap.addEventListener("click", (e) => {
+        if (e.target.closest(".gg-vs-star")) return;
         e.stopPropagation();
         selectStripVersion(c.id, vid);
       });
@@ -7613,57 +7632,36 @@ function mountShots(el) {
     openVersionWorkflow(cutId, vid);
     paintVersionStrip();
   };
-  const syncStripHeader = (c, selVid) => {
-    const s = stripHeaderState({ cut: c, vid: selVid, native: isNativeProject(), sdkBusy: !!sdk.busy, importBusy: stripImportBusy });
-    const set = (sel, st) => {
-      const b = root.querySelector(`.gg-vs-head ${sel}`);
-      if (!b) return;
-      b.disabled = st.disabled;
-      b.title = st.title;
-      if ("pressed" in st) {
-        b.classList.toggle("gg-on", st.pressed);
-        b.setAttribute("aria-pressed", st.pressed ? "true" : "false");
-      }
-    };
-    set(".gg-vs-best-btn", s.best);
-    set(".gg-vs-video-btn", s.video);
-    set(".gg-vs-import-btn", s.import);
-  };
-  const bindStripHeader = () => {
-    const on = (sel, fn) => root.querySelector(`.gg-vs-head ${sel}`)?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (e.currentTarget.disabled) return;
-      const c = stripCut();
-      if (c) fn(c, stripSelectedVersionId(c));
-    });
-    on(".gg-vs-best-btn", (c, vid) => {
-      Object.assign(stripPick, { pid: state.pid, cutId: c.id, vid });
-      toggleBest(c.id, vid);
-    });
-    on(".gg-vs-video-btn", (c, vid) => void imageToVideoCut(c.id, { startVid: vid }));
-    on(".gg-vs-import-btn", (c) => pickVersionImportFiles(c.id));
-  };
   const paintVersionStrip = () => {
     const list = root.querySelector(".gg-vstrip .gg-vs-list");
+    const info = root.querySelector(".gg-vstrip .gg-vs-info");
     if (!list) return;
     const c = stripCut();
     const cutId = c?.id || "";
     const selVid = stripSelectedVersionId(c);
-    syncStripHeader(c, selVid);
     const html = versionStripHtml(c, selVid);
     const key = `${cutId}\n${html}`;
-    if (list.dataset.html === key) return;
-    const left = stripScrollLeft(stripScroll, cutId);
-    stripScroll.cutId = cutId;
-    stripScroll.left = left;
-    list.dataset.html = key;
-    list.innerHTML = html;
-    list.scrollLeft = left;
-    syncStripNewest();
-    if (!c) return;
-    bindThumbFallbacks(list);
-    bindStripItems(list, c);
-    probeStripDurations(c);
+    if (list.dataset.html !== key) {
+      const left = stripScrollLeft(stripScroll, cutId);
+      stripScroll.cutId = cutId;
+      stripScroll.left = left;
+      list.dataset.html = key;
+      list.innerHTML = html;
+      list.scrollLeft = left;
+      syncStripNewest();
+      if (c) {
+        bindThumbFallbacks(list);
+        bindStripItems(list, c);
+        probeStripDurations(c);
+      }
+    }
+    if (info) {
+      const ihtml = versionInfoPanelHtml(c, selVid);
+      if (info.dataset.html !== ihtml) {
+        info.dataset.html = ihtml;
+        info.innerHTML = ihtml;
+      }
+    }
   };
   const paintPanel = () => {
     paintVersionStrip();
@@ -8049,11 +8047,11 @@ function mountShots(el) {
       </div>` : ""}
       ${iconRowHtml()}
       <div class="gg-vstrip" role="group" aria-label="Versions"${tl && !viewFinal ? "" : " hidden"}>
-        ${versionStripHeadHtml()}
         <div class="gg-vs-body">
           <div class="gg-vs-list"></div>
           <button type="button" class="gg-btn gg-vs-newest" hidden title="Back to newest" aria-label="Back to newest">‹</button>
         </div>
+        <div class="gg-vs-info" aria-live="polite"></div>
       </div>
       <div class="gg-cutpanel">${!SHOW_CUT_PANEL && SHOW_STATUS_PANEL ? statusPanelShellHtml() : ""}</div>
       <button type="button" class="gg-btn gg-timeline-toggle gg-on" aria-pressed="true" title="Timeline: on (T)">Timeline</button>`;
@@ -8134,7 +8132,6 @@ function mountShots(el) {
         updateSelectionBar(root);
       });
     });
-    bindStripHeader();
     const vsList = root.querySelector(".gg-vs-list");
     vsList?.addEventListener("scroll", () => {
       stripScroll.left = vsList.scrollLeft;
