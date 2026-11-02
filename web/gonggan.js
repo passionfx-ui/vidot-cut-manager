@@ -3047,6 +3047,40 @@ function isLoadTokenStale(loadToken) {
   return loadToken !== undefined && loadToken !== wfLoadToken;
 }
 
+/**
+ * Move an unsaved shot tab onto this cut's path. Temporary only: a saved file is not renamed,
+ * and the path is updated through the workflow store so the tab stays one entry.
+ */
+async function pointTemporaryShotTabAt(wf, loadName) {
+  if (!wf?.isTemporary || !loadName) return;
+  const rel = String(loadName).replace(/^\/+/, "").replace(/^workflows\//i, "");
+  const desired = `workflows/${rel}`;
+  if (workflowPathKey(wf.path) === workflowPathKey(desired)) return;
+  const ws = ggWorkflowStore();
+  if (typeof ws?.renameWorkflow !== "function") return;
+  try {
+    await ws.renameWorkflow(wf, desired);
+  } catch (e) {
+    console.warn("[gonggan] retarget shot tab path failed", e);
+  }
+}
+
+/** The tab loadGraphData just filled. A path string can open a different temporary than the path we asked for. */
+function claimLoadedShotTab(loadName, reused) {
+  if (reused && typeof reused === "object") {
+    ggOwnedShotWorkflow = reused;
+    return ggOwnedShotWorkflow;
+  }
+  adoptGongganShotWorkflow(loadName);
+  const ws = ggWorkflowStore();
+  const active = ws?.activeWorkflow;
+  const open = ws?.openWorkflows || [];
+  if (active && open.includes(active) && (!ggOwnedShotWorkflow || !open.includes(ggOwnedShotWorkflow))) {
+    ggOwnedShotWorkflow = active;
+  }
+  return ggOwnedShotWorkflow;
+}
+
 async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   const relPath = shotWorkflowRelPathForCut(cut);
   const storagePath = await resolveShotWorkflowStoragePath(relPath, { idBased: true });
@@ -3058,11 +3092,25 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   if (isLoadTokenStale(loadToken)) return false;
   const previous = ggOwnedShotWorkflow;
   const ws = ggWorkflowStore();
-  adoptGongganShotWorkflow(loadName);
-  // The tab object, not the path: ComfyUI reuses a same-path tab for a path string only while it is active.
+  // A path string opens a new temporary tab (unsaved dot) whenever that path is not the active tab.
+  // Pass the tab object: this cut's tab if it is already open, otherwise the one Cut Manager tab.
   const existingAtPath = findWorkflowAtShotPath(ws, loadName);
-  // ComfyUI reuses a tab when activateLoadedWorkflow gets the tab object; a path string opens a new temporary tab if that path is already open in the background (API loads used to always pass the string → uuid tab + labeled shot tab).
-  const loadTarget = existingAtPath || loadName;
+  const openList = ws?.openWorkflows || [];
+  const ownedOpen =
+    previous &&
+    previous !== existingAtPath &&
+    openList.includes(previous) &&
+    isGongganOwnedWorkflow(previous)
+      ? previous
+      : null;
+  let loadTarget = existingAtPath || null;
+  if (!loadTarget && ownedOpen?.isTemporary) {
+    loadTarget = ownedOpen;
+  } else if (!loadTarget) {
+    if (ownedOpen && !ownedOpen.isTemporary) await closeGongganOwnedTab(ownedOpen);
+    loadTarget = loadName;
+  }
+  const reusedTab = typeof loadTarget === "object" ? loadTarget : null;
   ensureWorkflowManagerActive();
   if (isLoadTokenStale(loadToken)) return false;
   syncSavedVideoStartImage(workflow);
@@ -3091,7 +3139,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
     return false;
   }
   if (isLoadTokenStale(loadToken)) {
-    adoptGongganShotWorkflow(loadName);
+    claimLoadedShotTab(loadName, reusedTab);
     const orphan = ggOwnedShotWorkflow;
     const openAfter = ws?.openWorkflows || [];
     if (orphan && orphan !== previous && openAfter.includes(orphan)) {
@@ -3104,8 +3152,10 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
     }
     return false;
   }
-  adoptGongganShotWorkflow(loadName);
-  markWorkflowGongganOwned(ggOwnedShotWorkflow, storagePath, shotMeta);
+  claimLoadedShotTab(loadName, reusedTab);
+  await pointTemporaryShotTabAt(ggOwnedShotWorkflow, loadName);
+  markWorkflowGongganOwned(ggOwnedShotWorkflow, ggOwnedShotWorkflow?.path || storagePath, shotMeta);
+  if (ggOwnedShotWorkflow?.isModified) ggOwnedShotWorkflow.isModified = false;
   if (ggOwnedShotWorkflow && cut) {
     const shown = tabNameForCut(cut);
     if (shown) ggOwnedShotWorkflow.ggCutDisplayName = shown;
@@ -3114,6 +3164,10 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
     const open = ws?.openWorkflows || [];
     const newTab = ggOwnedShotWorkflow;
     if (previous && previous !== newTab && open.includes(previous) && isGongganOwnedWorkflow(previous)) {
+      // A temporary tab's dot is "never saved", not an edit. The new graph is already on another tab.
+      if (previous.isTemporary) {
+        await closeGongganOwnedTab(previous);
+      } else {
       let prevDirty = workflowTabNeedsAutosave(previous, autosaveContextForWorkflow(previous));
       if (prevDirty) {
         const deps = buildAutosaveDeps();
@@ -3150,6 +3204,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
           loadOk: true,
         });
         if (decision.close) await closeGongganOwnedTab(previous);
+      }
       }
     }
   } catch (e) {
@@ -3553,14 +3608,14 @@ function refreshProjectMemoryFromServer(pid, cuts) {
   return gen;
 }
 
-function retargetOpenShotTab(cut, kind, key) {
+async function retargetOpenShotTab(cut, kind, key) {
   const rel = shotWorkflowRelPathById({ projectId: state.pid, cutId: cut?.id || "", kind });
   const wf = ggOwnedShotWorkflow;
   if (wf) {
-    const storagePath = String(rel).replace(/^workflows\//, "");
-    wf.path = storagePath;
-    wf.filename = storagePath.replace(/^.*\//, "");
-    markWorkflowGongganOwned(wf, storagePath, { projectId: state.pid, cutId: cut.id });
+    const loadName = String(rel).replace(/^workflows\//, "");
+    // Do not assign wf.path here. The workflow store keys tabs by path; a direct write leaves the old tab open.
+    await pointTemporaryShotTabAt(wf, loadName);
+    markWorkflowGongganOwned(wf, wf.path || loadName, { projectId: state.pid, cutId: cut.id });
     const shown = tabNameForCut(cut);
     if (shown) wf.ggCutDisplayName = shown;
   }
@@ -3607,7 +3662,7 @@ async function openStoredCutWorkflow(cutId, cutRec, loadToken, entry) {
     nextKind: kind,
     nextKey: key,
   })) {
-    retargetOpenShotTab(cutRec, kind, key);
+    await retargetOpenShotTab(cutRec, kind, key);
     sdk.msg = `Canvas: ${title}`;
     bus.dispatchEvent(new Event("sdk"));
     return;
