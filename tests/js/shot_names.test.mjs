@@ -136,6 +136,21 @@ describe("tab identity", () => {
     assert.equal(shouldSkipShotWorkflowReload({ ...same, loadedKind: null, wantKind: "video" }), true);
   });
 
+  it("reloads when graph node types no longer match the last loaded snapshot", () => {
+    const same = {
+      cutId: "c1",
+      projectId: "p1",
+      lastCutId: "c1",
+      lastProjectId: "p1",
+      graphExtra: { projectId: "p1", cutId: "c1" },
+      tabActive: true,
+      lastNodeTypes: "EmptyLatentImage,SaveImage",
+      liveNodeTypes: "CLIPTextEncode,EmptyLatentImage",
+    };
+    assert.equal(shouldSkipShotWorkflowReload(same), false);
+    assert.equal(shouldSkipShotWorkflowReload({ ...same, liveNodeTypes: "EmptyLatentImage,SaveImage" }), true);
+  });
+
   it("same cutId different projectId in graph -> no match", () => {
     assert.equal(graphExtraMatchesShot({ cutId: "c1", projectId: "p1" }, "p2", "c1"), false);
   });

@@ -166,14 +166,18 @@ export function shotTabIdentityMatches(graphExtra, ownedMeta, shot) {
  *   tabActive: boolean,
  *   loadedKind?: string | null,
  *   wantKind?: string | null,
+ *   lastNodeTypes?: string,
+ *   liveNodeTypes?: string,
  * }} opts
  */
 export function shouldSkipShotWorkflowReload(opts) {
-  const { cutId, projectId, lastCutId, lastProjectId, graphExtra, tabActive, loadedKind, wantKind } = opts || {};
+  const { cutId, projectId, lastCutId, lastProjectId, graphExtra, tabActive, loadedKind, wantKind, lastNodeTypes, liveNodeTypes } =
+    opts || {};
   if (!tabActive) return false;
   if (loadedKind && wantKind && loadedKind !== wantKind) return false;
   if (!cutId || cutId !== lastCutId) return false;
   if (!projectId || projectId !== lastProjectId) return false;
+  if (lastNodeTypes && liveNodeTypes && lastNodeTypes !== liveNodeTypes) return false;
   return graphExtraMatchesShot(graphExtra, projectId, cutId);
 }
 

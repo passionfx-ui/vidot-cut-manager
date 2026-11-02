@@ -2482,6 +2482,8 @@ function shouldSkipWorkflowReload(cutId) {
       tabActive: isGongganShotTabOpenAndActive(),
       loadedKind: wfLastLoadedKind,
       wantKind: workflowKindForCut(cutById(cutId)),
+      lastNodeTypes: wfLastLoadedNodeTypes,
+      liveNodeTypes: liveGraphNodeTypes(),
     });
   } catch {
     return false;
@@ -2678,6 +2680,7 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   ensureWorkflowManagerActive();
   if (isLoadTokenStale(loadToken)) return false;
   const tabCountBefore = (ws?.openWorkflows || []).length;
+  const wantTypes = workflowNodeTypes(workflow);
   try {
     if (isUiWorkflowGraph(workflow)) {
       if (typeof app.loadGraphData !== "function") return false;
@@ -2692,6 +2695,12 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   } catch (e) {
     console.warn("[gonggan] load failed", e);
     ggToast("Workflow", e?.message || String(e), "warn");
+    return false;
+  } finally {
+    if (loadToken !== undefined && loadToken === wfLoadToken) ggCutSwitchAutosaveBlocked = false;
+  }
+  if (wantTypes && liveGraphNodeTypes() !== wantTypes) {
+    console.warn("[gonggan] cut workflow load mismatch", { wantTypes, live: liveGraphNodeTypes(), cutId: cut?.id });
     return false;
   }
   if (isLoadTokenStale(loadToken)) {
@@ -2831,6 +2840,8 @@ const SOURCE_TOAST = {
 let ggMakeVideoCutId = "";
 /** Image / video kind of the media whose workflow the shot tab last opened. */
 let wfLastLoadedKind = null;
+/** Sorted node type list when a cut load last completed (skip reload guard). */
+let wfLastLoadedNodeTypes = "";
 
 /** The selected media's kind picks the image or the video workflow. */
 function workflowKindForCut(cut) {
@@ -2849,11 +2860,31 @@ function markWorkflowLoadComplete(cutId, cutRec, openedVid, openedKind) {
   wfLastLoadedKind = openedKind || (openedVid ? findCutVersion(cut, openedVid)?.kind : workflowKindForCut(cut)) || null;
   wfOpenVersion = openedVid ? { projectId: state.pid, cutId, vid: openedVid } : null;
   ggCutGraphNodeCounts.set(`${state.pid}\n${cutId}`, activeGraphNodeCount());
+  wfLastLoadedNodeTypes = liveGraphNodeTypes();
 }
 
 function activeGraphNodeCount() {
   const g = app.graph;
   return (g?._nodes || g?.nodes || []).length;
+}
+
+function liveGraphNodeTypes() {
+  const g = app.graph;
+  const nodes = g?._nodes || g?.nodes || [];
+  return nodes
+    .map((n) => n.type || n.comfyClass || "")
+    .filter(Boolean)
+    .sort()
+    .join(",");
+}
+
+function workflowNodeTypes(wf) {
+  if (!wf || !Array.isArray(wf.nodes)) return "";
+  return wf.nodes
+    .map((n) => n.type || "")
+    .filter(Boolean)
+    .sort()
+    .join(",");
 }
 
 /** Live node count when the cut's graph is the active shot tab, else null. */
