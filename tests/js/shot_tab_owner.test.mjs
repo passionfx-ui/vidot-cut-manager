@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import {
   workflowPathKey,
@@ -55,6 +56,33 @@ function comfyLoadGraphData(store, target) {
   target.unloaded = false;
   store.activePath = target.path;
 }
+
+/**
+ * ComfyUI `loadApiJson` → `afterLoadNewGraph(path string)`: a path string reuses a same-path
+ * tab only when it is unloaded or active. A path already open in the background opens a second
+ * temporary tab whose name looks like a uuid. A workflow tab object is activated in place.
+ */
+function comfyLoadApiJson(store, target) {
+  if (typeof target === "string") {
+    const full = target.startsWith("workflows/") ? target : `workflows/${target}`;
+    const existing = store.getWorkflowByPath(full);
+    if (existing && (existing.unloaded || store.activePath === existing.path)) {
+      target = existing;
+    } else if (existing) {
+      const p = "workflows/01a190d6-4d78-7760-a1af-000000000001.json";
+      target = { path: p, isTemporary: true };
+      store.lookup.set(p, target);
+    } else {
+      target = { path: full, isTemporary: false };
+      store.lookup.set(full, target);
+    }
+  }
+  if (!store.openPaths.includes(target.path)) store.openPaths.push(target.path);
+  target.unloaded = false;
+  store.activePath = target.path;
+}
+
+const UUID_TAB = /^workflows\/[0-9a-f]{8}-[0-9a-f]{4}/i;
 
 describe("workflowPathKey", () => {
   it("drops workflows/ and leading slashes, lower-cases, normalizes backslashes", () => {
@@ -140,5 +168,31 @@ describe("findWorkflowAtShotPath", () => {
     };
     assert.deepEqual(clicks(true), [2, 2, 2, 2]);
     assert.deepEqual(clicks(false), [3, 4, 5, 6]);
+  });
+
+  it("loadTarget for API reuse is the tab object at the cut path, not the path string", () => {
+    const cutTab = wf(STABLE);
+    const store = makeStore([cutTab, wf(TEMPLATE)], [STABLE, TEMPLATE], TEMPLATE);
+    const loadTarget = findWorkflowAtShotPath(store, LOAD_NAME) || LOAD_NAME;
+    assert.equal(loadTarget, cutTab);
+    comfyLoadApiJson(store, loadTarget);
+    assert.equal(store.openPaths.length, 2);
+    assert.equal(store.activePath, STABLE);
+    assert.equal(store.openPaths.some((p) => UUID_TAB.test(p)), false);
+
+    const background = makeStore([wf(STABLE), wf(TEMPLATE)], [STABLE, TEMPLATE], TEMPLATE);
+    comfyLoadApiJson(background, LOAD_NAME);
+    assert.equal(background.openPaths.length, 3);
+    assert.equal(background.openPaths.some((p) => UUID_TAB.test(p)), true);
+
+    const src = readFileSync(new URL("../../web/gonggan.js", import.meta.url), "utf8");
+    const start = src.indexOf("async function loadWorkflowIntoDedicatedTab");
+    const end = src.indexOf("\nasync function loadShotApiIntoDedicatedTab");
+    const fn = src.slice(start, end);
+    assert.match(fn, /const loadTarget = existingAtPath \|\| loadName/);
+    assert.match(fn, /await app\.loadApiJson\(workflow, loadTarget, \{ deferWarnings: true \}\)/);
+    assert.doesNotMatch(fn, /loadApiJson\(workflow, loadName/);
+    assert.equal(fn.includes("loadGraphData(workflow, true, true, loadName"), false);
+    assert.match(fn, /loadGraphData\(workflow, true, true, loadTarget, \{ deferWarnings: true \}\)/);
   });
 });

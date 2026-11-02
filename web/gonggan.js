@@ -2673,17 +2673,19 @@ async function loadWorkflowIntoDedicatedTab(workflow, cut, loadToken) {
   adoptGongganShotWorkflow(loadName);
   // The tab object, not the path: ComfyUI reuses a same-path tab for a path string only while it is active.
   const existingAtPath = findWorkflowAtShotPath(ws, loadName);
+  // ComfyUI reuses a tab when activateLoadedWorkflow gets the tab object; a path string opens a new temporary tab if that path is already open in the background (API loads used to always pass the string → uuid tab + labeled shot tab).
+  const loadTarget = existingAtPath || loadName;
   ensureWorkflowManagerActive();
   if (isLoadTokenStale(loadToken)) return false;
   const tabCountBefore = (ws?.openWorkflows || []).length;
   try {
     if (isUiWorkflowGraph(workflow)) {
       if (typeof app.loadGraphData !== "function") return false;
-      await app.loadGraphData(workflow, true, true, existingAtPath || loadName, { deferWarnings: true });
+      await app.loadGraphData(workflow, true, true, loadTarget, { deferWarnings: true });
     } else if (typeof app.loadApiJson === "function") {
-      await app.loadApiJson(workflow, loadName, { deferWarnings: true });
+      await app.loadApiJson(workflow, loadTarget, { deferWarnings: true });
     } else if (typeof app.loadGraphData === "function") {
-      await app.loadGraphData(workflow, true, true, loadName, { deferWarnings: true });
+      await app.loadGraphData(workflow, true, true, loadTarget, { deferWarnings: true });
     } else {
       return false;
     }
