@@ -1,4 +1,4 @@
-// comfyui-gonggan-cut — "Shots" sidebar tab + "Timeline" bottom panel tab.
+// comfyui-gonggan-cut — "Shots" sidebar tab + our own bottom strip (Timeline, Export).
 // Day 1: static render of real Gonggan projects/cuts (read-only). Trim/reorder come next.
 import { effectiveImageTemplate } from "./gg_project_settings_core.js";
 import {
@@ -381,6 +381,9 @@ import {
 import {
   loadTimelineOpen,
   saveTimelineOpen,
+  parseTimelineHeight,
+  clampHeight,
+  timelineHeightFromDrag,
   shouldIgnoreShortcut,
   pluginKeyScopeActive,
   timelineShortcutAllowed,
@@ -388,9 +391,7 @@ import {
 } from "./gg_timeline_toggle_core.js";
 import {
   fixedTimelineBodyHeight,
-  fixedPanelChrome,
   fixedBottomPanelHeight,
-  anchoredBottomPanelBox,
   normalModePreviewSize,
   editModeTimelineRow,
 } from "./gg_bottom_panel_layout_core.js";
@@ -7283,14 +7284,12 @@ function timelinePanelVisible() {
 }
 
 function timelineBottomTabActive() {
-  const bp = app.extensionManager?.bottomPanel;
-  if (!bp) return false;
-  return !!bp.bottomPanelVisible && bp.activeBottomPanelTabId === TIMELINE_TAB;
+  return isTimelinePanelOpen();
 }
 
+/** Timeline tab inside our strip (not the native bottom panel). */
 function isTimelinePanelOpen() {
-  const bp = app.extensionManager?.bottomPanel;
-  return !!(bp?.bottomPanelVisible && bp.activeBottomPanelTabId === TIMELINE_TAB);
+  return isOwnStripShown() && ownStripTabId === TIMELINE_TAB;
 }
 
 function shotsSidebarActive() {
@@ -7387,71 +7386,18 @@ function comfyPromptDialogOpen() {
   return !!document.querySelector(".p-dialog-mask, .p-dialog-enter-active, .p-dialog-visible");
 }
 
-let timelineHeightRestoreRaf = 0;
-let timelineHeightObserver = null;
 let timelineEditModeOn = loadEditPreviewMode(localStorage);
 let editPreviewLayoutRaf = 0;
 let editPreviewObserver = null;
 let editPreviewLoadToken = 0;
-let bottomAnchorLock = false;
-let bottomAnchorHoldOff = false;
 
-function canvasSplitter() {
-  const panel = document.querySelector(".bottom-panel");
-  const fromPanel = panel?.closest(".p-splitter");
-  if (fromPanel) return fromPanel;
-  const gutter = document.querySelector('[data-testid="graph-canvas-gutter"]');
-  return gutter?.closest(".p-splitter") || null;
-}
-
-function bottomPanelShown() {
-  return !!app.extensionManager?.bottomPanel?.bottomPanelVisible;
-}
-
-function rememberInlineStyle(el) {
-  if (!el || el.dataset.ggStyleSaved === "1") return;
-  el.dataset.ggStyleSaved = "1";
-  el.dataset.ggStylePrev = el.getAttribute("style") || "";
-}
-
-function restoreInlineStyle(el) {
-  if (!el || el.dataset.ggStyleSaved !== "1") return;
-  const prev = el.dataset.ggStylePrev || "";
-  if (prev) el.setAttribute("style", prev);
-  else el.removeAttribute("style");
-  delete el.dataset.ggStyleSaved;
-  delete el.dataset.ggStylePrev;
-}
-
-function clearAnchoredBottomPanel() {
-  document.documentElement.classList.remove("gg-bottom-anchored");
-  const panel = document.querySelector(".bottom-panel");
-  const splitter = canvasSplitter();
-  const gutter = document.querySelector('[data-testid="graph-canvas-gutter"]');
-  // Hidden panel: drop only the props we set. Restoring the saved style attribute
-  // would wipe the frontend's inline display:none and leave an empty frame.
-  if (panel && !bottomPanelShown()) {
-    for (const prop of [
-      "position", "bottom", "left", "width", "height",
-      "min-height", "max-height", "flex-shrink", "z-index", "overflow",
-    ]) panel.style.removeProperty(prop);
-    delete panel.dataset.ggStyleSaved;
-    delete panel.dataset.ggStylePrev;
-  } else {
-    restoreInlineStyle(panel);
-  }
-  restoreInlineStyle(splitter);
-  restoreInlineStyle(gutter);
-  if (panel) delete panel.dataset.ggBottomAnchor;
-}
-
-function readAnchorChrome(panel, timelineEl) {
-  const pr = panel.getBoundingClientRect();
-  const tr = timelineEl.getBoundingClientRect();
-  const tablist = panel.querySelector("[role='tablist']");
-  const tabH = tablist ? tablist.getBoundingClientRect().height : 0;
-  return fixedPanelChrome({ top: pr.top, bottom: pr.bottom }, { top: tr.top, bottom: tr.bottom }, tabH);
-}
+/** Persisted height of our strip. Separate from older gg.timelineHeight values. */
+const STRIP_HEIGHT_KEY = "gg.stripHeight";
+/** Used only before the tab row has been measured. Resize handle is 6px, tabs about 28px. */
+const STRIP_CHROME_FALLBACK = 34;
+let ownStripEl = null;
+let ownStripTabId = TIMELINE_TAB;
+let ownStripDrag = null;
 
 /** Hide the in-panel left preview in Edit mode so the timeline fills that width. */
 function applyEditModeTimelineRow(root) {
@@ -7485,123 +7431,236 @@ function applyEditModeTimelineRow(root) {
   }
 }
 
-/** Fixed height, no resize handle, glued to the screen bottom. Edit mode, Export, and Logs use the same height. */
-function applyAnchoredBottomPanel() {
-  if (bottomAnchorLock) return;
+/**
+ * I16 layout: Timeline and Export live in our strip, appended to ComfyUI's
+ * empty `#comfyui-body-bottom` slot. That slot is grid row 3 (`auto`) of
+ * `.comfyui-body`. The graph, its canvas toolbar (selection, fit, zoom, minimap),
+ * and the native Logs panel stay in row 2, so they sit above the strip in normal
+ * flow. We do not set styles on the native bottom panel, splitter, or gutter.
+ * Removing the strip lets row 3 collapse. Height is `gg.stripHeight`, or the
+ * I14 default `fixedBottomPanelHeight(tab chrome)` (already ×1.2) when unset.
+ */
+function stripHost() {
+  return document.getElementById("comfyui-body-bottom");
+}
+
+function isOwnStripShown() {
+  return !!(ownStripEl && ownStripEl.isConnected && !ownStripEl.hidden && ownStripEl.getClientRects().length > 0);
+}
+
+function loadStripHeightPx() {
+  try {
+    return parseTimelineHeight(localStorage.getItem(STRIP_HEIGHT_KEY));
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveStripHeightPx(px) {
+  try {
+    const n = Math.round(Number(px));
+    if (!Number.isFinite(n) || n <= 0) return;
+    localStorage.setItem(STRIP_HEIGHT_KEY, String(n));
+  } catch (_) {}
+}
+
+function measureStripChrome() {
+  const el = ownStripEl;
+  if (!el) return 0;
+  const resize = el.querySelector(".gg-strip-resize");
+  const tabs = el.querySelector(".gg-strip-tabs");
+  const rh = resize?.getBoundingClientRect().height || 0;
+  const th = tabs?.getBoundingClientRect().height || 0;
+  return Math.round(rh + th);
+}
+
+function defaultStripHeightPx() {
+  const chrome = measureStripChrome() || STRIP_CHROME_FALLBACK;
+  return fixedBottomPanelHeight(chrome, timelineEditModeOn);
+}
+
+function desiredStripHeight(explicitPx) {
+  const raw = explicitPx == null ? (loadStripHeightPx() ?? defaultStripHeightPx()) : explicitPx;
+  return clampHeight(raw, window.innerHeight);
+}
+
+function applyOwnStripHeight(explicitPx) {
+  const el = ownStripEl;
+  if (!el || !el.isConnected) return;
+  const next = desiredStripHeight(explicitPx);
+  el.style.height = `${next}px`;
+  el.style.flex = "0 0 auto";
+}
+
+function ownStripTop() {
+  if (!isOwnStripShown()) return null;
+  const top = ownStripEl.getBoundingClientRect().top;
+  return Number.isFinite(top) ? top : null;
+}
+
+/** Read-only. Top of the stock Logs panel when it is actually on screen. */
+function nativeBottomPanelTop() {
   const panel = document.querySelector(".bottom-panel");
-  if (!panel || !bottomPanelShown()) {
-    if (!bottomAnchorHoldOff && panel?.dataset.ggBottomAnchor === "1") clearAnchoredBottomPanel();
+  if (!panel || !panel.isConnected) return null;
+  const cs = getComputedStyle(panel);
+  if (cs.display === "none" || cs.visibility === "hidden") return null;
+  const r = panel.getBoundingClientRect();
+  if (r.height < 8 || r.width < 8) return null;
+  return r.top;
+}
+
+/**
+ * Lowest edge our overlays may use. The strip is passed only when it overlaps
+ * the graph box (fallback). In the normal slot layout the graph already ends
+ * above the strip, so this does not shrink the graph a second time.
+ */
+function overlayBottomLimit(graphRect) {
+  const caps = [];
+  const native = nativeBottomPanelTop();
+  if (native != null) caps.push(native);
+  const stripTop = ownStripTop();
+  const graphBottom = Number(graphRect?.bottom);
+  if (stripTop != null && Number.isFinite(graphBottom) && stripTop < graphBottom - 1) caps.push(stripTop);
+  if (!caps.length) return null;
+  return Math.min(...caps);
+}
+
+function refreshStripLayoutDependents() {
+  try { paintAppControls(); } catch (_) {}
+  if (timelineEditModeOn) scheduleEditPreviewLayout();
+}
+
+function syncOwnStripTabs() {
+  const el = ownStripEl;
+  if (!el) return;
+  el.querySelectorAll(".gg-strip-tab").forEach((btn) => {
+    const on = btn.dataset.tab === ownStripTabId;
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+    btn.tabIndex = on ? 0 : -1;
+  });
+  el.querySelectorAll(".gg-strip-pane").forEach((pane) => {
+    pane.hidden = pane.dataset.tab !== ownStripTabId;
+  });
+}
+
+function selectOwnStripTab(id) {
+  if (id !== TIMELINE_TAB && id !== EXPORT_TAB) return;
+  if (id === ownStripTabId) return;
+  ownStripTabId = id;
+  syncOwnStripTabs();
+  if (timelineEditModeOn) scheduleEditPreviewLayout();
+}
+
+function wireOwnStrip(el) {
+  el.querySelectorAll(".gg-strip-tab").forEach((btn) => {
+    btn.addEventListener("click", () => selectOwnStripTab(btn.dataset.tab));
+  });
+  el.querySelector(".gg-strip-close")?.addEventListener("click", () => setTimelineUserOpen(false));
+  const handle = el.querySelector(".gg-strip-resize");
+  handle?.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startH = el.getBoundingClientRect().height;
+    const startY = e.clientY;
+    ownStripDrag = { startH, startY };
+    try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+    const move = (ev) => {
+      if (!ownStripDrag) return;
+      applyOwnStripHeight(timelineHeightFromDrag(ownStripDrag.startH, ev.clientY - ownStripDrag.startY, window.innerHeight));
+      refreshStripLayoutDependents();
+    };
+    const end = (ev) => {
+      if (!ownStripDrag) return;
+      const h = timelineHeightFromDrag(ownStripDrag.startH, (ev.clientY || startY) - ownStripDrag.startY, window.innerHeight);
+      ownStripDrag = null;
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      applyOwnStripHeight(h);
+      saveStripHeightPx(desiredStripHeight(h));
+      refreshStripLayoutDependents();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  });
+}
+
+function ensureOwnStrip() {
+  if (ownStripEl) return ownStripEl;
+  const host = stripHost();
+  if (!host) return null;
+  const el = document.createElement("div");
+  el.className = "gg-bottom-strip";
+  el.setAttribute("role", "region");
+  el.setAttribute("aria-label", "Cut Manager");
+  el.innerHTML = `
+    <div class="gg-strip-resize" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
+    <div class="gg-strip-tabs" role="tablist" aria-label="Cut Manager">
+      <button type="button" class="gg-strip-tab" role="tab" data-tab="${TIMELINE_TAB}" aria-selected="true">Timeline</button>
+      <button type="button" class="gg-strip-tab" role="tab" data-tab="${EXPORT_TAB}" aria-selected="false">${EXPORT_TAB_TITLE}</button>
+      <button type="button" class="gg-strip-close" aria-label="Collapse" title="Collapse">×</button>
+    </div>
+    <div class="gg-strip-body"></div>`;
+  const body = el.querySelector(".gg-strip-body");
+  for (const tab of [
+    { id: TIMELINE_TAB, mount: mountTimeline },
+    { id: EXPORT_TAB, mount: mountExport },
+  ]) {
+    const pane = document.createElement("div");
+    pane.className = "gg-strip-pane";
+    pane.dataset.tab = tab.id;
+    pane.setAttribute("role", "tabpanel");
+    pane.hidden = tab.id !== ownStripTabId;
+    body.appendChild(pane);
+    tab.mount(pane);
+  }
+  wireOwnStrip(el);
+  ownStripEl = el;
+  host.appendChild(el);
+  syncOwnStripTabs();
+  return el;
+}
+
+function showOwnStrip(tries = 0) {
+  if (!loadTimelineOpen(localStorage)) return;
+  if (!stripHost()) {
+    if (tries < 30) requestAnimationFrame(() => showOwnStrip(tries + 1));
     return;
   }
-  if (bottomAnchorHoldOff && isTimelinePanelOpen()) return;
-  const timelineEl = document.querySelector(".gg-timeline");
-  const timelineVisible = !!(timelineEl && timelineEl.getClientRects().length);
-  let chrome = 0;
-  if (timelineVisible) {
-    chrome = readAnchorChrome(panel, timelineEl);
-    if (chrome > 0) panel.dataset.ggAnchorChrome = String(chrome);
-  } else {
-    const cached = Number(panel.dataset.ggAnchorChrome);
-    if (Number.isFinite(cached) && cached > 0) chrome = cached;
-    else {
-      const tablist = panel.querySelector("[role='tablist']");
-      chrome = tablist ? Math.round(tablist.getBoundingClientRect().height) : 0;
-    }
-  }
-  const panelH = fixedBottomPanelHeight(chrome, timelineEditModeOn);
-  const body = Math.max(fixedTimelineBodyHeight(), panelH - chrome);
-  const splitter = canvasSplitter();
-  const sr = splitter?.getBoundingClientRect();
-  const pr = panel.getBoundingClientRect();
-  const box = anchoredBottomPanelBox({
-    viewportHeight: window.innerHeight,
-    height: panelH,
-    left: sr && sr.width > 8 ? sr.left : pr.left,
-    width: sr && sr.width > 8 ? sr.width : pr.width,
+  const el = ensureOwnStrip();
+  if (!el) return;
+  const host = stripHost();
+  if (el.parentElement !== host) host.appendChild(el);
+  el.hidden = false;
+  applyOwnStripHeight();
+  syncOwnStripTabs();
+  requestAnimationFrame(() => {
+    if (!isOwnStripShown()) return;
+    if (loadStripHeightPx() == null) applyOwnStripHeight();
+    refreshStripLayoutDependents();
   });
-  if (box.width < 8) return;
-  const padOk = !splitter || (parseFloat(splitter.style.paddingBottom) || 0) === box.height;
-  const placed =
-    panel.dataset.ggBottomAnchor === "1" &&
-    Math.abs(pr.height - box.height) <= 1 &&
-    Math.abs(pr.left - box.left) <= 1 &&
-    Math.abs(pr.width - box.width) <= 1 &&
-    Math.abs(window.innerHeight - pr.bottom - box.bottom) <= 1;
-  const timelineSized = !timelineVisible || Math.abs((parseFloat(timelineEl.style.height) || 0) - body) <= 0.5;
-  if (placed && timelineSized && padOk) return;
-  bottomAnchorLock = true;
-  try {
-    if (timelineVisible) {
-      timelineEl.style.height = `${body}px`;
-      timelineEl.style.minHeight = `${body}px`;
-      timelineEl.style.maxHeight = `${body}px`;
-      timelineEl.style.flex = "0 0 auto";
-    }
-    rememberInlineStyle(panel);
-    rememberInlineStyle(splitter);
-    panel.dataset.ggBottomAnchor = "1";
-    panel.style.setProperty("position", box.position, "important");
-    panel.style.setProperty("bottom", `${box.bottom}px`, "important");
-    panel.style.setProperty("left", `${box.left}px`, "important");
-    panel.style.setProperty("width", `${box.width}px`, "important");
-    panel.style.setProperty("height", `${box.height}px`, "important");
-    panel.style.setProperty("min-height", `${box.height}px`, "important");
-    panel.style.setProperty("max-height", `${box.height}px`, "important");
-    panel.style.setProperty("flex-shrink", "0", "important");
-    panel.style.setProperty("z-index", "20", "important");
-    panel.style.setProperty("overflow", "auto", "important");
-    document.documentElement.classList.add("gg-bottom-anchored");
-    if (splitter) {
-      splitter.style.setProperty("box-sizing", "border-box", "important");
-      splitter.style.setProperty("padding-bottom", `${box.height}px`, "important");
-    }
-    const gutter = document.querySelector('[data-testid="graph-canvas-gutter"]');
-    if (gutter) {
-      rememberInlineStyle(gutter);
-      gutter.style.setProperty("pointer-events", "none", "important");
-      gutter.style.setProperty("flex-basis", "0px", "important");
-      gutter.style.setProperty("height", "0px", "important");
-      gutter.style.setProperty("min-height", "0px", "important");
-      gutter.style.setProperty("overflow", "hidden", "important");
-      gutter.style.setProperty("margin", "0", "important");
-    }
-  } finally {
-    bottomAnchorLock = false;
-  }
+  refreshStripLayoutDependents();
+}
+
+function hideOwnStrip() {
+  if (!ownStripEl) return;
+  ownStripDrag = null;
+  ownStripEl.remove();
+  refreshStripLayoutDependents();
 }
 
 function scheduleRestoreTimelinePanelHeight() {
-  cancelAnimationFrame(timelineHeightRestoreRaf);
-  let frames = 0;
-  const step = () => {
-    applyAnchoredBottomPanel();
-    frames += 1;
-    if (frames < 12) timelineHeightRestoreRaf = requestAnimationFrame(step);
-  };
-  timelineHeightRestoreRaf = requestAnimationFrame(step);
+  if (!isOwnStripShown()) return;
+  applyOwnStripHeight();
 }
 
-function startTimelineHeightObserver() {
-  if (timelineHeightObserver) return;
-  const panel = document.querySelector(".bottom-panel");
-  if (!panel || !window.ResizeObserver) return;
-  timelineHeightObserver = new ResizeObserver(() => {
-    if (bottomAnchorLock || bottomAnchorHoldOff) return;
-    if (!bottomPanelShown()) {
-      if (panel.dataset.ggBottomAnchor === "1") clearAnchoredBottomPanel();
-      return;
-    }
-    applyAnchoredBottomPanel();
-  });
-  timelineHeightObserver.observe(panel);
-  const splitter = canvasSplitter();
-  if (splitter) timelineHeightObserver.observe(splitter);
-}
-
-if (!globalThis.__ggBottomPanelAnchorResize) {
-  globalThis.__ggBottomPanelAnchorResize = true;
+if (!globalThis.__ggOwnStripResize) {
+  globalThis.__ggOwnStripResize = true;
   window.addEventListener("resize", () => {
-    applyAnchoredBottomPanel();
+    if (!isOwnStripShown()) return;
+    applyOwnStripHeight();
+    refreshStripLayoutDependents();
   });
 }
 
@@ -7615,16 +7674,8 @@ function syncTimelineToggleButtons() {
 }
 
 function openTimelinePanelInternal() {
-  bottomAnchorHoldOff = false;
-  const cmd = app.extensionManager?.command;
-  if (!cmd?.execute) return;
-  if (isTimelinePanelOpen()) {
-    scheduleRestoreTimelinePanelHeight();
-    return;
-  }
-  cmd.execute(`Workspace.ToggleBottomPanelTab.${TIMELINE_TAB}`);
-  scheduleRestoreTimelinePanelHeight();
-  requestAnimationFrame(startTimelineHeightObserver);
+  ownStripTabId = TIMELINE_TAB;
+  showOwnStrip();
 }
 
 function openTimelinePanelIfAllowed() {
@@ -7633,13 +7684,7 @@ function openTimelinePanelIfAllowed() {
 }
 
 function closeTimelinePanel() {
-  const cmd = app.extensionManager?.command;
-  if (!cmd?.execute) return;
-  if (!isTimelinePanelOpen()) return;
-  bottomAnchorHoldOff = true;
-  cancelAnimationFrame(timelineHeightRestoreRaf);
-  clearAnchoredBottomPanel();
-  cmd.execute(`Workspace.ToggleBottomPanelTab.${TIMELINE_TAB}`);
+  hideOwnStrip();
 }
 
 function setTimelineUserOpen(open) {
@@ -9423,8 +9468,6 @@ function placeAppControls(el) {
   const toolbarBottom = measureEditPreviewToolbarBottom(graph);
   const sides = measureEditPreviewSides(graph);
   const docker = measureRightDockerLeft(graph, toolbarBottom);
-  const panel = document.querySelector(".bottom-panel");
-  const bottomTop = panel && bottomPanelShown() ? panel.getBoundingClientRect().top : null;
   const shots = document.querySelector(".gg-root.gg-shots");
   const area = editPreviewOverlayRect({
     graphRect: graph,
@@ -9432,14 +9475,18 @@ function placeAppControls(el) {
     shotsRect: shots ? shots.getBoundingClientRect() : null,
     rightPanelLeft: sides.right,
     rightDockerLeft: docker,
-    bottomPanelTop: bottomTop,
+    bottomPanelTop: overlayBottomLimit(graph),
   });
   if (!area) return false;
   const width = Math.min(240, Math.max(168, Math.round(area.width * 0.32)));
-  el.style.top = `${Math.round(area.top + 8)}px`;
+  const top = Math.round(area.top + 8);
+  el.style.top = `${top}px`;
   el.style.left = `${Math.round(area.right - width - 8)}px`;
   el.style.width = `${width}px`;
-  el.style.maxHeight = `${Math.max(72, Math.round(area.height - 16))}px`;
+  let maxH = Math.max(72, Math.round(area.height - 16));
+  const stripTop = ownStripTop();
+  if (stripTop != null) maxH = Math.min(maxH, Math.max(72, Math.round(stripTop - top - 8)));
+  el.style.maxHeight = `${maxH}px`;
   return true;
 }
 
@@ -11927,6 +11974,8 @@ function bindEditPreviewObserver() {
   const watch = (el) => { if (el) editPreviewObserver.observe(el); };
   watch(graphWorkAreaElement());
   watch(document.querySelector(".bottom-panel"));
+  watch(document.querySelector(".gg-bottom-strip"));
+  watch(document.getElementById("comfyui-body-bottom"));
   watch(document.querySelector(".gg-root.gg-shots"));
   for (const pane of document.querySelectorAll(".p-splitterpanel")) watch(pane);
   const wfTab = document.querySelector('[data-testid="workflow-tab"]');
@@ -11946,9 +11995,7 @@ function applyEditPreviewLayout() {
     return;
   }
   const graph = editPreviewBox(graphWorkAreaElement());
-  const panel = document.querySelector(".bottom-panel");
-  const panelBox = panel?.getBoundingClientRect();
-  if (!graph || !panelBox || panelBox.height < 8) {
+  if (!graph) {
     document.querySelector(".gg-edit-preview")?.remove();
     return;
   }
@@ -11960,7 +12007,7 @@ function applyEditPreviewLayout() {
     shotsRect: sides.left != null ? { right: sides.left, width: 100 } : null,
     rightPanelLeft: sides.right,
     rightDockerLeft: measureRightDockerLeft(graph, toolbarBottom ?? graph.top),
-    bottomPanelTop: panelBox.top,
+    bottomPanelTop: overlayBottomLimit(graph),
   });
   if (!rect) {
     document.querySelector(".gg-edit-preview")?.remove();
@@ -12059,11 +12106,6 @@ function mountTimeline(el) {
   const root = document.createElement("div");
   root.className = "gg-root gg-timeline";
   root.tabIndex = -1;
-  const timelineBodyPx = fixedTimelineBodyHeight();
-  root.style.height = `${timelineBodyPx}px`;
-  root.style.minHeight = `${timelineBodyPx}px`;
-  root.style.maxHeight = `${timelineBodyPx}px`;
-  root.style.flex = "0 0 auto";
   el.appendChild(root);
   root.innerHTML = `
     <div class="gg-tl-main">
@@ -12684,10 +12726,6 @@ function bindHoverPlay(root) {
 
 app.registerExtension({
   name: EXT,
-  bottomPanelTabs: [
-    { id: TIMELINE_TAB, title: "Timeline", type: "custom", icon: "pi pi-video", render: (el) => mountTimeline(el) },
-    { id: EXPORT_TAB, title: EXPORT_TAB_TITLE, type: "custom", icon: "pi pi-download", render: (el) => mountExport(el) },
-  ],
   async setup() {
     globalThis.__gongganCutAutosaveOnSwitch = "0.8.2";
     globalThis.__gongganProjectFolders = "0.8.2";
@@ -12716,10 +12754,9 @@ app.registerExtension({
     } else {
       syncTimelineToggleButtons();
       queueMicrotask(() => {
-        if (loadTimelineOpen(localStorage) && isTimelinePanelOpen()) scheduleRestoreTimelinePanelHeight();
+        if (loadTimelineOpen(localStorage) && isOwnStripShown()) scheduleRestoreTimelinePanelHeight();
       });
     }
-    requestAnimationFrame(startTimelineHeightObserver);
     let lastShotTabActive = isGongganShotTabOpenAndActive();
     setInterval(() => {
       const active = isGongganShotTabOpenAndActive();
@@ -12828,23 +12865,3 @@ app.registerExtension({
     });
   },
 });
-
-/* I2c: native bottom-panel X leaves our anchored (fixed) frame behind; clear it when the timeline tab is no longer shown. */
-if (!globalThis.__ggBottomPanelCloseWatch) {
-  globalThis.__ggBottomPanelCloseWatch = setInterval(() => {
-    try {
-      const panel = document.querySelector(".bottom-panel");
-      if (!panel) return;
-      if (bottomPanelShown()) {
-        applyAnchoredBottomPanel();
-        return;
-      }
-      if (panel.dataset.ggBottomAnchor !== "1") return;
-      clearAnchoredBottomPanel();
-      if (!app.extensionManager?.bottomPanel?.bottomPanelVisible && loadTimelineOpen(localStorage)) {
-        saveTimelineOpen(localStorage, false);
-        syncTimelineToggleButtons();
-      }
-    } catch (_) {}
-  }, 300);
-}
