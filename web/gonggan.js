@@ -1395,10 +1395,16 @@ function openFolderPicker(startValue, onSelect) {
         view.drives.length ? `<li class="gg-fp-side-head">Drives</li>` : "",
         ...view.drives.map((p) => place(p, "gg-fp-drive")),
       ].join("");
+    const parentRow = view?.parentEntry
+      ? `<li role="option" class="gg-fp-item gg-fp-parent" data-up="1" title="${esc(view.parentEntry.path)}">${esc(view.parentEntry.name)}</li>`
+      : "";
+    const itemRows = view?.items.length
+      ? view.items.map((it, i) => `<li role="option" class="gg-fp-item" data-i="${i}" title="${esc(it.path)}">${esc(it.name)}</li>`).join("")
+      : "";
     listEl.innerHTML = !view
       ? ""
-      : view.items.length
-        ? view.items.map((it, i) => `<li role="option" class="gg-fp-item" data-i="${i}" title="${esc(it.path)}">${esc(it.name)}</li>`).join("")
+      : (parentRow || itemRows)
+        ? parentRow + itemRows
         : `<li class="gg-fp-empty">No folders</li>`;
     listEl.scrollTop = 0;
     syncButtons();
@@ -1454,7 +1460,12 @@ function openFolderPicker(startValue, onSelect) {
   });
   listEl.addEventListener("click", (e) => {
     const li = e.target.closest?.(".gg-fp-item");
-    const it = li && view?.items[Number(li.dataset.i)];
+    if (!li) return;
+    if (li.dataset.up && view?.parentEntry) {
+      void load([view.parentEntry.path]);
+      return;
+    }
+    const it = view?.items[Number(li.dataset.i)];
     if (it) void load([it.path]);
   });
   upBtn.addEventListener("click", () => { if (view?.canUp) void load([view.parent]); });

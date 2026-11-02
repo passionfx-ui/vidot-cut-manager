@@ -223,3 +223,46 @@ describe("folder pickers list folders only (0.9.125)", () => {
     assert.match(body, /gg-fp-select[^>]*>Select this folder</);
   });
 });
+
+describe("folder picker parent entry (I1)", () => {
+  it("shows ../ at the top of the folder list and hides it at a drive or filesystem root", () => {
+    const nested = folderPickerView({ path: "D:\\Films\\My Film", parent: "D:\\Films", folders: ["A", "B c"] });
+    assert.deepEqual(nested.parentEntry, { name: "../", path: "D:\\Films" });
+    assert.deepEqual(nested.items, [
+      { name: "A", path: "D:\\Films\\My Film\\A" },
+      { name: "B c", path: "D:\\Films\\My Film\\B c" },
+    ]);
+    assert.equal(folderPickTarget(nested, 0), "D:\\Films\\My Film\\A", "child selection index stays on the first folder");
+    assert.equal(folderPickTarget(nested, -1), "D:\\Films\\My Film");
+
+    const posix = folderPickerView({ path: "/home/a", parent: "/home", folders: ["docs"] });
+    assert.deepEqual(posix.parentEntry, { name: "../", path: "/home" });
+    assert.deepEqual(posix.items, [{ name: "docs", path: "/home/a/docs" }]);
+
+    const empty = folderPickerView({ path: "D:\\Films\\Empty", parent: "D:\\Films", folders: [] });
+    assert.deepEqual(empty.parentEntry, { name: "../", path: "D:\\Films" });
+    assert.deepEqual(empty.items, []);
+
+    const drive = folderPickerView({ path: "C:\\", parent: "", folders: ["Users"] });
+    assert.equal(drive.parentEntry, null);
+    assert.deepEqual(drive.items.map((it) => it.name), ["Users"]);
+    assert.equal(drive.canUp, true);
+
+    const slash = folderPickerView({ path: "/", parent: "", folders: ["home"] });
+    assert.equal(slash.parentEntry, null);
+    assert.deepEqual(slash.items.map((it) => it.name), ["home"]);
+
+    const drives = folderPickerView({ path: "", parent: null, folders: ["C:\\", "D:\\"] });
+    assert.equal(drives.parentEntry, null);
+    assert.deepEqual(drives.items.map((it) => it.path), ["C:\\", "D:\\"]);
+    assert.equal(folderPickerView(null).parentEntry, null);
+
+    const picker = GONGGAN_JS.slice(GONGGAN_JS.indexOf("function openFolderPicker("));
+    const body = picker.slice(0, picker.indexOf("\nfunction openProjectSettingsModal"));
+    assert.match(body, /parentEntry/);
+    assert.match(body, /gg-fp-parent/);
+    assert.match(body, /void load\(\[view\.parentEntry\.path\]\)/);
+    assert.match(body, /listEl\.addEventListener\("click"[\s\S]*void load\(\[it\.path\]\)/);
+    assert.doesNotMatch(body, /listEl\.addEventListener\("dblclick"/);
+  });
+});

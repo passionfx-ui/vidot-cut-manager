@@ -120,6 +120,20 @@ export function folderNames(folders, path) {
 }
 
 /**
+ * "../" row at the top of the folder list. Hidden on the drive list and at a drive or filesystem root
+ * (parent is null or "").
+ * @returns {{ name: "../", path: string }|null}
+ */
+function folderPickerParentEntry(path, parent) {
+  if (parent == null) return null;
+  const up = String(parent);
+  if (!up) return null;
+  const here = String(path ?? "");
+  if (!here || /^[a-zA-Z]:[\\/]*$/.test(here) || /^[\\/]+$/.test(here)) return null;
+  return { name: "../", path: up };
+}
+
+/**
  * @param {{ path?: string, parent?: string|null, folders?: string[], quick?: object[], drives?: string[] }|null|undefined} data
  *   GET /gonggan/folder/list body
  * @param {string} [lastUsed] last-used location, listed under the quick folders
@@ -132,6 +146,7 @@ export function folderPickerView(data, lastUsed) {
     path,
     parent,
     canUp: path !== "" && parent !== null,
+    parentEntry: folderPickerParentEntry(path, parent),
     items: names.map((name) => ({ name, path: joinFolderPath(path, name) })),
     ...folderPickerPlaces(data, lastUsed),
   };
