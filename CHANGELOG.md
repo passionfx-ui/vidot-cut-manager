@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.9.139 — 2026-11-02
+## 0.9.139 (beta) - 2026-11-02
+
+> Cut Manager is still in beta. Please report issues on GitHub.
 
 A large UI polish release on top of 0.9.137. No changes to saved project data; existing projects open as before.
 
