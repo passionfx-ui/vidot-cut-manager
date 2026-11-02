@@ -56,7 +56,7 @@ import {
   trimToSource,
   appliedTrimDelta,
 } from "./gg_trim_core.js";
-import { GAP, layoutTrack, clipAtTime, edgeSnapTargets, snapMoveStart, placeClip, prevClipEnd } from "./gg_tl_place_core.js";
+import { GAP, layoutTrack, clipAtTime, edgeSnapTargets, snapMoveStart, prevClipEnd, moveClipBlock, placeSelection, closeGaps } from "./gg_tl_place_core.js";
 import {
   movedToTrashToastMessage,
   deleteCutsConfirmMessage,
@@ -5382,7 +5382,11 @@ async function runShotsStep(step, pid) {
 }
 
 function historyCurrentFor(step) {
-  if (step?.scope === "timeline") return snapshotTimelineEdit(state.timeline);
+  if (step?.scope === "timeline") {
+    const snap = snapshotTimelineEdit(state.timeline);
+    if (snap && step.entry?.list) snap.list = snapshotOrderGroups(state.timeline);
+    return snap;
+  }
   const layout = snapshotOrderGroups(state.timeline);
   return step?.entry?.kind ? shotsCounterpart(step.entry, layout) : layout;
 }
@@ -5401,7 +5405,13 @@ async function applyHistoryStep(step, action) {
     if (!snap || !applyTimelineSnapshot(state.timeline, snap)) return false;
     recomputeCutStarts();
     play.idx = -1;
-    scheduleSave();
+    if (snap.list && Array.isArray(snap.list.order)) {
+      clearTimeout(ed.saveTimer);
+      ed.savePending = true;
+      await enqueueReorderPersist(() => persistShotsReorder(snap.list.order, snap.list.groups || []));
+    } else {
+      scheduleSave();
+    }
     bus.dispatchEvent(new Event("timeline"));
     return true;
   }
@@ -10929,6 +10939,7 @@ const ed = {
   saveTimer: 0,
   saving: false,
   dragging: false,
+  lastSaveOk: true,
   scrubbing: false,
   scrubResumePlay: false,
   tlResizing: false,
@@ -10997,7 +11008,10 @@ function scheduleSave() {
 /** `before` = snapshotTimelineEdit() taken before the edit; recorded only if the edit changed something. */
 function recordTimelineUndo(before, label = "Edit timeline") {
   if (!before || !state.timeline || historyApplying) return;
-  if (sameSnapshot(before, snapshotTimelineEdit(state.timeline))) return;
+  const now = snapshotTimelineEdit(state.timeline);
+  if (!now) return;
+  if (before.list) now.list = snapshotOrderGroups(state.timeline);
+  if (sameSnapshot(before, now)) return;
   recordProjectStep(state.pid, { label, scope: "timeline", entry: before });
 }
 
@@ -11050,6 +11064,7 @@ async function saveEditNow() {
     state.error = sentence("Timeline not saved: " + e.message, "Your change is still on screen. Edit again to retry.");
   }
   ed.saving = false;
+  ed.lastSaveOk = ok;
   bus.dispatchEvent(new Event("timeline"));
   return ok;
 }
@@ -11684,6 +11699,126 @@ function bindTrim(root) {
   });
 }
 
+/** Ids that move together: the multi-selection when it contains the clip, otherwise that clip alone. */
+function timelineGestureIds(anchorId) {
+  const order = trackClips().map((c) => c.id);
+  if (state.cutSel.size > 1 && state.cutSel.has(anchorId)) return order.filter((id) => state.cutSel.has(id));
+  return anchorId ? [anchorId] : [];
+}
+
+function clearTimelineMultiSelection() {
+  if (!state.cutSel.size) return;
+  state.cutSel.clear();
+  cutSelAnchor = "";
+  bus.dispatchEvent(new Event("select"));
+}
+
+/** Shift selects a range in track order. Ctrl/Cmd toggles. A plain click keeps single-cut select. */
+function selectTimelineCut(cutId, ev) {
+  if (ev && ev.shiftKey) {
+    selectTimelineRange(cutId);
+    return;
+  }
+  selectCut(cutId, { multi: !!(ev && (ev.ctrlKey || ev.metaKey)), fromTimeline: true });
+}
+
+function selectTimelineRange(toId) {
+  const order = trackClips().map((c) => c.id);
+  const anchor = cutSelAnchor || state.cutId || toId;
+  const i = order.indexOf(anchor);
+  const j = order.indexOf(toId);
+  if (i < 0 || j < 0) {
+    selectCut(toId, { fromTimeline: true });
+    return;
+  }
+  const lo = Math.min(i, j);
+  const hi = Math.max(i, j);
+  state.cutSel.clear();
+  for (let k = lo; k <= hi; k++) state.cutSel.add(order[k]);
+  state.cutId = toId;
+  cutSelAnchor = anchor;
+  bus.dispatchEvent(new Event("select"));
+  const t = clipStartOf(toId);
+  if (t != null && !play.on) {
+    play.idx = -1;
+    seek(t + 0.001);
+  }
+}
+
+function setTimelineSelection(ids) {
+  const order = trackClips().map((c) => c.id);
+  const have = new Set(ids || []);
+  const picked = order.filter((id) => have.has(id));
+  state.cutSel.clear();
+  for (const id of picked) state.cutSel.add(id);
+  if (picked.length) {
+    state.cutId = picked[picked.length - 1];
+    cutSelAnchor = picked[0];
+  } else {
+    cutSelAnchor = "";
+  }
+  bus.dispatchEvent(new Event("select"));
+}
+
+function markMovingClips(root, ids, on) {
+  for (const id of ids || []) {
+    root.querySelector(`.gg-clip[data-cut-id="${CSS.escape(id)}"]`)?.classList.toggle("gg-moving", !!on);
+  }
+}
+
+/**
+ * After a timeline placement. `before` is snapshotTimelineEdit taken before the change.
+ * Several clips whose order changed also rewrite the Shots list (native Apply Order) and one undo step.
+ */
+function commitTimelinePlacement(before, label, { syncList = false } = {}) {
+  const tl = state.timeline;
+  if (!tl) return;
+  const entry = syncList ? { ...before, list: snapshotOrderGroups(tl) } : before;
+  recordTimelineUndo(entry, label);
+  play.idx = -1;
+  if (!syncList || !isNativeProject()) {
+    scheduleSave();
+    return;
+  }
+  const pid = tl.project.id;
+  clearTimeout(ed.saveTimer);
+  ed.savePending = true;
+  enqueueReorderPersist(async () => {
+    try {
+      if (!ed.lastSaveOk || state.pid !== pid) return false;
+      const data = await postJson("/gonggan/timeline/apply_order", { pid });
+      editGate.bump();
+      if (state.pid === pid) adoptMutationTimeline(data, pid);
+      state.error = "";
+      return true;
+    } catch (e) {
+      ggToast("Cut list", e.message || "Could not update the cut list", "warn");
+      return false;
+    } finally {
+      bus.dispatchEvent(new Event("timeline"));
+      bus.dispatchEvent(new Event("select"));
+    }
+  });
+}
+
+/** Pack out empty space. A multi-selection packs that span; otherwise the whole track from 0. */
+function removeTimelineGaps() {
+  const tl = state.timeline;
+  if (!tl || ed.dragging) return;
+  const clips = trackClips();
+  if (!clips.length) return;
+  const selected = state.cutSel.size ? clips.map((c) => c.id).filter((id) => state.cutSel.has(id)) : null;
+  const res = closeGaps(clips, selected);
+  if (!res.changed) return;
+  const before = snapshotTimelineEdit(tl);
+  for (const c of clips) if (res.starts[c.id] != null) c.start = res.starts[c.id];
+  recomputeCutStarts();
+  recordTimelineUndo(before, "Remove gaps");
+  play.idx = -1;
+  scheduleSave();
+  bus.dispatchEvent(new Event("timeline"));
+}
+
 // ---- reorder (pointer-based; ComfyUI owns HTML5 drop for workflow files) ----
 function bindReorder(root) {
   if (isFreeTrack()) { bindMove(root); return; }
@@ -11695,6 +11830,7 @@ function bindReorder(root) {
       if (clipPointerIsPlayheadScrub(root, e.clientX)) return;
       const startX = e.clientX, startY = e.clientY;
       let active = false, target = -1;
+      let movingIds = [el.dataset.cutId];
       const cuts = cutsNow();
       const from = cuts.findIndex((x) => x.id === el.dataset.cutId);
       const slot = (x) => {
@@ -11709,25 +11845,33 @@ function bindReorder(root) {
       };
       const move = (ev) => {
         if (!active && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
-        if (!active) { active = true; ed.dragging = true; el.classList.add("gg-moving"); try { el.setPointerCapture(e.pointerId); } catch (_) {} }
+        if (!active) {
+          active = true;
+          ed.dragging = true;
+          movingIds = timelineGestureIds(el.dataset.cutId);
+          markMovingClips(root, movingIds, true);
+          try { el.setPointerCapture(e.pointerId); } catch (_) {}
+        }
         target = slot(ev.clientX);
         marker.hidden = false;
         marker.style.left = startOf(target) * ed.px + "px";
       };
-      const up = () => {
+      const up = (ev) => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
         window.removeEventListener("pointercancel", up);
         marker.hidden = true;
-        el.classList.remove("gg-moving");
-        if (!active) { selectCut(el.dataset.cutId, { fromTimeline: true }); return; }
+        markMovingClips(root, movingIds, false);
+        if (!active) { selectTimelineCut(el.dataset.cutId, ev); return; }
         ed.dragging = false;
-        if (target >= 0 && target !== from && target !== from + 1) {
+        const ids = cuts.map((c) => c.id);
+        const next = moveClipBlock(ids, movingIds, target);
+        if (next.join() !== ids.join()) {
           const before = snapshotTimelineEdit(state.timeline);
-          const [m] = cuts.splice(from, 1);
-          cuts.splice(target > from ? target - 1 : target, 0, m);
+          const byId = new Map(cuts.map((c) => [c.id, c]));
+          cuts.splice(0, cuts.length, ...next.map((id) => byId.get(id)).filter(Boolean));
           cuts.forEach((c, i) => { c.pos = i; });
-          recordTimelineUndo(before, "Reorder clips");
+          recordTimelineUndo(before, movingIds.length > 1 ? "Move clips" : "Reorder clips");
           play.idx = -1;
           scheduleSave();
         }
@@ -11740,7 +11884,7 @@ function bindReorder(root) {
   });
 }
 
-/** Native timeline: drag a clip to any time (gap left behind), snapping to clip edges / playhead, never overlapping. */
+/** Native timeline: drag a clip (or the whole selection) in time. A gap stays behind unless the drop lands on another clip. */
 function bindMove(root) {
   const marker = root.querySelector(".gg-drop");
   root.querySelectorAll(".gg-clip").forEach((el) => {
@@ -11749,42 +11893,61 @@ function bindMove(root) {
       if (clipPointerIsPlayheadScrub(root, e.clientX)) return;
       const startX = e.clientX, startY = e.clientY;
       const clips = trackClips();
-      const idx = clips.findIndex((x) => x.id === el.dataset.cutId);
+      const anchorId = el.dataset.cutId;
+      const idx = clips.findIndex((x) => x.id === anchorId);
       if (idx < 0) return;
       const c = clips[idx];
       const start0 = startOf(idx);
-      const targets = edgeSnapTargets(clips, idx, play.t);
+      let movingIds = [anchorId];
+      let targets = edgeSnapTargets(clips, idx, play.t);
       let active = false, res = null;
       const move = (ev) => {
         if (!active && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 6) return;
-        if (!active) { active = true; ed.dragging = true; el.classList.add("gg-moving"); try { el.setPointerCapture(e.pointerId); } catch (_) {} }
+        if (!active) {
+          active = true;
+          ed.dragging = true;
+          movingIds = timelineGestureIds(anchorId);
+          targets = edgeSnapTargets(clips, idx, play.t, movingIds);
+          markMovingClips(root, movingIds, true);
+          try { el.setPointerCapture(e.pointerId); } catch (_) {}
+        }
         const snap = snapMoveStart(start0 + (ev.clientX - startX) / ed.px, c.sec, targets, TRIM_SNAP_PX / ed.px);
-        res = placeClip(clips, idx, snap.start);
-        el.style.transform = `translateX(${(res.start - start0) * ed.px}px)`;
+        res = placeSelection(clips, movingIds, anchorId, snap.start);
+        for (const id of movingIds) {
+          const node = root.querySelector(`.gg-clip[data-cut-id="${CSS.escape(id)}"]`);
+          const old = clips.find((x) => x.id === id);
+          if (!node || !old || res.starts[id] == null) continue;
+          node.style.transform = `translateX(${(res.starts[id] - (Number(old.start) || 0)) * ed.px}px)`;
+        }
         const snapped = snap.hit != null && Math.abs(res.start - snap.start) < 0.011;
         marker.classList.toggle("gg-snap-hit", snapped);
         marker.hidden = !snapped;
         if (snapped) marker.style.left = snap.hit * ed.px + "px";
       };
-      const up = () => {
+      const up = (ev) => {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
         window.removeEventListener("pointercancel", up);
         marker.hidden = true;
         marker.classList.remove("gg-snap-hit");
-        el.classList.remove("gg-moving");
-        el.style.transform = "";
-        if (!active) { selectCut(el.dataset.cutId, { fromTimeline: true }); return; }
+        markMovingClips(root, movingIds, false);
+        for (const id of movingIds) {
+          const node = root.querySelector(`.gg-clip[data-cut-id="${CSS.escape(id)}"]`);
+          if (node) node.style.transform = "";
+        }
+        if (!active) { selectTimelineCut(anchorId, ev); return; }
         ed.dragging = false;
         const tl = state.timeline;
-        if (res && tl && (res.start !== start0 || res.order.join() !== clips.map((x) => x.id).join())) {
+        const beforeOrder = clips.map((x) => x.id).join();
+        if (res && tl && (res.start !== start0 || res.order.join() !== beforeOrder)) {
           const before = snapshotTimelineEdit(tl);
           tl.track_order = res.order;
           for (const x of clips) if (res.starts[x.id] != null) x.start = res.starts[x.id];
           recomputeCutStarts();
-          recordTimelineUndo(before, "Move clip");
-          play.idx = -1;
-          scheduleSave();
+          const orderChanged = res.order.join() !== beforeOrder;
+          commitTimelinePlacement(before, movingIds.length > 1 ? "Move clips" : "Move clip", {
+            syncList: movingIds.length > 1 && orderChanged && isNativeProject(),
+          });
         }
         bus.dispatchEvent(new Event("timeline"));
       };
@@ -11792,6 +11955,69 @@ function bindMove(root) {
       window.addEventListener("pointerup", up);
       window.addEventListener("pointercancel", up);
     });
+  });
+}
+
+/** Drag a box on empty track to select clips. A click with no box clears the multi-selection. */
+function bindTimelineMarquee(root) {
+  const track = root.querySelector(".gg-track");
+  if (!track || track.dataset.marquee) return;
+  track.dataset.marquee = "1";
+  track.addEventListener("pointerdown", (e) => {
+    if (e.button || e.target.closest(".gg-clip")) return;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let active = false;
+    const box = document.createElement("div");
+    box.className = "gg-tl-marquee";
+    const paint = (x, y) => {
+      const l = Math.min(x0, x);
+      const t = Math.min(y0, y);
+      box.style.left = l + "px";
+      box.style.top = t + "px";
+      box.style.width = Math.abs(x - x0) + "px";
+      box.style.height = Math.abs(y - y0) + "px";
+    };
+    const hits = (x, y) => {
+      const l = Math.min(x0, x);
+      const r = Math.max(x0, x);
+      const t = Math.min(y0, y);
+      const b = Math.max(y0, y);
+      const ids = [];
+      root.querySelectorAll(".gg-clip").forEach((el) => {
+        const rect = el.getBoundingClientRect();
+        if (rect.right < l || rect.left > r || rect.bottom < t || rect.top > b) return;
+        if (el.dataset.cutId) ids.push(el.dataset.cutId);
+      });
+      return ids;
+    };
+    const move = (ev) => {
+      if (!active && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return;
+      if (!active) {
+        active = true;
+        box.style.left = x0 + "px";
+        box.style.top = y0 + "px";
+        document.body.appendChild(box);
+        try { track.setPointerCapture(e.pointerId); } catch (_) {}
+      }
+      paint(ev.clientX, ev.clientY);
+    };
+    const up = (ev) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      box.remove();
+      if (!active) {
+        clearTimelineMultiSelection();
+        return;
+      }
+      const ids = hits(ev.clientX, ev.clientY);
+      if (ev.ctrlKey || ev.metaKey) setTimelineSelection([...state.cutSel, ...ids]);
+      else setTimelineSelection(ids);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   });
 }
 
@@ -12395,6 +12621,7 @@ function mountTimeline(el) {
         <span class="gg-tip"></span>
         <button type="button" class="gg-btn gg-edit-mode" title="Current cut over the graph. Video follows the playhead." aria-pressed="false">${EDIT_MODE_LABEL}</button>
         <button class="gg-btn gg-snap" title="Snap: 1 s steps (off = 0.1 s)">Snap</button>
+        <button type="button" class="gg-btn gg-close-gaps" title="Remove empty space so cuts sit back to back from the start. Selected cuts, or the whole timeline if none are selected.">Remove gaps</button>
         <button class="gg-btn gg-reset" title="Reset to original order and lengths">Reset</button>
       </div>
       <div class="gg-error" hidden></div>
@@ -12530,9 +12757,22 @@ function mountTimeline(el) {
     zoomAt(act === "zoom-in" ? ZOOM_KEY_FACTOR : 1 / ZOOM_KEY_FACTOR, x);
   };
   window.addEventListener("keydown", onZoomKey, true);
+  const onTimelineKey = (e) => {
+    if (e.key !== "Escape" || e.isComposing) return;
+    if (ggModalOpen() || comfyPromptDialogOpen() || ctxUi.el) return;
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ""))) return;
+    if (!pluginKeyScopeActive({ hoverTimeline: ggElHovered(root), focusTimeline: ggElHasFocus(root) })) return;
+    if (!state.cutSel.size) return;
+    e.preventDefault();
+    e.stopPropagation();
+    clearTimelineMultiSelection();
+  };
+  document.addEventListener("keydown", onTimelineKey);
   const zoomRo = window.ResizeObserver ? new ResizeObserver(() => paintZoomBar(root)) : null;
   if (zoomRo) { zoomRo.observe(tlWrap); zoomRo.observe(zoomBar); }
   $r(".gg-reset").addEventListener("click", resetEdit);
+  $r(".gg-close-gaps")?.addEventListener("click", () => removeTimelineGaps());
   scheduleRestoreTimelinePanelHeight();
   const beginTimelineScrub = (e) => {
     if (e.button) return;
@@ -12610,6 +12850,7 @@ function mountTimeline(el) {
     window.addEventListener("mouseup", end);
     window.addEventListener("pointercancel", end);
   };
+  bindTimelineMarquee(root);
   $r(".gg-ruler").addEventListener("pointerdown", beginTimelineScrub);
   const headLine = $r(".gg-head-line");
   headLine?.addEventListener("pointerdown", beginTimelineScrub, true);
@@ -12718,6 +12959,7 @@ function mountTimeline(el) {
     if (ro) ro.disconnect();
     if (zoomRo) zoomRo.disconnect();
     window.removeEventListener("keydown", onZoomKey, true);
+    document.removeEventListener("keydown", onTimelineKey);
     bus.removeEventListener("timeline", onTimeline);
     bus.removeEventListener("timeline", onTimelineLocks);
     bus.removeEventListener("projects", onProjects);
