@@ -366,6 +366,7 @@ import {
   fixedBottomPanelHeight,
   anchoredBottomPanelBox,
   normalModePreviewSize,
+  editModeTimelineRow,
 } from "./gg_bottom_panel_layout_core.js";
 import {
   JOB_HISTORY_DOCK_SETTING_ID,
@@ -6022,6 +6023,30 @@ function readAnchorChrome(panel, timelineEl) {
   return fixedPanelChrome({ top: pr.top, bottom: pr.bottom }, { top: tr.top, bottom: tr.bottom }, tabH);
 }
 
+/** Hide the in-panel left preview in Edit mode so the timeline fills that width. */
+function applyEditModeTimelineRow(root) {
+  const rows = root ? [root] : [...document.querySelectorAll(".gg-root.gg-timeline")];
+  for (const rowRoot of rows) {
+    if (!rowRoot) continue;
+    const host = rowRoot.parentElement || rowRoot;
+    const screen = rowRoot.querySelector(".gg-screen");
+    const previewWidth = parseFloat(screen?.style.width) || 0;
+    const row = editModeTimelineRow({
+      editMode: timelineEditModeOn,
+      hostWidth: host.clientWidth || rowRoot.clientWidth || 0,
+      previewWidth,
+    });
+    const viewerEl = rowRoot.querySelector(".gg-viewer");
+    const editorEl = rowRoot.querySelector(".gg-editor");
+    if (viewerEl) viewerEl.style.display = row.hideLeftPreview ? row.viewerDisplay : "";
+    if (editorEl) {
+      editorEl.style.flex = row.hideLeftPreview ? row.editorFlex : "";
+      editorEl.style.minWidth = row.hideLeftPreview ? "0" : "";
+      editorEl.style.width = row.hideLeftPreview ? "100%" : "";
+    }
+  }
+}
+
 /** Fixed height, no resize handle, glued to the screen bottom. Edit mode uses the same height. */
 function applyAnchoredBottomPanel() {
   if (bottomAnchorLock || bottomAnchorHoldOff) return;
@@ -9802,6 +9827,7 @@ function setTimelineEditMode(on) {
   saveEditPreviewMode(localStorage, timelineEditModeOn);
   document.documentElement.classList.toggle(EDIT_MODE_ON_CLASS, timelineEditModeOn);
   paintEditPreviewButton();
+  applyEditModeTimelineRow();
   if (timelineEditModeOn) {
     bindEditPreviewObserver();
     applyEditPreviewLayout();
@@ -10129,6 +10155,7 @@ function mountTimeline(el) {
     const scr = root.querySelector(".gg-screen");
     const box = normalModePreviewSize({ bodyHeight: h || bodyH, hostWidth: host.clientWidth });
     if (scr) { scr.style.width = `${box.width}px`; scr.style.height = `${box.height}px`; }
+    applyEditModeTimelineRow(root);
   };
   const ro = window.ResizeObserver ? new ResizeObserver(fit) : null;
   if (ro) ro.observe(host);

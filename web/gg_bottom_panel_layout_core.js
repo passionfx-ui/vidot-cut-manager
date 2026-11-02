@@ -122,6 +122,25 @@ export function fixedBottomPanelHeight(chromePx, _editMode = false) {
 }
 
 /**
+ * In-panel row. Edit mode hides the left preview (the D21 graph overlay is the
+ * preview) so the timeline uses the full width. Leaving Edit mode shows it again.
+ * This does not change the bottom panel height.
+ * @param {{ editMode?: boolean, hostWidth?: number, previewWidth?: number }} box
+ */
+export function editModeTimelineRow({ editMode = false, hostWidth = 0, previewWidth = 0 } = {}) {
+  const host = Math.max(0, Math.round(Number(hostWidth) || 0));
+  const preview = Math.max(0, Math.round(Number(previewWidth) || 0));
+  const hideLeftPreview = !!editMode;
+  const usedPreview = hideLeftPreview ? 0 : Math.min(host, preview);
+  return {
+    hideLeftPreview,
+    viewerDisplay: hideLeftPreview ? "none" : "flex",
+    timelineWidth: host - usedPreview,
+    editorFlex: "1 1 auto",
+  };
+}
+
+/**
  * Screen-bottom anchor. A floating window's measured box is ignored.
  * @param {{ viewportHeight: number, height: number, left?: number, width?: number, bottomGap?: number, measuredHeight?: number, measuredTop?: number }} box
  */

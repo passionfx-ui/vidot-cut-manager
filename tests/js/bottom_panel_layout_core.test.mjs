@@ -22,6 +22,7 @@ import {
   fixedPanelChrome,
   fixedBottomPanelHeight,
   anchoredBottomPanelBox,
+  editModeTimelineRow,
 } from "../../web/gg_bottom_panel_layout_core.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -140,6 +141,54 @@ describe("bottom panel is anchored and not resizable", () => {
     assert.equal(stable.width, 880);
     assert.equal(stable.resizable, false);
     assert.equal(BOTTOM_PANEL_RESIZABLE, false);
+  });
+});
+
+describe("edit mode hides the in-panel left preview and gives that width to the timeline", () => {
+  it("collapses the left preview while Edit mode is on and restores it when Edit mode is off", () => {
+    const normal = editModeTimelineRow({ editMode: false, hostWidth: 1200, previewWidth: 320 });
+    assert.equal(normal.hideLeftPreview, false);
+    assert.equal(normal.viewerDisplay, "flex");
+    assert.equal(normal.timelineWidth, 880);
+    assert.equal(normal.editorFlex, "1 1 auto");
+
+    const edit = editModeTimelineRow({ editMode: true, hostWidth: 1200, previewWidth: 320 });
+    assert.equal(edit.hideLeftPreview, true);
+    assert.equal(edit.viewerDisplay, "none");
+    assert.equal(edit.timelineWidth, 1200);
+    assert.ok(edit.timelineWidth > normal.timelineWidth);
+    assert.equal(edit.editorFlex, "1 1 auto");
+
+    const restored = editModeTimelineRow({ editMode: false, hostWidth: 1200, previewWidth: 320 });
+    assert.deepEqual(restored, normal);
+  });
+
+  it("keeps the bottom panel height the same in Edit mode", () => {
+    assert.equal(fixedBottomPanelHeight(48, true), fixedBottomPanelHeight(48, false));
+    assert.equal(fixedBottomPanelHeight(48, true), fixedTimelineBodyHeight() + 48);
+    const wide = editModeTimelineRow({ editMode: true, hostWidth: 900, previewWidth: 400 });
+    const plain = editModeTimelineRow({ editMode: false, hostWidth: 900, previewWidth: 400 });
+    assert.equal(wide.timelineWidth, 900);
+    assert.equal(plain.timelineWidth, 500);
+    assert.equal(fixedTimelineBodyHeight(), timelineViewerBodyPx());
+  });
+
+  it("hides the left viewer from the timeline row and lets the editor fill the row", () => {
+    const hidden = ruleFor("html.gg-edit-mode-on .gg-timeline .gg-viewer");
+    assert.equal(prop(hidden, "display"), "none");
+    const viewer = ruleFor(".gg-timeline .gg-viewer");
+    assert.equal(prop(viewer, "display"), "flex");
+    const editEditor = ruleFor("html.gg-edit-mode-on .gg-timeline .gg-editor");
+    assert.equal(prop(editEditor, "flex"), "1 1 auto");
+    assert.equal(prop(editEditor, "min-width"), "0");
+    const editor = ruleFor(".gg-timeline .gg-editor");
+    assert.equal(prop(editor, "flex"), "1");
+    assert.ok(js.includes("editModeTimelineRow("));
+    assert.ok(js.includes("applyEditModeTimelineRow("));
+    const toggleStart = js.indexOf("function setTimelineEditMode(");
+    const toggleEnd = js.indexOf("\nfunction ", toggleStart + 20);
+    const toggle = js.slice(toggleStart, toggleEnd);
+    assert.match(toggle, /applyEditModeTimelineRow\(/);
   });
 });
 

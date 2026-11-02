@@ -532,6 +532,7 @@ html.gg-bottom-anchored [data-testid="graph-canvas-gutter"] { pointer-events: no
 .gg-tl-scrub-overlay { cursor: col-resize; }
 .gg-tl-drag-overlay { cursor: ns-resize; }
 .gg-timeline .gg-viewer { flex: 0 0 auto; display: flex; flex-direction: column; padding: 6px; border-right: 1px solid var(--gg-line); }
+html.gg-edit-mode-on .gg-timeline .gg-viewer { display: none; }
 /* Fixed on the graph, not inside the bottom panel, so it is not clipped or able to push that panel. */
 .gg-edit-preview {
   --gg-line: #353a44;
@@ -590,6 +591,7 @@ html.gg-bottom-anchored [data-testid="graph-canvas-gutter"] { pointer-events: no
 .gg-timeline .gg-clock { font-variant-numeric: tabular-nums; font-family: ui-monospace, Consolas, monospace; flex: 1; }
 .gg-root .gg-btn.gg-on { border-color: var(--gg-acc); color: var(--gg-acc); }
 .gg-timeline .gg-editor { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-timeline .gg-tl-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 4px 8px; border-bottom: 1px solid var(--gg-line); }
 .gg-timeline .gg-tl-title { font-weight: 600; white-space: nowrap; }
 .gg-timeline .gg-tl-info { color: var(--gg-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
