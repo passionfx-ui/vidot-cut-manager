@@ -17,6 +17,7 @@
 - MiniMax H3 보너스는 메인 상과 중복 가능.
 
 ## 3. 결정 사항 (시간순)
+- 2026-11-02: **I7 영상 컷 큐는 선택 이미지** — 영상 컷 그래프를 큐할 때(ComfyUI Queue / `app.queuePrompt`), 그 컷에서 현재 선택된 정지 이미지 버전을 `input/gonggan/start_<버전>.<ext>`로 복사하고 Load Image 위젯(제목 `Start Image`, 없으면 첫 LoadImage)을 그 파일로 맞춘 뒤 큐한다. 선택된 정지 이미지가 없으면 경고만 남기고 위젯은 그대로 큐. 이미지 컷 큐는 건드리지 않음. 프론트만(Ctrl+F5).
 - 2026-11-02: **I5 History가 Trash를 대체** — 컷 휴지통 버튼·모달·「Restore Deleted Cuts」메뉴를 없애고, Shots에 History 패널(오래된 것이 위, 최신이 아래, 포토샵처럼 클릭하면 그 시점으로). Shots와 Timeline undo는 프로젝트당 스택 하나. Ctrl+Z / Ctrl+Shift+Z(Ctrl+Y)는 어느 탭에서 한 편집이든 가장 최근 것을 취소. 캔버스에 포커스/마지막 클릭이면 ComfyUI 그래프 undo에 맡긴다. 기록하지 않음: Image/Video/Auto 전환, 선택·보기만 바꾼 것. 컷·버전·씬 삭제는 History 한 단계이고 파일은 `projects/<pid>/.history/files/<step>/`에 숨긴다(씬은 메타만). 전역 설정 **History steps**(기본 50, `gonggan_settings.json` `history_steps`). 프로젝트별 `history.json`에 diff만 저장(새로고침 후에도 유지). 50을 넘는 가장 오래된 단계의 숨긴 파일은 완전히 삭제(휴지통 없음). 기존 삭제분(`deleted_at`, `trash/`)은 History 단계로 옮기고, 옮기는 동안에는 파일을 지우지 않는다. 새 라우트 → ComfyUI 재시작 필요. 프론트 History 패널은 Ctrl+F5.
 - 2026-11-02: **I4 컷 정보 고정 크기 + 큐 버튼 둘째 줄** — 버전 정보 칸(Type·Resolution·Duration·FPS·Seed·Workflow)은 이미지/영상 같은 105×전체 너비. 영상만 있는 값은 이미지에서 `-`. Image/Video/Auto는 Queue 바로 위 오른쪽 줄, Random seed는 그 아래 Queue와 같은 줄. 프론트만(Ctrl+F5).
 - 2026-11-02: **I6 컷 전환은 메모리** — 프로젝트를 열거나 서버에서 다시 읽을 때(새로고침, 렌더가 끝나 버전이 생긴 뒤) 컷 목록·컷 정보·버전 메타·프롬프트와 컷 워크플로를 클라이언트 메모리에 한 번 채운다. 컷 전환은 그 메모리만 본다(서버 왕복 없음, 늦은 응답이 화면을 덮어쓰지 못함). 저장할 때만 메모리와 서버를 같이 갱신한다. 영상 컷은 프로젝트 Video 워크플로, 이미지 컷은 Image 워크플로(한 함수). 이미 열린 그래프와 같으면 탭을 다시 그리지 않는다. 워크플로 탭 제목은 컷 표시 이름이다(내부 UUID를 보여 주지 않음).

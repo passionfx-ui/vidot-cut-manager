@@ -184,7 +184,8 @@ import {
   shouldReuseOpenWorkflow,
   workflowContentKey,
 } from "./gg_project_store_core.js";
-import { syncSavedVideoStartImage } from "./gg_start_image_core.js";
+import { findStartImageNode, syncSavedVideoStartImage } from "./gg_start_image_core.js";
+import { findImageWidget } from "./gg_loadimage_core.js";
 import {
   cutHeaderParts,
   formatShotTabLabel,
@@ -299,6 +300,7 @@ import {
   IMPORT_ACCEPT,
   IMPORT_TILE_TIP,
   cutHasStartImage,
+  isStillVersion,
   stripSelectedVid,
   SET_BEST_LABEL,
   importButtonState,
@@ -8003,6 +8005,99 @@ async function importVersionFiles(pid, cutId, files) {
 /** Thumbnail clicked last in the version row (the row's selected version until another cut or project). */
 const stripPick = { pid: "", cutId: "", vid: "" };
 
+const IMAGE_MIME_EXT = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/jpg": ".jpg",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+};
+
+function extForImageMime(mime) {
+  const m = String(mime || "").split(";")[0].trim().toLowerCase();
+  return IMAGE_MIME_EXT[m] || ".png";
+}
+
+/** Live graph node that receives the i2v start frame (title "Start Image", else the first LoadImage). */
+function liveStartImageNode() {
+  const nodes = app.graph?._nodes || app.graph?.nodes || [];
+  const hit = findStartImageNode({
+    nodes: nodes.map((n) => ({
+      id: n?.id,
+      type: n?.type || n?.comfyClass || "",
+      title: n?.title,
+      mode: n?.mode,
+    })),
+  });
+  if (!hit) return null;
+  return nodes.find((n) => n && String(n.id) === hit.id) || null;
+}
+
+function setLiveLoadImageWidget(node, imageName) {
+  const widget = findImageWidget(node);
+  if (!widget) return false;
+  const values = widget.options?.values;
+  if (Array.isArray(values) && !values.includes(imageName)) values.push(imageName);
+  widget.value = imageName;
+  try { app.canvas?.setDirty?.(true, true); } catch (_) {}
+  return true;
+}
+
+/** Copy a version image into ComfyUI input/gonggan and return the Load Image name. */
+async function copyVersionImageToInput(vid) {
+  const res = await api.fetchApi(`/gonggan/media?id=${encodeURIComponent(vid)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const blob = await res.blob();
+  const ext = extForImageMime(res.headers.get("Content-Type") || blob.type);
+  const filename = `start_${vid}${ext}`;
+  const form = new FormData();
+  form.append("image", new File([blob], filename, { type: blob.type || "image/png" }));
+  form.append("overwrite", "true");
+  form.append("type", "input");
+  form.append("subfolder", "gonggan");
+  const up = await api.fetchApi("/upload/image", { method: "POST", body: form });
+  if (!up.ok) throw new Error(`upload HTTP ${up.status}`);
+  const data = await up.json().catch(() => ({}));
+  const name = String(data.name || filename).replace(/\\/g, "/");
+  const sub = String(data.subfolder || "gonggan").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!sub || name.startsWith(`${sub}/`)) return name;
+  return `${sub}/${name}`;
+}
+
+/**
+ * Video-cut queue only: the cut's selected still image becomes the Load Image start frame.
+ * No selected image, or the copy fails: leave the graph alone and queue as before.
+ * Image cuts return immediately.
+ */
+async function feedVideoCutStartImage() {
+  const extra = app.graph?.extra?.gonggan;
+  const cutId = extra?.cutId;
+  const pid = extra?.pid || extra?.projectId;
+  if (!cutId || !pid || pid !== state.pid || !isNativeProject()) return;
+  const cut = cutById(cutId);
+  if (!cut || workflowKindForCut(cut) !== "video") return;
+  const ver = findCutVersion(cut, stripSelectedVersionId(cut));
+  if (!isStillVersion(ver)) {
+    console.warn("[gonggan] video queue: no selected image result; queuing without a start frame", cutId);
+    return;
+  }
+  const node = liveStartImageNode();
+  if (!node) {
+    console.warn("[gonggan] video queue: no Load Image node; queuing without a start frame", cutId);
+    return;
+  }
+  let imageName = "";
+  try {
+    imageName = await copyVersionImageToInput(ver.id);
+  } catch (e) {
+    console.warn("[gonggan] video queue: could not copy the selected image; queuing as before", cutId, e);
+    return;
+  }
+  if (!setLiveLoadImageWidget(node, imageName)) {
+    console.warn("[gonggan] video queue: Load Image has no image widget; queuing as before", cutId);
+  }
+}
+
 /** Selected version of the row for this cut (see stripSelectedVid). */
 function stripSelectedVersionId(c) {
   if (!c) return "";
@@ -11175,6 +11270,18 @@ app.registerExtension({
     }, 500);
     bindLoadImageUi({ ggToast });
     installLoadImageQueueGuard();
+    if (!app._ggVideoStartWrapped) {
+      app._ggVideoStartWrapped = true;
+      const origQueue = app.queuePrompt.bind(app);
+      app.queuePrompt = async function ggVideoStartQueue(...args) {
+        try {
+          await feedVideoCutStartImage();
+        } catch (e) {
+          console.warn("[gonggan] video queue: start image step failed; queuing as before", e);
+        }
+        return origQueue(...args);
+      };
+    }
     loadPersistedJobs();
     void refreshGenerateAll();
     void refreshRegenJob();
