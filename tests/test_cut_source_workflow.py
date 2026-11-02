@@ -18,6 +18,7 @@ from gg_project.cut_source import (
     format_source_fallback,
     resolve_native_cut_source,
     version_media_kind,
+    workflow_media_kind,
 )
 
 WF_IMAGE = {"nodes": [{"id": 1, "type": "SaveImage"}], "version": 0.4}
@@ -185,6 +186,65 @@ class NativeCutSourceIntegrationTests(unittest.TestCase):
 
     def test_version_media_kind(self):
         self.assertEqual(version_media_kind({"asset": {"kind": "video"}}), "video")
+
+    def test_selected_kind_never_opens_the_other_kind(self):
+        """Imported image + video without workflows: each opens its own kind's template, not the cut's image graph."""
+        doc = self.store.create_project("P", template_graph=WF_IMAGE)
+        pid = doc["id"]
+        cut_id = next(iter(doc["cuts"].values()))["id"]
+        mp4 = Path(self._tmp.name) / "b.mp4"
+        mp4.write_bytes(b"\x00" * 8)
+        self.store.add_version(pid, cut_id, self._png("a.png"))
+        v_vid = self.store.add_version(pid, cut_id, mp4)
+        video_tpl = {"nodes": [{"id": 5, "type": "LTXVImgToVideo"}], "links": [], "version": 0.4}
+        with mock.patch.object(na, "project_video_template", return_value=("V", video_tpl)):
+            vid = na.native_cut_source_workflow(pid, cut_id, kind="video")
+            self.assertEqual(workflow_media_kind(vid["workflow"]), "video")
+            self.assertEqual(vid["source"], "template")
+            self.assertIn("Video template", vid["fallback"])
+            self.assertEqual(workflow_media_kind(na.native_cut_source_workflow(pid, cut_id, kind="image")["workflow"]), "image")
+            self.store.apply_timeline_edit(pid, [cut_id], {cut_id: {"in": 0, "sec": 3.0, "pick": v_vid["id"]}})
+            self.assertEqual(workflow_media_kind(na.native_cut_source_workflow(pid, cut_id)["workflow"]), "video")
+
+
+class WorkflowMediaKindTests(unittest.TestCase):
+    def test_ui_and_api_graphs(self):
+        self.assertEqual(workflow_media_kind(WF_IMAGE), "image")
+        self.assertEqual(workflow_media_kind(WF_VIDEO), "video")
+        self.assertEqual(workflow_media_kind(WF_CUT), "image")
+        self.assertIsNone(workflow_media_kind(WF_TPL))
+        self.assertIsNone(workflow_media_kind(None))
+        api = {"1": {"class_type": "EmptyFlux2LatentImage"}, "2": {"class_type": "SaveImage"}}
+        self.assertEqual(workflow_media_kind(api), "image")
+        self.assertEqual(workflow_media_kind({"9": {"class_type": "SaveAnimatedWEBP"}}), "video")
+        self.assertEqual(workflow_media_kind({"nodes": [{"type": "VHS_VideoCombine"}]}), "video")
+
+    def test_kind_template_beats_other_kind_graphs(self):
+        cut = {"pick_version_id": "vv", "workflow_sha": "cutsha"}
+        versions = [
+            {"id": "vv", "asset": {"kind": "video"}, "workflow_sha": None},
+            {"id": "vi", "asset": {"kind": "image"}, "workflow_sha": "isha"},
+        ]
+        blobs = {"isha": WF_IMAGE, "cutsha": WF_CUT}
+        tpls = {"video": WF_VIDEO, "image": WF_TPL}
+        out = resolve_native_cut_source(cut, versions, blobs.get, WF_TPL, is_ui_workflow=_is_ui, kind_template=tpls.get)
+        self.assertEqual(out["workflow"], WF_VIDEO)
+        self.assertEqual(out["source"], "template")
+        self.assertEqual(out["kind_used"], "video")
+        out = resolve_native_cut_source(cut, versions, blobs.get, WF_TPL, requested_kind="image",
+                                        is_ui_workflow=_is_ui, kind_template=tpls.get)
+        self.assertEqual(out["workflow"], WF_IMAGE)
+
+    def test_cut_graph_of_the_wanted_kind_still_opens(self):
+        cut = {"pick_version_id": None, "workflow_sha": "cutsha"}
+        versions = [{"id": "vi", "asset": {"kind": "image"}, "workflow_sha": None}]
+        out = resolve_native_cut_source(cut, versions, {"cutsha": WF_CUT}.get, None, is_ui_workflow=_is_ui,
+                                        kind_template=lambda _k: WF_TPL)
+        self.assertEqual(out["workflow"], WF_CUT)
+        cut["workflow_sha"] = "unknown"
+        out = resolve_native_cut_source(cut, versions, {"unknown": WF_TPL}.get, None, requested_kind="video",
+                                        is_ui_workflow=_is_ui, kind_template={"video": WF_VIDEO}.get)
+        self.assertEqual(out["workflow"], WF_VIDEO)
 
 
 if __name__ == "__main__":

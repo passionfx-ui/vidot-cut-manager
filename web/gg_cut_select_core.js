@@ -3,19 +3,22 @@
  */
 
 /**
- * @param {{ multi?: boolean, range?: boolean, fromTimeline?: boolean }} opts
+ * A timeline clip click opens the clip's workflow only while a shot tab is the active tab
+ * (never pulls the user away from their own workflow tab).
+ * @param {{ multi?: boolean, range?: boolean, fromTimeline?: boolean, shotTabActive?: boolean }} opts
  */
 export function shouldScheduleCutWorkflowLoad(opts = {}) {
-  const { multi, range, fromTimeline } = opts;
-  if (multi || range || fromTimeline) return false;
+  const { multi, range, fromTimeline, shotTabActive } = opts;
+  if (multi || range) return false;
+  if (fromTimeline) return !!shotTabActive;
   return true;
 }
 
 /**
- * @param {{ fromTimeline?: boolean }} opts
+ * @param {{ fromTimeline?: boolean, shotTabActive?: boolean }} opts
  */
 export function shouldCancelPendingWorkflowLoad(opts = {}) {
-  return !!opts.fromTimeline;
+  return !!opts.fromTimeline && !opts.shotTabActive;
 }
 
 /**
@@ -23,6 +26,7 @@ export function shouldCancelPendingWorkflowLoad(opts = {}) {
  *   multi?: boolean,
  *   range?: boolean,
  *   fromTimeline?: boolean,
+ *   shotTabActive?: boolean,
  *   cutId?: string,
  *   graphCutId?: string,
  *   projectId?: string,
@@ -34,12 +38,13 @@ export function shouldResetOpenTabTracking(opts = {}) {
     multi,
     range,
     fromTimeline,
+    shotTabActive,
     cutId = "",
     graphCutId = "",
     projectId = "",
     graphProjectId = "",
   } = opts;
-  if (!shouldScheduleCutWorkflowLoad({ multi, range, fromTimeline })) return false;
+  if (!shouldScheduleCutWorkflowLoad({ multi, range, fromTimeline, shotTabActive })) return false;
   if (graphCutId !== cutId) return true;
   if (projectId && graphProjectId && graphProjectId !== projectId) return true;
   return false;

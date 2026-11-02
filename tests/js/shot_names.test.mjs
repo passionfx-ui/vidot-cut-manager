@@ -122,6 +122,20 @@ describe("tab identity", () => {
     );
   });
 
+  it("reloads the same cut when the selected media kind changed", () => {
+    const same = {
+      cutId: "c1",
+      projectId: "p1",
+      lastCutId: "c1",
+      lastProjectId: "p1",
+      graphExtra: { projectId: "p1", cutId: "c1" },
+      tabActive: true,
+    };
+    assert.equal(shouldSkipShotWorkflowReload({ ...same, loadedKind: "image", wantKind: "video" }), false);
+    assert.equal(shouldSkipShotWorkflowReload({ ...same, loadedKind: "video", wantKind: "video" }), true);
+    assert.equal(shouldSkipShotWorkflowReload({ ...same, loadedKind: null, wantKind: "video" }), true);
+  });
+
   it("same cutId different projectId in graph -> no match", () => {
     assert.equal(graphExtraMatchesShot({ cutId: "c1", projectId: "p1" }, "p2", "c1"), false);
   });

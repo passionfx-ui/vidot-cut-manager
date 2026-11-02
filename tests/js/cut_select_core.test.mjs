@@ -29,20 +29,22 @@ describe("shouldScheduleCutWorkflowLoad", () => {
     assert.equal(shouldScheduleCutWorkflowLoad({ range: true }), false);
   });
 
-  it("fromTimeline does not schedule", () => {
+  it("fromTimeline schedules only while a shot tab is the active tab", () => {
     assert.equal(shouldScheduleCutWorkflowLoad({ fromTimeline: true }), false);
+    assert.equal(shouldScheduleCutWorkflowLoad({ fromTimeline: true, shotTabActive: true }), true);
   });
 
   it("fromTimeline with multi/range still does not schedule", () => {
-    assert.equal(shouldScheduleCutWorkflowLoad({ fromTimeline: true, multi: true }), false);
-    assert.equal(shouldScheduleCutWorkflowLoad({ fromTimeline: true, range: true }), false);
+    assert.equal(shouldScheduleCutWorkflowLoad({ fromTimeline: true, multi: true, shotTabActive: true }), false);
+    assert.equal(shouldScheduleCutWorkflowLoad({ fromTimeline: true, range: true, shotTabActive: true }), false);
   });
 });
 
 describe("shouldCancelPendingWorkflowLoad", () => {
-  it("only timeline cancels pending debounced load", () => {
+  it("a timeline click away from the shot tab cancels the pending load", () => {
     assert.equal(shouldCancelPendingWorkflowLoad({}), false);
     assert.equal(shouldCancelPendingWorkflowLoad({ fromTimeline: true }), true);
+    assert.equal(shouldCancelPendingWorkflowLoad({ fromTimeline: true, shotTabActive: true }), false);
   });
 });
 

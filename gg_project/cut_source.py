@@ -10,6 +10,28 @@ def normalize_media_kind(kind: str | None) -> str | None:
     return None
 
 
+_VIDEO_NODE_HINTS = ("video", "ltxv", "saveanimated", "webm", "vhs_")
+_IMAGE_OUTPUT_NODES = ("saveimage", "previewimage")
+_IMAGE_LATENT_HINTS = ("emptylatentimage", "emptysd3latentimage", "emptyflux2latentimage", "emptyhunyuanlatent")
+
+
+def workflow_media_kind(wf: dict[str, Any] | None) -> str | None:
+    """What a graph (UI or API format) makes, from its node types: "video", "image" or None (unknown)."""
+    if not isinstance(wf, dict):
+        return None
+    nodes = wf.get("nodes")
+    if isinstance(nodes, list):
+        types = [str(n.get("type") or "") for n in nodes if isinstance(n, dict)]
+    else:
+        types = [str(n.get("class_type") or "") for n in wf.values() if isinstance(n, dict)]
+    low = [t.lower() for t in types]
+    if any(h in t for t in low for h in _VIDEO_NODE_HINTS):
+        return "video"
+    if any(t in _IMAGE_OUTPUT_NODES or t in _IMAGE_LATENT_HINTS for t in low):
+        return "image"
+    return None
+
+
 def version_media_kind(ver: dict[str, Any] | None) -> str | None:
     if not ver or not isinstance(ver, dict):
         return None
@@ -60,6 +82,8 @@ def format_source_fallback(wanted: str | None, opened_kind: str | None, source: 
         return None
     if source == "template":
         return f"no {wanted} workflow yet — opened project template"
+    if source == "kind_template":
+        return f"no {wanted} workflow yet — opened the {wanted.capitalize()} template"
     if opened_kind in ("image", "video") and opened_kind != wanted:
         return f"no {wanted} workflow yet — opened latest {opened_kind} workflow"
     if source == "stored" and opened_kind is None:
@@ -74,11 +98,14 @@ def resolve_native_cut_source(
     template_workflow: dict | None,
     requested_kind: str | None = None,
     is_ui_workflow: Callable[[dict], bool] | None = None,
+    kind_template: Callable[[str], dict | None] | None = None,
 ) -> dict[str, Any]:
     """
     Resolve workflow graph and metadata.
 
     versions: newest-first (same order as LocalStore.list_versions).
+    kind_template: the project's Image / Video template graph for a kind; with it, a cut showing an image never
+    opens a video graph and the other way round (the template of the wanted kind comes before other-kind graphs).
     Returns keys: ok, source, workflow, kind (ui|api), kind_used, fallback.
     """
     is_ui = is_ui_workflow or (lambda _wf: False)
@@ -124,9 +151,17 @@ def resolve_native_cut_source(
                 return pack(wf, "stored", opened_kind=wanted, fallback=None)
 
         wf = get_workflow(cut.get("workflow_sha"))
-        if wf:
+        cut_kind = workflow_media_kind(wf)
+        # The cut's own graph usually started from the Image template: an unknown graph never opens as video.
+        if wf and (kind_template is None or cut_kind == wanted or (cut_kind is None and wanted == "image")):
             fb = format_source_fallback(wanted, None, "stored")
             return pack(wf, "stored", opened_kind=None, fallback=fb)
+
+        if kind_template is not None:
+            wf = kind_template(wanted)
+            if wf:
+                fb = format_source_fallback(wanted, None, "kind_template")
+                return pack(wf, "template", opened_kind=wanted, fallback=fb)
 
         for ver in versions:
             wf = get_workflow(ver.get("workflow_sha"))

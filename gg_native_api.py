@@ -621,7 +621,9 @@ def _workflow_from_sha(store: LocalStore, pid: str, sha: str | None) -> dict | N
     return store.get_blob(pid, sha)
 
 
-def native_cut_source_workflow(pid: str, cut_id: str, kind: str | None = None) -> dict:
+def native_cut_source_workflow(pid: str, cut_id: str, kind: str | None = None, by_kind: bool = True) -> dict:
+    """The workflow to open for a cut. With `by_kind` (the editor), a selected image opens an image graph and a
+    video a video graph: the project Image / Video template stands in when the cut has none of that kind."""
     try:
         from .gg_project.cut_source import normalize_media_kind, resolve_native_cut_source
     except ImportError:  # unittest / plain script
@@ -641,11 +643,11 @@ def native_cut_source_workflow(pid: str, cut_id: str, kind: str | None = None) -
     def get_workflow(sha: str | None) -> dict | None:
         return _workflow_from_sha(store, pid, sha)
 
-    if req == "video" and not any((v.get("asset") or {}).get("kind") == "video" for v in versions):
-        wf = _video_tab_workflow(pid, cut_id, doc, cut)
-        if wf is not None:
-            return {"ok": True, "source": "template", "workflow": wf,
-                    "kind": "ui" if gg_template._is_ui_workflow(wf) else "api", "kind_used": "video", "fallback": None}
+    def kind_template(kind: str) -> dict | None:
+        if kind == "video":
+            return _video_tab_workflow(pid, cut_id, doc, cut)
+        return project_template_graph(doc, "image")
+
     tpl = native_template_info(pid).get("workflow")
     return resolve_native_cut_source(
         cut,
@@ -654,6 +656,7 @@ def native_cut_source_workflow(pid: str, cut_id: str, kind: str | None = None) -
         tpl if isinstance(tpl, dict) else None,
         requested_kind=req,
         is_ui_workflow=gg_template._is_ui_workflow,
+        kind_template=kind_template if by_kind else None,
     )
 
 
@@ -727,7 +730,7 @@ def native_cut_api_workflow(pid: str, cut_id: str, canvas: dict | None = None, c
         import gg_sdk  # type: ignore
         from gg_project.cut_source import current_version_id  # type: ignore
 
-    src = native_cut_source_workflow(pid, cut_id)
+    src = native_cut_source_workflow(pid, cut_id, by_kind=False)
     store = native_store()
     cut = store.get_project(pid)["cuts"][cut_id]
     versions = store.list_versions(pid, cut_id)

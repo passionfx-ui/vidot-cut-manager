@@ -77,6 +77,42 @@ export function shouldTryEmbeddedRepWorkflow(cut, effectiveKind) {
   return kind === "image";
 }
 
+const VIDEO_NODE_HINTS = ["video", "ltxv", "saveanimated", "webm", "vhs_"];
+const IMAGE_NODE_TYPES = new Set([
+  "saveimage",
+  "previewimage",
+  "emptylatentimage",
+  "emptysd3latentimage",
+  "emptyflux2latentimage",
+  "emptyhunyuanlatent",
+]);
+
+/**
+ * What a graph (UI or API format) makes, from its node types (same rule as the server's workflow_media_kind).
+ * @param {unknown} wf
+ * @returns {"image" | "video" | null}
+ */
+export function workflowGraphKind(wf) {
+  if (!wf || typeof wf !== "object") return null;
+  const nodes = Array.isArray(wf.nodes) ? wf.nodes : Object.values(wf);
+  const types = nodes
+    .map((n) => (n && typeof n === "object" ? String(n.type ?? n.class_type ?? "") : ""))
+    .map((t) => t.toLowerCase());
+  if (types.some((t) => VIDEO_NODE_HINTS.some((h) => t.includes(h)))) return "video";
+  if (types.some((t) => IMAGE_NODE_TYPES.has(t))) return "image";
+  return null;
+}
+
+/**
+ * A graph opens for a selected image / video unless it clearly makes the other kind.
+ * @param {unknown} wf
+ * @param {"image" | "video" | null | undefined} kind
+ */
+export function graphFitsKind(wf, kind) {
+  const k = workflowGraphKind(wf);
+  return !kind || !k || k === kind;
+}
+
 export const VERSION_WF_MISSING = "No workflow saved for this version.";
 
 /**

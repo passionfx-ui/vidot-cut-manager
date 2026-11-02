@@ -12,7 +12,43 @@ import {
   isOpenVersion,
   versionWorkflowSourceOrder,
   workflowFromVersionRecord,
+  workflowGraphKind,
+  graphFitsKind,
 } from "../../web/gg_rep_wf_core.js";
+import { readFileSync } from "node:fs";
+
+describe("workflowGraphKind", () => {
+  it("reads UI and API graphs", () => {
+    assert.equal(workflowGraphKind({ nodes: [{ type: "EmptyFlux2LatentImage" }, { type: "SaveImage" }] }), "image");
+    assert.equal(workflowGraphKind({ nodes: [{ type: "LTXVImgToVideo" }, { type: "SaveImage" }] }), "video");
+    assert.equal(workflowGraphKind({ 1: { class_type: "SaveAnimatedWEBP" } }), "video");
+    assert.equal(workflowGraphKind({ 1: { class_type: "PreviewImage" } }), "image");
+    assert.equal(workflowGraphKind({ nodes: [{ type: "KSampler" }] }), null);
+    assert.equal(workflowGraphKind(null), null);
+  });
+
+  it("graphFitsKind rejects only the clearly other kind", () => {
+    const img = { nodes: [{ type: "SaveImage" }] };
+    assert.equal(graphFitsKind(img, "image"), true);
+    assert.equal(graphFitsKind(img, "video"), false);
+    assert.equal(graphFitsKind(img, null), true);
+    assert.equal(graphFitsKind({ nodes: [{ type: "KSampler" }] }, "video"), true);
+  });
+});
+
+describe("selected media kind picks the workflow", () => {
+  const src = readFileSync(new URL("../../web/gonggan.js", import.meta.url), "utf8");
+  it("no stale saved Image/Video switch overrides the selected media", () => {
+    assert.doesNotMatch(src, /readCutWorkflowKindSwitch\(/);
+  });
+  it("a version without its own workflow opens the workflow of its kind", () => {
+    assert.match(src, /if \(await loadVersionKindWorkflow\(cut, ver, name, loadToken\)\) return;/);
+    assert.match(src, /fetchCutSourceWorkflowPayload\(cut\.id, cut, kind\)/);
+  });
+  it("a timeline click loads that clip only while the shot tab is already active", () => {
+    assert.match(src, /shouldScheduleCutWorkflowLoad\(\{ multi, range, fromTimeline, shotTabActive \}\)/);
+  });
+});
 
 describe("resolveEffectiveWorkflowKind", () => {
   it("switch beats rep kind", () => {

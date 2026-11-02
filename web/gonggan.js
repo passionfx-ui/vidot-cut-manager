@@ -164,7 +164,7 @@ import {
 } from "./gg_batch_render_core.js";
 import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
 import {
-  readCutWorkflowKindSwitch,
+  graphFitsKind,
   repMediaKind,
   resolveEffectiveWorkflowKind,
   shouldTryEmbeddedRepWorkflow,
@@ -2340,6 +2340,7 @@ async function tryRestoreCutWorkingCopy(cutId, cutRec, loadToken) {
     const json = await fetchCutWorkingCopyJson(cut);
     if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
     if (!json || !shouldRestoreWip(json, { cutId, baseKey: cutBaseKey(cut) })) return false;
+    if (!graphFitsKind(json, workflowKindForCut(cut))) return false;
     const loaded = await loadWorkflowIntoDedicatedTab(json, cut, loadToken);
     if (loadToken !== undefined && loadToken !== wfLoadToken) return false;
     if (ggCutSwitchAutosaveBlocked) return false;
@@ -2479,6 +2480,8 @@ function shouldSkipWorkflowReload(cutId) {
       lastProjectId: wfLastLoadedProjectId,
       graphExtra: g,
       tabActive: isGongganShotTabOpenAndActive(),
+      loadedKind: wfLastLoadedKind,
+      wantKind: workflowKindForCut(cutById(cutId)),
     });
   } catch {
     return false;
@@ -2822,27 +2825,26 @@ const SOURCE_TOAST = {
   draft: "draft workflow",
 };
 
-function userWorkflowKindSwitch(cutId) {
-  const fromUi =
-    shotsUi.cutWfKindCutId === cutId && shotsUi.cutWfKind ? shotsUi.cutWfKind : null;
-  return readCutWorkflowKindSwitch(localStorage, cutId) || fromUi || null;
-}
-
 /** Cut whose tab Make Video switched to its video workflow; cleared when its selected version changes. */
 let ggMakeVideoCutId = "";
+/** Image / video kind of the media whose workflow the shot tab last opened. */
+let wfLastLoadedKind = null;
 
+/** The selected media's kind picks the image or the video workflow. */
 function workflowKindForCut(cut) {
   if (!cut) return null;
   return resolveEffectiveWorkflowKind({
-    userKind: ggMakeVideoCutId === cut.id ? "video" : userWorkflowKindSwitch(cut.id),
+    userKind: ggMakeVideoCutId === cut.id ? "video" : null,
     repKind: repMediaKind(cut),
   });
 }
 
-function markWorkflowLoadComplete(cutId, cutRec, openedVid) {
+function markWorkflowLoadComplete(cutId, cutRec, openedVid, openedKind) {
+  const cut = cutRec || cutById(cutId);
   wfLastLoadedCutId = cutId;
   wfLastLoadedProjectId = state.pid;
-  wfLastLoadedRepId = repIdOf(cutRec || cutById(cutId));
+  wfLastLoadedRepId = repIdOf(cut);
+  wfLastLoadedKind = openedKind || (openedVid ? findCutVersion(cut, openedVid)?.kind : workflowKindForCut(cut)) || null;
   wfOpenVersion = openedVid ? { projectId: state.pid, cutId, vid: openedVid } : null;
   ggCutGraphNodeCounts.set(`${state.pid}\n${cutId}`, activeGraphNodeCount());
 }
@@ -2888,10 +2890,10 @@ async function reloadOpenCutWorkflowIfRepChanged() {
   await loadCutWorkflow(cutId, cut, loadToken);
 }
 
-async function fetchCutSourceWorkflowPayload(cutId, cutRec) {
+async function fetchCutSourceWorkflowPayload(cutId, cutRec, kind) {
   const tl = state.timeline;
   const cut = cutRec || cutById(cutId);
-  const effectiveKind = workflowKindForCut(cut);
+  const effectiveKind = kind || workflowKindForCut(cut);
   let q = `/gonggan/cut-source-workflow?pid=${encodeURIComponent(tl.project.id)}&cut=${encodeURIComponent(cutId)}`;
   if (effectiveKind) q += `&kind=${encodeURIComponent(effectiveKind)}`;
   const res = await api.fetchApi(q);
@@ -3128,7 +3130,7 @@ async function loadVersionWorkflow(cutId, vid, loadToken) {
       console.warn(`[gonggan] version workflow (${src}) failed`, e);
     }
     if (isLoadTokenStale(loadToken)) return;
-    if (!wf) continue;
+    if (!wf || !graphFitsKind(wf, ver.kind)) continue;
     const loaded = await loadWorkflowIntoDedicatedTab(wf, cut, loadToken);
     if (isLoadTokenStale(loadToken) || ggCutSwitchAutosaveBlocked || !loaded) return;
     markWorkflowLoadComplete(cutId, cut, vid);
@@ -3139,7 +3141,33 @@ async function loadVersionWorkflow(cutId, vid, loadToken) {
     ggToast("Shot", `${name} — ${VERSION_SOURCE_DETAIL[src]}`, "ok");
     return;
   }
+  if (await loadVersionKindWorkflow(cut, ver, name, loadToken)) return;
+  if (isLoadTokenStale(loadToken)) return;
   ggToast("Workflow", sentence(VERSION_WF_MISSING, name), "warn");
+}
+
+/** A version with no workflow of its own: open the cut's workflow of that version's kind (image or video). */
+async function loadVersionKindWorkflow(cut, ver, name, loadToken) {
+  const kind = ver.kind === "image" || ver.kind === "video" ? ver.kind : null;
+  if (!kind) return false;
+  let data = null;
+  try {
+    data = await fetchCutSourceWorkflowPayload(cut.id, cut, kind);
+  } catch (e) {
+    console.warn("[gonggan] version kind workflow failed", e);
+  }
+  if (isLoadTokenStale(loadToken) || !data?.workflow) return false;
+  const loaded = await loadWorkflowIntoDedicatedTab(data.workflow, cut, loadToken);
+  if (isLoadTokenStale(loadToken) || ggCutSwitchAutosaveBlocked || !loaded) return false;
+  markWorkflowLoadComplete(cut.id, cut, ver.id, kind);
+  markGraphGongganCut(cut.id);
+  const label = SOURCE_TOAST[data.source] || data.source || "stored";
+  const detail = workflowSourceToastDetail(label, data.fallback);
+  sdk.msg = `Canvas: ${name} (${detail})`;
+  bus.dispatchEvent(new Event("sdk"));
+  bus.dispatchEvent(new Event("gg-opentab"));
+  ggToast("Shot", `${name} — ${detail}`, "ok");
+  return true;
 }
 
 function openVersionWorkflow(cutId, vid) {
@@ -3615,12 +3643,13 @@ function selectCut(cutId, opts) {
     play.idx = -1;
     seek(t + 0.001);
   }
-  if (shouldCancelPendingWorkflowLoad({ fromTimeline })) {
+  const shotTabActive = fromTimeline && isGongganShotTabOpenAndActive();
+  if (shouldCancelPendingWorkflowLoad({ fromTimeline, shotTabActive })) {
     clearTimeout(wfLoadDebounce);
     wfLoadDebounce = 0;
     ++wfLoadToken;
   }
-  if (shouldScheduleCutWorkflowLoad({ multi, range, fromTimeline })) {
+  if (shouldScheduleCutWorkflowLoad({ multi, range, fromTimeline, shotTabActive })) {
     clearTimeout(wfLoadDebounce);
     try {
       const g = app.graph?.extra?.gonggan;
@@ -3630,6 +3659,7 @@ function selectCut(cutId, opts) {
           multi,
           range,
           fromTimeline,
+          shotTabActive,
           cutId,
           graphCutId: g?.cutId || "",
           projectId: state.pid,
