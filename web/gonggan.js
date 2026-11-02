@@ -366,6 +366,14 @@ import {
   resolveSettingApi,
 } from "./gg_job_history_dock_core.js";
 import {
+  EDIT_MODE_LABEL,
+  EDIT_MODE_ON_CLASS,
+  editPreviewOverlayRect,
+  editPreviewStill,
+  loadEditPreviewMode,
+  saveEditPreviewMode,
+} from "./gg_edit_preview_core.js";
+import {
   ZOOM_KEY_FACTOR,
   clampPx,
   thumbFromScroll,
@@ -5879,6 +5887,9 @@ let timelineRestoreFrames = 0;
 let timelineHeightObserver = null;
 // No saved height yet: the first Timeline show shrinks ComfyUI's default bottom panel height by half.
 let timelineFirstShowPending = loadTimelineHeight(localStorage) == null;
+let timelineEditModeOn = loadEditPreviewMode(localStorage);
+let editPreviewLayoutRaf = 0;
+let editPreviewObserver = null;
 
 function canvasSplitter() {
   const panel = document.querySelector(".bottom-panel");
@@ -8460,6 +8471,7 @@ function showFrame(force) {
     if (!c) {
       vid.pause(); img.hidden = vid.hidden = true; blank.hidden = false; blank.textContent = ""; label.textContent = "";
       if (i === GAP) paintHead();  // empty timeline gap: black while the playhead keeps moving
+      refreshEditPreviewStill(null);
       return;
     }
     const dispNum = cutDisplayLabel(c, computeCutLabels(state.timeline));
@@ -8527,6 +8539,7 @@ function showFrame(force) {
     if (idx != null) setPreviewFrameIndex(idx);
   }
   paintHead();
+  refreshEditPreviewStill(c);
 }
 
 const animScrubBytesCache = new Map();
@@ -9097,6 +9110,242 @@ function paintZoomBar(root) {
   thumb.style.width = width + "px";
 }
 
+function graphWorkAreaElement() {
+  return (
+    document.querySelector("#graph-canvas-container") ||
+    document.querySelector("#graph-canvas") ||
+    document.querySelector("canvas[data-lgraphcanvas]")
+  );
+}
+
+function editPreviewBox(el) {
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  if (r.width < 8 || r.height < 8) return null;
+  return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
+}
+
+/** Bottom of the graph's top toolbar row (Run, workflow tabs, right-docker buttons). */
+function measureEditPreviewToolbarBottom(graphRect) {
+  if (!graphRect) return null;
+  let bottom = null;
+  const consider = (el) => {
+    if (!el || el === document.body || el === document.documentElement) return;
+    const r = el.getBoundingClientRect();
+    if (r.height < 8 || r.height > 88 || r.width < 8) return;
+    if (r.bottom < graphRect.top - 8) return;
+    if (r.top > graphRect.top + 120) return;
+    if (r.bottom > graphRect.bottom - 80) return;
+    bottom = bottom == null ? r.bottom : Math.max(bottom, r.bottom);
+  };
+  const wfTab = document.querySelector('[data-testid="workflow-tab"]');
+  if (wfTab) {
+    consider(wfTab);
+    consider(wfTab.closest("header"));
+    consider(wfTab.parentElement);
+  }
+  for (const el of document.querySelectorAll("button")) {
+    const aria = (el.getAttribute("aria-label") || el.title || "").trim();
+    const text = (el.textContent || "").trim();
+    const isRun = /^run$/i.test(text) || /^run$/i.test(aria) || (/^run\b/i.test(text) && text.length <= 24);
+    if (!isRun && !/toggle properties panel|workflow overview/i.test(aria)) continue;
+    consider(el);
+    consider(el.parentElement);
+  }
+  return bottom;
+}
+
+/** Open left/right side panels that the preview must stay inside. */
+function measureEditPreviewSides(graphRect) {
+  let left = null;
+  let right = null;
+  if (!graphRect) return { left, right };
+  const mid = graphRect.left + graphRect.width * 0.5;
+  for (const pane of document.querySelectorAll(".p-splitterpanel")) {
+    const r = pane.getBoundingClientRect();
+    if (r.width < 48 || r.width > 560 || r.height < 64) continue;
+    if (r.bottom < graphRect.top + 24 || r.top > graphRect.bottom - 24) continue;
+    if (r.right <= mid && r.right > graphRect.left - 4) {
+      left = left == null ? r.right : Math.max(left, r.right);
+    } else if (r.left >= mid - 4 && r.left < graphRect.right + 8) {
+      right = right == null ? r.left : Math.min(right, r.left);
+    }
+  }
+  const shots = document.querySelector(".gg-root.gg-shots");
+  if (shots) {
+    const r = shots.getBoundingClientRect();
+    if (r.width > 8 && r.height > 8) left = left == null ? r.right : Math.max(left, r.right);
+  }
+  return { left, right };
+}
+
+/** Left edge of a right docker strip that hangs below the toolbar. Toolbar buttons are ignored. */
+function measureRightDockerLeft(graphRect, toolbarBottom) {
+  if (!graphRect) return null;
+  const barBottom = Number.isFinite(Number(toolbarBottom)) ? Number(toolbarBottom) : graphRect.top;
+  let edge = null;
+  for (const el of document.querySelectorAll("button")) {
+    const aria = `${el.getAttribute("aria-label") || ""} ${el.title || ""}`;
+    if (!/toggle properties panel|workflow overview/i.test(aria)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 8 || r.height < 8) continue;
+    if (r.bottom <= barBottom + 6) continue;
+    if (r.left < graphRect.left + graphRect.width * 0.45) continue;
+    edge = edge == null ? r.left : Math.min(edge, r.left);
+  }
+  return edge;
+}
+
+function currentEditPreviewCut() {
+  const cuts = trackClips();
+  const { i } = itemAt(play.t);
+  if (cuts[i]) return cuts[i];
+  if (state.cutId) return cuts.find((c) => c.id === state.cutId) || null;
+  return null;
+}
+
+function paintEditPreviewButton() {
+  document.querySelectorAll(".gg-timeline .gg-edit-mode").forEach((btn) => {
+    btn.classList.toggle("gg-on", timelineEditModeOn);
+    btn.setAttribute("aria-pressed", timelineEditModeOn ? "true" : "false");
+  });
+}
+
+function ensureEditPreviewEl() {
+  let el = document.querySelector(".gg-edit-preview");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "gg-edit-preview";
+    el.setAttribute("role", "img");
+    el.innerHTML = `<img alt="" /><div class="gg-edit-preview-label"></div><div class="gg-edit-preview-empty" hidden></div>`;
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function refreshEditPreviewStill(cut) {
+  if (!timelineEditModeOn) return;
+  const el = document.querySelector(".gg-edit-preview");
+  if (!el) return;
+  const c = cut === undefined ? currentEditPreviewCut() : cut;
+  const sig = c?.media?.id ? `${c.id}:${c.media.id}:${c.media.kind || ""}` : (c?.id || "");
+  if (sig && el.dataset.stillSig === sig) return;
+  el.dataset.stillSig = sig;
+  const img = el.querySelector("img");
+  const label = el.querySelector(".gg-edit-preview-label");
+  const empty = el.querySelector(".gg-edit-preview-empty");
+  const labels = computeCutLabels(state.timeline || { cuts: [] });
+  const name = c ? `${cutDisplayLabel(c, labels)} ${c.name || ""}`.trim() : "";
+  if (label) label.textContent = name;
+  el.setAttribute("aria-label", name ? `Edit preview, ${name}` : "Edit preview");
+  const spec = editPreviewStill(c?.media);
+  if (!img || !empty) return;
+  if (!spec) {
+    img.hidden = true;
+    img.removeAttribute("src");
+    delete img.dataset.src;
+    empty.hidden = false;
+    empty.textContent = c ? noMediaText(cutDisplayLabel(c, labels), c.name) : "";
+    return;
+  }
+  const url = spec.kind === "poster" ? posterUrl(spec.id) : mediaUrl(spec.id);
+  if (img.dataset.src !== url) {
+    img.dataset.src = url;
+    img.src = url;
+    img.alt = name;
+  }
+  img.hidden = false;
+  empty.hidden = true;
+}
+
+function bindEditPreviewObserver() {
+  if (!window.ResizeObserver) return;
+  if (!editPreviewObserver) {
+    editPreviewObserver = new ResizeObserver(() => {
+      if (timelineEditModeOn) scheduleEditPreviewLayout();
+    });
+  }
+  const watch = (el) => { if (el) editPreviewObserver.observe(el); };
+  watch(graphWorkAreaElement());
+  watch(document.querySelector(".bottom-panel"));
+  watch(document.querySelector(".gg-root.gg-shots"));
+  for (const pane of document.querySelectorAll(".p-splitterpanel")) watch(pane);
+  const wfTab = document.querySelector('[data-testid="workflow-tab"]');
+  watch(wfTab?.closest("header"));
+  watch(wfTab?.parentElement);
+}
+
+function unbindEditPreviewObserver() {
+  editPreviewObserver?.disconnect();
+  editPreviewObserver = null;
+}
+
+function applyEditPreviewLayout() {
+  document.documentElement.classList.toggle(EDIT_MODE_ON_CLASS, !!timelineEditModeOn);
+  if (!timelineEditModeOn || !isTimelinePanelOpen()) {
+    document.querySelector(".gg-edit-preview")?.remove();
+    return;
+  }
+  const graph = editPreviewBox(graphWorkAreaElement());
+  const panel = document.querySelector(".bottom-panel");
+  const panelBox = panel?.getBoundingClientRect();
+  if (!graph || !panelBox || panelBox.height < 8) {
+    document.querySelector(".gg-edit-preview")?.remove();
+    return;
+  }
+  const toolbarBottom = measureEditPreviewToolbarBottom(graph);
+  const sides = measureEditPreviewSides(graph);
+  const rect = editPreviewOverlayRect({
+    graphRect: graph,
+    toolbarBottom,
+    shotsRect: sides.left != null ? { right: sides.left, width: 100 } : null,
+    rightPanelLeft: sides.right,
+    rightDockerLeft: measureRightDockerLeft(graph, toolbarBottom ?? graph.top),
+    bottomPanelTop: panelBox.top,
+  });
+  if (!rect) {
+    document.querySelector(".gg-edit-preview")?.remove();
+    return;
+  }
+  const el = ensureEditPreviewEl();
+  if (!el) return;
+  el.style.left = `${Math.round(rect.left)}px`;
+  el.style.top = `${Math.round(rect.top)}px`;
+  el.style.width = `${Math.round(rect.width)}px`;
+  el.style.height = `${Math.round(rect.height)}px`;
+  refreshEditPreviewStill();
+  bindEditPreviewObserver();
+}
+
+function scheduleEditPreviewLayout() {
+  cancelAnimationFrame(editPreviewLayoutRaf);
+  editPreviewLayoutRaf = requestAnimationFrame(() => {
+    editPreviewLayoutRaf = 0;
+    applyEditPreviewLayout();
+  });
+}
+
+function setTimelineEditMode(on) {
+  timelineEditModeOn = !!on;
+  saveEditPreviewMode(localStorage, timelineEditModeOn);
+  document.documentElement.classList.toggle(EDIT_MODE_ON_CLASS, timelineEditModeOn);
+  paintEditPreviewButton();
+  if (timelineEditModeOn) {
+    bindEditPreviewObserver();
+    applyEditPreviewLayout();
+  } else {
+    unbindEditPreviewObserver();
+    document.querySelector(".gg-edit-preview")?.remove();
+  }
+}
+
+if (!globalThis.__ggEditPreviewResize) {
+  globalThis.__ggEditPreviewResize = true;
+  window.addEventListener("resize", () => {
+    if (timelineEditModeOn) scheduleEditPreviewLayout();
+  });
+}
+
 function mountTimeline(el) {
   el.innerHTML = "";
   const root = document.createElement("div");
@@ -9130,6 +9379,7 @@ function mountTimeline(el) {
         <span class="gg-tl-title"></span>
         <span class="gg-tl-info"></span>
         <span class="gg-tip"></span>
+        <button type="button" class="gg-btn gg-edit-mode" title="Still image of the current cut over the graph" aria-pressed="false">${EDIT_MODE_LABEL}</button>
         <button class="gg-btn gg-snap" title="Snap: 1 s steps (off = 0.1 s)">Snap</button>
         <button class="gg-btn gg-reset" title="Reset to original order and lengths">Reset</button>
         <span class="gg-sep"></span>
@@ -9185,10 +9435,12 @@ function mountTimeline(el) {
     $r(".gg-snap").classList.toggle("gg-on", ed.snap);
     $r(".gg-sound").textContent = ed.sound ? "🔊" : "🔇";
     $r(".gg-sound").classList.toggle("gg-on", ed.sound);
+    paintEditPreviewButton();
   };
   $r(".gg-play-btn").addEventListener("click", togglePlay);
   $r(".gg-sound").addEventListener("click", () => { ed.sound = !ed.sound; localStorage.setItem("gg.sound", ed.sound ? "1" : "0"); viewer.vid.muted = !ed.sound; paintButtons(); });
   $r(".gg-snap").addEventListener("click", () => { ed.snap = !ed.snap; localStorage.setItem("gg.snap", ed.snap ? "1" : "0"); paintButtons(); });
+  $r(".gg-edit-mode")?.addEventListener("click", () => setTimelineEditMode(!timelineEditModeOn));
   const tlWrap = $r(".gg-tl-scroll");
   const zoomBar = $r(".gg-zoombar");
   const zoomThumb = $r(".gg-zb-thumb");
@@ -9524,8 +9776,15 @@ function mountTimeline(el) {
   paintTimelineNativeLocks();
   refreshExport();
   if (!state.projects.length) loadProjects();
+  if (timelineEditModeOn) {
+    bindEditPreviewObserver();
+    applyEditPreviewLayout();
+    requestAnimationFrame(applyEditPreviewLayout);
+  }
   return () => {
     stopPlay();
+    document.querySelector(".gg-edit-preview")?.remove();
+    unbindEditPreviewObserver();
     if (ro) ro.disconnect();
     if (zoomRo) zoomRo.disconnect();
     window.removeEventListener("keydown", onZoomKey, true);
