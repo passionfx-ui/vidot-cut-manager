@@ -1149,12 +1149,20 @@ def native_image_to_video_workflow(pid: str, cut_id: str, selected_vid: str | No
     if not cut or cut.get("deleted_at"):
         raise ValueError("cut not found")
     label, graph = project_video_template(doc)
+    graph = copy.deepcopy(graph)
+    prefer_id = None
     if gg_template._is_ui_workflow(graph):
+        try:
+            prefer_id = gg_wfnodes.find_start_image_node(graph)[0]
+        except gg_wfnodes.NodeNotFound:
+            prefer_id = None
         try:
             graph = _ui_to_api(graph)
         except ValueError as ex:
             raise ValueError(f"Video template {label} cannot run without its tab: {ex}") from None
-    gg_wfnodes.find_start_image_node(graph)
+    if not (isinstance(prefer_id, str) and isinstance(graph.get(prefer_id), dict)):
+        gg_wfnodes.find_start_image_node(graph)
+        prefer_id = None
     ver, path = pick_start_version(pid, cut_id, selected_vid, start_vid)
     prompt = cut_video_prompt_text(cut) or _version_prompt(pid, ver, path)
     if not prompt:
@@ -1166,7 +1174,13 @@ def native_image_to_video_workflow(pid: str, cut_id: str, selected_vid: str | No
     wf = gg_ltx.inject_ltx(graph, prompt, float(sec))
     wf = gg_ltx.patch_ltx_duration(wf, float(sec))
     image = stage_start_image(path, ver["id"])
-    node = gg_wfnodes.set_start_image(wf, image)
+    if isinstance(prefer_id, str) and isinstance(wf.get(prefer_id), dict):
+        try:
+            node = gg_wfnodes.set_node_image(wf, prefer_id, image)
+        except gg_wfnodes.NodeNotFound:
+            node = gg_wfnodes.set_start_image(wf, image)
+    else:
+        node = gg_wfnodes.set_start_image(wf, image)
     return {"workflow": wf, "template": label, "start_version": ver["id"], "start_node": node, "image": image,
             "prompt": prompt, "frames": gg_ltx.frames_for_duration(float(sec), gg_ltx.workflow_fps(wf))}
 

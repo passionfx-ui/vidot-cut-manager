@@ -5,6 +5,7 @@
  * over widgets_values. A cut image written only into the array never reaches the node.
  */
 
+import { parseLinearRef } from "./gg_app_mode_core.js";
 import { workflowGraphKind } from "./gg_rep_wf_core.js";
 
 const START_TITLE = "start image";
@@ -34,6 +35,110 @@ function listedNodes(workflow) {
   return Object.entries(workflow)
     .filter(([, n]) => n && typeof n === "object" && n.class_type)
     .map(([id, node]) => ({ node, id: String(id) }));
+}
+
+function workflowNodesDeep(workflow) {
+  const out = [];
+  const add = (nodes, graphId) => {
+    if (!Array.isArray(nodes)) return;
+    for (const node of nodes) {
+      if (!node || typeof node !== "object" || SKIPPED_MODES.has(node.mode)) continue;
+      out.push({ node, id: String(node.id), graphId: graphId || "" });
+    }
+  };
+  if (Array.isArray(workflow?.nodes)) add(workflow.nodes, "");
+  else if (workflow && typeof workflow === "object" && !Array.isArray(workflow)) {
+    for (const [id, node] of Object.entries(workflow)) {
+      if (node && typeof node === "object" && node.class_type) out.push({ node, id: String(id), graphId: "" });
+    }
+  }
+  const subs = workflow?.definitions?.subgraphs;
+  if (Array.isArray(subs)) {
+    for (const sg of subs) {
+      if (sg && typeof sg === "object") add(sg.nodes, String(sg.id || ""));
+    }
+  }
+  return out;
+}
+
+function parseLinearInputRow(row) {
+  if (!Array.isArray(row) || row.length < 2) return null;
+  const head = row[0];
+  const label = row[1];
+  if (typeof head === "string" && head.split(":").length >= 3) {
+    const parsed = parseLinearRef(head);
+    if (!parsed) return null;
+    return {
+      graphId: parsed.graphId,
+      nodeId: parsed.nodeId,
+      widget: parsed.widget,
+      label: String(label ?? parsed.widget),
+    };
+  }
+  if ((typeof head === "string" || typeof head === "number") && label != null) {
+    return { graphId: "", nodeId: String(head), widget: String(label), label: String(label) };
+  }
+  return null;
+}
+
+/**
+ * LoadImage named by an app template's linearData inputs.
+ * `{ nodeId, widget, graphId, label, node }` or null.
+ */
+export function linearLoadImageInput(workflow) {
+  const rows = workflow?.extra?.linearData?.inputs;
+  if (!Array.isArray(rows)) return null;
+  const nodes = workflowNodesDeep(workflow);
+  const hits = [];
+  for (const row of rows) {
+    const parsed = parseLinearInputRow(row);
+    if (!parsed) continue;
+    let matches = nodes.filter((n) => n.id === parsed.nodeId);
+    if (parsed.graphId) {
+      const exact = matches.filter((n) => n.graphId === parsed.graphId);
+      if (exact.length) matches = exact;
+    }
+    const hit = matches.find((n) => nodeType(n.node) === "LoadImage");
+    if (!hit) continue;
+    hits.push({
+      nodeId: hit.id,
+      widget: parsed.widget || "image",
+      graphId: hit.graphId,
+      label: parsed.label || parsed.widget || "image",
+      node: hit.node,
+    });
+  }
+  if (!hits.length) return null;
+  const rank = (h) => {
+    const blob = `${h.label} ${h.widget}`.toLowerCase();
+    if (blob.includes("start")) return 0;
+    if (blob.includes("image")) return 1;
+    return 2;
+  };
+  hits.sort((a, b) => rank(a) - rank(b));
+  return hits[0];
+}
+
+/**
+ * Image input of a video template: the LoadImage named by linearData, else
+ * title "Start Image", else the first LoadImage (root, then a subgraph).
+ * `{ nodeId, widget, graphId, label, node }` or null.
+ */
+export function findVideoImageTarget(workflow) {
+  const linear = linearLoadImageInput(workflow);
+  if (linear) return linear;
+  const titled = findStartImageNode(workflow);
+  if (titled) return { nodeId: titled.id, widget: "image", graphId: "", label: "image", node: titled.node };
+  const deep = workflowNodesDeep(workflow).filter((n) => nodeType(n.node) === "LoadImage");
+  if (!deep.length) return null;
+  deep.sort((a, b) => {
+    const [ka, va] = idKey(a.id);
+    const [kb, vb] = idKey(b.id);
+    if (ka !== kb) return ka - kb;
+    return va < vb ? -1 : va > vb ? 1 : 0;
+  });
+  const n = deep[0];
+  return { nodeId: n.id, widget: "image", graphId: n.graphId, label: "image", node: n.node };
 }
 
 /** Title "Start Image", else the first LoadImage (lowest id). `{node, id}` or null. */
@@ -80,16 +185,20 @@ function writeUiImage(node, imageName) {
 export function wireCutStartImage(workflow, imageName) {
   const name = String(imageName ?? "").trim();
   if (!workflow || !name) return null;
-  const hit = findStartImageNode(workflow);
+  const hit = findVideoImageTarget(workflow);
   if (!hit) return null;
   const node = hit.node;
   if (node.inputs && typeof node.inputs === "object" && !Array.isArray(node.inputs)) {
     if (!Array.isArray(node.inputs.image)) node.inputs.image = name;
   }
-  if (Array.isArray(workflow.nodes) || node.widgets_values != null || node.widgets_values_named) {
+  if (Array.isArray(workflow.nodes) || node.widgets_values != null || node.widgets_values_named || hit.graphId) {
     writeUiImage(node, name);
+    const widget = String(hit.widget || "");
+    if (widget && widget !== "image" && node.widgets_values_named && typeof node.widgets_values_named === "object") {
+      node.widgets_values_named[widget] = name;
+    }
   }
-  return hit.id;
+  return hit.nodeId;
 }
 
 /**
@@ -98,9 +207,15 @@ export function wireCutStartImage(workflow, imageName) {
  * @param {object} workflow
  * @returns {string | null}
  */
+function workflowLooksLikeVideo(workflow) {
+  if (workflowGraphKind(workflow) === "video") return true;
+  const subs = workflow?.definitions?.subgraphs;
+  return Array.isArray(subs) && subs.some((sg) => sg && workflowGraphKind(sg) === "video");
+}
+
 export function syncSavedVideoStartImage(workflow) {
-  if (workflowGraphKind(workflow) !== "video") return null;
-  const hit = findStartImageNode(workflow);
+  if (!workflowLooksLikeVideo(workflow)) return null;
+  const hit = findVideoImageTarget(workflow);
   if (!hit) return null;
   const wv = hit.node.widgets_values;
   const positional = Array.isArray(wv) ? wv[0] : wv && typeof wv === "object" ? wv.image : "";

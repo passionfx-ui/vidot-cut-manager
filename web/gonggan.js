@@ -187,7 +187,7 @@ import {
   shouldReuseOpenWorkflow,
   workflowContentKey,
 } from "./gg_project_store_core.js";
-import { findStartImageNode, syncSavedVideoStartImage } from "./gg_start_image_core.js";
+import { findStartImageNode, findVideoImageTarget, syncSavedVideoStartImage } from "./gg_start_image_core.js";
 import {
   applyCutData,
   cloneGraph,
@@ -354,6 +354,7 @@ import {
   templateComboItems,
   templateLabel,
   isBuiltinTemplate,
+  isAppWorkflowFile,
   templateListPaths,
 } from "./gg_template_pick_core.js";
 import { clearLinearMode, hasLinearModeFlag, linearBindings, linearOutputIds, linearPromptLabel } from "./gg_app_mode_core.js";
@@ -3355,6 +3356,8 @@ let ggApplyingCutData = false;
 let ggCutDataLock = 0;
 /** Uploaded Load Image name for the video queue currently being serialized. */
 let ggQueuedStartFile = "";
+/** LoadImage node id chosen for that upload (linearData input, else the LoadImage node). */
+let ggQueuedStartNode = "";
 /** Snapshot taken just before queuePrompt, attached to the returned prompt_id. */
 let ggPendingQueueSnap = null;
 /** Per-cut negative prompt, seed, input image, and frames. Positive prompt stays on the cut. */
@@ -4170,16 +4173,12 @@ async function applyLiveCutData(cut, data, loadToken) {
       if (isStillVersion(ver)) {
         try {
           const name = await copyVersionImageToInput(ver.id);
-          if (!isLoadTokenStale(loadToken)) {
-            const node = liveStartImageNode();
-            if (node) setLiveLoadImageWidget(node, name);
-          }
+          if (!isLoadTokenStale(loadToken)) applyLiveVideoImage(findVideoImageTarget(snap), name);
         } catch (e) {
           console.warn("[gonggan] cut start image", e);
         }
       } else if (fileImage) {
-        const node = liveStartImageNode();
-        if (node) setLiveLoadImageWidget(node, fileImage);
+        applyLiveVideoImage(findVideoImageTarget(snap), fileImage);
       }
     } else if (fileImage) {
       const node = liveNodeById(ids?.imageId) || liveStartImageNode();
@@ -4550,7 +4549,7 @@ function syncTplUseLastButton(root) {
   const btn = root?.querySelector(".gg-tpl-use-last");
   if (!btn) return;
   const last = loadLastTemplate(localStorage);
-  const show = !projectTemplateRef && typeof last === "string" && !!last && (userWorkflowPaths.includes(last) || isBuiltinTemplate(last));
+  const show = !projectTemplateRef && typeof last === "string" && !!last && (isBuiltinTemplate(last) || isAppWorkflowFile(last));
   btn.hidden = !show;
   if (!show) return;
   btn.title = `Link last used template: ${templateLabel(last)}`;
@@ -5592,9 +5591,12 @@ async function loadTemplateIntoCut(cutId, ref) {
     if (isLoadTokenStale(loadToken) || !loaded) return;
     markWorkflowLoadComplete(cutId, cut);
     markGraphGongganCut(cutId);
-    if (queueGraphIsVideo(cut)) {
+    const videoRef = String(state.timeline?.project?.settings?.video_template || "").trim();
+    const usingVideo = (videoRef && String(ref || "").trim() === videoRef) || queueGraphIsVideo(cut) || graphLooksLikeVideo(filled);
+    if (usingVideo) {
+      if (videoRef && String(ref || "").trim() === videoRef) wfLastLoadedKind = "video";
       ggApplyingCutData = true;
-      try { await feedVideoCutStartImage(); } catch (_) {}
+      try { await feedVideoCutStartImage({ force: true }); } catch (_) {}
       ggApplyingCutData = false;
     }
     await saveCutWorkflowNow(cutId, { flush: true });
@@ -9337,18 +9339,69 @@ function rememberRunSnapshot(promptId, snap) {
   scheduleRunSnapFile();
 }
 
+function graphLooksLikeVideo(wf) {
+  if (!wf || typeof wf !== "object") return false;
+  if (workflowGraphKind(wf) === "video") return true;
+  const subs = wf.definitions?.subgraphs;
+  return Array.isArray(subs) && subs.some((sg) => sg && workflowGraphKind(sg) === "video");
+}
+
 /** The open graph is a video workflow (shared video template), even if the cut's current media is a still. */
 function queueGraphIsVideo(cut) {
   if (workflowKindForCut(cut) === "video" || wfLastLoadedKind === "video") return true;
   try {
-    return workflowGraphKind(captureGraphWorkflowSnapshot()) === "video";
+    return graphLooksLikeVideo(captureGraphWorkflowSnapshot());
   } catch (_) {
     return false;
   }
 }
 
+/** The still image Take for a video start frame. A selected video Take is not used. */
+function selectedStillTakeId(cut) {
+  const sel = stripSelectedVersionId(cut);
+  if (isStillVersion(findCutVersion(cut, sel))) return sel;
+  return selectedImageTakeId(cut);
+}
+
+function liveGraphNodes() {
+  return app.graph?._nodes || app.graph?.nodes || [];
+}
+
+/** Write the cut image onto the video template's LoadImage (linearData input, else the LoadImage node). */
+function applyLiveVideoImage(binding, imageName) {
+  const name = String(imageName || "").trim();
+  if (!name) return false;
+  const names = [...new Set([binding?.widget, binding?.label, "image"].map((n) => String(n || "").trim()).filter(Boolean))];
+  const writeNode = (node) => {
+    if (!node) return false;
+    let ok = false;
+    for (const widgetName of names) {
+      if (setLiveNamedWidget(node.id, widgetName, name)) ok = true;
+    }
+    if (setLiveLoadImageWidget(node, name)) ok = true;
+    const inner = node.subgraph?._nodes || node.subgraph?.nodes;
+    if (binding?.nodeId && Array.isArray(inner)) {
+      const nested = inner.find((n) => n && String(n.id) === String(binding.nodeId));
+      if (nested && setLiveLoadImageWidget(nested, name)) ok = true;
+    }
+    return ok;
+  };
+  if (binding?.nodeId) {
+    const direct = liveNodeById(binding.nodeId);
+    if (writeNode(direct)) return true;
+  }
+  if (binding?.graphId) {
+    for (const node of liveGraphNodes()) {
+      const type = String(node?.type || node?.comfyClass || "");
+      if (type !== binding.graphId) continue;
+      if (writeNode(node)) return true;
+    }
+  }
+  return writeNode(liveStartImageNode());
+}
+
 /** Write the uploaded still into the API prompt ComfyUI is about to send. */
-function patchQueuedStartImage(prompt, imageName) {
+function patchQueuedStartImage(prompt, imageName, preferId) {
   const output = prompt?.output;
   const name = String(imageName || "").trim();
   if (!output || !name) return;
@@ -9363,8 +9416,10 @@ function patchQueuedStartImage(prompt, imageName) {
     const nb = /^\d+$/.test(b.id) ? Number(b.id) : Number.MAX_SAFE_INTEGER;
     return na - nb || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   });
+  const wanted = String(preferId || "");
+  const preferred = wanted ? rows.find((r) => r.id === wanted) : null;
   const titled = rows.filter((r) => r.title === "start image");
-  const hit = titled.length === 1 ? titled[0] : titled.length ? null : rows[0];
+  const hit = preferred || (titled.length === 1 ? titled[0] : titled.length ? null : rows[0]);
   if (!hit) return;
   const inputs = hit.node.inputs && typeof hit.node.inputs === "object" ? hit.node.inputs : (hit.node.inputs = {});
   if (!Array.isArray(inputs.image)) inputs.image = name;
@@ -9410,8 +9465,9 @@ async function injectCutDataForQueue() {
       }
     }
     ggQueuedStartFile = "";
+    ggQueuedStartNode = "";
     if (video) {
-      sourceImageTake = selectedImageTakeId(cut);
+      sourceImageTake = selectedStillTakeId(cut);
       ggQueuedStartFile = await feedVideoCutStartImage() || "";
     }
   } catch (e) {
@@ -9460,20 +9516,21 @@ async function injectCutDataForQueue() {
  * No selected image, or the copy fails: leave the graph alone and queue as before.
  * Image cuts return immediately.
  */
-async function feedVideoCutStartImage() {
+async function feedVideoCutStartImage({ force = false } = {}) {
   const extra = app.graph?.extra?.gonggan;
   const cutId = extra?.cutId;
   const pid = extra?.pid || extra?.projectId;
   if (!cutId || !pid || pid !== state.pid || !isNativeProject()) return "";
   const cut = cutById(cutId);
-  if (!cut || !queueGraphIsVideo(cut)) return "";
-  const ver = findCutVersion(cut, selectedImageTakeId(cut));
+  if (!cut || (!force && !queueGraphIsVideo(cut))) return "";
+  const ver = findCutVersion(cut, selectedStillTakeId(cut));
   if (!isStillVersion(ver)) {
     console.warn("[gonggan] video queue: no selected image result; queuing without a start frame", cutId);
     return "";
   }
-  const node = liveStartImageNode();
-  if (!node) {
+  const binding = findVideoImageTarget(captureGraphWorkflowSnapshot());
+  ggQueuedStartNode = binding?.nodeId || "";
+  if (!binding && !liveStartImageNode()) {
     console.warn("[gonggan] video queue: no Load Image node; queuing without a start frame", cutId);
     return "";
   }
@@ -9484,7 +9541,7 @@ async function feedVideoCutStartImage() {
     console.warn("[gonggan] video queue: could not copy the selected image; queuing as before", cutId, e);
     return "";
   }
-  if (!setLiveLoadImageWidget(node, imageName)) {
+  if (!applyLiveVideoImage(binding, imageName)) {
     console.warn("[gonggan] video queue: Load Image has no image widget; queuing as before", cutId);
     return "";
   }
@@ -12994,21 +13051,23 @@ app.registerExtension({
         } catch (e) {
           console.warn("[gonggan] queue inject failed; queuing as before", e);
           ggQueuedStartFile = "";
+          ggQueuedStartNode = "";
         }
         if (!ok) {
           ggApplyingCutData = false;
           ggQueuedStartFile = "";
+          ggQueuedStartNode = "";
           return {};
         }
         const prevGraphToPrompt = app.graphToPrompt;
         app.graphToPrompt = async function ggQueueGraphToPrompt(...gargs) {
           applyLinearPromptsForOpenCut();
           if (ggQueuedStartFile) {
-            const node = liveStartImageNode();
-            if (node) setLiveLoadImageWidget(node, ggQueuedStartFile);
+            const binding = findVideoImageTarget(captureGraphWorkflowSnapshot()) || { nodeId: ggQueuedStartNode, widget: "image" };
+            applyLiveVideoImage(binding, ggQueuedStartFile);
           }
           const result = await prevGraphToPrompt.apply(app, gargs);
-          if (ggQueuedStartFile) patchQueuedStartImage(result, ggQueuedStartFile);
+          if (ggQueuedStartFile) patchQueuedStartImage(result, ggQueuedStartFile, ggQueuedStartNode);
           return result;
         };
         try {
@@ -13016,6 +13075,7 @@ app.registerExtension({
         } finally {
           app.graphToPrompt = prevGraphToPrompt;
           ggQueuedStartFile = "";
+          ggQueuedStartNode = "";
           restoreSeedControls(ggPendingQueueSnap?.controls);
           if (ggPendingQueueSnap) ggPendingQueueSnap.controls = null;
           ggApplyingCutData = false;

@@ -85,19 +85,17 @@ export function appWorkflowPaths(paths) {
 }
 
 /**
- * Workflows shown in template lists: normal .json files and Apps .app.json files.
- * Built-in refs are added by the caller. Internal gonggan paths stay hidden unless `keep` is that path.
- * A saved ref that has left the folder is still listed.
+ * Workflows shown in template lists: Apps `.app.json` files only.
+ * Normal `.json` files stay on disk and stay out of the list. Built-in refs are added by the caller.
+ * A saved `.app.json` that has left the folder is still listed. A saved non-app path is not.
  * @param {string[]} paths
  * @param {string} [keep]
  * @returns {string[]}
  */
 export function templateListPaths(paths, keep) {
   const cur = String(keep ?? "").trim();
-  const list = [...userTemplatePaths(paths, cur)]
-    .filter((p) => !isBuiltinTemplate(p))
-    .sort((a, b) => a.localeCompare(b));
-  if (cur && !isBuiltinTemplate(cur) && !list.includes(cur)) list.push(cur);
+  const list = appWorkflowPaths(paths);
+  if (cur && isAppWorkflowFile(cur) && !isBuiltinTemplate(cur) && !list.includes(cur)) list.push(cur);
   return list;
 }
 
@@ -132,7 +130,7 @@ export function filterTemplatePaths(paths, query, keep) {
 
 /**
  * Template combobox items: (none) first (only for Default template), then the built-in templates, then
- * user workflows A–Z. That includes normal .json templates and Apps .app.json templates.
+ * Apps workflows (.app.json) A–Z. Other userdata workflows stay out of the list.
  * @param {string[]} paths
  * @param {string} current saved template ref ("" = none)
  * @param {{ none?: boolean }} [opts] none: false for the Image / Video template fields (always a template)

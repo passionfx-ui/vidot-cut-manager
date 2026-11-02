@@ -138,11 +138,91 @@ def _id_key(nid) -> tuple:
     return (0, int(s), s) if s.isdigit() else (1, 0, s)
 
 
+def _parse_linear_input(row: Any) -> tuple[str, str, str, str] | None:
+    """(graph id, node id, widget name, label) from one linearData input row."""
+    if not isinstance(row, (list, tuple)) or len(row) < 2:
+        return None
+    head, label = row[0], row[1]
+    if isinstance(head, str) and head.count(":") >= 2:
+        parts = head.split(":")
+        widget, node_id = parts[-1], parts[-2]
+        graph_id = ":".join(parts[:-2])
+        if graph_id and node_id and widget:
+            return graph_id, str(node_id), str(widget), str(label if label is not None else widget)
+    if isinstance(head, (int, str)) and label is not None:
+        return "", str(head), str(label), str(label)
+    return None
+
+
+def _nodes_deep(graph: dict) -> list[tuple[str, dict, str]]:
+    """(id, node, graph id) for the root graph, then each subgraph definition."""
+    ui = is_ui(graph)
+    rows = [(nid, node, "") for nid, node in _nodes(graph)]
+    if not ui:
+        return rows
+    defs = graph.get("definitions") if isinstance(graph.get("definitions"), dict) else {}
+    for sg in defs.get("subgraphs") or []:
+        if not isinstance(sg, dict):
+            continue
+        gid = str(sg.get("id") or "")
+        for node in sg.get("nodes") or []:
+            if isinstance(node, dict) and node.get("mode") in ACTIVE_MODES:
+                rows.append((str(node.get("id")), node, gid))
+    return rows
+
+
+def _linear_load_image(graph: dict) -> tuple[str, dict] | None:
+    """LoadImage named by extra.linearData inputs, or None."""
+    extra = graph.get("extra") if isinstance(graph.get("extra"), dict) else None
+    linear = extra.get("linearData") if isinstance(extra, dict) else None
+    rows = linear.get("inputs") if isinstance(linear, dict) else None
+    if not isinstance(rows, list):
+        return None
+    ui = is_ui(graph)
+    nodes = _nodes_deep(graph)
+    hits: list[tuple[str, dict, str]] = []
+    for row in rows:
+        parsed = _parse_linear_input(row)
+        if not parsed:
+            continue
+        graph_id, node_id, widget, label = parsed
+        matches = [item for item in nodes if item[0] == node_id]
+        if graph_id:
+            exact = [item for item in matches if item[2] == graph_id]
+            if exact:
+                matches = exact
+        for nid, node, _gid in matches:
+            if _type(node, ui) == "LoadImage":
+                hits.append((nid, node, f"{label} {widget}"))
+                break
+    if not hits:
+        return None
+
+    def rank(blob: str) -> int:
+        text = blob.casefold()
+        if "start" in text:
+            return 0
+        if "image" in text:
+            return 1
+        return 2
+
+    hits.sort(key=lambda item: rank(item[2]))
+    return hits[0][0], hits[0][1]
+
+
 def find_start_image_node(graph: dict, *, titled_only: bool = False) -> tuple[str, dict]:
-    """(id, node) that gets the start image: titled "Start Image", else the first LoadImage node (lowest id).
-    `titled_only` skips the LoadImage fallback. Raises NodeNotFound."""
+    """(id, node) that gets the start image.
+
+    An app template's linearData input that points at a LoadImage wins.
+    Otherwise the node titled "Start Image", else the first LoadImage (lowest id;
+    a subgraph LoadImage is used when the root graph has none).
+    `titled_only` keeps the title-only rule. Raises NodeNotFound."""
     if not isinstance(graph, dict):
         raise NodeNotFound(START_IMAGE_MISSING)
+    if not titled_only:
+        linear = _linear_load_image(graph)
+        if linear:
+            return linear
     titled = _titled(graph, START_IMAGE_TITLE)
     if len(titled) > 1:
         raise NodeNotFound(f"More than one node is titled {START_IMAGE_TITLE}. Keep the title on one node only.")
@@ -150,9 +230,12 @@ def find_start_image_node(graph: dict, *, titled_only: bool = False) -> tuple[st
         return titled[0]
     if not titled_only:
         ui = is_ui(graph)
-        loaders = [(nid, n) for nid, n in _nodes(graph) if _type(n, ui) == "LoadImage"]
-        if loaders:  # several Load Image nodes: the first one (lowest node id) is the start image
-            return min(loaders, key=lambda it: _id_key(it[0]))
+        root_ids = {nid for nid, _node in _nodes(graph)}
+        loaders = [(nid, node) for nid, node, _gid in _nodes_deep(graph) if _type(node, ui) == "LoadImage"]
+        root_loaders = [item for item in loaders if item[0] in root_ids]
+        chosen = root_loaders or loaders
+        if chosen:  # several Load Image nodes: the first one (lowest node id) is the start image
+            return min(chosen, key=lambda it: _id_key(it[0]))
     raise NodeNotFound(START_IMAGE_MISSING)
 
 
@@ -172,6 +255,25 @@ def _write_ui_image_value(node: dict, image_name: str) -> None:
     named["image"] = image_name
     if named.get("upload") is None:
         named["upload"] = "image"
+
+
+def set_node_image(graph: dict, node_id: str, image_name: str) -> str:
+    """Write `image_name` onto one already chosen node. Raises NodeNotFound when that id is gone."""
+    nid = str(node_id)
+    if is_ui(graph):
+        for cand, node, _gid in _nodes_deep(graph):
+            if cand == nid:
+                _write_ui_image_value(node, image_name)
+                return nid
+        raise NodeNotFound(START_IMAGE_MISSING)
+    node = graph.get(nid)
+    if not isinstance(node, dict):
+        raise NodeNotFound(START_IMAGE_MISSING)
+    inputs = node.setdefault("inputs", {})
+    if isinstance(inputs.get("image"), list):
+        raise NodeNotFound(f"The {START_IMAGE_TITLE} node gets its image from another node; it must be a Load Image node.")
+    inputs["image"] = image_name
+    return nid
 
 
 def set_start_image(graph: dict, image_name: str, *, titled_only: bool = False) -> str:
