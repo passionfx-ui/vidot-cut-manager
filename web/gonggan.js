@@ -7298,14 +7298,24 @@ async function setPick(cutId, vid, opts = {}) {
   ggToast("Promote failed", `Reverted to the previous version: ${msg}`, "warn");
 }
 
+const versionDeleteBusy = new Set();
+
+/** Hide one output thumbnail. Files stay in this History step until the step is dropped. */
 async function deleteVersion(cutId, versionId) {
   if (!state.pid || !cutId || !versionId || !isNativeProject()) return;
+  const busyKey = `${cutId}\n${versionId}`;
+  if (versionDeleteBusy.has(busyKey)) return;
+  versionDeleteBusy.add(busyKey);
   const stepId = historyStepId();
   const pid = state.pid;
   try {
     const d = await postJson("/gonggan/version/delete", {
       pid, cut_id: cutId, version_id: versionId, history_step: stepId,
     });
+    if (stripPick.pid === pid && stripPick.cutId === cutId && stripPick.vid === versionId) stripPick.vid = "";
+    if (wfOpenVersion && wfOpenVersion.projectId === pid && wfOpenVersion.cutId === cutId && wfOpenVersion.vid === versionId) {
+      wfOpenVersion = null;
+    }
     if (d.timeline) adoptMutationTimeline(d.timeline, pid);
     else await loadTimeline();
     recordShotsEntry(pid, {
@@ -7314,6 +7324,8 @@ async function deleteVersion(cutId, versionId) {
     bus.dispatchEvent(new Event("timeline"));
   } catch (e) {
     ggToast("Delete version", e.message, "warn");
+  } finally {
+    versionDeleteBusy.delete(busyKey);
   }
 }
 
@@ -8194,9 +8206,13 @@ function versionStripHtml(c, selVid) {
     const sel = r.id === selVid;
     const failed = !!byId.get(r.id)?.failed;
     const starOn = r.best ? " gg-on" : "";
+    const xBtn = isNativeProject()
+      ? `<button type="button" class="gg-vs-x" title="Hide this version. History can restore it." aria-label="Delete">×</button>`
+      : "";
     return `<div class="${wrapCls} gg-vs-item${failed ? " gg-vs-failed" : ""}${r.best ? " gg-vs-best" : ""}${sel && !r.best ? " gg-vs-sel" : ""}" data-vid="${esc(r.id)}"${sel ? ' aria-selected="true"' : ""}>
       <div class="gg-ver" title="${esc(title)}">
         <button type="button" class="gg-vs-star${starOn}" title="${esc(SET_BEST_LABEL)}" aria-pressed="${r.best ? "true" : "false"}">★</button>
+        ${xBtn}
         ${img}
         ${r.video ? `<span class="gg-vs-dur"${r.duration ? "" : " hidden"}>${esc(r.duration)}</span>` : ""}
       </div>
@@ -8364,8 +8380,13 @@ function mountShots(el) {
         Object.assign(stripPick, { pid: state.pid, cutId: c.id, vid });
         toggleBest(c.id, vid);
       });
+      wrap.querySelector(".gg-vs-x")?.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void deleteVersion(c.id, vid);
+      });
       wrap.addEventListener("click", (e) => {
-        if (e.target.closest(".gg-vs-star")) return;
+        if (e.target.closest(".gg-vs-star, .gg-vs-x")) return;
         e.stopPropagation();
         selectStripVersion(c.id, vid);
       });
@@ -9159,6 +9180,16 @@ function mountShots(el) {
       return;
     }
     if (action === "delete") {
+      const overStrip = !!root.querySelector(".gg-vstrip:hover");
+      if (overStrip && isNativeProject() && state.timeline) {
+        const c = state.timeline.cuts.find((x) => x.id === state.cutId) || null;
+        const vid = stripSelectedVersionId(c);
+        if (c && vid) {
+          handled();
+          if (!e.repeat) void deleteVersion(c.id, vid);
+          return;
+        }
+      }
       if (!cutsForDelete().length) return;
       handled();
       deleteSelectedCuts();

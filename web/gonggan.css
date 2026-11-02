@@ -785,6 +785,10 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-shots .gg-vstrip .gg-vs-import-tile:disabled { opacity: 0.45; cursor: default; }
 .gg-shots .gg-vstrip .gg-vs-star { position: absolute; left: 2px; top: 2px; z-index: 2; width: 18px; height: 18px; padding: 0; border: none; border-radius: 2px; background: rgba(0,0,0,.55); color: #ccc; font-size: 12px; line-height: 16px; cursor: pointer; }
 .gg-shots .gg-vstrip .gg-vs-star.gg-on { color: #e8c547; }
+.gg-shots .gg-vstrip .gg-vs-x { position: absolute; right: 2px; top: 2px; z-index: 2; width: 18px; height: 18px; padding: 0; border: none; border-radius: 2px; background: rgba(0,0,0,.55); color: #fff; font-size: 14px; line-height: 16px; cursor: pointer; opacity: 0; pointer-events: none; }
+.gg-shots .gg-vstrip .gg-ver-wrap:hover .gg-vs-x,
+.gg-shots .gg-vstrip .gg-vs-x:focus-visible { opacity: 1; pointer-events: auto; }
+.gg-shots .gg-vstrip .gg-vs-x:hover { background: rgba(180, 40, 40, .92); }
 .gg-shots .gg-vs-info { flex: 0 0 105px; display: grid; grid-template-columns: 80px minmax(0, 1fr); grid-template-rows: repeat(6, 14px); column-gap: 10px; row-gap: 2px; box-sizing: border-box; width: 100%; height: 105px; min-height: 105px; max-height: 105px; padding: 4px 8px 6px; overflow: hidden; font-size: 11px; line-height: 14px; border-top: 1px solid var(--gg-line); }
 .gg-shots .gg-vs-info-k { color: var(--gg-dim); white-space: nowrap; overflow: hidden; }
 .gg-shots .gg-vs-info-v { color: var(--gg-fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -17,6 +17,7 @@
 - MiniMax H3 보너스는 메인 상과 중복 가능.
 
 ## 3. 결정 사항 (시간순)
+- 2026-11-02: **I8 출력 썸네일 삭제** — 왼쪽 아래 버전 썸네일 줄에서 항목에 마우스를 올리면 X가 보이고, 그 줄(썸네일·버전 정보) 위에 포인터가 있을 때 Delete는 선택된 썸네일만 숨긴다. 숨긴 파일은 I5 History 한 단계이고 Ctrl+Z·History 팝업으로 돌아온다. 설정한 History steps(기본 50)를 넘는 가장 오래된 단계의 숨긴 파일은 완전히 삭제된다. 컷 목록 위의 Delete는 컷 삭제 그대로. 프론트만(Ctrl+F5).
 - 2026-11-02: **I5b History는 팝업** — Shots 인라인 History 목록을 없애고, 예전 Trash 버튼 자리(샷 수 줄 오른쪽)의 **History** 버튼을 누르면 그 버튼에 붙는 작은 팝업에 같은 목록(단계 클릭으로 이동, 현재/이후 스타일). 바깥 클릭·ESC로 닫힘. 기록 로직은 그대로. 프론트만(Ctrl+F5).
 - 2026-11-02: **I7 영상 컷 큐는 선택 이미지** — 영상 컷 그래프를 큐할 때(ComfyUI Queue / `app.queuePrompt`), 그 컷에서 현재 선택된 정지 이미지 버전을 `input/gonggan/start_<버전>.<ext>`로 복사하고 Load Image 위젯(제목 `Start Image`, 없으면 첫 LoadImage)을 그 파일로 맞춘 뒤 큐한다. 선택된 정지 이미지가 없으면 경고만 남기고 위젯은 그대로 큐. 이미지 컷 큐는 건드리지 않음. 프론트만(Ctrl+F5).
 - 2026-11-02: **I5 History가 Trash를 대체** — 컷 휴지통 버튼·모달·「Restore Deleted Cuts」메뉴를 없애고, Shots에 History 패널(오래된 것이 위, 최신이 아래, 포토샵처럼 클릭하면 그 시점으로). Shots와 Timeline undo는 프로젝트당 스택 하나. Ctrl+Z / Ctrl+Shift+Z(Ctrl+Y)는 어느 탭에서 한 편집이든 가장 최근 것을 취소. 캔버스에 포커스/마지막 클릭이면 ComfyUI 그래프 undo에 맡긴다. 기록하지 않음: Image/Video/Auto 전환, 선택·보기만 바꾼 것. 컷·버전·씬 삭제는 History 한 단계이고 파일은 `projects/<pid>/.history/files/<step>/`에 숨긴다(씬은 메타만). 전역 설정 **History steps**(기본 50, `gonggan_settings.json` `history_steps`). 프로젝트별 `history.json`에 diff만 저장(새로고침 후에도 유지). 50을 넘는 가장 오래된 단계의 숨긴 파일은 완전히 삭제(휴지통 없음). 기존 삭제분(`deleted_at`, `trash/`)은 History 단계로 옮기고, 옮기는 동안에는 파일을 지우지 않는다. 새 라우트 → ComfyUI 재시작 필요. 프론트 History 패널은 Ctrl+F5.
