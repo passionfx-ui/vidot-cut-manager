@@ -49,7 +49,21 @@ _MEDIA_EXT = {
     ".gif": "image",
     ".mp4": "video",
     ".webm": "video",
+    ".mov": "video",
 }
+
+
+def _probe_video_seconds(path: Path) -> float | None:
+    """Length of an mp4 / webm / mov, or None when the file cannot be read."""
+    try:
+        try:
+            from ..gg_data import probe_file_duration
+        except ImportError:
+            from gg_data import probe_file_duration  # type: ignore
+        return probe_file_duration(path)
+    except Exception:  # noqa: BLE001
+        return None
+
 
 def _atomic_write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -987,6 +1001,28 @@ class LocalStore:
             return None
         return data if isinstance(data, dict) else None
 
+    def set_imported_cut_length(self, pid: str, cut_id: str, seconds: float) -> None:
+        """Use a file's length as a new imported cut's timeline length (0.2–60s, same cap as playback)."""
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+            return
+        sec = float(seconds)
+        if sec != sec or sec <= 0 or sec == float("inf"):
+            return
+        sec = round(min(60.0, max(0.2, sec)), 2)
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                return
+            c = self._cuts_map(doc).get(cut_id)
+            if not c or c.get("deleted_at"):
+                return
+            if c.get("sec") == sec:
+                return
+            c["sec"] = sec
+            bump_entity(c)
+            self._bump_project(doc)
+            self._save_project_doc(pid, doc, "import_duration", cut_id)
+
     def add_version(
         self,
         pid: str,
@@ -1047,6 +1083,10 @@ class LocalStore:
             if is_anim:
                 asset["animated"] = True
                 asset.update({k: anim[k] for k in ("frames", "seconds") if anim and anim.get(k)})
+            elif kind == "video":
+                dur = _probe_video_seconds(dest)
+                if dur:
+                    asset["seconds"] = dur
             wf_sha = self.put_blob(pid, workflow) if workflow else None
             ver = new_version(cut_id, asset, wf_sha, prompt_id, gen=gen)
             vpath = self._project_dir(pid) / "versions" / cut_id / f"{ver['id']}.json"

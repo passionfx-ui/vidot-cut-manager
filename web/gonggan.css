@@ -788,7 +788,8 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-shots .gg-ver-wrap.gg-implicit .gg-ver { outline: 1px dashed var(--gg-acc); outline-offset: -1px; }
 .gg-shots .gg-ver-wrap.gg-ver-open .gg-ver { border-color: var(--gg-fg); box-shadow: inset 0 -2px 0 var(--gg-fg); }
 .gg-shots .gg-ver { position: relative; width: 56px; height: 32px; padding: 0; border: 1px solid var(--gg-line); border-radius: 3px; overflow: hidden; background: #000; cursor: pointer; }
-.gg-shots .gg-ver img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gg-shots .gg-ver img,
+.gg-shots .gg-ver video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gg-shots .gg-ver-rep { position: absolute; right: 2px; top: 2px; font-size: 7px; padding: 0 2px; border-radius: 2px; background: var(--gg-acc); color: #1b1d22; font-weight: 600; }
 .gg-shots .gg-vstrip { position: relative; flex: 0 0 auto; min-height: 0; overflow: hidden; min-width: 0; display: flex; flex-direction: column; border-top: 1px solid var(--gg-line); background: #1f2228; }
 .gg-shots .gg-vs-head { display: none; height: 0; overflow: hidden; margin: 0; padding: 0; border: none; }

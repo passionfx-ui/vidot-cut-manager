@@ -5,7 +5,63 @@ import { versionRepState } from "./gg_cuts_core.js";
 export const SET_BEST_LABEL = "Set as Best";
 export const IMPORT_TILE_TIP = "Import";
 export const IMPORT_MENU_LABEL = "Import Media…";
-export const IMPORT_ACCEPT = "image/*,video/*";
+/** Still images plus video. `.webp` covers an animated WebP; the server decides if it is video. */
+export const IMPORT_IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".gif", ".webp"];
+export const IMPORT_VIDEO_EXTS = [".mp4", ".webm", ".mov"];
+export const IMPORT_MEDIA_EXTS = [...IMPORT_IMAGE_EXTS, ...IMPORT_VIDEO_EXTS];
+/**
+ * Extensions are listed on their own (no image/* or video/* wildcard).
+ * On Windows the wildcard filter hides .mp4 even when video/* is included.
+ */
+export const IMPORT_ACCEPT = [
+  ...IMPORT_MEDIA_EXTS,
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+].join(",");
+
+const IMPORT_MIME_EXT = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/jpg": ".jpg",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+  "video/mp4": ".mp4",
+  "video/webm": ".webm",
+  "video/quicktime": ".mov",
+  "video/mov": ".mov",
+  "video/x-quicktime": ".mov",
+};
+
+/** Lowercase extension including the dot, or "" when the name has none. */
+export function importMediaExtension(name) {
+  const base = String(name || "").replace(/\\/g, "/").split("/").pop() || "";
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0) return "";
+  return base.slice(dot).toLowerCase();
+}
+
+/** A picked or dropped file Import can turn into a cut (image, or mp4 / webm / mov / webp). */
+export function isImportMediaFile(file) {
+  if (!file) return false;
+  if (IMPORT_MEDIA_EXTS.includes(importMediaExtension(file.name))) return true;
+  const type = String(file.type || "").split(";")[0].trim().toLowerCase();
+  return !!IMPORT_MIME_EXT[type];
+}
+
+/** Upload name that keeps a known extension when the dropped file's name has none. */
+export function importUploadName(file) {
+  const name = String(file?.name || "").trim() || "import";
+  if (importMediaExtension(name)) return name;
+  const type = String(file?.type || "").split(";")[0].trim().toLowerCase();
+  const ext = IMPORT_MIME_EXT[type] || "";
+  return ext ? `${name}${ext}` : name;
+}
+
 /** Back-to-newest arrow appears once the row is scrolled right past this many pixels. */
 export const NEWEST_BUTTON_MIN_SCROLL = 4;
 

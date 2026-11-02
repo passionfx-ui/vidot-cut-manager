@@ -318,6 +318,8 @@ import {
   wheelToScrollLeft,
   IMPORT_ACCEPT,
   IMPORT_TILE_TIP,
+  importUploadName,
+  isImportMediaFile,
   cutHasStartImage,
   isStillVersion,
   stripSelectedVid,
@@ -628,6 +630,9 @@ function thumbHtml(media, cls) {
   if (playsAsVideo(media)) {
     // poster from the pack cache; the video itself loads only on hover (preload=none)
     return `<video class="${cls} gg-thumb-vid" draggable="false" src="${url}" poster="${esc(posterUrl(media.id))}" muted playsinline preload="none"></video>`;
+  }
+  if (isAnimatedImage(media)) {
+    return `<img class="${cls} gg-thumb-img" draggable="false" src="${url}" alt="" />`;
   }
   return `<img class="${cls} gg-thumb-img" draggable="false" src="${esc(posterUrl(media.id))}" loading="lazy" decoding="async" alt="" />`;
 }
@@ -9134,7 +9139,7 @@ function versionThumbParts(c, v, tabOpen) {
     on: repState === "manual",
     wrapCls: `gg-ver-wrap${repState === "manual" ? " gg-rep" : repState === "implicit" ? " gg-implicit" : ""}${open ? " gg-ver-open" : ""}`,
     tip: [v.failed ? `Failed: ${v.error || "black video"}` : "", fmtSrc(v.source), v.model || "", new Date(v.created * 1000).toLocaleString()].filter(Boolean).join(" · "),
-    img: v.missing ? thumbHtml(null, "gg-ver-img") : `<img class="gg-ver-img gg-thumb-img" draggable="false" src="${esc(posterUrl(v.id))}" loading="lazy" alt="" />`,
+    img: thumbHtml(v?.missing ? null : versionMedia(v), "gg-ver-img"),
   };
 }
 
@@ -9278,7 +9283,7 @@ async function importVersionFiles(pid, cutId, files) {
       form.append("create_cut", "1");
       if (after) form.append("after", after);
       if (group) form.append("group", group);
-      form.append("file", file, file.name);
+      form.append("file", file, importUploadName(file));
       try {
         const res = await api.fetchApi("/gonggan/import-version", { method: "POST", body: form });
         const data = await res.json().catch(() => ({}));
@@ -9318,6 +9323,44 @@ async function importVersionFiles(pid, cutId, files) {
   const added = created.length;
   if (failed.length) ggToast(`Imported ${added} of ${files.length}`, failed.join("\n"), "warn");
   else ggToast(`Imported ${added} file${added === 1 ? "" : "s"}`, "", "ok");
+}
+
+const IMPORT_DROP_SEL = ".gg-shots, .gg-timeline, .gg-bottom-strip, .gg-vstrip, .gg-edit-preview";
+
+function importDropHost(target) {
+  return target && target.closest ? target.closest(IMPORT_DROP_SEL) : null;
+}
+
+/** File drop on the cut list, take row, Timeline, or edit preview. Same import as the file picker. */
+function installImportDrop() {
+  if (window.__ggImportDrop) return;
+  window.__ggImportDrop = true;
+  const allow = (e) => {
+    if (!isNativeProject() || stripImportBusy) return;
+    const dt = e.dataTransfer;
+    if (!dt || ![...dt.types].includes("Files")) return;
+    if (!importDropHost(e.target)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try { dt.dropEffect = "copy"; } catch (_) {}
+  };
+  window.addEventListener("dragenter", allow, true);
+  window.addEventListener("dragover", allow, true);
+  window.addEventListener("drop", (e) => {
+    if (!importDropHost(e.target)) return;
+    const incoming = [...(e.dataTransfer?.files || [])];
+    if (!incoming.length) return;
+    e.preventDefault();
+    const files = incoming.filter(isImportMediaFile);
+    if (!files.length || !isNativeProject() || stripImportBusy) return;
+    e.stopPropagation();
+    const pid = state.pid;
+    if (!pid) {
+      ggToast("Import", "Open a project first", "warn");
+      return;
+    }
+    void importVersionFiles(pid, state.cutId || "", files);
+  }, true);
 }
 
 /** Thumbnail clicked last in the version row (the row's selected version until another cut or project). */
@@ -13461,6 +13504,7 @@ app.registerExtension({
     }, 500);
     bindLoadImageUi({ ggToast });
     installLoadImageQueueGuard();
+    installImportDrop();
     void fetchUserWorkflowPaths();
     const refreshAppUi = () => {
       if (document.hidden) return;

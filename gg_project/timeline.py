@@ -13,7 +13,7 @@ from .entities import is_reference
 from .project_settings import PROJECT_ASSETS_DIR, is_external_project_asset_media, normalize_settings
 
 _IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-_VID_EXT = {".mp4", ".webm"}
+_VID_EXT = {".mp4", ".webm", ".mov"}
 
 
 def _round(v: float) -> float:
@@ -195,7 +195,7 @@ def _version_job(root: Path, pid: str, ver: dict[str, Any]) -> dict[str, Any] | 
         "project_id": pid,
         "width": None,
         "height": None,
-        "seconds": _asset_seconds(asset) if animated else None,
+        "seconds": _asset_seconds(asset) if kind == "video" else None,
         "frames": asset.get("frames") if animated and isinstance(asset.get("frames"), int) else None,
         "model": "",
         "aspect": "",
@@ -350,6 +350,10 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
         pick = cut.get("pick_version_id")
         display = cut.get("display_version_id")
         src_dur = media_duration(job) if job else None
+        if not src_dur and job and job.get("kind") == "video":
+            stored = job.get("seconds")
+            if isinstance(stored, (int, float)) and not isinstance(stored, bool) and stored > 0:
+                src_dur = float(stored)
         sec = float(cut.get("sec") if isinstance(cut.get("sec"), (int, float)) else 3.0)
         tl_in = float(cut.get("in") or 0.0)
         kind = job["kind"] if job else None

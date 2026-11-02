@@ -268,7 +268,7 @@ def project_mp4_export_dir(project_base: Path) -> Path:
         return standard
     return base / FALLBACK_MP4_EXPORT_DIR
 _MEDIA_IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
-_MEDIA_VIDEO_EXTS = frozenset({".mp4", ".webm"})
+_MEDIA_VIDEO_EXTS = frozenset({".mp4", ".webm", ".mov"})
 
 
 def project_assets_type_subdir(ext: str, kind: str | None = None) -> str:

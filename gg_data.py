@@ -17,11 +17,11 @@ DEFAULT_SETTINGS_FILE = PACK_DIR / "gonggan_settings.default.json"
 
 MEDIA_KINDS = {
     ".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image", ".gif": "image",
-    ".mp4": "video", ".webm": "video",
+    ".mp4": "video", ".webm": "video", ".mov": "video",
 }
 MIME = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
-    ".gif": "image/gif", ".mp4": "video/mp4", ".webm": "video/webm",
+    ".gif": "image/gif", ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
 }
 JOB_ID_RE = re.compile(r"^j\d+_[A-Za-z0-9]+$")
 UID_RE = re.compile(r"^[A-Za-z0-9_-]{2,32}$")
@@ -256,6 +256,40 @@ def _round(x: float) -> float:
     return round(float(x) + 1e-9, 2)
 
 
+def probe_file_duration(path: Path | str | None) -> float | None:
+    """Seconds of one video file (PyAV, else ffprobe). None when the file has no readable length."""
+    if path is None:
+        return None
+    src = Path(path)
+    if not src.is_file():
+        return None
+    dur = None
+    try:
+        import av  # ships with ComfyUI
+        with av.open(str(src)) as c:
+            if c.duration:
+                dur = c.duration / 1_000_000
+            elif c.streams.video and c.streams.video[0].duration:
+                st = c.streams.video[0]
+                dur = float(st.duration * st.time_base)
+    except Exception:  # noqa: BLE001
+        dur = None
+    if not dur:
+        exe = ffmpeg_exe()
+        probe = exe and str(Path(exe).with_name(Path(exe).name.replace("ffmpeg", "ffprobe")))
+        if probe and Path(probe).is_file():
+            try:
+                out = subprocess.run(
+                    [probe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(src)],
+                    capture_output=True, text=True, timeout=20,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                ).stdout.strip()
+                dur = float(out) if out else None
+            except Exception:  # noqa: BLE001
+                dur = None
+    return _round(dur) if dur and dur > 0 else None
+
+
 def media_duration(job: dict | None) -> float | None:
     """Real duration of a video result (PyAV, fallback ffprobe). Cached by id + mtime."""
     if not job or job.get("kind") != "video":
@@ -267,33 +301,7 @@ def media_duration(job: dict | None) -> float | None:
     with _lock:
         if key in _dur_cache:
             return _dur_cache[key]
-    path = media_path(job["id"])
-    dur = None
-    if path is not None:
-        try:
-            import av  # ships with ComfyUI
-            with av.open(str(path)) as c:
-                if c.duration:
-                    dur = c.duration / 1_000_000
-                elif c.streams.video and c.streams.video[0].duration:
-                    st = c.streams.video[0]
-                    dur = float(st.duration * st.time_base)
-        except Exception:  # noqa: BLE001
-            dur = None
-        if not dur:
-            exe = ffmpeg_exe()
-            probe = exe and str(Path(exe).with_name(Path(exe).name.replace("ffmpeg", "ffprobe")))
-            if probe and Path(probe).is_file():
-                try:
-                    out = subprocess.run(
-                        [probe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
-                        capture_output=True, text=True, timeout=20,
-                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                    ).stdout.strip()
-                    dur = float(out) if out else None
-                except Exception:  # noqa: BLE001
-                    dur = None
-    dur = _round(dur) if dur and dur > 0 else None
+    dur = probe_file_duration(media_path(job["id"]))
     with _lock:
         _dur_cache[key] = dur
     return dur

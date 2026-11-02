@@ -1215,7 +1215,10 @@ def native_poster_path(media_id: str) -> Path | None:
     return _poster_for_file(media_id, src)
 
 
-_MEDIA_KIND = {".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image", ".gif": "image", ".mp4": "video", ".webm": "video"}
+_MEDIA_KIND = {
+    ".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image", ".gif": "image",
+    ".mp4": "video", ".webm": "video", ".mov": "video",
+}
 
 
 def _poster_for_file(media_id: str, src: Path) -> Path | None:
@@ -1337,6 +1340,20 @@ def native_import_version(pid: str, cut_id: str, src: Path | str) -> dict:
     return {"ok": True, "version": _add_output_version(pid, cut_id, {"path": str(src)})}
 
 
+def _apply_imported_video_length(store, pid: str, cut_id: str, ver: dict) -> None:
+    """When the imported file is a video and its length was read, the new cut uses that length."""
+    asset = ver.get("asset") if isinstance(ver, dict) else None
+    if not isinstance(asset, dict) or asset.get("kind") != "video":
+        return
+    seconds = asset.get("seconds")
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds <= 0:
+        return
+    try:
+        store.set_imported_cut_length(pid, cut_id, float(seconds))
+    except Exception:  # noqa: BLE001
+        log.exception("[gonggan-cut] import duration was not saved")
+
+
 def native_import_image_cut(
     pid: str,
     src: Path | str,
@@ -1348,6 +1365,8 @@ def native_import_image_cut(
     A ComfyUI workflow embedded in the file becomes that cut's workflow.
     With no embedded workflow the cut workflow stays empty. Add cut and a new
     project's first cut still copy the options template for that cut's kind.
+    Video (mp4, webm, mov, animated webp) stays a video take. Its length is the
+    file's length when that can be read. No workflow is taken from a video file.
     """
     src = Path(src)
     if src.suffix.lower() not in _MEDIA_KIND:
@@ -1372,6 +1391,7 @@ def native_import_image_cut(
         raise
     if graph is not None:
         store.set_cut_workflow(pid, cut_id, graph)
+    _apply_imported_video_length(store, pid, cut_id, ver)
     return {
         "ok": True,
         "cut": {"id": cut_id, "name": cut.get("name")},
