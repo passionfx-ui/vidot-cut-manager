@@ -153,12 +153,41 @@ def _stash_cuts_into(project_dir: Path, step: Path, cut_ids: list[str], manifest
 
 
 def stash_version(project_dir: Path, step_id: str, cut_id: str, version_id: str) -> None:
-    """Move one version json and its media into the step folder."""
+    """Move one version json and its media into the step folder.
+
+    A second version with the same step id is added to that step, so one Undo restores the batch.
+    """
     cid = _safe_id(cut_id)
     vid = _safe_id(version_id)
+    step = _step_dir(project_dir, step_id)
+    manifest_path = step / "manifest.json"
+    if manifest_path.is_file():
+        try:
+            loaded = _read_json(manifest_path)
+        except (OSError, ValueError):
+            loaded = None
+        manifest: dict[str, Any] = loaded if isinstance(loaded, dict) else {}
+        manifest.setdefault("cuts", [])
+        manifest.setdefault("versions", [])
+        manifest.setdefault("assets", [])
+        already = any(
+            isinstance(row, dict) and row.get("cut_id") == cid and row.get("version_id") == vid
+            for row in manifest["versions"]
+        )
+        if already:
+            return
+        _stash_one_version(project_dir, step, cid, vid, manifest)
+        _write_json(manifest_path, manifest)
+        return
     step = _prepare(project_dir, step_id)
     if step is None:
         return
+    manifest = {"cuts": [], "versions": [], "assets": []}
+    _stash_one_version(project_dir, step, cid, vid, manifest)
+    _write_json(step / "manifest.json", manifest)
+
+
+def _stash_one_version(project_dir: Path, step: Path, cid: str, vid: str, manifest: dict[str, Any]) -> None:
     src = project_dir / "versions" / cid / f"{vid}.json"
     if not _inside(src, project_dir) or not src.is_file():
         raise FileNotFoundError("version not found")
@@ -166,14 +195,13 @@ def stash_version(project_dir: Path, step_id: str, cut_id: str, version_id: str)
         data = _read_json(src)
     except (OSError, ValueError) as ex:
         raise FileNotFoundError("version not found") from ex
-    manifest: dict[str, Any] = {"cuts": [], "versions": [], "assets": []}
+    assets = manifest.setdefault("assets", [])
     if isinstance(data, dict):
-        _stash_asset(project_dir, step, data.get("asset"), manifest["assets"])
+        _stash_asset(project_dir, step, data.get("asset"), assets)
     dest = step / "versions" / cid / f"{vid}.json"
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dest))
-    manifest["versions"].append({"cut_id": cid, "version_id": vid})
-    _write_json(step / "manifest.json", manifest)
+    manifest.setdefault("versions", []).append({"cut_id": cid, "version_id": vid})
 
 
 def restore_step(project_dir: Path, step_id: str) -> None:

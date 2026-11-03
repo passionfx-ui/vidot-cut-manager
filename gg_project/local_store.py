@@ -266,8 +266,26 @@ class LocalStore:
         if after and after in order:
             idx = order.index(after) + 1
             order.insert(idx, cut_id)
-        elif after is None:
-            order.append(cut_id)
+        elif isinstance(scene_id, str) and scene_id and self._scene(doc, scene_id):
+            cuts = self._cuts_map(doc)
+            in_scene = [cid for cid in order if (cuts.get(cid) or {}).get("scene_id") == scene_id]
+            if in_scene:
+                order.insert(order.index(in_scene[-1]) + 1, cut_id)
+            else:
+                scenes = self._active_scenes(doc)
+                ids = [s.get("id") for s in scenes if isinstance(s, dict)]
+                pos = ids.index(scene_id) if scene_id in ids else -1
+                earlier = set(ids[:pos]) if pos >= 0 else set()
+                insert_at = None
+                for i, cid in enumerate(order):
+                    sid = (cuts.get(cid) or {}).get("scene_id")
+                    if sid not in earlier:
+                        insert_at = i
+                        break
+                if insert_at is None:
+                    order.append(cut_id)
+                else:
+                    order.insert(insert_at, cut_id)
         else:
             order.append(cut_id)
         self._apply_cut_order(doc, order)
@@ -945,14 +963,58 @@ class LocalStore:
         doc["cuts"] = cuts
         return c
 
-    def add_reference(self, pid: str, name: str, category: str, template_graph: dict | None = None) -> dict[str, Any]:
-        """Add a reference (hidden from the timeline). Returns the new reference record."""
+    def _place_reference_after(self, doc: dict[str, Any], new_id: str, after: str | None) -> None:
+        """Keep name order until a reference is inserted after another one. Then remember that order."""
+        if not isinstance(after, str) or not after or after == new_id:
+            return
+        cuts = self._cuts_map(doc)
+
+        def active_ids() -> list[str]:
+            rows = []
+            for cid, ref in cuts.items():
+                if cid == new_id or not is_reference(ref) or ref.get("deleted_at"):
+                    continue
+                rows.append((str(ref.get("name") or "").lower(), cid))
+            rows.sort()
+            return [cid for _, cid in rows]
+
+        known = set(active_ids())
+        order = [
+            x for x in (doc.get("reference_order") or [])
+            if isinstance(x, str) and x in known
+        ]
+        if not order:
+            order = active_ids()
+        else:
+            have = set(order)
+            for cid in active_ids():
+                if cid not in have:
+                    order.append(cid)
+        if after in order:
+            order.insert(order.index(after) + 1, new_id)
+        else:
+            order.append(new_id)
+        doc["reference_order"] = order
+
+    def add_reference(
+        self,
+        pid: str,
+        name: str,
+        category: str,
+        template_graph: dict | None = None,
+        after: str | None = None,
+    ) -> dict[str, Any]:
+        """Add a reference (hidden from the timeline). Returns the new reference record.
+
+        `after` places it just after that reference. With no `after`, name order is unchanged.
+        """
         with self._lock:
             doc = self._load_project_doc(pid)
             if not doc or doc.get("deleted_at"):
                 raise FileNotFoundError(pid)
             sha = self.put_blob(pid, template_graph) if template_graph is not None else None
             c = self._add_reference_locked(doc, name, category, sha)
+            self._place_reference_after(doc, c["id"], after)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "add_reference", c["id"])
             return c
@@ -1261,8 +1323,7 @@ class LocalStore:
             ver = new_version(cut_id, asset, wf_sha, prompt_id, gen=gen)
             vpath = self._project_dir(pid) / "versions" / cut_id / f"{ver['id']}.json"
             _atomic_write_json(vpath, ver)
-            if is_reference(c):
-                c["pick_version_id"] = ver["id"]
+            # Best is only the star. A new image or video stays unpicked for cuts and references.
             bump_entity(c)
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "add_version", ver["id"])

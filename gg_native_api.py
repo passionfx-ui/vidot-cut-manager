@@ -643,7 +643,7 @@ def native_save_reference_groups(pid: str, groups) -> dict | None:
     return store.to_timeline(pid)
 
 
-def native_add_reference(pid: str, name: str, category: str) -> dict | None:
+def native_add_reference(pid: str, name: str, category: str, after: str | None = None) -> dict | None:
     store = native_store()
     doc = store.get_project(pid)
     if not doc:
@@ -653,7 +653,8 @@ def native_add_reference(pid: str, name: str, category: str) -> dict | None:
     graph = project_template_graph(doc, "image")
     if isinstance(graph, dict):
         graph = clear_cut_linear_mode(copy.deepcopy(graph))
-    c = store.add_reference(pid, name, category, template_graph=graph or None)
+    placed = after if isinstance(after, str) and after else None
+    c = store.add_reference(pid, name, category, template_graph=graph or None, after=placed)
     return {"ok": True, "reference": {"id": c["id"], "name": c["name"], "category": c["category"]}, "timeline": store.to_timeline(pid)}
 
 

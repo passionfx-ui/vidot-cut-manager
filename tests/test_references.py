@@ -68,13 +68,13 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(self.store.list_deleted_cuts(self.pid), [])  # trash lists cuts only
         self.assertEqual(len(res["timeline"]["cuts"]), 1)
 
-    def test_newest_version_is_best(self):
+    def test_new_version_is_not_auto_best(self):
         rid = native_add_reference(self.pid, "Mina", "Character")["reference"]["id"]
         v1 = self.store.add_version(self.pid, rid, self._png("a.png"))
         v2 = self.store.add_version(self.pid, rid, self._png("b.png"))
         ref = self.store.to_timeline(self.pid)["references"][0]
         self.assertEqual(ref["versions"], 2)
-        self.assertEqual(ref["pick"], v2["id"])
+        self.assertIsNone(ref["pick"])
         self.assertEqual(ref["media"]["id"], v2["id"])
         self.assertNotEqual(v1["id"], v2["id"])
 

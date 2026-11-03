@@ -197,13 +197,25 @@ export function shotsUndoSteps(entry, action) {
     }];
   }
   if (entry.kind === "version") {
+    const ids = Array.isArray(entry.version_ids) && entry.version_ids.length
+      ? entry.version_ids
+      : (entry.version_id ? [entry.version_id] : []);
+    if (!ids.length) return [];
     const hide = entry.op === "delete" ? redo : !redo;
-    return [{
-      type: hide ? "deleteVersion" : "restoreVersion",
+    if (!hide) {
+      return [{
+        type: "restoreVersion",
+        cut_id: entry.cut_id,
+        version_id: ids[0],
+        history_step: entry.history_step,
+      }];
+    }
+    return ids.map((version_id) => ({
+      type: "deleteVersion",
       cut_id: entry.cut_id,
-      version_id: entry.version_id,
+      version_id,
       history_step: entry.history_step,
-    }];
+    }));
   }
   if (entry.kind === "cuts") {
     const ids = [...(entry.ids || [])];

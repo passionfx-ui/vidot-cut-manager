@@ -132,12 +132,12 @@ export function groupedListHtml(sections, { cutHtml, groupHue = () => 200, group
   return (sections || []).map((sec) => {
     const rows = sec.cuts.map((c) => cutHtml(c)).join("");
     if (sec.type === "ungrouped") {
-      return `<section class="gg-grp-sec gg-grp-loose"><header class="gg-grp-head" title="Cuts not in a scene"><span class="gg-grp-title">Ungrouped</span><span class="gg-grp-meta">${sec.cuts.length}</span></header><ol class="gg-cutlist">${rows}</ol></section>`;
+      return `<section class="gg-grp-sec gg-grp-loose" data-loose="1"><header class="gg-grp-head" title="Click to select all ungrouped cuts"><span class="gg-grp-title">Ungrouped</span><span class="gg-grp-meta">${sec.cuts.length}</span></header><ol class="gg-cutlist">${rows}</ol></section>`;
     }
     const g = sec.group;
     const collapsed = !!g.collapsed;
     return `<section class="gg-grp-sec" data-group-id="${escHtml(g.id)}" style="--gg-grp:${groupHue(g.id)}">
-        <header class="gg-grp-head" title="Double-click to rename">
+        <header class="gg-grp-head" title="Click to select all cuts in this scene. Double-click to rename.">
           <button type="button" class="gg-grp-fold" title="Collapse or expand">${collapsed ? "▸" : "▾"}</button>
           <span class="gg-grp-title">${escHtml(g.name)}</span>
           <span class="gg-grp-prog">${escHtml(groupProgress(sec.cuts))}</span>

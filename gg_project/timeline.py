@@ -259,7 +259,13 @@ def _reference_views(root: Path, project: dict[str, Any]) -> list[dict[str, Any]
             "prompt": c.get("prompt") if isinstance(c.get("prompt"), str) else "",
             "description": c.get("description") if isinstance(c.get("description"), str) else "",
         })
-    out.sort(key=lambda row: (str(row.get("name") or "").lower(), row.get("id") or ""))
+    stored = project.get("reference_order") if isinstance(project.get("reference_order"), list) else []
+    index = {rid: i for i, rid in enumerate(stored) if isinstance(rid, str)}
+    out.sort(key=lambda row: (
+        index.get(row["id"], 10**9),
+        str(row.get("name") or "").lower(),
+        row.get("id") or "",
+    ))
     return out
 
 

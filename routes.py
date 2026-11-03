@@ -884,8 +884,13 @@ async def gg_reference_add(request):
         return _err(400, "pid required")
     if not gg_native_api.is_native_pid(pid):
         return _err(400, "pid required")
+    after = data.get("after")
+    if after is not None and not isinstance(after, str):
+        return _err(400, "after must be a string")
     try:
-        res = await asyncio.to_thread(gg_native_api.native_add_reference, pid, data.get("name"), data.get("category"))
+        res = await asyncio.to_thread(
+            gg_native_api.native_add_reference, pid, data.get("name"), data.get("category"), after or None,
+        )
     except FileNotFoundError:
         return _err(404, "project not found")
     except ValueError as ex:

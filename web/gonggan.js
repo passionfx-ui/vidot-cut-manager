@@ -283,6 +283,7 @@ import {
   stripCutsFromGroups,
 } from "./gg_group_list_core.js";
 import {
+  expandableFieldWrapHtml,
   fieldExpandModalShellHtml,
   promptExpandFullscreenTitle,
   promptExpandKeyAction,
@@ -604,7 +605,15 @@ const shotsUi = {
   inlineSceneRename: null,
   cutWfKind: null,
   cutWfKindCutId: "",
+  /** Header click selected a whole scene or reference group. New Cut / New Reference then goes at the end of it. */
+  selFromGroup: false,
+  selGroupKey: "",
+  /** "list" = cuts/references, "versions" = the version row. Delete follows the last one. */
+  selTarget: "list",
+  blockHeadSelect: false,
 };
+/** Version-row multi-select for the cut or reference currently shown in the row. */
+const verSel = { cutId: "", anchor: "", ids: new Set() };
 const cutFieldUi = { timer: 0, pending: createFieldSlots(), unsaved: {}, routeMissing: false, captionDegraded: false };
 let cutFieldSaveFailToastAt = 0;
 let routeMissingToastShown = false;
@@ -2065,7 +2074,9 @@ function selectedReference() {
 }
 
 function cutPromptNow(cut) {
-  const open = cut && state.cutId === cut.id ? document.querySelector("#gg-root .gg-prompt-text") : null;
+  const open = cut && state.cutId === cut.id
+    ? document.querySelector(`#gg-root .gg-cut[data-cut-id="${CSS.escape(cut.id)}"] textarea.gg-prompt-text:not(.gg-desc-text)`)
+    : null;
   if (open && document.activeElement === open) return open.value;
   return cut?.prompt || "";
 }
@@ -2197,11 +2208,11 @@ function referenceLibraryHtml() {
   const sections = referenceGroupSections().map((g) => {
     const rows = all.filter((r) => (r.category || "Other") === g.name);
     const cards = rows.map((r) =>
-      `<li class="gg-cut${state.cutId === r.id ? " gg-sel" : ""}" data-cut-id="${esc(r.id)}" data-kind="reference">${infoRowContent(r)}</li>`
+      `<li class="gg-cut gg-cut-reference${state.cutId === r.id ? " gg-sel" : ""}" data-cut-id="${esc(r.id)}" data-kind="reference">${infoRowContent(r)}${referenceEditorsHtml(r)}</li>`
     ).join("");
     const on = refsUi.groupId === g.id ? " gg-on" : "";
     return `<section class="gg-grp-sec gg-ref-sec${on}" data-ref-group="${esc(g.id)}" data-ref-cat="${esc(g.name)}">
-      <header class="gg-grp-head" title="Reference group">
+      <header class="gg-grp-head" title="Click to select all references in this group">
         <button type="button" class="gg-grp-fold" title="Collapse or expand">${g.collapsed ? "▸" : "▾"}</button>
         <span class="gg-grp-title">${esc(g.name)}</span>
         <span class="gg-grp-meta">${rows.length}</span>
@@ -2225,13 +2236,28 @@ function refSlotOptions(cut, row) {
 }
 
 function selectionDetailHtml() {
-  const ref = selectedReference();
-  if (!ref || !shotsUi.refTab) return "";
-  return `<div class="gg-sel-detail" data-sel-kind="reference">
-    <label class="gg-sel-field">Name <input data-field="name" value="${esc(ref.name)}" maxlength="80" /></label>
-    <label class="gg-sel-field">Category <select data-field="category">${referenceCategoryOptions(ref.category || "Other")}</select></label>
-    <label class="gg-sel-field gg-sel-grow">Description <textarea data-field="description" rows="3" maxlength="4000">${esc(ref.description || "")}</textarea></label>
-    <label class="gg-sel-field gg-sel-grow">Prompt <textarea class="gg-ref-prompt" data-field="prompt" rows="3">${esc(ref.prompt || "")}</textarea></label>
+  return "";
+}
+
+/** Description and prompt on the reference card, same editors as the Info and Prompt cut cards. No create dialog. */
+function referenceEditorsHtml(ref) {
+  const nat = isNativeProject();
+  const tip = nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP;
+  const ro = nat ? " readonly" : " disabled";
+  return `<div class="gg-ref-fields">
+    <label class="gg-ref-field"><span>Description</span>
+      <textarea class="gg-prompt-text gg-desc-text" rows="3" placeholder="Description" maxlength="4000"${ro} title="${esc(tip)}">${esc(ref.description || "")}</textarea>
+    </label>
+    <label class="gg-ref-field"><span>Prompt</span>
+      ${expandableFieldWrapHtml({
+        textareaClass: "gg-prompt-text",
+        text: ref.prompt || "",
+        placeholder: "Prompt for Generate…",
+        title: tip,
+        native: nat,
+        cutId: ref.id,
+      })}
+    </label>
   </div>`;
 }
 
@@ -2284,6 +2310,20 @@ async function addReferenceGroup() {
   }
 }
 
+/** Id to insert a new reference after, or "" when nothing is selected (keep name order). */
+function referenceInsertAfterId() {
+  const order = referenceDisplayOrder();
+  if (shotsUi.selFromGroup && shotsUi.selGroupKey) {
+    const group = referenceGroupById(shotsUi.selGroupKey);
+    if (!group) return "";
+    const inGroup = order.filter((id) => (referenceById(id)?.category || "Other") === group.name);
+    return inGroup.length ? inGroup[inGroup.length - 1] : "";
+  }
+  if (referenceById(state.cutId)) return state.cutId;
+  const picked = order.filter((id) => state.cutSel.has(id));
+  return picked.length ? picked[picked.length - 1] : "";
+}
+
 /** Icon-row New Reference: a new reference in the selected group, image template copied like a new image cut. */
 async function addReferenceInSelectedGroup() {
   if (!state.pid || !isNativeProject()) return;
@@ -2291,8 +2331,11 @@ async function addReferenceInSelectedGroup() {
   if (!group) return;
   const name = nextReferenceName(group.name);
   refsUi.groupId = group.id;
+  const afterId = referenceInsertAfterId();
+  const body = { pid: state.pid, name, category: group.name };
+  if (afterId) body.after = afterId;
   try {
-    const d = await postJson("/gonggan/reference/add", { pid: state.pid, name, category: group.name });
+    const d = await postJson("/gonggan/reference/add", body);
     if (d.timeline) adoptMutationTimeline(d.timeline, state.pid);
     else await loadTimeline({ keepView: true });
     bus.dispatchEvent(new Event("timeline"));
@@ -2424,6 +2467,7 @@ async function useLastOutputOnReference(id) {
 function openReferenceMenu(id, x, y) {
   const ref = referenceById(id);
   if (!ref) return;
+  if (!state.cutSel.has(id)) selectReference(id);
   const cats = referenceGroupSections().map((g) => g.name).filter((c) => c !== ref.category).map((c) => ({
     label: c,
     action: () => changeReferenceCategory(id, c).catch((e) => ggToast("Reference", referenceErrorText(e, "References"), "warn")),
@@ -2437,7 +2481,7 @@ function openReferenceMenu(id, x, y) {
     { label: "Rename", shortcut: "F2", action: () => renameReference(id).catch((e) => ggToast("Reference", referenceErrorText(e, "References"), "warn")) },
     cats.length ? { label: "Change Category", submenu: cats } : null,
     { separator: true },
-    { label: "Delete", danger: true, action: () => deleteReference(id).catch((e) => ggToast("Reference", e.message || "Could not delete.", "warn")) },
+    { label: "Delete", danger: true, action: () => { void confirmDeleteSelectedCuts(); } },
   ].filter(Boolean));
 }
 
@@ -2589,7 +2633,7 @@ function unlinkReferenceFromCut(cut, refId) {
   if (!cut || !row) return;
   let prompt = cutPromptNow(cut);
   if (row.name) prompt = stripMention(prompt, row.name);
-  const ta = document.querySelector(`#gg-root .gg-cut[data-cut-id="${CSS.escape(cut.id)}"] .gg-prompt-text`);
+  const ta = document.querySelector(`#gg-root .gg-cut[data-cut-id="${CSS.escape(cut.id)}"] textarea.gg-prompt-text:not(.gg-desc-text)`);
   if (ta && ta.value !== prompt) ta.value = prompt;
   const rows = displayRefLinks(prompt, cut.ref_links, activeReferences()).filter((r) => r.ref_id !== refId);
   const links = rows.map((item) => ({
@@ -2712,9 +2756,15 @@ function bindReferenceGroup(root) {
   group.querySelectorAll(".gg-ref-sec").forEach((sec) => {
     const id = sec.dataset.refGroup || "";
     sec.querySelector(".gg-grp-head")?.addEventListener("click", (e) => {
-      if (e.target.closest(".gg-grp-fold")) return;
+      if (e.target.closest(".gg-grp-fold, button, input, textarea")) return;
+      if (shotsUi.blockHeadSelect) {
+        shotsUi.blockHeadSelect = false;
+        return;
+      }
+      e.stopPropagation();
+      const ids = [...sec.querySelectorAll(".gg-cut")].map((li) => li.dataset.cutId).filter(Boolean);
       refsUi.groupId = id;
-      repaintShots();
+      selectListedGroup(ids, { multi: !!(e.ctrlKey || e.metaKey), range: !!e.shiftKey, groupKey: id });
     });
     sec.querySelector(".gg-grp-fold")?.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -4917,7 +4967,7 @@ function openCutForLinear() {
 function promptTextForQueue(cut) {
   if (!cut) return "";
   const stored = cut.prompt != null ? String(cut.prompt) : "";
-  const ta = document.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cut.id)}"] .gg-prompt-text`)
+  const ta = document.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cut.id)}"] textarea.gg-prompt-text:not(.gg-desc-text)`)
     || (cut.kind === "reference" ? document.querySelector("#gg-root .gg-sel-detail .gg-ref-prompt") : null);
   if (!ta || typeof ta.value !== "string") return stored;
   if (ta.value === stored || document.activeElement === ta) return ta.value;
@@ -4965,7 +5015,7 @@ function syncPromptFieldFromGraph(cutId, text) {
   const before = c.prompt;
   c.prompt = text == null ? "" : String(text);
   scheduleCutFieldSave(cutId, { prompt: c.prompt }, { prompt: before || "" });
-  const ta = document.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cutId)}"] .gg-prompt-text`);
+  const ta = document.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cutId)}"] textarea.gg-prompt-text:not(.gg-desc-text)`);
   if (ta && document.activeElement !== ta) ta.value = c.prompt;
 }
 
@@ -5503,6 +5553,29 @@ async function setProjectTemplateRef(ref) {
   }
 }
 
+/** Where New Cut goes. Null means nothing is selected, so the list-end behavior stays. */
+function selectedCutInsert() {
+  const cuts = state.timeline?.cuts || [];
+  const groups = state.timeline?.groups || [];
+  if (shotsUi.selFromGroup && shotsUi.selGroupKey && !shotsUi.refTab) {
+    const sections = shotsSections(cuts, groups);
+    if (shotsUi.selGroupKey === "ungrouped") {
+      const loose = sections.find((s) => s.type === "ungrouped");
+      const last = loose?.cuts?.[loose.cuts.length - 1];
+      return last?.id ? { after: last.id, group: null } : null;
+    }
+    const sec = sections.find((s) => s.group && s.group.id === shotsUi.selGroupKey);
+    if (!sec) return null;
+    const last = sec.cuts[sec.cuts.length - 1];
+    return { after: last?.id || null, group: shotsUi.selGroupKey };
+  }
+  const id = state.cutId && cuts.some((c) => c.id === state.cutId) ? state.cutId : (cutSelIds()[0] || "");
+  if (!id) return null;
+  const cut = cuts.find((c) => c.id === id);
+  if (!cut) return null;
+  return { after: cut.id, group: cut.group_id || null };
+}
+
 async function addLocalCut() {
   if (!state.pid) {
     ggToast("Cut", "Pick a project in the list first.", "warn");
@@ -5510,7 +5583,8 @@ async function addLocalCut() {
   }
   const cuts = state.timeline ? state.timeline.cuts : [];
   const groups = state.timeline ? state.timeline.groups || [] : [];
-  const { after, group } = addCutTargetAtListEnd({ timelineCuts: cuts, groups });
+  const placed = selectedCutInsert();
+  const { after, group } = placed || addCutTargetAtListEnd({ timelineCuts: cuts, groups });
   const body = { pid: state.pid };
   if (group) body.group = group;
   if (after) body.after = after;
@@ -5829,8 +5903,25 @@ function displayedCutIds() {
   return out;
 }
 
+/** Reference cards in group order. Collapsed groups stay out of Shift-range and Select All. */
+function referenceDisplayOrder({ includeHidden = false } = {}) {
+  const ids = [];
+  for (const g of referenceGroupSections()) {
+    if (!includeHidden && g.collapsed) continue;
+    for (const r of activeReferences()) {
+      if ((r.category || "Other") === g.name) ids.push(r.id);
+    }
+  }
+  return ids;
+}
+
+function selectionListOrder() {
+  if (shotsUi.refTab && isNativeProject()) return referenceDisplayOrder();
+  return displayedCutIds();
+}
+
 function selectCutRange(fromId, toId) {
-  const order = displayedCutIds();
+  const order = selectionListOrder();
   const i = order.indexOf(fromId);
   const j = order.indexOf(toId);
   if (i < 0 || j < 0) return;
@@ -5848,13 +5939,73 @@ function selectCutRange(fromId, toId) {
   }
 }
 
+function rememberReferenceGroup(id) {
+  const ref = referenceById(id);
+  if (!ref) return;
+  const group = referenceGroupSections().find((g) => g.name === (ref.category || "Other"));
+  if (group) refsUi.groupId = group.id;
+}
+
+/** Click a scene or reference-group header: select every item in it. Ctrl toggles, Shift extends. */
+function selectListedGroup(ids, { multi = false, range = false, groupKey = "" } = {}) {
+  const order = selectionListOrder();
+  const raw = ids.filter(Boolean);
+  const inOrder = order.filter((id) => raw.includes(id));
+  const groupIds = inOrder.length ? inOrder : raw;
+  shotsUi.selTarget = "list";
+  shotsUi.selGroupKey = groupKey;
+  if (!groupIds.length) {
+    shotsUi.selFromGroup = true;
+    state.cutSel.clear();
+    cutSelAnchor = "";
+    bus.dispatchEvent(new Event("select"));
+    return;
+  }
+  if (range && inOrder.length) {
+    const anchor = cutSelAnchor || state.cutId || groupIds[0];
+    const marks = groupIds.map((id) => order.indexOf(id)).filter((i) => i >= 0);
+    const ai = order.indexOf(anchor);
+    const start = Math.min(ai >= 0 ? ai : marks[0], ...marks);
+    const end = Math.max(ai >= 0 ? ai : marks[0], ...marks);
+    state.cutSel.clear();
+    for (let i = start; i <= end; i++) if (order[i]) state.cutSel.add(order[i]);
+    state.cutId = groupIds[groupIds.length - 1];
+    cutSelAnchor = anchor;
+    shotsUi.selFromGroup = false;
+  } else if (multi) {
+    if (!state.cutSel.size && state.cutId) state.cutSel.add(state.cutId);
+    const allOn = groupIds.every((id) => state.cutSel.has(id));
+    if (allOn) groupIds.forEach((id) => state.cutSel.delete(id));
+    else groupIds.forEach((id) => state.cutSel.add(id));
+    state.cutId = groupIds[groupIds.length - 1];
+    cutSelAnchor = groupIds[0];
+    shotsUi.selFromGroup = false;
+  } else {
+    state.cutSel.clear();
+    groupIds.forEach((id) => state.cutSel.add(id));
+    state.cutId = groupIds[groupIds.length - 1];
+    cutSelAnchor = groupIds[0];
+    shotsUi.selFromGroup = true;
+  }
+  rememberReferenceGroup(state.cutId);
+  bus.dispatchEvent(new Event("select"));
+  const t = clipStartOf(state.cutId);
+  if (t != null && typeof seek === "function" && !play.on) {
+    play.idx = -1;
+    seek(t + 0.001);
+  }
+}
+
 function selectCut(cutId, opts) {
   const range = opts && opts.range;
   const multi = opts && opts.multi;
   const fromTimeline = !!(opts && opts.fromTimeline);
+  shotsUi.selFromGroup = false;
+  shotsUi.selTarget = "list";
   if (range) {
     const anchor = cutSelAnchor || state.cutId || cutId;
     selectCutRange(anchor, cutId);
+    rememberReferenceGroup(cutId);
     return;
   }
   const cut = cutById(cutId);
@@ -5869,6 +6020,7 @@ function selectCut(cutId, opts) {
     cutSelAnchor = cutId;
   }
   state.cutId = cutId;
+  rememberReferenceGroup(cutId);
   bus.dispatchEvent(new Event("select"));
   const t = clipStartOf(cutId);
   if (t != null && typeof seek === "function" && !play.on) {
@@ -6045,7 +6197,16 @@ function showCtxMenu(x, y, items) {
   document.addEventListener("keydown", ctxUi.onKey, true);
 }
 
+function referenceSelIds() {
+  const refs = activeReferences();
+  const order = referenceDisplayOrder({ includeHidden: true });
+  const ids = order.filter((id) => state.cutSel.has(id) && refs.some((r) => r.id === id));
+  if (!ids.length && referenceById(state.cutId)) ids.push(state.cutId);
+  return ids;
+}
+
 function cutsForDelete() {
+  if (shotsUi.refTab && isNativeProject()) return referenceSelIds();
   const ids = cutSelIds();
   return ids.length ? ids : (state.cutId ? [state.cutId] : []);
 }
@@ -6081,8 +6242,12 @@ async function deleteSelectedCuts() {
   const entry = { kind: "cuts", op: "delete", ids: deletedIds, before: snapshotOrderGroups(state.timeline), history_step: stepId };
   try {
     await deleteCutsByIds(deletedIds, stepId);
-    recordShotsEntry(reqPid, entry, n === 1 ? "Delete cut" : `Delete ${n} cuts`);
-    ggToast(movedToTrashToastMessage(n), "", "ok", {
+    const refNoun = shotsUi.refTab ? "reference" : "cut";
+    recordShotsEntry(reqPid, entry, n === 1 ? `Delete ${refNoun}` : `Delete ${n} ${refNoun}s`);
+    const toast = shotsUi.refTab
+      ? (n === 1 ? "Deleted 1 reference" : `Deleted ${n} references`)
+      : movedToTrashToastMessage(n);
+    ggToast(toast, "", "ok", {
       actionLabel: "Undo",
       onAction: async () => {
         try {
@@ -6552,7 +6717,7 @@ function openCutContextMenu(e, cutId) {
         addCut: () => addCutAfter(cutId),
         loadTemplate: () => loadTemplateIntoCut(cutId),
         aiMakeCut: () => openAiCutSplitModal(),
-        del: () => deleteSelectedCuts(),
+        del: () => { void confirmDeleteSelectedCuts(); },
       },
       {
         ...(nat ? { moveToScene: buildMoveToSceneSubmenu(ids) } : {}),
@@ -6580,7 +6745,7 @@ function openClipContextMenu(e, cutId) {
       del: () => {
         undoLastArea = "shots";
         selectOnlyCut(cutId);
-        deleteSelectedCuts();
+        void confirmDeleteSelectedCuts();
       },
     }),
   );
@@ -6683,6 +6848,19 @@ function timelineSelectedCutIds() {
 
 /** Ctrl/Cmd+A: every cut shown in the list (not offered in the right-click menu). */
 function selectAllListCuts() {
+  if (shotsUi.refTab && isNativeProject()) {
+    const ids = referenceDisplayOrder();
+    if (!ids.length) return false;
+    state.cutSel.clear();
+    for (const id of ids) state.cutSel.add(id);
+    if (!state.cutSel.has(state.cutId)) state.cutId = ids[ids.length - 1];
+    cutSelAnchor = state.cutSel.has(state.cutId) ? state.cutId : ids[0];
+    shotsUi.selFromGroup = false;
+    shotsUi.selTarget = "list";
+    rememberReferenceGroup(state.cutId);
+    bus.dispatchEvent(new Event("select"));
+    return true;
+  }
   const { order, hidden } = shotsNavOrder();
   const ids = selectAllCutIds(order, hidden);
   if (!ids.length) return false;
@@ -7784,6 +7962,7 @@ function bindSceneHeadReorder(root, wrap, indicator) {
       };
       const up = async () => {
         const wasActive = active;
+        if (wasActive) shotsUi.blockHeadSelect = true;
         cancel();
         if (!wasActive || aborted || !drop) return;
         const tl = state.timeline;
@@ -8281,7 +8460,7 @@ function openFieldExpandModal(ta, cutId) {
       const text = editor.value;
       if (text !== ta.value) {
         ta.value = text;
-        const c = cutByIdTimeline(cutId);
+        const c = kind === "caption" ? cutByIdTimeline(cutId) : cutById(cutId);
         if (c) {
           if (kind === "caption") {
             c.caption = text;
@@ -9027,7 +9206,7 @@ function updateSelectionBar(root) {
     setBtn(row, ".gg-ir-scene", refMode ? !hasProject : r.scene.disabled, sceneTitle);
     setBtn(row, ".gg-ir-cut", refMode ? !hasProject : r.cut.disabled, cutTitle);
     setBtn(row, ".gg-ir-del", r.del.disabled, r.del.title);
-    if (refMode && referenceById(state.cutId)) setBtn(row, ".gg-ir-del", false, "Delete");
+    if (refMode) setBtn(row, ".gg-ir-del", !cutsForDelete().length, "Delete");
     for (const sel of [".gg-ir-scene", ".gg-ir-cut", ".gg-ir-del"]) {
       const b = row.querySelector(sel);
       if (b && b.title) b.setAttribute("aria-label", b.title);
@@ -9110,6 +9289,13 @@ function paintSelection(root) {
       on.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
   }
+  root.querySelectorAll(".gg-grp-sec").forEach((sec) => {
+    const picked = new Set(state.cutSel);
+    if (!picked.size && state.cutId) picked.add(state.cutId);
+    const rowIds = [...sec.querySelectorAll(".gg-cut")].map((li) => li.dataset.cutId).filter(Boolean);
+    sec.classList.toggle("gg-grp-picked", rowIds.length > 0 && rowIds.every((id) => picked.has(id)));
+    if (sec.dataset.refGroup) sec.classList.toggle("gg-on", sec.dataset.refGroup === refsUi.groupId);
+  });
   updateSelectionBar(root);
 }
 
@@ -9321,33 +9507,64 @@ async function setPick(cutId, vid, opts = {}) {
 
 const versionDeleteBusy = new Set();
 
-/** Hide one output thumbnail. Files stay in this History step until the step is dropped. */
-async function deleteVersion(cutId, versionId) {
-  if (!state.pid || !cutId || !versionId || !isNativeProject()) return;
-  const busyKey = `${cutId}\n${versionId}`;
+function versionIdsForDelete(cutId, vid) {
+  if (verSel.cutId === cutId && verSel.ids.has(vid) && verSel.ids.size) return [...verSel.ids];
+  return vid ? [vid] : [];
+}
+
+/** Hide output thumbnails. One confirm when several are selected. Files stay in one History step. */
+async function deleteVersions(cutId, versionIds) {
+  const ids = [...new Set(versionIds || [])].filter(Boolean);
+  if (!state.pid || !cutId || !ids.length || !isNativeProject()) return;
+  const busyKey = `${cutId}\n${ids.join(",")}`;
   if (versionDeleteBusy.has(busyKey)) return;
+  if (ids.length > 1) {
+    const ok = await askConfirm({
+      message: `Delete ${ids.length} versions?\nYou can restore them from History.`,
+      okLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
+  }
   versionDeleteBusy.add(busyKey);
   const stepId = historyStepId();
   const pid = state.pid;
   try {
-    const d = await postJson("/gonggan/version/delete", {
-      pid, cut_id: cutId, version_id: versionId, history_step: stepId,
-    });
-    if (stripPick.pid === pid && stripPick.cutId === cutId && stripPick.vid === versionId) stripPick.vid = "";
-    if (wfOpenVersion && wfOpenVersion.projectId === pid && wfOpenVersion.cutId === cutId && wfOpenVersion.vid === versionId) {
-      wfOpenVersion = null;
+    let timeline = null;
+    for (const versionId of ids) {
+      const d = await postJson("/gonggan/version/delete", {
+        pid, cut_id: cutId, version_id: versionId, history_step: stepId,
+      });
+      if (d.timeline) timeline = d.timeline;
+      if (stripPick.pid === pid && stripPick.cutId === cutId && stripPick.vid === versionId) stripPick.vid = "";
+      if (wfOpenVersion && wfOpenVersion.projectId === pid && wfOpenVersion.cutId === cutId && wfOpenVersion.vid === versionId) {
+        wfOpenVersion = null;
+      }
     }
-    if (d.timeline) adoptMutationTimeline(d.timeline, pid);
+    if (verSel.cutId === cutId) {
+      ids.forEach((id) => verSel.ids.delete(id));
+      if (!verSel.ids.size) verSel.anchor = "";
+    }
+    if (timeline) adoptMutationTimeline(timeline, pid);
     else await loadTimeline();
     recordShotsEntry(pid, {
-      kind: "version", op: "delete", cut_id: cutId, version_id: versionId, history_step: stepId,
-    }, "Delete version");
+      kind: "version",
+      op: "delete",
+      cut_id: cutId,
+      version_id: ids[0],
+      version_ids: ids,
+      history_step: stepId,
+    }, ids.length === 1 ? "Delete version" : `Delete ${ids.length} versions`);
     bus.dispatchEvent(new Event("timeline"));
   } catch (e) {
     ggToast("Delete version", e.message, "warn");
   } finally {
     versionDeleteBusy.delete(busyKey);
   }
+}
+
+async function deleteVersion(cutId, versionId) {
+  await deleteVersions(cutId, versionIdsForDelete(cutId, versionId));
 }
 
 async function regenCut(cutId) {
@@ -10849,13 +11066,14 @@ function versionStripHtml(c, selVid) {
   const thumbs = rows.map((r) => {
     const { wrapCls, tip, img } = versionThumbParts(c, byId.get(r.id), tabOpen);
     const title = r.state ? `${r.state} · ${tip}` : tip;
-    const sel = r.id === selVid;
+    const inMulti = !!(c && verSel.cutId === c.id && verSel.ids.size);
+    const sel = inMulti ? verSel.ids.has(r.id) : r.id === selVid;
     const failed = !!byId.get(r.id)?.failed;
     const starOn = r.best ? " gg-on" : "";
     const xBtn = isNativeProject()
       ? `<button type="button" class="gg-vs-x" title="Hide this version. History can restore it." aria-label="Delete">×</button>`
       : "";
-    return `<div class="${wrapCls} gg-vs-item${failed ? " gg-vs-failed" : ""}${r.best ? " gg-vs-best" : ""}${sel && !r.best ? " gg-vs-sel" : ""}" data-vid="${esc(r.id)}"${sel ? ' aria-selected="true"' : ""}>
+    return `<div class="${wrapCls} gg-vs-item${failed ? " gg-vs-failed" : ""}${r.best ? " gg-vs-best" : ""}${sel ? " gg-vs-sel" : ""}" data-vid="${esc(r.id)}"${sel ? ' aria-selected="true"' : ""}>
       <div class="gg-ver" title="${esc(title)}">
         <button type="button" class="gg-vs-star${starOn}" title="${esc(SET_BEST_LABEL)}" aria-pressed="${r.best ? "true" : "false"}">★</button>
         ${xBtn}
@@ -10914,7 +11132,12 @@ function iconRowHtml() {
 async function confirmDeleteSelectedCuts() {
   const n = cutsForDelete().length;
   if (!n) return;
-  if (!(await askConfirm({ message: deleteCutsConfirmMessage(n), danger: true }))) return;
+  const message = shotsUi.refTab
+    ? (n === 1
+      ? "Delete 1 reference?\nIt will be moved to trash. You can restore it from History."
+      : `Delete ${n} references?\nThey will be moved to trash. You can restore them from History.`)
+    : deleteCutsConfirmMessage(n);
+  if (!(await askConfirm({ message, danger: true }))) return;
   await deleteSelectedCuts();
 }
 
@@ -11250,11 +11473,45 @@ function mountShots(el) {
       wrap.addEventListener("click", (e) => {
         if (e.target.closest(".gg-vs-star, .gg-vs-x")) return;
         e.stopPropagation();
+        const order = versionStripRows(c, stripProbe.dur).map((r) => r.id);
+        if (verSel.cutId !== c.id) {
+          verSel.cutId = c.id;
+          verSel.ids = new Set();
+          verSel.anchor = "";
+        }
+        if (e.shiftKey) {
+          const anchor = verSel.anchor || stripSelectedVersionId(c) || vid;
+          const i = order.indexOf(anchor);
+          const j = order.indexOf(vid);
+          verSel.ids = new Set();
+          if (i < 0 || j < 0) verSel.ids.add(vid);
+          else for (let k = Math.min(i, j); k <= Math.max(i, j); k++) verSel.ids.add(order[k]);
+          verSel.anchor = anchor;
+        } else if (e.ctrlKey || e.metaKey) {
+          if (!verSel.ids.size) {
+            const cur = stripSelectedVersionId(c);
+            if (cur) verSel.ids.add(cur);
+          }
+          if (verSel.ids.has(vid)) verSel.ids.delete(vid);
+          else verSel.ids.add(vid);
+          verSel.anchor = vid;
+        } else {
+          verSel.ids = new Set([vid]);
+          verSel.anchor = vid;
+        }
+        verSel.cutId = c.id;
+        shotsUi.selTarget = "versions";
         selectStripVersion(c.id, vid);
       });
       wrap.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         e.stopPropagation();
+        if (!(verSel.cutId === c.id && verSel.ids.has(vid))) {
+          verSel.cutId = c.id;
+          verSel.ids = new Set([vid]);
+          verSel.anchor = vid;
+        }
+        shotsUi.selTarget = "versions";
         const menuItems = versionStripMenuItems(row).map((it) => (
           it.key === "loadWf" ? { ...it, label: loadTakeWorkflowLabel(captionLangNow()) } : it
         ));
@@ -11366,9 +11623,10 @@ function mountShots(el) {
     });
     if (c) bindCutPanelFields(panel, c);
   };
-  const FIELD_TEXT_SEL = ".gg-caption-text, .gg-prompt-text";
+  const FIELD_TEXT_SEL = ".gg-caption-text, .gg-prompt-text, .gg-desc-text";
 
   function fieldTextKind(el) {
+    if (el?.classList?.contains("gg-desc-text")) return "description";
     if (el?.classList?.contains("gg-prompt-text")) return "prompt";
     if (el?.classList?.contains("gg-caption-text")) return "caption";
     return "";
@@ -11393,7 +11651,11 @@ function mountShots(el) {
 
   function restoreFieldTextFocus(cap) {
     if (!cap?.cutId || !cap.field) return;
-    const sel = cap.field === "prompt" ? ".gg-prompt-text" : ".gg-caption-text";
+    const sel = cap.field === "description"
+      ? ".gg-desc-text"
+      : cap.field === "prompt"
+        ? ".gg-prompt-text:not(.gg-desc-text)"
+        : ".gg-caption-text";
     const ta = root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cap.cutId)}"] ${sel}`);
     if (!ta) return;
     ta.value = cap.value;
@@ -11507,7 +11769,7 @@ function mountShots(el) {
       const li = ta.closest(".gg-cut");
       const id = li?.dataset?.cutId;
       if (!id) return;
-      if (ta.classList.contains("gg-prompt-text")) bindMentionField(ta);
+      if (ta.classList.contains("gg-prompt-text") && !ta.classList.contains("gg-desc-text")) bindMentionField(ta);
       const nat = isNativeProject() && !ta.disabled;
 
       const exitCardFieldEdit = () => {
@@ -11599,11 +11861,19 @@ function mountShots(el) {
           c.caption = ta.value;
           scheduleCutFieldSave(id, { caption: ta.value }, { caption: prev });
           paintViewerCaption();
-        } else if (c && kind === "prompt") {
-          const prev = c.prompt;
-          c.prompt = ta.value;
+        } else if (kind === "prompt") {
+          const row = cutById(id);
+          if (!row) return;
+          const prev = row.prompt;
+          row.prompt = ta.value;
           scheduleCutFieldSave(id, { prompt: ta.value }, { prompt: prev });
           syncPromptNodeFromField(id, ta.value);
+        } else if (kind === "description") {
+          const row = cutById(id);
+          if (!row) return;
+          const prev = row.description || "";
+          row.description = ta.value;
+          scheduleCutFieldSave(id, { description: ta.value }, { description: prev });
         }
         autoSizeFieldTextarea(ta);
       });
@@ -11779,10 +12049,18 @@ function mountShots(el) {
     root.querySelectorAll(".gg-list-toggle .gg-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         if (btn.dataset.mode === "reference") {
+          if (!shotsUi.refTab) {
+            shotsUi.selFromGroup = false;
+            shotsUi.selGroupKey = "";
+          }
           shotsUi.refTab = true;
           saveRefTab(true);
           paint();
           return;
+        }
+        if (shotsUi.refTab) {
+          shotsUi.selFromGroup = false;
+          shotsUi.selGroupKey = "";
         }
         shotsUi.refTab = false;
         saveRefTab(false);
@@ -11919,15 +12197,18 @@ function mountShots(el) {
     root.querySelectorAll(".gg-cut").forEach((li) => {
       if (li.dataset.kind === "reference") {
         li.addEventListener("click", (e) => {
+          const fieldEl = e.target.closest(FIELD_TEXT_SEL);
+          if (fieldEl && shouldSkipCardSelect({ inEditMode: isCardFieldEditing(fieldEl) })) return;
           e.stopPropagation();
-          selectReference(li.dataset.cutId);
+          const id = li.dataset.cutId;
+          if (e.shiftKey) selectCut(id, { range: true });
+          else selectCut(id, { multi: e.ctrlKey || e.metaKey });
           paintSelection(root);
           paintPanel();
         });
         li.addEventListener("contextmenu", (e) => {
           e.preventDefault();
           e.stopPropagation();
-          selectReference(li.dataset.cutId);
           openReferenceMenu(li.dataset.cutId, e.clientX, e.clientY);
           paintSelection(root);
           paintPanel();
@@ -11951,12 +12232,28 @@ function mountShots(el) {
         paintPanel();
       });
     });
+    const bindGroupHead = (head, groupKey) => {
+      head.addEventListener("click", (e) => {
+        if (e.target.closest("button, input, textarea, a")) return;
+        if (shotsUi.blockHeadSelect) {
+          shotsUi.blockHeadSelect = false;
+          return;
+        }
+        const sec = head.closest(".gg-grp-sec");
+        const ids = [...(sec?.querySelectorAll(".gg-cut") || [])].map((li) => li.dataset.cutId).filter(Boolean);
+        selectListedGroup(ids, { multi: !!(e.ctrlKey || e.metaKey), range: !!e.shiftKey, groupKey });
+        paintSelection(root);
+        paintPanel();
+      });
+    };
     root.querySelectorAll(".gg-grp-sec[data-group-id] .gg-grp-head").forEach((head) => {
       const sec = head.closest(".gg-grp-sec");
       const gid = sec?.dataset?.groupId;
-      if (!gid) return;
+      if (!gid || sec.classList.contains("gg-ref-sec")) return;
       head.addEventListener("contextmenu", (e) => openSceneContextMenu(e, gid));
+      bindGroupHead(head, gid);
     });
+    root.querySelectorAll(".gg-grp-sec[data-loose] > .gg-grp-head").forEach((head) => bindGroupHead(head, "ungrouped"));
     bindHoverPlay(root);
     bindThumbFallbacks(root);
     if (!refTab) bindShotsReorder(root);
@@ -12165,6 +12462,11 @@ function mountShots(el) {
     };
     if (action === "escape") {
       closeCtxMenu();
+      shotsUi.selFromGroup = false;
+      if (verSel.ids.size) {
+        verSel.ids.clear();
+        verSel.anchor = "";
+      }
       if (state.cutSel.size) {
         state.cutSel.clear();
         cutSelAnchor = "";
@@ -12176,24 +12478,22 @@ function mountShots(el) {
     }
     if (action === "delete") {
       const overStrip = !!root.querySelector(".gg-vstrip:hover");
-      if (overStrip && isNativeProject() && state.timeline) {
-        const c = cutById(state.cutId);
-        const vid = stripSelectedVersionId(c);
-        if (c && vid) {
-          handled();
-          if (!e.repeat) void deleteVersion(c.id, vid);
-          return;
-        }
-      }
-      const refDel = selectedReference();
-      if (refDel && !state.cutSel.size) {
+      const c = cutById(state.cutId);
+      const stripVid = c ? stripSelectedVersionId(c) : "";
+      const pickedVersions = c && verSel.cutId === c.id && verSel.ids.size ? [...verSel.ids] : [];
+      const deleteVersionsNow = isNativeProject() && c && (
+        (shotsUi.selTarget === "versions" && pickedVersions.length > 1)
+        || (overStrip && (pickedVersions.length || stripVid))
+      );
+      if (deleteVersionsNow) {
+        const ids = pickedVersions.length ? pickedVersions : [stripVid];
         handled();
-        if (!e.repeat) void deleteReference(refDel.id);
+        if (!e.repeat) void deleteVersions(c.id, ids);
         return;
       }
       if (!cutsForDelete().length) return;
       handled();
-      deleteSelectedCuts();
+      if (!e.repeat) void confirmDeleteSelectedCuts();
       return;
     }
     if (!state.timeline) return;
@@ -12277,8 +12577,10 @@ function mountShots(el) {
   };
   const onShotsEmptyClick = (e) => {
     if (!root.contains(e.target)) return;
-    if (e.target.closest(".gg-cut") || e.target.closest(".gg-ref-group") || e.target.closest(".gg-sel-detail") || e.target.closest(".gg-selbar") || e.target.closest(".gg-iconrow") || e.target.closest(".gg-vstrip") || e.target.closest(".gg-cutpanel") || e.target.closest(".gg-ctx")) return;
-    if (!state.cutSel.size) return;
+    if (e.target.closest(".gg-cut") || e.target.closest(".gg-grp-head") || e.target.closest(".gg-ref-group") || e.target.closest(".gg-sel-detail") || e.target.closest(".gg-selbar") || e.target.closest(".gg-iconrow") || e.target.closest(".gg-vstrip") || e.target.closest(".gg-cutpanel") || e.target.closest(".gg-ctx")) return;
+    if (!state.cutSel.size && !shotsUi.selFromGroup) return;
+    shotsUi.selFromGroup = false;
+    shotsUi.selGroupKey = "";
     state.cutSel.clear();
     cutSelAnchor = "";
     updateSelectionBar(root);

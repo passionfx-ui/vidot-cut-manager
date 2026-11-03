@@ -90,7 +90,10 @@
 .gg-shots .gg-grp-wrap { overflow-y: auto; flex: 1 1 auto; min-height: 0; padding: 0 4px 6px; }
 .gg-shots .gg-grp-sec { margin-bottom: 6px; border: 1px solid var(--gg-line); border-radius: 6px; overflow: hidden; border-left: 3px solid hsl(var(--gg-grp, 200) 55% 48%); }
 .gg-shots .gg-grp-loose { border-left-color: var(--gg-dim); }
-.gg-shots .gg-grp-head { display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: var(--gg-panel); font-size: 11px; }
+.gg-shots .gg-grp-head { display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: var(--gg-panel); font-size: 11px; cursor: pointer; }
+.gg-shots .gg-grp-sec.gg-grp-picked > .gg-grp-head { box-shadow: inset 0 0 0 1px var(--gg-acc, #6ea8fe); }
+.gg-shots .gg-ref-fields { display: flex; flex-direction: column; gap: 4px; padding: 4px 6px 6px; }
+.gg-shots .gg-ref-field { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--gg-dim); }
 .gg-shots .gg-grp-fold, .gg-shots .gg-grp-ren, .gg-shots .gg-grp-del { background: transparent; border: none; color: var(--gg-dim); cursor: pointer; padding: 0 4px; }
 .gg-shots .gg-grp-fold:hover, .gg-shots .gg-grp-ren:hover, .gg-shots .gg-grp-del:hover { color: var(--gg-acc); }
 .gg-shots .gg-grp-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }

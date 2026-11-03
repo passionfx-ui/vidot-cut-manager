@@ -104,7 +104,7 @@ export function shotsKeyAction(e) {
     const plain = !e.altKey && !e.shiftKey && !e.menuOpen && !e.fieldEditing;
     return plain && isLetterKey(e, "a") ? "select-all" : null;
   }
-  if (key === "Delete") return "delete";
+  if (key === "Delete" || key === "Backspace") return "delete";
   if (e.menuOpen || e.fieldEditing) return null;
   const alt = !!e.altKey;
   const shift = !!e.shiftKey;

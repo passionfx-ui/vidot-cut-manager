@@ -114,7 +114,7 @@ export function isCaptionSaveRejected(status, message) {
 export function isSilentFieldSave(fields) {
   const keys = Object.keys(fields || {});
   if (!keys.length) return true;
-  return keys.every((k) => k === "notes" || k === "caption" || k === "prompt");
+  return keys.every((k) => k === "notes" || k === "caption" || k === "prompt" || k === "description");
 }
 
 /** Clamp textarea content height (px) between min and max; safe for bad inputs. */
