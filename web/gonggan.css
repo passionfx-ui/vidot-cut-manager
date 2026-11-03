@@ -683,8 +683,8 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
 }
 .gg-edit-preview-best {
   position: absolute;
-  top: 8px;
-  left: 10px;
+  top: calc(var(--gg-gate-y) + 8px);
+  left: calc(var(--gg-gate-x) + 8px);
   z-index: 6;
   width: 36px;
   height: 36px;
@@ -699,8 +699,25 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
   cursor: pointer;
 }
 .gg-edit-preview-best.gg-on { color: #e8c547; }
-.gg-edit-preview.gg-is-best {
-  box-shadow: 0 0 0 3px #e8c547, 0 4px 24px rgba(0, 0, 0, 0.45);
+/* Gold ring wraps the current take frame only. It uses the same gate box as that frame, so resize and film metrics move it with the frame. */
+.gg-edit-preview.gg-is-best .gg-edit-preview-stage {
+  box-shadow: 0 0 0 3px #e8c547;
+}
+.gg-edit-preview.gg-film-move .gg-edit-preview-stage {
+  box-shadow: none;
+}
+.gg-edit-preview-slide-frame.gg-frame-best::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  box-shadow: inset 0 0 0 3px #e8c547;
+  pointer-events: none;
+}
+.gg-edit-preview-slide-frame > .gg-edit-preview-best {
+  top: 8px;
+  left: 8px;
+  pointer-events: auto;
 }
 .gg-edit-preview-cap {
   position: absolute;

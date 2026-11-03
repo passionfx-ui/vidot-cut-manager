@@ -8657,6 +8657,7 @@ let editPreviewProxyWatched = new WeakSet();
 let editPreviewProxySyncing = false;
 let editPreviewLoadToken = 0;
 let editPreviewAnimating = false;
+let editPreviewChromeHold = null;
 let editPreviewFilmGen = 0;
 let editPreviewWheelAcc = 0;
 let editPreviewWheelAt = 0;
@@ -14874,14 +14875,37 @@ function syncEditPreviewPeeks() {
   paintEditPreviewPeek(el.querySelector(".gg-edit-preview-peek-next"), c, nextId);
 }
 
+/** Star rides the outgoing take frame during a slide, then returns to the settled frame. */
+function rideEditPreviewStar(el) {
+  const frame = el?.querySelector(".gg-frame-out");
+  const star = el?.querySelector(".gg-edit-preview-best");
+  if (!frame || !star || star.parentElement === frame) return;
+  frame.appendChild(star);
+}
+
+function parkEditPreviewStar(el) {
+  const star = el?.querySelector(".gg-edit-preview-best");
+  if (!star || !el || star.parentElement === el) return;
+  el.appendChild(star);
+}
+
+function releaseEditPreviewChromeHold() {
+  const held = editPreviewChromeHold;
+  editPreviewChromeHold = null;
+  if (held) syncEditPreviewTakeChrome(held);
+}
+
 /** Drop a running slide so playback can cut to the next take with no blur. */
 function cancelEditPreviewFilm() {
   editPreviewFilmGen += 1;
   editPreviewAnimating = false;
   const el = document.querySelector(".gg-edit-preview");
-  if (!el) return;
-  el.classList.remove("gg-film-move");
-  el.querySelectorAll(".gg-edit-preview-slide").forEach((node) => node.remove());
+  if (el) {
+    parkEditPreviewStar(el);
+    el.querySelectorAll(".gg-edit-preview-slide").forEach((node) => node.remove());
+  }
+  releaseEditPreviewChromeHold();
+  el?.classList.remove("gg-film-move");
 }
 
 function releaseEditPreviewFilmHold(el) {
@@ -14963,6 +14987,8 @@ function startEditPreviewFilm(c, dir, incomingId) {
   syncEditPreviewFilmMetrics(el);
   const frameH = Number(el.dataset.ggSlide) || el.querySelector(".gg-edit-preview-stage")?.clientHeight || 0;
   const down = dir > 0;
+  const outgoingBest = el.classList.contains("gg-is-best");
+  parkEditPreviewStar(el);
   const outgoing = captureEditPreviewFrame(el);
   el.querySelector(".gg-edit-preview-slide")?.remove();
   const slide = document.createElement("div");
@@ -14972,7 +14998,8 @@ function startEditPreviewFilm(c, dir, incomingId) {
   track.dataset.down = down ? "1" : "0";
   track.dataset.phase = "start";
   const outFrame = document.createElement("div");
-  outFrame.className = "gg-edit-preview-slide-frame";
+  outFrame.className = "gg-edit-preview-slide-frame gg-frame-out";
+  if (outgoingBest) outFrame.classList.add("gg-frame-best");
   outFrame.appendChild(outgoing);
   const inFrame = document.createElement("div");
   inFrame.className = "gg-edit-preview-slide-frame";
@@ -14983,6 +15010,7 @@ function startEditPreviewFilm(c, dir, incomingId) {
   el.appendChild(slide);
   layoutFilmTrack(track, frameH);
   editPreviewAnimating = true;
+  rideEditPreviewStar(el);
   el.classList.add("gg-film-move");
   void track.offsetWidth;
   requestAnimationFrame(() => {
@@ -14996,8 +15024,10 @@ function startEditPreviewFilm(c, dir, incomingId) {
   const finish = () => {
     if (done || gen !== editPreviewFilmGen) return;
     done = true;
-    el.classList.remove("gg-film-move");
+    parkEditPreviewStar(el);
     editPreviewAnimating = false;
+    releaseEditPreviewChromeHold();
+    el.classList.remove("gg-film-move");
     syncEditPreviewPeeks();
     if (!slide.isConnected) return;
     if (el.dataset.previewReady === "1") {
@@ -15267,6 +15297,17 @@ function syncEditPreviewTakeChrome(shown) {
   const el = document.querySelector(".gg-edit-preview");
   if (!el) return;
   ensureEditPreviewChrome(el);
+  const { order, index } = takeBrowserIndex(takeBrowserSubject());
+  const up = el.querySelector(".gg-edit-preview-up");
+  const down = el.querySelector(".gg-edit-preview-down");
+  if (up) up.disabled = !(order.length && index > 0);
+  if (down) down.disabled = !(order.length && index >= 0 && index < order.length - 1);
+  if (editPreviewAnimating) {
+    editPreviewChromeHold = shown;
+    rideEditPreviewStar(el);
+    return;
+  }
+  editPreviewChromeHold = null;
   const vid = shown?.media?.id ? String(shown.media.id) : "";
   const on = !!(shown && vid && shown.pick === vid);
   el.classList.toggle("gg-is-best", on);
@@ -15278,11 +15319,6 @@ function syncEditPreviewTakeChrome(shown) {
     star.title = !vid ? "No take" : (on ? "Best (click to clear)" : SET_BEST_LABEL);
     star.setAttribute("aria-label", star.title);
   }
-  const { order, index } = takeBrowserIndex(takeBrowserSubject());
-  const up = el.querySelector(".gg-edit-preview-up");
-  const down = el.querySelector(".gg-edit-preview-down");
-  if (up) up.disabled = !(order.length && index > 0);
-  if (down) down.disabled = !(order.length && index >= 0 && index < order.length - 1);
   syncEditPreviewPeeks();
 }
 
