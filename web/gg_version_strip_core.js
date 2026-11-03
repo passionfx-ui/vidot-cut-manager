@@ -53,6 +53,14 @@ export function isImportMediaFile(file) {
   return !!IMPORT_MIME_EXT[type];
 }
 
+/** Still image only. A reference version is a photo, not a video file. */
+export function isImportImageFile(file) {
+  if (!file) return false;
+  if (IMPORT_IMAGE_EXTS.includes(importMediaExtension(file.name))) return true;
+  const type = String(file.type || "").split(";")[0].trim().toLowerCase();
+  return type === "image/png" || type === "image/jpeg" || type === "image/jpg" || type === "image/gif" || type === "image/webp";
+}
+
 /** Upload name that keeps a known extension when the dropped file's name has none. */
 export function importUploadName(file) {
   const name = String(file?.name || "").trim() || "import";

@@ -327,9 +327,11 @@ import {
   stripScrollLeft,
   wheelToScrollLeft,
   IMPORT_ACCEPT,
+  IMPORT_IMAGE_EXTS,
   IMPORT_TILE_TIP,
   importUploadName,
   isImportMediaFile,
+  isImportImageFile,
   cutHasStartImage,
   isStillVersion,
   stripSelectedVid,
@@ -2039,7 +2041,8 @@ function openProjectSettingsModal() {
   folderIn.focus();
 }
 
-const refsUi = { cat: "All", adding: false, collapsed: {}, focusAdd: false };
+const refsUi = { collapsed: {}, groupId: "" };
+const REF_IMAGE_ACCEPT = [...IMPORT_IMAGE_EXTS, "image/png", "image/jpeg", "image/gif", "image/webp"].join(",");
 
 function activeReferences() {
   return (state.timeline?.references || []).filter((r) => r && r.id);
@@ -2109,36 +2112,99 @@ function cutRefStripInnerHtml(cut) {
   return `${thumbs}<button type="button" class="gg-refthumb gg-refthumb-add" title="Link reference" aria-label="Link reference"></button>`;
 }
 
+/** Built-in categories plus saved groups, then any category that still has a reference. */
+function referenceGroupSections() {
+  const sections = REFERENCE_CATEGORIES.map((name) => ({
+    id: `cat:${name}`,
+    name,
+    builtin: true,
+    collapsed: !!refsUi.collapsed[`cat:${name}`],
+  }));
+  const names = new Set(sections.map((g) => g.name.toLowerCase()));
+  for (const g of state.timeline?.reference_groups || []) {
+    const name = String(g?.name || "").trim();
+    if (!g?.id || !name || names.has(name.toLowerCase())) continue;
+    names.add(name.toLowerCase());
+    sections.push({ id: String(g.id), name, builtin: false, collapsed: !!g.collapsed });
+  }
+  for (const r of activeReferences()) {
+    const name = String(r?.category || "Other").trim() || "Other";
+    if (names.has(name.toLowerCase())) continue;
+    names.add(name.toLowerCase());
+    sections.push({
+      id: `cat:${name}`,
+      name,
+      builtin: true,
+      collapsed: !!refsUi.collapsed[`cat:${name}`],
+    });
+  }
+  return sections;
+}
+
+function referenceGroupById(id) {
+  return referenceGroupSections().find((g) => g.id === id) || null;
+}
+
+/** Group the next New Reference uses: the clicked group, else the selected reference's group, else the last group. */
+function selectedReferenceGroup() {
+  const sections = referenceGroupSections();
+  if (!sections.length) return null;
+  const picked = referenceGroupById(refsUi.groupId);
+  if (picked) return picked;
+  const ref = selectedReference();
+  if (ref) {
+    const hit = sections.find((g) => g.name === (ref.category || "Other"));
+    if (hit) return hit;
+  }
+  return sections[sections.length - 1];
+}
+
+function nextReferenceGroupName(sections) {
+  const used = new Set((sections || []).map((g) => String(g?.name || "").trim().toLowerCase()));
+  let n = 1;
+  while (used.has(`group ${n}`)) n += 1;
+  return `Group ${n}`;
+}
+
+function nextReferenceName(category) {
+  const used = new Set(
+    activeReferences()
+      .filter((r) => (r.category || "Other") === category)
+      .map((r) => String(r.name || "").trim().toLowerCase()),
+  );
+  let name = "New reference";
+  let n = 2;
+  while (used.has(name.toLowerCase())) {
+    name = `New reference ${n}`;
+    n += 1;
+  }
+  return name;
+}
+
+function referenceCategoryOptions(selected) {
+  const names = referenceGroupSections().map((g) => g.name);
+  if (selected && !names.includes(selected)) names.push(selected);
+  return names.map((c) => `<option${c === selected ? " selected" : ""}>${esc(c)}</option>`).join("");
+}
+
 function referenceLibraryHtml() {
   const all = activeReferences();
-  const form = refsUi.adding
-    ? `<form class="gg-ref-add-form">
-        <input class="gg-ref-add-name" maxlength="80" placeholder="Name" />
-        <select class="gg-ref-add-cat">${REFERENCE_CATEGORIES.map((c) => `<option${c === "Character" ? " selected" : ""}>${esc(c)}</option>`).join("")}</select>
-        <button type="submit">Add</button>
-        <button type="button" class="gg-ref-add-cancel">Cancel</button>
-      </form>`
-    : "";
-  const sections = REFERENCE_CATEGORIES.map((cat) => {
-    const rows = all.filter((r) => (r.category || "Other") === cat);
-    const collapsed = !!refsUi.collapsed[cat];
+  const sections = referenceGroupSections().map((g) => {
+    const rows = all.filter((r) => (r.category || "Other") === g.name);
     const cards = rows.map((r) =>
       `<li class="gg-cut${state.cutId === r.id ? " gg-sel" : ""}" data-cut-id="${esc(r.id)}" data-kind="reference">${infoRowContent(r)}</li>`
     ).join("");
-    return `<section class="gg-grp-sec gg-ref-sec" data-ref-cat="${esc(cat)}">
-      <header class="gg-grp-head">
-        <button type="button" class="gg-grp-fold" title="Collapse or expand">${collapsed ? "▸" : "▾"}</button>
-        <span class="gg-grp-title">${esc(cat)}</span>
+    const on = refsUi.groupId === g.id ? " gg-on" : "";
+    return `<section class="gg-grp-sec gg-ref-sec${on}" data-ref-group="${esc(g.id)}" data-ref-cat="${esc(g.name)}">
+      <header class="gg-grp-head" title="Reference group">
+        <button type="button" class="gg-grp-fold" title="Collapse or expand">${g.collapsed ? "▸" : "▾"}</button>
+        <span class="gg-grp-title">${esc(g.name)}</span>
         <span class="gg-grp-meta">${rows.length}</span>
       </header>
-      <ol class="gg-cutlist"${collapsed ? " hidden" : ""}>${cards}</ol>
+      <ol class="gg-cutlist"${g.collapsed ? " hidden" : ""}>${cards}</ol>
     </section>`;
   }).join("");
-  return `<div class="gg-ref-library">
-    <div class="gg-ref-library-bar"><button type="button" class="gg-btn gg-ref-add-btn">+ Add reference</button></div>
-    ${form}
-    ${sections}
-  </div>`;
+  return `<div class="gg-ref-library">${sections}</div>`;
 }
 
 function refSlotOptions(cut, row) {
@@ -2158,9 +2224,7 @@ function selectionDetailHtml() {
   if (!ref || !shotsUi.refTab) return "";
   return `<div class="gg-sel-detail" data-sel-kind="reference">
     <label class="gg-sel-field">Name <input data-field="name" value="${esc(ref.name)}" maxlength="80" /></label>
-    <label class="gg-sel-field">Category <select data-field="category">${REFERENCE_CATEGORIES.map((c) =>
-      `<option${c === ref.category ? " selected" : ""}>${esc(c)}</option>`
-    ).join("")}</select></label>
+    <label class="gg-sel-field">Category <select data-field="category">${referenceCategoryOptions(ref.category || "Other")}</select></label>
     <label class="gg-sel-field gg-sel-grow">Description <textarea data-field="description" rows="3" maxlength="4000">${esc(ref.description || "")}</textarea></label>
     <label class="gg-sel-field gg-sel-grow">Prompt <textarea class="gg-ref-prompt" data-field="prompt" rows="3">${esc(ref.prompt || "")}</textarea></label>
   </div>`;
@@ -2170,20 +2234,84 @@ function referenceErrorText(err, fallback) {
   const msg = err?.message || "";
   if (/already exists/i.test(msg)) return "A reference with that name already exists in this category.";
   if (/not a reference/i.test(msg)) return "That item is not a reference.";
-  if (/category must be/i.test(msg)) return "Choose Character, Place, Prop, Style, or Other.";
+  if (/category must be|valid category|group name/i.test(msg)) return "Choose a reference group.";
   return msg || fallback;
 }
 
-async function addReferenceFromGroup(name, category) {
-  const clean = normalizeNameInput(name, 80);
-  if (!clean.value) return;
-  await postJson("/gonggan/reference/add", { pid: state.pid, name: clean.value, category: category || "Character" });
-  refsUi.adding = false;
-  await loadTimeline({ keepView: true });
+function customReferenceGroupsPayload(nextCollapsedId) {
+  return referenceGroupSections()
+    .filter((g) => !g.builtin)
+    .map((g) => ({
+      id: g.id,
+      name: g.name,
+      collapsed: g.id === nextCollapsedId ? !g.collapsed : !!g.collapsed,
+    }));
+}
+
+async function persistReferenceGroups(groups) {
+  const pid = state.pid;
+  const data = await postJson("/gonggan/reference/groups", { pid, groups });
+  if (data && state.pid === pid) {
+    if (data.cuts || data.references) adoptMutationTimeline(data, pid);
+    else if (data.timeline) adoptMutationTimeline(data.timeline, pid);
+    bus.dispatchEvent(new Event("timeline"));
+  }
+}
+
+/** Icon-row New Group: one more empty group, same instant create as New scene. */
+async function addReferenceGroup() {
+  if (!state.pid || !isNativeProject()) return;
+  const sections = referenceGroupSections();
+  const id = `rg${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36).padStart(2, "0")}`;
+  const name = nextReferenceGroupName(sections);
+  const groups = customReferenceGroupsPayload().concat([{ id, name, collapsed: false }]);
+  try {
+    await persistReferenceGroups(groups);
+    refsUi.groupId = id;
+    bus.dispatchEvent(new Event("timeline"));
+    requestAnimationFrame(() => {
+      document.querySelector(`.gg-shots .gg-ref-sec[data-ref-group="${CSS.escape(id)}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+  } catch (e) {
+    const missing = e.status === 404 || e.status === 405;
+    ggToast("Reference", missing ? "Restart ComfyUI to add a reference group." : referenceErrorText(e, "Could not add a group."), "warn");
+  }
+}
+
+/** Icon-row New Reference: a new reference in the selected group, image template copied like a new image cut. */
+async function addReferenceInSelectedGroup() {
+  if (!state.pid || !isNativeProject()) return;
+  const group = selectedReferenceGroup();
+  if (!group) return;
+  const name = nextReferenceName(group.name);
+  refsUi.groupId = group.id;
+  try {
+    const d = await postJson("/gonggan/reference/add", { pid: state.pid, name, category: group.name });
+    if (d.timeline) adoptMutationTimeline(d.timeline, state.pid);
+    else await loadTimeline({ keepView: true });
+    bus.dispatchEvent(new Event("timeline"));
+    const id = d.reference?.id;
+    if (id) {
+      wfLastLoadedCutId = "";
+      wfLastLoadedProjectId = "";
+      selectReference(id);
+      requestAnimationFrame(() => {
+        document.querySelector(`.gg-shots .gg-cut[data-cut-id="${CSS.escape(id)}"]`)
+          ?.scrollIntoView({ block: "nearest" });
+      });
+    }
+    ggToast("Reference", `Added ${d.reference?.name || name}`, "ok");
+  } catch (e) {
+    ggToast("Reference", referenceErrorText(e, "Could not add a reference."), "warn");
+  }
 }
 
 function selectReference(id) {
-  if (!referenceById(id)) return;
+  const ref = referenceById(id);
+  if (!ref) return;
+  const group = referenceGroupSections().find((g) => g.name === (ref.category || "Other"));
+  if (group) refsUi.groupId = group.id;
   state.cutSel = new Set();
   selectCut(id);
 }
@@ -2199,8 +2327,13 @@ async function renameReference(id, nextName) {
 }
 
 async function changeReferenceCategory(id, category) {
-  if (!REFERENCE_CATEGORIES.includes(category)) return;
+  const names = referenceGroupSections().map((g) => g.name);
+  if (!names.includes(category)) return;
   await saveCutFields(id, { category });
+  if (state.cutId === id) {
+    const group = referenceGroupSections().find((g) => g.name === category);
+    if (group) refsUi.groupId = group.id;
+  }
 }
 
 async function deleteReference(id) {
@@ -2225,26 +2358,51 @@ async function setReferenceBest(id) {
   await saveCutFields(id, { pick_version_id: vid });
 }
 
-async function importReferenceMedia(id) {
+/** Photo files become versions of this reference. Same import route as a cut version, not a new cut. */
+async function importReferenceVersionFiles(pid, refId, files) {
+  const images = (files || []).filter(isImportImageFile);
+  if (!images.length || !refId) {
+    if ((files || []).length) ggToast("Reference", "Choose an image file.", "warn");
+    return;
+  }
+  stripImportBusy = true;
+  bus.dispatchEvent(new Event("sdk"));
+  const failed = [];
+  let added = 0;
+  try {
+    for (const file of images) {
+      const body = new FormData();
+      body.append("pid", pid);
+      body.append("cut_id", refId);
+      body.append("file", file, importUploadName(file));
+      try {
+        const res = await api.fetchApi("/gonggan/import-version", { method: "POST", body });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 404 || res.status === 405) throw new Error("Restart ComfyUI to enable Import");
+        if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
+        added += 1;
+      } catch (e) {
+        failed.push(`${file.name}: ${e.message}`);
+      }
+    }
+  } finally {
+    stripImportBusy = false;
+    if (added && state.pid === pid) await loadTimeline({ keepView: true });
+    bus.dispatchEvent(new Event("sdk"));
+  }
+  if (failed.length) ggToast(`Imported ${added} of ${images.length}`, failed.join("\n"), "warn");
+  else if (added) ggToast(`Imported ${added} image${added === 1 ? "" : "s"}`, "", "ok");
+}
+
+function pickReferenceVersionFiles(refId) {
+  const pid = state.pid;
+  if (!refId || !isNativeProject() || stripImportBusy) return;
   const input = document.createElement("input");
   input.type = "file";
-  input.accept = IMPORT_ACCEPT;
-  input.style.display = "none";
-  document.body.appendChild(input);
-  const file = await new Promise((resolve) => {
-    input.addEventListener("change", () => resolve(input.files?.[0] || null), { once: true });
-    input.addEventListener("cancel", () => resolve(null), { once: true });
-    input.click();
-  });
-  input.remove();
-  if (!file || !state.pid) return;
-  const body = new FormData();
-  body.append("pid", state.pid);
-  body.append("cut_id", id);
-  body.append("file", file, importUploadName(file));
-  const res = await fetch(api.apiURL("/gonggan/import-version"), { method: "POST", body });
-  if (!res.ok) throw new Error("Could not import.");
-  await loadTimeline({ keepView: true });
+  input.multiple = true;
+  input.accept = REF_IMAGE_ACCEPT;
+  input.addEventListener("change", () => void importReferenceVersionFiles(pid, refId, [...(input.files || [])]));
+  input.click();
 }
 
 async function useLastOutputOnReference(id) {
@@ -2261,15 +2419,15 @@ async function useLastOutputOnReference(id) {
 function openReferenceMenu(id, x, y) {
   const ref = referenceById(id);
   if (!ref) return;
-  const cats = REFERENCE_CATEGORIES.filter((c) => c !== ref.category).map((c) => ({
+  const cats = referenceGroupSections().map((g) => g.name).filter((c) => c !== ref.category).map((c) => ({
     label: c,
     action: () => changeReferenceCategory(id, c).catch((e) => ggToast("Reference", referenceErrorText(e, "References"), "warn")),
   }));
   showCtxMenu(x, y, [
-    { label: "Generate", action: () => generateReference(id) },
     { label: "Load template…", submenu: templateChoicesForCut(id) },
+    { label: "Import Media…", action: () => pickReferenceVersionFiles(id) },
+    { label: "Generate Selected", action: () => generateReference(id) },
     { label: "Set as Best", action: () => setReferenceBest(id).catch((e) => ggToast("Reference", e.message || "Could not set Best.", "warn")) },
-    { label: "Import Media", action: () => importReferenceMedia(id).catch((e) => ggToast("Reference", e.message || "Could not import.", "warn")) },
     { label: "Use Last Output", action: () => useLastOutputOnReference(id).catch((e) => ggToast("Reference", e.message || "Could not use the last output.", "warn")) },
     { label: "Rename", shortcut: "F2", action: () => renameReference(id).catch((e) => ggToast("Reference", referenceErrorText(e, "References"), "warn")) },
     cats.length ? { label: "Change Category", submenu: cats } : null,
@@ -2280,8 +2438,7 @@ function openReferenceMenu(id, x, y) {
 
 async function generateReference(id) {
   if (!referenceById(id)) return;
-  await flushPendingCutFields();
-  await sdkGenerateNativeCut(id, { newSeed: false });
+  await queueSelectedCuts([id], { resolved: true });
 }
 
 function saveReferenceLinks(cutId, rows, prompt) {
@@ -2366,7 +2523,7 @@ function openRefPicker(anchor, cut) {
     const all = activeReferences();
     const linked = new Set(cutRefRows(cut).map((row) => row.ref_id));
     const shown = cat === "All" ? all : all.filter((r) => (r.category || "Other") === cat);
-    const chips = ["All", ...REFERENCE_CATEGORIES].map((c) =>
+    const chips = ["All", ...referenceGroupSections().map((g) => g.name)].map((c) =>
       `<button type="button" class="gg-ref-filter${c === cat ? " on" : ""}" data-ref-filter="${esc(c)}">${esc(c)}</button>`
     ).join("");
     const cells = shown.map((r) => {
@@ -2547,35 +2704,26 @@ function repaintShots() {
 function bindReferenceGroup(root) {
   const group = root.querySelector(".gg-ref-library");
   if (!group) return;
-  group.querySelector(".gg-ref-add-btn")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    refsUi.adding = true;
-    refsUi.focusAdd = true;
-    repaintShots();
-  });
-  group.querySelector(".gg-ref-add-cancel")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    refsUi.adding = false;
-    repaintShots();
-  });
-  group.querySelector(".gg-ref-add-form")?.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const name = group.querySelector(".gg-ref-add-name")?.value || "";
-    const category = group.querySelector(".gg-ref-add-cat")?.value || "Character";
-    addReferenceFromGroup(name, category).catch((err) => ggToast("Reference", referenceErrorText(err, "References"), "warn"));
-  });
   group.querySelectorAll(".gg-ref-sec").forEach((sec) => {
+    const id = sec.dataset.refGroup || "";
+    sec.querySelector(".gg-grp-head")?.addEventListener("click", (e) => {
+      if (e.target.closest(".gg-grp-fold")) return;
+      refsUi.groupId = id;
+      repaintShots();
+    });
     sec.querySelector(".gg-grp-fold")?.addEventListener("click", (e) => {
       e.stopPropagation();
-      const cat = sec.dataset.refCat || "";
-      refsUi.collapsed[cat] = !refsUi.collapsed[cat];
+      refsUi.groupId = id;
+      const section = referenceGroupById(id);
+      if (section && !section.builtin) {
+        persistReferenceGroups(customReferenceGroupsPayload(id))
+          .catch((err) => ggToast("Reference", referenceErrorText(err, "Could not collapse the group."), "warn"));
+        return;
+      }
+      refsUi.collapsed[id] = !refsUi.collapsed[id];
       repaintShots();
     });
   });
-  if (refsUi.focusAdd) {
-    refsUi.focusAdd = false;
-    group.querySelector(".gg-ref-add-name")?.focus();
-  }
 }
 
 function bindSelectionDetail(root) {
@@ -2597,7 +2745,12 @@ function bindSelectionDetail(root) {
     const ref = selectedReference();
     const field = e.target?.dataset?.field;
     if (!ref || (field !== "description" && field !== "prompt")) return;
-    scheduleCutFieldSave(ref.id, { [field]: e.target.value }, { [field]: ref[field] || "" });
+    const prev = ref[field] || "";
+    if (field === "prompt") {
+      ref.prompt = e.target.value;
+      syncPromptNodeFromField(ref.id, e.target.value);
+    }
+    scheduleCutFieldSave(ref.id, { [field]: e.target.value }, { [field]: prev });
   });
 }
 
@@ -4759,7 +4912,8 @@ function openCutForLinear() {
 function promptTextForQueue(cut) {
   if (!cut) return "";
   const stored = cut.prompt != null ? String(cut.prompt) : "";
-  const ta = document.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cut.id)}"] .gg-prompt-text`);
+  const ta = document.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cut.id)}"] .gg-prompt-text`)
+    || (cut.kind === "reference" ? document.querySelector("#gg-root .gg-sel-detail .gg-ref-prompt") : null);
   if (!ta || typeof ta.value !== "string") return stored;
   if (ta.value === stored || document.activeElement === ta) return ta.value;
   return stored;
@@ -6479,7 +6633,8 @@ function openShotsPanelContextMenu(e) {
     e.preventDefault();
     e.stopPropagation();
     showCtxMenu(e.clientX, e.clientY, [
-      { label: "Add reference", action: () => { refsUi.adding = true; refsUi.focusAdd = true; repaintShots(); } },
+      { label: "New Group", action: () => { void addReferenceGroup(); } },
+      { label: "New Reference", action: () => { void addReferenceInSelectedGroup(); } },
     ]);
     return;
   }
@@ -8861,14 +9016,26 @@ function updateSelectionBar(root) {
   const row = root.querySelector(".gg-iconrow");
   if (row) {
     const r = iconRowView({ count: n, hasProject, native: isNativeProject() });
-    setBtn(row, ".gg-ir-scene", r.scene.disabled, r.scene.title);
-    setBtn(row, ".gg-ir-cut", r.cut.disabled, shotsUi.refTab ? "New reference" : r.cut.title);
+    const refMode = !!(shotsUi.refTab && isNativeProject());
+    const sceneTitle = refMode ? "New Group" : r.scene.title;
+    const cutTitle = refMode ? "New Reference" : r.cut.title;
+    setBtn(row, ".gg-ir-scene", refMode ? !hasProject : r.scene.disabled, sceneTitle);
+    setBtn(row, ".gg-ir-cut", refMode ? !hasProject : r.cut.disabled, cutTitle);
     setBtn(row, ".gg-ir-del", r.del.disabled, r.del.title);
-    if (shotsUi.refTab && isNativeProject() && referenceById(state.cutId)) {
-      setBtn(row, ".gg-ir-del", false, "Delete");
+    if (refMode && referenceById(state.cutId)) setBtn(row, ".gg-ir-del", false, "Delete");
+    for (const sel of [".gg-ir-scene", ".gg-ir-cut", ".gg-ir-del"]) {
+      const b = row.querySelector(sel);
+      if (b && b.title) b.setAttribute("aria-label", b.title);
+    }
+    const wand = row.querySelector(".gg-ir-aicut");
+    if (wand && shotsUi.refTab) {
+      wand.disabled = true;
+      wand.title = "Switch to Info to use AI Make Cut";
+      wand.setAttribute("aria-label", wand.title);
     }
   }
-  const queueIds = timelineSelectedCutIds();
+  const refForQueue = shotsUi.refTab ? selectedReference() : null;
+  const queueIds = refForQueue ? [refForQueue.id] : timelineSelectedCutIds();
   const allCount = generateAllCutIds().length;
   const allRunning = isGenerateAllRunning(genAll.batch);
   const qPlan = queueIds.length ? queuePlanForSelectedIds(queueIds) : null;
@@ -9083,7 +9250,8 @@ function applyPickLocally(c, vid) {
 
 /** Version row Best: sets Best on the version, or clears it when that version already is the Best. */
 function toggleBest(cutId, vid) {
-  const c = cutsNow().find((x) => x.id === cutId);
+  const ref = referenceById(cutId);
+  const c = ref || cutsNow().find((x) => x.id === cutId);
   if (!c || !vid) return;
   void setPick(cutId, c.pick === vid ? null : vid);
 }
@@ -9348,6 +9516,16 @@ function queueContextForCut(cutId) {
 }
 
 function queuePlanForSelectedIds(ids) {
+  if (ids.length === 1 && referenceById(ids[0]) && !(state.timeline?.cuts || []).some((c) => c.id === ids[0])) {
+    const counts = { video: 0, regen: 0, image: 1, skipBest: 0, skipNoImage: 0 };
+    return {
+      jobs: [{ cut_id: ids[0], job: "image", selected_vid: "" }],
+      counts,
+      actionable: 1,
+      mode: "image",
+      tooltip: queuePlanTooltip(counts),
+    };
+  }
   const mode = loadQueueMode(localStorage);
   const tl = state.timeline;
   const { order } = shotsNavOrder();
@@ -9437,6 +9615,11 @@ async function runQueueJobItem(item, { newSeed }) {
 function queueButtonClick() {
   if (isGenerateAllRunning(genAll.batch) && genAll.batch?.pid === state.pid && !genAll.batch?.stop) {
     return stopGenerateAll();
+  }
+  if (shotsUi.refTab && isNativeProject()) {
+    const ref = selectedReference();
+    if (!ref) return;
+    return void queueSelectedCuts([ref.id], { resolved: true });
   }
   const ids = timelineSelectedCutIds();
   if (!ids.length || !isNativeProject()) return;
@@ -9557,11 +9740,13 @@ function shotsNavOrder() {
  * path (open the cut in its shot tab, then queue like ComfyUI's Queue button). One confirm for the batch;
  * empty cuts are skipped. The selection is restored afterwards. `cutIds` (Re-queue) replaces the selection.
  */
-async function queueSelectedCuts(cutIds) {
+async function queueSelectedCuts(cutIds, opts = {}) {
   const tl = state.timeline;
   if (!tl || !isNativeProject() || sdk.busy || batchRenderUi.running) return;
   const selected = cutIds || cutSelIds();
-  const ids = selectedInDisplayOrder(shotsNavOrder().order, tl.cuts.map((c) => c.id), selected);
+  const ids = opts.resolved
+    ? [...new Set((selected || []).filter((id) => cutById(id)))]
+    : selectedInDisplayOrder(shotsNavOrder().order, tl.cuts.map((c) => c.id), selected);
   if (!ids.length) return;
   const plan = batchRenderPlan(ids, (id) => {
     const c = cutById(id);
@@ -10037,6 +10222,21 @@ function installImportDrop() {
     const pid = state.pid;
     if (!pid) {
       ggToast("Import", "Open a project first", "warn");
+      return;
+    }
+    const refDrop = shotsUi.refTab || (referenceById(state.cutId) && e.target.closest?.(".gg-vstrip"));
+    if (refDrop) {
+      const ref = referenceById(state.cutId);
+      const images = files.filter(isImportImageFile);
+      if (!ref) {
+        ggToast("Reference", "Select a reference to add an image.", "warn");
+        return;
+      }
+      if (!images.length) {
+        ggToast("Reference", "Drop an image file.", "warn");
+        return;
+      }
+      void importReferenceVersionFiles(pid, ref.id, images);
       return;
     }
     void importVersionFiles(pid, state.cutId || "", files);
@@ -10699,8 +10899,8 @@ function iconRowHtml() {
   return `<div class="gg-iconrow">
         <span class="gg-version" title="Shots plugin version — if this is not the latest, press Ctrl+F5">v${esc(GG_VERSION)}</span>
         ${aiWand}
-        ${btn("gg-ir-scene", "New scene", ICON_FOLDER)}
-        ${btn("gg-ir-cut", "New cut", ICON_NEW_PAGE)}
+        ${btn("gg-ir-scene", shotsUi.refTab ? "New Group" : "New scene", ICON_FOLDER)}
+        ${btn("gg-ir-cut", shotsUi.refTab ? "New Reference" : "New cut", ICON_NEW_PAGE)}
         ${btn("gg-ir-del", "Delete", ICON_TRASH)}
       </div>`;
 }
@@ -11025,7 +11225,8 @@ function mountShots(el) {
     list.querySelector(".gg-vs-import-tile")?.addEventListener("click", (e) => {
       e.stopPropagation();
       if (e.currentTarget.disabled) return;
-      pickVersionImportFiles(c.id);
+      if (c.kind === "reference") pickReferenceVersionFiles(c.id);
+      else pickVersionImportFiles(c.id);
     });
     list.querySelectorAll(".gg-ver-wrap").forEach((wrap) => {
       const vid = wrap.dataset.vid;
@@ -11624,13 +11825,17 @@ function mountShots(el) {
     root.querySelector(".gg-scene-add")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-group")?.addEventListener("click", () => createSceneGroup(cutSelIds()));
     root.querySelector(".gg-sel-ungroup")?.addEventListener("click", () => ungroupCuts(cutSelIds()));
-    root.querySelector(".gg-ir-scene")?.addEventListener("click", () =>
-      isNativeProject() ? void addEmptyScene() : createSceneGroup(cutSelIds()));
+    root.querySelector(".gg-ir-scene")?.addEventListener("click", () => {
+      if (shotsUi.refTab && isNativeProject()) {
+        void addReferenceGroup();
+        return;
+      }
+      if (isNativeProject()) void addEmptyScene();
+      else createSceneGroup(cutSelIds());
+    });
     root.querySelector(".gg-ir-cut")?.addEventListener("click", () => {
       if (shotsUi.refTab && isNativeProject()) {
-        refsUi.adding = true;
-        refsUi.focusAdd = true;
-        repaintShots();
+        void addReferenceInSelectedGroup();
         return;
       }
       addLocalCut();

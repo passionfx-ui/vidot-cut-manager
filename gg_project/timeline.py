@@ -10,7 +10,7 @@ except ImportError:  # unittest / plain script
     from gg_data import clamp_clip, media_duration  # type: ignore
 
 from .entities import is_reference
-from .ref_links import generation_links
+from .ref_links import REF_CATEGORIES, generation_links
 from .project_settings import PROJECT_ASSETS_DIR, is_external_project_asset_media, normalize_settings
 
 _IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -358,6 +358,25 @@ def _cut_frames(cut: dict[str, Any]) -> int | None:
     return frames if isinstance(frames, int) else None
 
 
+def _reference_group_views(project: dict[str, Any]) -> list[dict[str, Any]]:
+    """Custom reference groups. The five built-in categories are not stored here."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    builtins = {name.casefold() for name in REF_CATEGORIES}
+    for g in project.get("reference_groups") or []:
+        if not isinstance(g, dict) or g.get("deleted_at"):
+            continue
+        gid = g.get("id")
+        name = str(g.get("name") or "").strip()[:40]
+        if not isinstance(gid, str) or not gid or not name or gid in seen:
+            continue
+        if name.casefold() in builtins:
+            continue
+        seen.add(gid)
+        out.append({"id": gid, "name": name, "collapsed": bool(g.get("collapsed"))})
+    return out
+
+
 def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
     pid = project["id"]
     active = _active_cuts(project)
@@ -503,6 +522,7 @@ def build_timeline(root: Path, project: dict[str, Any]) -> dict[str, Any]:
         "cuts": cuts,
         "track_order": track,
         "references": references,
+        "reference_groups": _reference_group_views(project),
         "groups": groups,
         "groups_customized": True,
         "total_sec": total,

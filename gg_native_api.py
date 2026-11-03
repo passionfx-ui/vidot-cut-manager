@@ -633,6 +633,16 @@ def native_import_structure(pid: str, payload: dict) -> dict:
     return {"ok": True, "timeline": store.to_timeline(pid)}
 
 
+def native_save_reference_groups(pid: str, groups) -> dict | None:
+    store = native_store()
+    if store.get_project(pid) is None:
+        return None
+    if not isinstance(groups, list):
+        raise ValueError("groups must be a list")
+    store.sync_reference_groups(pid, groups)
+    return store.to_timeline(pid)
+
+
 def native_add_reference(pid: str, name: str, category: str) -> dict | None:
     store = native_store()
     doc = store.get_project(pid)

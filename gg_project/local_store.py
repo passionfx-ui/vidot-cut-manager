@@ -862,6 +862,36 @@ class LocalStore:
             self._save_project_doc(pid, doc, "import_structure", pid)
             return doc
 
+    def _reference_group_rows(self, doc: dict[str, Any]) -> list[dict[str, Any]]:
+        rows = []
+        for g in doc.get("reference_groups") or []:
+            if isinstance(g, dict) and isinstance(g.get("id"), str) and g.get("id") and not g.get("deleted_at"):
+                rows.append(g)
+        return rows
+
+    def _canonical_reference_category(self, doc: dict[str, Any], category: Any) -> str | None:
+        """Built-in category, or the stored name of a reference group. Anything else is refused."""
+        if not isinstance(category, str):
+            return None
+        name = category.strip()
+        if not name or len(name) > 40:
+            return None
+        folded = name.casefold()
+        for builtin in REF_CATEGORIES:
+            if builtin.casefold() == folded:
+                return builtin
+        for g in self._reference_group_rows(doc):
+            stored = str(g.get("name") or "").strip()
+            if stored and stored.casefold() == folded:
+                return stored
+        return None
+
+    def _next_reference_group_name(self, used: set[str]) -> str:
+        n = 1
+        while f"group {n}" in used:
+            n += 1
+        return f"Group {n}"
+
     def _reject_duplicate_reference(self, doc, ref: dict[str, Any]) -> None:
         key = (str(ref.get("category") or "").lower(), str(ref.get("name") or "").strip().lower())
         for other in self._cuts_map(doc).values():
@@ -873,9 +903,10 @@ class LocalStore:
     def _set_reference_category(self, doc, ref: dict[str, Any], category: Any) -> None:
         if not is_reference(ref):
             raise ValueError("category is only for a reference")
-        if category not in REF_CATEGORIES:
+        cat = self._canonical_reference_category(doc, category)
+        if not cat:
             raise ValueError("name and a valid category are required")
-        ref["category"] = category
+        ref["category"] = cat
         self._reject_duplicate_reference(doc, ref)
 
     def _set_reference_pick(self, pid: str, ref: dict[str, Any], vid: Any) -> None:
@@ -893,10 +924,12 @@ class LocalStore:
 
     def _add_reference_locked(self, doc, name, category, sha, skip_bad=False):
         nm = str(name or "").strip()[:80]
-        if category not in REF_CATEGORIES or not nm:
+        cat = self._canonical_reference_category(doc, category)
+        if not cat or not nm:
             if skip_bad:
                 return None
             raise ValueError("name and a valid category are required")
+        category = cat
         cuts = self._cuts_map(doc)
         key = (category.lower(), nm.lower())
         for c in cuts.values():
@@ -923,6 +956,84 @@ class LocalStore:
             self._bump_project(doc)
             self._save_project_doc(pid, doc, "add_reference", c["id"])
             return c
+
+    def sync_reference_groups(self, pid: str, groups: list[dict]) -> dict:
+        """Replace custom reference groups. Built-in categories stay implied and are not stored.
+
+        A renamed group keeps its references (their category string follows the name).
+        A group left out of the list is removed. Its references move to Other when that
+        name is free, and stay put when Other already has the same name.
+        """
+        if not isinstance(groups, list):
+            raise ValueError("groups must be a list")
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                raise FileNotFoundError(pid)
+            old = {g["id"]: g for g in self._reference_group_rows(doc)}
+            parsed: list[dict[str, Any]] = []
+            seen_ids: set[str] = set()
+            seen_names = {name.casefold() for name in REF_CATEGORIES}
+            for g in groups:
+                if not isinstance(g, dict):
+                    continue
+                gid = str(g.get("id") or "").strip()[:80]
+                if not gid or gid in seen_ids or gid.startswith("cat:"):
+                    continue
+                name = str(g.get("name") or "").strip()[:40]
+                if not name or name.casefold() in seen_names:
+                    if name and name.casefold() in seen_names:
+                        raise ValueError("group name is already used")
+                    name = self._next_reference_group_name(seen_names)
+                seen_ids.add(gid)
+                seen_names.add(name.casefold())
+                parsed.append({"id": gid, "name": name, "collapsed": bool(g.get("collapsed"))})
+            cuts = self._cuts_map(doc)
+            for g in parsed:
+                prev = old.get(g["id"])
+                old_name = str(prev.get("name") or "").strip() if prev else ""
+                if not prev or not old_name or old_name == g["name"]:
+                    continue
+                for ref in cuts.values():
+                    if not is_reference(ref) or ref.get("deleted_at"):
+                        continue
+                    if str(ref.get("category") or "") != old_name:
+                        continue
+                    ref["category"] = g["name"]
+                    self._reject_duplicate_reference(doc, ref)
+                    bump_entity(ref)
+            for gid, prev in old.items():
+                if gid in seen_ids:
+                    continue
+                old_name = str(prev.get("name") or "").strip()
+                if not old_name:
+                    continue
+                for ref in list(cuts.values()):
+                    if not is_reference(ref) or ref.get("deleted_at"):
+                        continue
+                    if str(ref.get("category") or "") != old_name:
+                        continue
+                    ref["category"] = "Other"
+                    try:
+                        self._reject_duplicate_reference(doc, ref)
+                    except ValueError:
+                        ref["category"] = old_name
+                        continue
+                    bump_entity(ref)
+            new_rows: list[dict[str, Any]] = []
+            for g in parsed:
+                row = dict(old.get(g["id"]) or entity_base(g["id"]))
+                row["id"] = g["id"]
+                row["name"] = g["name"]
+                row["collapsed"] = g["collapsed"]
+                row.pop("deleted_at", None)
+                if g["id"] in old:
+                    bump_entity(row)
+                new_rows.append(row)
+            doc["reference_groups"] = new_rows
+            self._bump_project(doc)
+            self._save_project_doc(pid, doc, "reference_groups", pid)
+            return doc
 
     def delete_cuts(self, pid: str, ids: list[str]) -> dict[str, Any]:
         with self._lock:

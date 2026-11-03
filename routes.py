@@ -898,6 +898,30 @@ async def gg_reference_add(request):
     return web.json_response(res)
 
 
+@routes.post("/gonggan/reference/groups")
+async def gg_reference_groups(request):
+    data = await _json_body(request)
+    pid = data.get("pid")
+    if not isinstance(pid, str) or not pid:
+        return _err(400, "pid required")
+    if not gg_native_api.is_native_pid(pid):
+        return _err(400, "pid required")
+    if "groups" not in data or not isinstance(data.get("groups"), list):
+        return _err(400, "groups required")
+    try:
+        tl = await asyncio.to_thread(gg_native_api.native_save_reference_groups, pid, data.get("groups"))
+    except FileNotFoundError:
+        return _err(404, "project not found")
+    except ValueError as ex:
+        return _err(400, str(ex))
+    except Exception as ex:  # noqa: BLE001
+        log.exception("[gonggan-cut] reference groups save failed")
+        return _err(500, str(ex))
+    if tl is None:
+        return _err(404, "project not found")
+    return web.json_response(tl)
+
+
 @routes.post("/gonggan/cut/rename")
 async def gg_cut_rename(request):
     data = await _json_body(request)

@@ -1133,6 +1133,7 @@ html.gg-edit-mode-on .gg-bottom-strip {
 .gg-shots .gg-ref-main { min-width: 0; display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; }
 .gg-shots .gg-ref-status { font-size: 10px; opacity: .7; }
 .gg-shots .gg-ref-none { opacity: .7; padding: 4px 6px; font-size: 11px; }
+.gg-shots .gg-ref-sec.gg-on > .gg-grp-head { background: rgba(58, 95, 158, .28); }
 .gg-shots .gg-ref-library-bar { display: flex; justify-content: flex-end; padding: 4px 6px 2px; }
 .gg-shots .gg-ref-library .gg-ref-add-form { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 6px 6px; }
 .gg-shots .gg-ref-library .gg-ref-add-name { flex: 1; min-width: 0; }
