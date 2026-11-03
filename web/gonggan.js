@@ -9486,6 +9486,7 @@ function toggleBest(cutId, vid) {
 async function setPick(cutId, vid, opts = {}) {
   if (referenceById(cutId)) {
     await saveCutFields(cutId, { pick_version_id: vid || null });
+    if (state.pid && state.cutId === cutId) bus.dispatchEvent(new Event("select"));
     return;
   }
   const c = cutsNow().find((x) => x.id === cutId);
@@ -11624,6 +11625,7 @@ function mountShots(el) {
     noteTakeKind(cutById(cutId), vid);
     void setDisplayVersion(cutId, vid);
     paintVersionStrip();
+    if (referenceById(cutId)) bus.dispatchEvent(new Event("select"));
   };
   const paintVersionStrip = () => {
     const list = root.querySelector(".gg-vstrip .gg-vs-list");
@@ -14158,11 +14160,140 @@ function applyEditPreviewVideo(el, vid, plan) {
   el.dataset.ggFrame = previewFrameAttr(plan.frame);
 }
 
+/** Reference versions have no display slot. The strip pick is what the preview shows. */
+function previewTakeView(c) {
+  if (!c || c.kind !== "reference") return c;
+  const vid = stripPick.pid === state.pid && stripPick.cutId === c.id ? stripPick.vid : "";
+  if (!vid) return c;
+  const v = (c.versions_list || []).find((x) => x && x.id === vid);
+  if (!v) return c;
+  return { ...c, media: versionMedia(v), display: vid };
+}
+
+/** Cut whose takes Up/Down and the preview chevrons step. Reference tab uses the selected reference. */
+function takeBrowserSubject() {
+  if (shotsUi.refTab && isNativeProject()) return selectedReference();
+  return selectedShot() || currentEditPreviewCut();
+}
+
+function takeBrowserIndex(c) {
+  const order = c ? versionStripRows(c, stripProbe.dur).map((r) => r.id) : [];
+  if (!order.length) return { order, index: -1 };
+  const cur = stripSelectedVersionId(c) || order[0];
+  let index = order.indexOf(cur);
+  if (index < 0) index = 0;
+  return { order, index };
+}
+
+/** Select one take the same way a thumbnail click does, and show it in the edit preview. */
+function showPreviewTake(c, vid) {
+  if (!c || !vid) return;
+  verSel.cutId = c.id;
+  verSel.ids = new Set([vid]);
+  verSel.anchor = vid;
+  shotsUi.selTarget = "versions";
+  Object.assign(stripPick, { pid: state.pid, cutId: c.id, vid });
+  noteTakeKind(c, vid);
+  if (play.on) stopPlay();
+  if (c.kind !== "reference") void setDisplayVersion(c.id, vid);
+  bus.dispatchEvent(new Event("select"));
+  requestAnimationFrame(() => {
+    const esc = window.CSS && CSS.escape ? CSS.escape(vid) : vid;
+    document.querySelector(`.gg-vstrip .gg-ver-wrap[data-vid="${esc}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
+}
+
+/** dir -1 is the newer take (left on the strip), +1 is the older take. */
+function stepPreviewTake(dir) {
+  const c = takeBrowserSubject();
+  const { order, index } = takeBrowserIndex(c);
+  if (!order.length || index < 0) return;
+  const next = index + (dir < 0 ? -1 : 1);
+  if (next < 0 || next >= order.length) return;
+  showPreviewTake(c, order[next]);
+}
+
+function togglePreviewBest() {
+  const el = document.querySelector(".gg-edit-preview");
+  const id = el?.dataset.previewCut || "";
+  const vid = el?.dataset.previewMedia || "";
+  if (!id || !vid) return;
+  toggleBest(id, vid);
+}
+
+function ensureEditPreviewChrome(el) {
+  if (!el.querySelector(".gg-edit-preview-best")) {
+    const star = document.createElement("button");
+    star.type = "button";
+    star.className = "gg-edit-preview-best";
+    star.textContent = "★";
+    el.appendChild(star);
+  }
+  if (!el.querySelector(".gg-edit-preview-nav")) {
+    const nav = document.createElement("div");
+    nav.className = "gg-edit-preview-nav";
+    nav.innerHTML = `<button type="button" class="gg-edit-preview-up" aria-label="Previous take" title="Previous take">▴</button><button type="button" class="gg-edit-preview-down" aria-label="Next take" title="Next take">▾</button>`;
+    el.appendChild(nav);
+  }
+  if (el._ggTakeNav) return;
+  el._ggTakeNav = true;
+  el.querySelector(".gg-edit-preview-up")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    stepPreviewTake(-1);
+  });
+  el.querySelector(".gg-edit-preview-down")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    stepPreviewTake(1);
+  });
+  el.querySelector(".gg-edit-preview-best")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    togglePreviewBest();
+  });
+}
+
+function syncEditPreviewTakeChrome(shown) {
+  const el = document.querySelector(".gg-edit-preview");
+  if (!el) return;
+  ensureEditPreviewChrome(el);
+  const vid = shown?.media?.id ? String(shown.media.id) : "";
+  const on = !!(shown && vid && shown.pick === vid);
+  const star = el.querySelector(".gg-edit-preview-best");
+  if (star) {
+    star.classList.toggle("gg-on", on);
+    star.disabled = !vid;
+    star.setAttribute("aria-pressed", on ? "true" : "false");
+    star.title = !vid ? "No take" : (on ? "Best (click to clear)" : SET_BEST_LABEL);
+    star.setAttribute("aria-label", star.title);
+  }
+  const { order, index } = takeBrowserIndex(takeBrowserSubject());
+  const up = el.querySelector(".gg-edit-preview-up");
+  const down = el.querySelector(".gg-edit-preview-down");
+  if (up) up.disabled = !(order.length && index > 0);
+  if (down) down.disabled = !(order.length && index >= 0 && index < order.length - 1);
+}
+
+function takeNavZoneActive() {
+  const zones = [document.querySelector(".gg-edit-preview"), document.querySelector(".gg-shots .gg-vs-body")]
+    .filter((el) => el && el.isConnected && !el.hidden && !el.closest("[hidden]"));
+  const ae = document.activeElement;
+  return zones.some((el) => el.matches(":hover") || (ae && ae !== document.body && el.contains(ae)));
+}
+
+function isTypingKeyTarget(t) {
+  if (!t || t === document.body || t === document.documentElement) return false;
+  if (t.isContentEditable) return true;
+  const tag = t.tagName || "";
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
 function refreshEditPreviewStill(cut) {
   if (!timelineEditModeOn) return;
   const el = document.querySelector(".gg-edit-preview");
   if (!el) return;
-  const c = cut === undefined ? currentEditPreviewCut() : cut;
+  const c = previewTakeView(cut === undefined ? currentEditPreviewCut() : cut);
   const mediaId = c?.media?.id != null && String(c.media.id) !== "" ? String(c.media.id) : "";
   const timing = editPreviewPlayheadTiming(c);
   const plan = editPreviewAtPlayhead(
@@ -14191,6 +14322,7 @@ function refreshEditPreviewStill(cut) {
   if (label && label.textContent !== name) label.textContent = name;
   const aria = name ? `Edit preview, ${name}` : "Edit preview";
   if (el.getAttribute("aria-label") !== aria) el.setAttribute("aria-label", aria);
+  syncEditPreviewTakeChrome(c);
   el.dataset.previewMode = plan.mode === "video" || plan.mode === "frames" ? plan.mode : (plan.showEmpty ? "empty" : "still");
   el.dataset.previewCut = plan.cutId;
   el.dataset.previewMedia = plan.mediaId;
@@ -15092,6 +15224,19 @@ function paintExport() {
 }
 
 api.addEventListener("gonggan.export", (e) => onExportJob(e.detail));
+
+// Up/Down already move the cut list. Over the preview or the takes strip they step that row's takes instead.
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.isComposing) return;
+  if (isTypingKeyTarget(e.target) || isTypingKeyTarget(document.activeElement)) return;
+  if (ggModalOpen() || comfyPromptDialogOpen() || ctxUi.el) return;
+  if (!takeNavZoneActive()) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+  stepPreviewTake(e.key === "ArrowUp" ? -1 : 1);
+}, true);
 
 // Space = play/pause, only while the pointer is over (or focus is inside) the Timeline panel,
 // so ComfyUI's own space-drag canvas panning keeps working everywhere else.
