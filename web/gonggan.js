@@ -611,6 +611,8 @@ const shotsUi = {
   /** "list" = cuts/references, "versions" = the version row. Delete follows the last one. */
   selTarget: "list",
   blockHeadSelect: false,
+  /** Last real cut, so leaving the Reference tab can show that cut's link row again. */
+  lastShotId: "",
 };
 /** Version-row multi-select for the cut or reference currently shown in the row. */
 const verSel = { cutId: "", anchor: "", ids: new Set() };
@@ -2110,6 +2112,19 @@ function selectedShot() {
   return (state.timeline.cuts || []).find((c) => c && c.id === id) || null;
 }
 
+function noteLastShot(id) {
+  if (!id || !state.timeline) return;
+  if ((state.timeline.cuts || []).some((c) => c && c.id === id)) shotsUi.lastShotId = id;
+}
+
+/** Cut to show again after the Reference tab. Falls back to the first cut. */
+function shotIdToRestore() {
+  const cuts = state.timeline?.cuts || [];
+  const back = shotsUi.lastShotId;
+  if (back && cuts.some((c) => c.id === back)) return back;
+  return cuts[0]?.id || "";
+}
+
 function refSquareHtml(row, { unlink }) {
   const name = row.missing ? `${row.name || "Reference"} missing` : (row.name || "Reference");
   const face = row.missing ? `<span class="gg-ref-empty">?</span>` : referenceThumbHtml(row.media);
@@ -2203,12 +2218,26 @@ function referenceCategoryOptions(selected) {
   return names.map((c) => `<option${c === selected ? " selected" : ""}>${esc(c)}</option>`).join("");
 }
 
+function referenceVersionThumbsHtml(ref) {
+  const list = Array.isArray(ref?.versions_list) ? ref.versions_list.filter((v) => v && v.id) : [];
+  if (!list.length) return `<div class="gg-ref-versions gg-dim">No versions yet</div>`;
+  const cells = list.map((v) => {
+    const best = ref.pick === v.id ? " best" : "";
+    const face = v.missing
+      ? `<span class="gg-ref-empty">?</span>`
+      : `<img class="gg-thumb-img" src="${esc(posterUrl(v.id))}" loading="lazy" alt="" />`;
+    const label = ref.pick === v.id ? "Best" : (v.kind === "video" ? "Video" : "Image");
+    return `<button type="button" class="gg-ref-ver${best}" data-vid="${esc(v.id)}" title="${esc(label)}">${face}</button>`;
+  }).join("");
+  return `<div class="gg-ref-versions">${cells}</div>`;
+}
+
 function referenceLibraryHtml() {
   const all = activeReferences();
   const sections = referenceGroupSections().map((g) => {
     const rows = all.filter((r) => (r.category || "Other") === g.name);
     const cards = rows.map((r) =>
-      `<li class="gg-cut gg-cut-reference${state.cutId === r.id ? " gg-sel" : ""}" data-cut-id="${esc(r.id)}" data-kind="reference">${infoRowContent(r)}${referenceEditorsHtml(r)}</li>`
+      `<li class="gg-cut gg-cut-reference${state.cutId === r.id ? " gg-sel" : ""}" data-cut-id="${esc(r.id)}" data-kind="reference"><div class="gg-ref-card-main">${infoRowContent(r)}</div>${referenceVersionThumbsHtml(r)}${referenceEditorsHtml(r)}</li>`
     ).join("");
     const on = refsUi.groupId === g.id ? " gg-on" : "";
     return `<section class="gg-grp-sec gg-ref-sec${on}" data-ref-group="${esc(g.id)}" data-ref-cat="${esc(g.name)}">
@@ -5930,6 +5959,7 @@ function selectCutRange(fromId, toId) {
   state.cutSel.clear();
   for (let k = lo; k <= hi; k++) state.cutSel.add(order[k]);
   state.cutId = toId;
+  noteLastShot(toId);
   cutSelAnchor = fromId;
   bus.dispatchEvent(new Event("select"));
   const t = clipStartOf(toId);
@@ -5988,6 +6018,7 @@ function selectListedGroup(ids, { multi = false, range = false, groupKey = "" } 
     shotsUi.selFromGroup = true;
   }
   rememberReferenceGroup(state.cutId);
+  noteLastShot(state.cutId);
   bus.dispatchEvent(new Event("select"));
   const t = clipStartOf(state.cutId);
   if (t != null && typeof seek === "function" && !play.on) {
@@ -6020,6 +6051,7 @@ function selectCut(cutId, opts) {
     cutSelAnchor = cutId;
   }
   state.cutId = cutId;
+  noteLastShot(cutId);
   rememberReferenceGroup(cutId);
   bus.dispatchEvent(new Event("select"));
   const t = clipStartOf(cutId);
@@ -6207,8 +6239,7 @@ function referenceSelIds() {
 
 function cutsForDelete() {
   if (shotsUi.refTab && isNativeProject()) return referenceSelIds();
-  const ids = cutSelIds();
-  return ids.length ? ids : (state.cutId ? [state.cutId] : []);
+  return cutSelIds();
 }
 
 /** Hide cuts (files go to the project's History folder when historyStep is set). No History entry here. */
@@ -6223,6 +6254,7 @@ async function deleteCutsByIds(ids, historyStep = null) {
   cutSelAnchor = "";
   if (ids.includes(state.cutId)) {
     state.cutId = state.timeline?.cuts?.[0]?.id || "";
+    noteLastShot(state.cutId);
     wfLastLoadedCutId = "";
     wfLastLoadedProjectId = "";
   }
@@ -6555,6 +6587,7 @@ function selectOnlyCut(cutId) {
   state.cutSel.add(cutId);
   cutSelAnchor = cutId;
   state.cutId = cutId;
+  noteLastShot(cutId);
   bus.dispatchEvent(new Event("select"));
 }
 
@@ -11055,12 +11088,20 @@ function stripSelectedVersionId(c) {
 
 /** Thumbnails of the selected cut's versions (+ import tile first); Best via star or border. */
 function versionStripHtml(c, selVid) {
-  if (!c) return `<div class="gg-vs-empty gg-dim">Select a cut to see its ${esc(takesNoun(captionLangNow()))}</div>`;
+  if (!c) {
+    const hint = shotsUi.refTab && isNativeProject()
+      ? "Select a reference to see its versions"
+      : `Select a cut to see its ${takesNoun(captionLangNow())}`;
+    return `<div class="gg-vs-empty gg-dim">${esc(hint)}</div>`;
+  }
   const importSt = importButtonState({ hasCut: !!c, native: isNativeProject(), busy: stripImportBusy });
   const tileDis = importSt.disabled ? " disabled" : "";
   const tile = `<button type="button" class="gg-vs-import-tile"${tileDis} title="${esc(IMPORT_TILE_TIP)}">+</button>`;
   const rows = versionStripRows(c, stripProbe.dur);
-  if (!rows.length) return tile + `<div class="gg-vs-empty gg-dim">No ${esc(takesNoun(captionLangNow()))}</div>`;
+  if (!rows.length) {
+    const noun = shotsUi.refTab && isNativeProject() ? "versions" : takesNoun(captionLangNow());
+    return tile + `<div class="gg-vs-empty gg-dim">No ${esc(noun)}</div>`;
+  }
   const tabOpen = ownedShotTabOpen();
   const byId = new Map((c.versions_list || []).map((v) => [v.id, v]));
   const thumbs = rows.map((r) => {
@@ -11523,7 +11564,7 @@ function mountShots(el) {
       });
     });
   };
-  const stripCut = () => cutById(state.cutId);
+  const stripCut = () => (shotsUi.refTab && isNativeProject() ? selectedReference() : selectedShot());
   /** Thumbnail click: select this Take. The cut workflow stays until "Load workflow from this take". */
   const selectStripVersion = (cutId, vid) => {
     Object.assign(stripPick, { pid: state.pid, cutId, vid });
@@ -12050,6 +12091,7 @@ function mountShots(el) {
       btn.addEventListener("click", () => {
         if (btn.dataset.mode === "reference") {
           if (!shotsUi.refTab) {
+            noteLastShot(state.cutId);
             shotsUi.selFromGroup = false;
             shotsUi.selGroupKey = "";
           }
@@ -12064,6 +12106,10 @@ function mountShots(el) {
         }
         shotsUi.refTab = false;
         saveRefTab(false);
+        if (referenceById(state.cutId)) {
+          const back = shotIdToRestore();
+          if (back) selectCut(back);
+        }
         const mode = normalizeListMode(btn.dataset.mode);
         shotsUi.listMode = mode;
         saveListMode(localStorage, mode);
@@ -12201,6 +12247,14 @@ function mountShots(el) {
           if (fieldEl && shouldSkipCardSelect({ inEditMode: isCardFieldEditing(fieldEl) })) return;
           e.stopPropagation();
           const id = li.dataset.cutId;
+          const verBtn = e.target.closest(".gg-ref-ver");
+          if (verBtn?.dataset?.vid) {
+            selectCut(id);
+            selectStripVersion(id, verBtn.dataset.vid);
+            paintSelection(root);
+            paintPanel();
+            return;
+          }
           if (e.shiftKey) selectCut(id, { range: true });
           else selectCut(id, { multi: e.ctrlKey || e.metaKey });
           paintSelection(root);
@@ -13438,6 +13492,7 @@ function selectTimelineRange(toId) {
   state.cutSel.clear();
   for (let k = lo; k <= hi; k++) state.cutSel.add(order[k]);
   state.cutId = toId;
+  noteLastShot(toId);
   cutSelAnchor = anchor;
   bus.dispatchEvent(new Event("select"));
   const t = clipStartOf(toId);
@@ -13455,6 +13510,7 @@ function setTimelineSelection(ids) {
   for (const id of picked) state.cutSel.add(id);
   if (picked.length) {
     state.cutId = picked[picked.length - 1];
+    noteLastShot(state.cutId);
     cutSelAnchor = picked[0];
   } else {
     cutSelAnchor = "";
@@ -14243,7 +14299,7 @@ function placeEditTakesStrip() {
   const bottomEdge = timelineTop != null ? timelineTop : graph.bottom;
   const minTop = (barBottom != null ? barBottom : graph.top) + gap;
   const links = body.querySelector(".gg-cut-reflinks");
-  const extra = links && !links.hidden ? (links.offsetHeight || 40) : 0;
+  const extra = links && !links.hidden ? Math.max(40, links.offsetHeight || 40) : 0;
   const rowPx = EDIT_TAKES_ROW_PX + extra;
   let top = Math.round(bottomEdge - rowPx);
   if (top < minTop) top = Math.round(minTop);
