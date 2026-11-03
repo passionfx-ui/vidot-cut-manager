@@ -665,6 +665,11 @@ function thumbHtml(media, cls) {
     return `<video class="${cls} gg-thumb-vid" draggable="false" src="${url}" poster="${esc(posterUrl(media.id))}" muted playsinline preload="none"></video>`;
   }
   if (isAnimatedImage(media)) {
+    // Timeline track: do not put the animated file in the <img> until hover.
+    // A resting <img> keeps playing WebP/GIF. The still is drawn onto a canvas.
+    if (String(cls).split(/\s+/).includes("gg-clip-thumb")) {
+      return `<span class="${cls} gg-anim-thumb" data-gg-anim-id="${esc(media.id)}"><canvas class="gg-anim-still"></canvas><img class="gg-anim-live" draggable="false" alt="" hidden /></span>`;
+    }
     return `<img class="${cls} gg-thumb-img" draggable="false" src="${url}" alt="" />`;
   }
   return `<img class="${cls} gg-thumb-img" draggable="false" src="${esc(posterUrl(media.id))}" loading="lazy" decoding="async" alt="" />`;
@@ -14256,6 +14261,7 @@ window.addEventListener("keyup", (e) => {
 }, true);
 
 function bindHoverPlay(root) {
+  if (!root) return;
   root.querySelectorAll("video.gg-thumb-vid").forEach((v) => {
     if (v._ggHoverBound) return;
     v._ggHoverBound = true;
@@ -14278,6 +14284,211 @@ function bindHoverPlay(root) {
       if (v.readyState >= 1) showFirstFrame();
       else v.addEventListener("loadedmetadata", showFirstFrame, { once: true });
     });
+    if (!host.matches(":hover") && !v.paused) {
+      v._ggHoverOn = false;
+      try { v.pause(); } catch (_) {}
+      showFirstFrame();
+    }
+  });
+  bindAnimThumbHover(root);
+}
+
+/** First-frame stills for timeline animated WebP/GIF thumbs. Keyed by media id. */
+const animThumbStillCache = new Map();
+
+function animThumbStill(id) {
+  const key = String(id || "");
+  if (!key) return Promise.resolve(null);
+  let job = animThumbStillCache.get(key);
+  if (!job) {
+    job = loadAnimThumbStill(key).then((bmp) => {
+      if (!bmp) animThumbStillCache.delete(key);
+      return bmp;
+    });
+    animThumbStillCache.set(key, job);
+  }
+  return job;
+}
+
+async function loadAnimThumbStill(id) {
+  try {
+    const res = await api.fetchApi("/gonggan/media?id=" + encodeURIComponent(id));
+    if (res.ok) {
+      const buf = await res.arrayBuffer();
+      const frame = animatedWebpFrameBytes(buf, 0);
+      const blob = frame ? new Blob([frame], { type: "image/webp" }) : new Blob([buf]);
+      const bmp = await bitmapFromBlob(blob);
+      if (bmp) return bmp;
+    }
+  } catch (_) {}
+  return loadPosterImage(id);
+}
+
+async function bitmapFromBlob(blob) {
+  if (typeof createImageBitmap === "function") {
+    try { return await createImageBitmap(blob); } catch (_) {}
+  }
+  const im = await imageFromBlob(blob);
+  if (!im) return null;
+  const snap = document.createElement("canvas");
+  if (!drawThumbStill(snap, im)) return null;
+  im.removeAttribute("src");
+  return snap;
+}
+
+function imageFromBlob(blob) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob);
+    const im = new Image();
+    im.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(im);
+    };
+    im.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+    im.src = url;
+  });
+}
+
+function loadPosterImage(id) {
+  return new Promise((resolve) => {
+    const im = new Image();
+    im.onload = () => resolve(im);
+    im.onerror = () => resolve(null);
+    im.src = posterUrl(id);
+  });
+}
+
+function drawThumbStill(canvas, src) {
+  const w = src.naturalWidth || src.width;
+  const h = src.naturalHeight || src.height;
+  if (!w || !h) return false;
+  canvas.width = w;
+  canvas.height = h;
+  try {
+    canvas.getContext("2d").drawImage(src, 0, 0);
+  } catch (_) {
+    return false;
+  }
+  return true;
+}
+
+async function paintCachedAnimStill(canvas, id) {
+  if (!canvas) return;
+  const still = await animThumbStill(id);
+  if (!canvas.isConnected || !still) return;
+  const host = canvas.closest(".gg-anim-thumb") || canvas.parentElement;
+  if (!drawThumbStill(canvas, still)) return;
+  if (host && host._ggHoverOn) return;
+  canvas.hidden = false;
+}
+
+/**
+ * Timeline animated WebP/GIF thumbs (and any other <img> on the track that would
+ * keep animating) show a cached first frame, and play only while the cut is hovered.
+ * Viewer play/scrub uses .gg-v-img, which is outside the track.
+ */
+function timelineTracks(root) {
+  if (!root || !root.querySelectorAll) return [];
+  if (root.classList && root.classList.contains("gg-track")) return [root];
+  return [...root.querySelectorAll(".gg-track")];
+}
+
+function bindAnimThumbHover(root) {
+  for (const track of timelineTracks(root)) {
+    track.querySelectorAll(".gg-anim-thumb[data-gg-anim-id]").forEach((host) => {
+      if (host._ggAnimBound) return;
+      host._ggAnimBound = true;
+      const id = host.dataset.ggAnimId;
+      const canvas = host.querySelector(".gg-anim-still");
+      const img = host.querySelector(".gg-anim-live");
+      const clip = host.closest(".gg-clip") || host;
+      const showStill = () => {
+        host._ggHoverOn = false;
+        if (img) {
+          img.hidden = true;
+          img.removeAttribute("src");
+        }
+        if (canvas) canvas.hidden = false;
+      };
+      const showAnim = () => {
+        if (!img || !host.isConnected) return;
+        host._ggHoverOn = true;
+        const url = mediaUrl(id);
+        img.removeAttribute("src");
+        img.src = url;
+        if (img.complete && img.naturalWidth) {
+          img.hidden = false;
+          if (canvas) canvas.hidden = true;
+        }
+      };
+      img?.addEventListener("load", () => {
+        if (!host._ggHoverOn) return;
+        img.hidden = false;
+        if (canvas) canvas.hidden = true;
+      });
+      void paintCachedAnimStill(canvas, id);
+      clip.addEventListener("mouseenter", showAnim);
+      clip.addEventListener("mouseleave", showStill);
+      if (clip.matches(":hover")) showAnim();
+    });
+    track.querySelectorAll("img.gg-thumb-img").forEach((img) => {
+      if (img.closest(".gg-anim-thumb") || img._ggAnimBound) return;
+      const clip = img.closest(".gg-clip");
+      if (!clip) return;
+      freezeLooseTrackImage(img, clip);
+    });
+  }
+}
+
+/** Media id from a /gonggan/media URL, if that is what the thumb was pointing at. */
+function mediaIdFromThumbUrl(src) {
+  try {
+    return new URL(src, window.location.href).searchParams.get("id") || "";
+  } catch (_) {
+    const m = /[?&]id=([^&]+)/.exec(String(src || ""));
+    return m ? decodeURIComponent(m[1]) : "";
+  }
+}
+
+/** An <img> on the track that is not already a hover-still pair. Stop it, then keep a first frame. */
+function freezeLooseTrackImage(img, clip) {
+  img._ggAnimBound = true;
+  const src = img.getAttribute("src") || "";
+  if (!src || src.indexOf("/gonggan/poster") !== -1) return;
+  img.removeAttribute("src");
+  img.hidden = true;
+  const canvas = document.createElement("canvas");
+  canvas.className = "gg-anim-still";
+  img.classList.add("gg-anim-live");
+  img.before(canvas);
+  const host = img.parentElement;
+  const id = mediaIdFromThumbUrl(src);
+  if (id) void paintCachedAnimStill(canvas, id);
+  else {
+    const probe = new Image();
+    probe.onload = () => {
+      if (!canvas.isConnected || (host && host._ggHoverOn)) return;
+      if (!drawThumbStill(canvas, probe)) return;
+      probe.removeAttribute("src");
+      canvas.hidden = false;
+    };
+    probe.src = src;
+  }
+  clip.addEventListener("mouseenter", () => {
+    if (!img.isConnected) return;
+    if (host) host._ggHoverOn = true;
+    canvas.hidden = true;
+    img.hidden = false;
+    img.src = src;
+  });
+  clip.addEventListener("mouseleave", () => {
+    if (host) host._ggHoverOn = false;
+    img.hidden = true;
+    img.removeAttribute("src");
+    canvas.hidden = false;
   });
 }
 
