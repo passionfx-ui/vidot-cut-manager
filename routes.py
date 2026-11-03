@@ -18,10 +18,12 @@ try:
     from .gg_project import ConflictError
     from .gg_project.folder_list import folder_list_response
     from .gg_project.project_settings import check_output_folder, check_export_output_folder, comfyui_output_directory
+    from .gg_project.ref_links import clean_refs_used
 except ImportError:  # unittest / plain script
     from gg_project import ConflictError  # type: ignore
     from gg_project.folder_list import folder_list_response  # type: ignore
     from gg_project.project_settings import check_output_folder, check_export_output_folder, comfyui_output_directory  # type: ignore
+    from gg_project.ref_links import clean_refs_used  # type: ignore
 
 routes = PromptServer.instance.routes
 log = logging.getLogger("gonggan-cut")
@@ -1367,8 +1369,6 @@ def _capture_gen(data: dict) -> dict | None:
     if isinstance(source, str) and source.strip():
         gen["source_image_take"] = source.strip()[:80]
     if isinstance(data.get("refs_used"), list):
-        from gg_project.ref_links import clean_refs_used
-
         used = clean_refs_used(data.get("refs_used"))
         if used:
             gen["refs_used"] = used

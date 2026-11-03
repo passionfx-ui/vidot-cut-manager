@@ -1169,9 +1169,35 @@ def _reference_version_file(pid: str, ref: dict) -> tuple[dict, Path] | None:
     return None
 
 
+def _ref_links():
+    """Reference helpers. ComfyUI loads this pack as a package, so the relative import has to come first."""
+    try:
+        from .gg_project import ref_links as ref_links
+    except ImportError:
+        from gg_project import ref_links as ref_links  # type: ignore
+    return ref_links
+
+
+def _qwen_ref():
+    try:
+        from . import gg_qwen_ref as qwen_ref
+    except ImportError:
+        import gg_qwen_ref as qwen_ref  # type: ignore
+    return qwen_ref
+
+
+def _linear_output_ids(graph: dict):
+    """App output node ids, or None when the template has no linearData.outputs list."""
+    try:
+        from . import gg_sdk
+    except ImportError:
+        import gg_sdk  # type: ignore
+    return gg_sdk.linear_output_node_ids(graph)
+
+
 def reference_prompt_text(doc: dict, cut: dict, text: str, *, mention_prompt: str | None = None) -> str:
     """@Name becomes the plain name, then a References block is appended. The caption field is not read here."""
-    from gg_project.ref_links import inject_prompt_text
+    inject_prompt_text = _ref_links().inject_prompt_text
 
     cuts = doc.get("cuts") if isinstance(doc, dict) and isinstance(doc.get("cuts"), dict) else {}
     source = mention_prompt if isinstance(mention_prompt, str) else (cut.get("prompt") if isinstance(cut.get("prompt"), str) else text)
@@ -1226,8 +1252,10 @@ def _apply_qwen_edit_references(doc: dict, cut: dict, wf: dict) -> list:
     Zero links use the cut's current still as image1, or text only when it has none.
     A reference without a still stays text and that input is left disconnected.
     """
-    from gg_project.ref_links import generation_links
-    from gg_qwen_ref import apply_qwen_ref_images, qwen_ref_warning
+    generation_links = _ref_links().generation_links
+    qwen = _qwen_ref()
+    apply_qwen_ref_images = qwen.apply_qwen_ref_images
+    qwen_ref_warning = qwen.qwen_ref_warning
 
     cuts = doc.get("cuts") if isinstance(doc, dict) and isinstance(doc.get("cuts"), dict) else {}
     prompt = cut.get("prompt") if isinstance(cut.get("prompt"), str) else ""
@@ -1280,13 +1308,13 @@ def apply_reference_images(doc: dict, cut: dict, wf: dict, exclude_ids: list | N
     selected-take node is never written on other templates. No slot, no still, or a failed
     copy leaves that reference as text. Returns refs_used for the version meta.
     """
-    from gg_project.ref_links import generation_links
-    from gg_qwen_ref import is_qwen_edit_api
-
     if not isinstance(wf, dict) or not isinstance(cut, dict):
         return []
-    if is_qwen_edit_api(wf):
+    # Image-ref slots image1..image3 exist only on TextEncodeQwenImageEditPlus.
+    # Video templates (LTX and the rest) keep their own LoadImage / start take.
+    if _qwen_ref().is_qwen_edit_api(wf):
         return _apply_qwen_edit_references(doc, cut, wf)
+    generation_links = _ref_links().generation_links
     cuts = doc.get("cuts") if isinstance(doc, dict) and isinstance(doc.get("cuts"), dict) else {}
     prompt = cut.get("prompt") if isinstance(cut.get("prompt"), str) else ""
     links = generation_links(cuts, cut, prompt)
@@ -1423,6 +1451,7 @@ def native_image_to_video_workflow(pid: str, cut_id: str, selected_vid: str | No
         raise ValueError("cut not found")
     label, graph = project_video_template(doc)
     graph = copy.deepcopy(graph)
+    output_nodes = _linear_output_ids(graph)
     prefer_id = None
     if gg_template._is_ui_workflow(graph):
         try:
@@ -1467,7 +1496,7 @@ def native_image_to_video_workflow(pid: str, cut_id: str, selected_vid: str | No
     refs_used = apply_reference_images(doc, cut, wf, exclude_ids=[node])
     return {"workflow": wf, "template": label, "start_version": ver["id"], "start_node": node, "image": image,
             "prompt": prompt, "frames": gg_ltx.frames_for_duration(float(sec), gg_ltx.workflow_fps(wf)),
-            "refs_used": refs_used}
+            "refs_used": refs_used, "output_nodes": output_nodes}
 
 
 def _skip_native_media_lookup(media_id: str) -> bool:

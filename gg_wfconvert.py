@@ -36,6 +36,8 @@ _KNOWN: dict[str, list[tuple[str, Any, int]]] = {
                        ("strength", 1.0, 0)],
     "LTXVPreprocess": [("img_compression", 35, 0)],
     "LoadImage": [("image", None, 1)],
+    "CreateVideo": [("fps", 24.0, 0), ("bit_depth", "auto", 0), ("color_space", "sRGB", 0), ("codec", "none", 0)],
+    "SaveVideo": [("filename_prefix", "video/ComfyUI", 0), ("format", "mp4", 0)],
     "TextEncodeQwenImageEditPlus": [("prompt", "", 0)],
     "FluxKontextImageScale": [],
     "FluxKontextMultiReferenceLatentMethod": [("reference_latents_method", "index_timestep_zero", 0)],
@@ -47,6 +49,15 @@ _KNOWN: dict[str, list[tuple[str, Any, int]]] = {
                          ("quality", 80, 0), ("method", "default", 0)],
     "SaveWEBM": [("filename_prefix", "ComfyUI", 0), ("codec", "vp9", 0), ("fps", 24.0, 0), ("crf", 32.0, 0)],
 }
+
+
+def _named_widget(value: Any) -> bool:
+    """A saved widgets_values_named entry that should win over the positional array."""
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, str):
+        return value != ""
+    return isinstance(value, (int, float))
 
 
 def _class_mappings() -> dict:
@@ -134,13 +145,15 @@ def ui_to_api(graph: dict, mappings: dict | None = None) -> dict:
         if isinstance(vals, dict):
             inputs.update({name: vals[name] for name, _d, _x in spec if name in vals})
             for name, _d, _x in spec:
-                if inputs.get(name) in (None, "") and named.get(name) not in (None, ""):
+                if _named_widget(named.get(name)):
+                    inputs[name] = named[name]
+                elif inputs.get(name) in (None, "") and named.get(name) not in (None, ""):
                     inputs[name] = named[name]
         else:
             vals = vals if isinstance(vals, list) else []
             pos = 0
             for name, default, extra in spec:
-                got = vals[pos] if pos < len(vals) else None
+                got = named[name] if _named_widget(named.get(name)) else (vals[pos] if pos < len(vals) else None)
                 if got in (None, "") and named.get(name) not in (None, ""):
                     got = named[name]
                 if got not in (None, ""):
@@ -148,6 +161,14 @@ def ui_to_api(graph: dict, mappings: dict | None = None) -> dict:
                 elif default is not None:
                     inputs[name] = default
                 pos += 1 + extra
+        # Dynamic widgets (SaveVideo format.codec, …) are stored by name and are not in the static widget list.
+        for name, value in named.items():
+            if not isinstance(name, str) or name in inputs:
+                continue
+            if name in ("upload", "control_after_generate") or name.endswith("_upload"):
+                continue
+            if _named_widget(value):
+                inputs[name] = value
         for inp in n.get("inputs") or []:
             if not isinstance(inp, dict) or inp.get("link") is None:
                 continue
