@@ -663,14 +663,19 @@ function thumbHtml(media, cls) {
   if (!media) return `<div class="${cls} gg-thumb-empty">no media</div>`;
   const url = esc(mediaUrl(media.id));
   if (playsAsVideo(media)) {
-    // poster from the pack cache; the video itself loads only on hover (preload=none)
-    return `<video class="${cls} gg-thumb-vid" draggable="false" src="${url}" poster="${esc(posterUrl(media.id))}" muted playsinline preload="none"></video>`;
+    // Timeline clips preload a real frame. The element stays invisible (gg-vid-hold)
+    // until that frame is copied to a canvas — Chromium paints an empty green
+    // surface while preload=none, and again when currentTime is exactly 0.
+    const onTimeline = String(cls).split(/\s+/).includes("gg-clip-thumb");
+    const hold = onTimeline ? " gg-vid-hold" : "";
+    const preload = onTimeline ? "auto" : "none";
+    return `<video class="${cls} gg-thumb-vid${hold}" draggable="false" src="${url}" poster="${esc(posterUrl(media.id))}" muted playsinline preload="${preload}"></video>`;
   }
   if (isAnimatedImage(media)) {
     // Timeline track: do not put the animated file in the <img> until hover.
     // A resting <img> keeps playing WebP/GIF. The still is drawn onto a canvas.
     if (String(cls).split(/\s+/).includes("gg-clip-thumb")) {
-      return `<span class="${cls} gg-anim-thumb" data-gg-anim-id="${esc(media.id)}"><canvas class="gg-anim-still"></canvas><img class="gg-anim-live" draggable="false" alt="" hidden /></span>`;
+      return `<span class="${cls} gg-anim-thumb" data-gg-anim-id="${esc(media.id)}"><canvas class="gg-anim-still" hidden></canvas><img class="gg-anim-live" draggable="false" alt="" hidden /></span>`;
     }
     return `<img class="${cls} gg-thumb-img" draggable="false" src="${url}" alt="" />`;
   }
@@ -14707,6 +14712,10 @@ function bindHoverPlay(root) {
     v._ggHoverBound = true;
     const host = v.parentElement;
     if (!host) return;
+    if (v.closest(".gg-timeline")) {
+      bindTimelineVideoThumb(v, host);
+      return;
+    }
     const showFirstFrame = () => {
       if (v._ggHoverOn) return;
       try { v.currentTime = 0; } catch (_) {}
@@ -14733,6 +14742,114 @@ function bindHoverPlay(root) {
   bindAnimThumbHover(root);
 }
 
+/** Off exact 0. Chromium's video layer is an empty green frame at currentTime 0. */
+function firstFrameTime(video) {
+  const d = Number(video.duration);
+  if (!Number.isFinite(d) || d <= 0) return 0.001;
+  const t = Math.min(0.001, d * 0.5);
+  return t > 0 ? t : 0.001;
+}
+
+function revealThumbCanvas(canvas) {
+  if (canvas && canvas.width > 0 && canvas.height > 0) canvas.hidden = false;
+}
+
+/**
+ * Timeline mp4/webm/mov thumb. The <video> stays opacity 0 until a decoded
+ * frame is on the canvas, then that still covers the clip while idle.
+ * Playback is hover-only and returns to the same first frame on leave.
+ */
+function bindTimelineVideoThumb(v, host) {
+  v.muted = true;
+  v.defaultMuted = true;
+  v.playsInline = true;
+  v.preload = "auto";
+  v.loop = true;
+  v.classList.add("gg-vid-hold");
+  let canvas = host.querySelector(":scope > canvas.gg-vid-still");
+  if (!canvas) {
+    canvas = document.createElement("canvas");
+    canvas.className = "gg-vid-still";
+    canvas.hidden = true;
+    v.before(canvas);
+  }
+  const paint = () => {
+    if (v._ggHoverOn || v.readyState < 2 || !(v.currentTime > 0)) return false;
+    if (!drawThumbStill(canvas, v)) return false;
+    canvas.hidden = false;
+    v.classList.add("gg-vid-hold");
+    return true;
+  };
+  const park = () => {
+    const token = (v._ggPark = (v._ggPark || 0) + 1);
+    const finish = () => {
+      if (v._ggPark !== token || v._ggHoverOn) return;
+      paint();
+    };
+    const seek = () => {
+      if (v._ggPark !== token || v._ggHoverOn) return;
+      const t = firstFrameTime(v);
+      if (v.readyState >= 2 && Math.abs(v.currentTime - t) < 0.0004) {
+        finish();
+        return;
+      }
+      const onSeeked = () => {
+        if (v._ggPark !== token || v._ggHoverOn) return;
+        finish();
+      };
+      v.addEventListener("seeked", onSeeked, { once: true });
+      try {
+        v.currentTime = t;
+      } catch (_) {
+        v.removeEventListener("seeked", onSeeked);
+        finish();
+      }
+    };
+    if (v.readyState >= 2) seek();
+    else v.addEventListener("loadeddata", seek, { once: true });
+  };
+  host.addEventListener("mouseenter", () => {
+    if (!v.isConnected) return;
+    v._ggHoverOn = true;
+    v._ggPark = (v._ggPark || 0) + 1;
+    v.preload = "auto";
+    v.loop = true;
+    const showVideo = () => {
+      if (!v._ggHoverOn || !v.isConnected) return;
+      canvas.hidden = true;
+      v.classList.remove("gg-vid-hold");
+    };
+    v.addEventListener("playing", showVideo, { once: true });
+    v.play().then(() => {
+      if (v._ggHoverOn && v.readyState >= 2) showVideo();
+    }).catch(() => {});
+  });
+  host.addEventListener("mouseleave", () => {
+    v._ggHoverOn = false;
+    try { v.pause(); } catch (_) {}
+    v.classList.add("gg-vid-hold");
+    revealThumbCanvas(canvas);
+    park();
+  });
+  if (host.matches(":hover")) {
+    v._ggHoverOn = true;
+    v.addEventListener("playing", () => {
+      if (!v._ggHoverOn) return;
+      canvas.hidden = true;
+      v.classList.remove("gg-vid-hold");
+    }, { once: true });
+    v.play().then(() => {
+      if (v._ggHoverOn && v.readyState >= 2) {
+        canvas.hidden = true;
+        v.classList.remove("gg-vid-hold");
+      }
+    }).catch(() => {});
+  } else {
+    try { v.pause(); } catch (_) {}
+    park();
+  }
+}
+
 /** First-frame stills for timeline animated WebP/GIF thumbs. Keyed by media id. */
 const animThumbStillCache = new Map();
 
@@ -14750,14 +14867,40 @@ function animThumbStill(id) {
   return job;
 }
 
+function sniffThumbMime(buf) {
+  const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  if (u8.length >= 3 && u8[0] === 0x47 && u8[1] === 0x49 && u8[2] === 0x46) return "image/gif";
+  if (u8.length >= 8 && u8[0] === 0x89 && u8[1] === 0x50) return "image/png";
+  return "image/webp";
+}
+
+/** Frame 0 of the whole file. Sliced ANMF bytes often decode as an empty green picture. */
+async function firstStillBitmap(buf) {
+  const type = sniffThumbMime(buf);
+  if (typeof ImageDecoder === "function") {
+    let dec = null;
+    try {
+      dec = new ImageDecoder({ data: buf, type });
+      const result = await dec.decode({ frameIndex: 0 });
+      try {
+        return await createImageBitmap(result.image);
+      } finally {
+        result.image.close?.();
+      }
+    } catch (_) {
+    } finally {
+      try { dec?.close(); } catch (_) {}
+    }
+  }
+  return bitmapFromBlob(new Blob([buf], { type }));
+}
+
 async function loadAnimThumbStill(id) {
   try {
     const res = await api.fetchApi("/gonggan/media?id=" + encodeURIComponent(id));
     if (res.ok) {
       const buf = await res.arrayBuffer();
-      const frame = animatedWebpFrameBytes(buf, 0);
-      const blob = frame ? new Blob([frame], { type: "image/webp" }) : new Blob([buf]);
-      const bmp = await bitmapFromBlob(blob);
+      const bmp = await firstStillBitmap(buf);
       if (bmp) return bmp;
     }
   } catch (_) {}
@@ -14802,9 +14945,10 @@ function loadPosterImage(id) {
 }
 
 function drawThumbStill(canvas, src) {
-  const w = src.naturalWidth || src.width;
-  const h = src.naturalHeight || src.height;
+  const w = src.videoWidth || src.naturalWidth || src.displayWidth || src.width;
+  const h = src.videoHeight || src.naturalHeight || src.displayHeight || src.height;
   if (!w || !h) return false;
+  if (typeof HTMLVideoElement === "function" && src instanceof HTMLVideoElement && !(src.videoWidth > 0 && src.videoHeight > 0)) return false;
   canvas.width = w;
   canvas.height = h;
   try {
@@ -14851,7 +14995,7 @@ function bindAnimThumbHover(root) {
           img.hidden = true;
           img.removeAttribute("src");
         }
-        if (canvas) canvas.hidden = false;
+        revealThumbCanvas(canvas);
       };
       const showAnim = () => {
         if (!img || !host.isConnected) return;
@@ -14928,7 +15072,7 @@ function freezeLooseTrackImage(img, clip) {
     if (host) host._ggHoverOn = false;
     img.hidden = true;
     img.removeAttribute("src");
-    canvas.hidden = false;
+    revealThumbCanvas(canvas);
   });
 }
 
