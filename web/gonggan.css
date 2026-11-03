@@ -615,11 +615,19 @@ html.gg-edit-mode-on .gg-timeline .gg-viewer { display: none; }
   color: var(--gg-fg);
   background: #000;
   border: 0;
-  border-radius: 12px;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
+  border-radius: 0;
+  box-shadow: none;
   pointer-events: auto;
   overflow: hidden;
   box-sizing: border-box;
+}
+.gg-edit-preview::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: #000;
+  pointer-events: none;
 }
 .gg-edit-preview-stage {
   position: absolute;
@@ -931,10 +939,10 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 }
 .gg-timeline .gg-tl-marquee {
   position: fixed;
-  z-index: 80;
+  z-index: 40;
   box-sizing: border-box;
-  border: 1px solid #f2b84b;
-  background: rgba(242, 184, 75, 0.2);
+  border: 1px dashed #f2b84b;
+  background: rgba(242, 184, 75, 0.16);
   pointer-events: none;
 }
 .gg-timeline .gg-clip.gg-play { box-shadow: inset 0 0 0 2px #6ee07a; }
@@ -1005,6 +1013,7 @@ canvas.gg-vid-still[hidden] { display: none !important; }
 }
 .gg-timeline .gg-clip-label { position: absolute; left: 0; right: 0; top: 0; padding: 2px 6px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: linear-gradient(rgba(0,0,0,.75), transparent); pointer-events: none; }
 .gg-timeline .gg-clip-dur { position: absolute; right: 7px; bottom: 2px; font-size: 10px; background: rgba(0,0,0,.6); border-radius: 3px; padding: 0 3px; font-variant-numeric: tabular-nums; pointer-events: none; }
+.gg-timeline .gg-clip-dur.gg-len-drift { color: #e67e22; font-weight: 600; }
 .gg-timeline .gg-clip-in { position: absolute; left: 7px; bottom: 2px; font-size: 10px; color: #6ee07a; pointer-events: none; }
 .gg-timeline .gg-clip-in:empty { display: none; }
 .gg-timeline .gg-edge { position: absolute; top: 0; bottom: 0; width: 8px; z-index: 3; background: rgba(255,255,255,.0); }
@@ -1131,7 +1140,7 @@ canvas.gg-vid-still[hidden] { display: none !important; }
   scrollbar-width: thin;
 }
 .gg-shots .gg-cut-reflinks[hidden] { display: none !important; }
-/* I26/I30: Edit mode pins the thumbnail row on the timeline, under the preview. */
+/* I47: the take row stays in the shots column. This only clears an old dock if one is left on screen. */
 html.gg-edit-mode-on .gg-shots .gg-vs-body.gg-vs-dock {
   margin: 0;
   background: #1f2228;

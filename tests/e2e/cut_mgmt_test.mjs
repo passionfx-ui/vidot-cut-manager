@@ -536,27 +536,23 @@ async function main() {
     }
   });
 
-  await runScenario("04", "Length 4s warning badge", async () => {
+  await runScenario("04", "Length change has no >3s text badge", async () => {
     await requireCutPanel(page);
     await page.click(".gg-root.gg-shots .gg-cut");
     await sleep(300);
     await page.waitForSelector(".gg-len-input");
-    await page.click(".gg-len-input", { clickCount: 3 });
-    await page.type(".gg-len-input", "4");
-    await page.keyboard.press("Tab");
-    await sleep(600);
-    const warn = await page.$(".gg-root.gg-shots .gg-cut .gg-warn3");
-    if (!warn) throw new Error("expected >3s warning badge");
+    const warn = await page.$(".gg-root.gg-shots .gg-cut .gg-warn3, .gg-timeline .gg-clip .gg-warn3");
+    if (warn) throw new Error("duration warning text badge should be gone");
   });
 
   await runScenario("05", "End card clears warning", async () => {
     await requireCutPanel(page);
     await page.click(".gg-cutpanel input.gg-endcard-chk");
     await sleep(500);
-    const hidden = await page.$eval(".gg-root.gg-shots .gg-cut .gg-warn3", (el) => el.hidden).catch(() => true);
+    const warn = await page.$(".gg-root.gg-shots .gg-cut .gg-warn3");
     const badge = await page.$(".gg-root.gg-shots .gg-cut .gg-endcard-badge");
     if (!badge) throw new Error("end card badge missing");
-    if (!hidden) throw new Error("warning should hide for end card");
+    if (warn) throw new Error("duration warning text badge should stay off");
   });
 
   await runScenario("06", "Caption view: same scene groups as Info, thumbnail + caption rows, cut drag, caption persists", async () => {

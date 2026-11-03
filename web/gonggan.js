@@ -20,7 +20,6 @@ import {
   computeCutLabels,
   cutDisplayLabel,
   computeEffectiveSec,
-  lengthWarning,
   moveCuts,
   shotsDropTarget,
   dropRestIndex,
@@ -374,7 +373,7 @@ import {
   templateListPaths,
   defaultVideoTemplate,
 } from "./gg_template_pick_core.js";
-import { clearLinearMode, expandLinearOutputIds, hasLinearModeFlag, linearBindings, linearPromptLabel } from "./gg_app_mode_core.js";
+import { clearLinearMode, expandLinearOutputIds, hasLinearModeFlag, linearBindings } from "./gg_app_mode_core.js";
 import { comboFilter, comboActiveIndex, comboKey, comboTypedValue } from "./gg_combo_core.js";
 import {
   folderAddressTarget,
@@ -4966,10 +4965,6 @@ function workflowSnapshotForCut(cutId) {
   return stored || null;
 }
 
-function promptBindLabel(cutId) {
-  return linearPromptLabel(linearBindings(workflowSnapshotForCut(cutId)));
-}
-
 /**
  * The cut whose graph is being queued.
  * A stale or empty extra.gonggan pid (a workflow id, a subgraph id) must not skip the write
@@ -6871,6 +6866,8 @@ async function ungroupSceneGroup(groupId) {
 function cutSelIds() {
   const cuts = state.timeline ? state.timeline.cuts : [];
   const ids = cuts.filter((c) => state.cutSel.has(c.id)).map((c) => c.id);
+  // An empty scene/group is the selection. Do not fall back to the previously current cut.
+  if (!ids.length && shotsUi.selFromGroup && shotsUi.selGroupKey) return [];
   if (!ids.length && state.cutId && cuts.some((c) => c.id === state.cutId)) ids.push(state.cutId);
   return ids;
 }
@@ -8217,7 +8214,6 @@ function finalCutListHtml(tl) {
   const r = finalCutList(tl);
   const items = r.items.map((it) => {
     const cut = tl.cuts.find((c) => c.id === it.cutId) || {};
-    const warn = lengthWarning(cut);
     const fname = fileBaseName(cut, null, versionIndexFromList(cut.versions_list, it.versionId));
     const capLine = effectiveCaption(cut).replace(/\s+/g, " ").trim();
     return `
@@ -8228,7 +8224,6 @@ function finalCutListHtml(tl) {
           <div class="gg-final-name">${esc(it.name)}</div>
           <div class="gg-final-sub">${esc(it.sceneName || "—")} · ${effectiveLenLabel(cut)} · ${esc(fname)} · ${esc(it.versionLabel)}</div>
           ${capLine ? `<div class="gg-final-cap" title="${esc(capLine)}">${esc(capLine)}</div>` : ""}
-          ${warn ? `<span class="gg-warn3" title="${esc(warn.message)}">&gt; 3s</span>` : ""}
         </div>
       </li>`;
   }).join("");
@@ -8316,18 +8311,7 @@ function refreshCutRowBadges(cutId) {
       len.title = liInfo.title;
       len.classList.toggle("gg-len-drift", liInfo.drift);
     }
-    const warn = lengthWarning(c);
-    let wEl = li.querySelector(".gg-warn3");
-    if (warn) {
-      if (!wEl) {
-        wEl = document.createElement("span");
-        wEl.className = "gg-warn3";
-        li.querySelector(".gg-cut-header-badges")?.appendChild(wEl);
-      }
-      wEl.hidden = false;
-      wEl.textContent = "> 3s";
-      wEl.title = warn.message;
-    } else if (wEl) wEl.hidden = true;
+    li.querySelectorAll(".gg-warn3").forEach((wEl) => wEl.remove());
     let ec = li.querySelector(".gg-endcard-badge");
     if (c.end_card) {
       if (!ec) {
@@ -8368,7 +8352,6 @@ function promptRowContent(c) {
     placeholder: "Prompt for Generate…",
     title: nat ? CARD_EDIT_IDLE_TIP : NATIVE_READONLY_TIP,
     native: nat,
-    bindLabel: promptBindLabel(c.id),
   });
 }
 
@@ -8389,7 +8372,6 @@ function cutThumbHtml(c) {
 
 function infoRowContent(c, labels) {
   const asRef = c?.kind === "reference";
-  const warn = asRef ? null : lengthWarning(c);
   const lenInfo = asRef && !(c.media?.kind === "video" && Number(c.media?.seconds) > 0)
     ? { text: "—", title: "No duration", drift: false }
     : formatCutListLength(c);
@@ -8408,7 +8390,6 @@ function infoRowContent(c, labels) {
   const nameTitle = `${c.story || c.prompt || c.name || ""}`.trim();
   const headName = head.name && cutShowsEditedMarker(c) ? `${head.name} *` : head.name;
   const headerBadges = asRef ? "" : [
-    warn ? `<span class="gg-warn3" title="${esc(warn.message)}">&gt; 3s</span>` : "",
     c.end_card ? `<span class="gg-endcard-badge">End card</span>` : "",
     c.needs_redo ? `<span class="gg-redo-badge">Needs redo</span>` : "",
   ].filter(Boolean).join("");
@@ -9300,14 +9281,21 @@ function paintGenerateAllProgress(root) {
   }
 }
 
+/** Empty scene or reference group is the selection (no item ids to highlight). */
+function emptyGroupSelectionKey() {
+  if (!shotsUi.selFromGroup || state.cutSel.size || !shotsUi.selGroupKey) return "";
+  return shotsUi.selGroupKey;
+}
+
 function paintSelection(root) {
   const shotTabOpen = isGongganShotTabOpenAndActive();
   const openCutId = wfLastLoadedCutId;
   const sameProject =
     !wfLastLoadedProjectId || !state.pid || wfLastLoadedProjectId === state.pid;
+  const emptyKey = emptyGroupSelectionKey();
   root.querySelectorAll("[data-cut-id]").forEach((el) => {
     const id = el.dataset.cutId;
-    el.classList.toggle("gg-on", id === state.cutId);
+    el.classList.toggle("gg-on", !emptyKey && id === state.cutId);
     el.classList.toggle("gg-sel", state.cutSel.has(id));
     if (el.classList.contains("gg-cut")) {
       const showOpen = shouldShowOpenTabMarker({
@@ -9336,10 +9324,13 @@ function paintSelection(root) {
   }
   root.querySelectorAll(".gg-grp-sec").forEach((sec) => {
     const picked = new Set(state.cutSel);
-    if (!picked.size && state.cutId) picked.add(state.cutId);
+    if (!picked.size && state.cutId && !emptyKey) picked.add(state.cutId);
     const rowIds = [...sec.querySelectorAll(".gg-cut")].map((li) => li.dataset.cutId).filter(Boolean);
-    sec.classList.toggle("gg-grp-picked", rowIds.length > 0 && rowIds.every((id) => picked.has(id)));
-    if (sec.dataset.refGroup) sec.classList.toggle("gg-on", sec.dataset.refGroup === refsUi.groupId);
+    const gid = sec.dataset.groupId || sec.dataset.refGroup || (sec.hasAttribute("data-loose") ? "ungrouped" : "");
+    const allRows = rowIds.length > 0 && rowIds.every((id) => picked.has(id));
+    const emptyHit = !!emptyKey && gid === emptyKey && rowIds.length === 0;
+    sec.classList.toggle("gg-grp-picked", allRows || emptyHit);
+    if (sec.dataset.refGroup) sec.classList.toggle("gg-on", sec.dataset.refGroup === refsUi.groupId || emptyHit);
   });
   updateSelectionBar(root);
 }
@@ -11550,27 +11541,6 @@ function onAppControlEdit(e) {
   }, 400);
 }
 
-function syncPromptBindLabels() {
-  document.querySelectorAll(".gg-cut.gg-cut-prompt").forEach((li) => {
-    const id = li.dataset.cutId;
-    if (!id) return;
-    const label = promptBindLabel(id);
-    const col = li.querySelector(".gg-prompt-col") || li;
-    let el = li.querySelector(".gg-app-bind");
-    if (!label) {
-      if (el) el.remove();
-      return;
-    }
-    if (!el) {
-      el = document.createElement("div");
-      el.className = "gg-app-bind";
-      el.title = "This prompt is written to this widget when you queue";
-      col.insertBefore(el, col.firstChild);
-    }
-    if (el.textContent !== label) el.textContent = label;
-  });
-}
-
 /** Status panel: job queue (when active) + Queue toolbar (cut details stay in the list / version info). */
 function statusPanelShellHtml() {
   return `
@@ -12020,6 +11990,7 @@ function mountShots(el) {
         } catch (_) {}
         autoSizeFieldTextarea(ta);
       };
+      ta._ggEnterEdit = enterCardFieldEdit;
 
       ta.addEventListener("mousedown", (e) => {
         if (isCardFieldEditing(ta)) e.stopPropagation();
@@ -12491,6 +12462,19 @@ function mountShots(el) {
       bindGroupHead(head, gid);
     });
     root.querySelectorAll(".gg-grp-sec[data-loose] > .gg-grp-head").forEach((head) => bindGroupHead(head, "ungrouped"));
+    root.querySelectorAll(".gg-grp-sec > .gg-cutlist").forEach((list) => {
+      if (list.querySelector(".gg-cut")) return;
+      list.addEventListener("click", (e) => {
+        if (e.target.closest("button, input, textarea, a, .gg-cut")) return;
+        const sec = list.closest(".gg-grp-sec");
+        const groupKey = sec?.dataset.groupId || sec?.dataset.refGroup || (sec?.hasAttribute("data-loose") ? "ungrouped" : "");
+        if (!groupKey) return;
+        if (sec.dataset.refGroup) refsUi.groupId = sec.dataset.refGroup;
+        selectListedGroup([], { multi: !!(e.ctrlKey || e.metaKey), range: !!e.shiftKey, groupKey });
+        paintSelection(root);
+        paintPanel();
+      });
+    });
     bindHoverPlay(root);
     bindThumbFallbacks(root);
     if (!refTab) bindShotsReorder(root);
@@ -12751,12 +12735,26 @@ function mountShots(el) {
         if (id) selectCutFromKeys(id);
         return;
       }
-      case "open":
+      case "open": {
         if (e.target?.closest?.("button, a[href], summary, [role='button']")) return;
+        const mode = normalizeListMode(shotsUi.listMode);
+        if (!shotsUi.refTab && (mode === "prompt" || mode === "caption")) {
+          const id = state.cutId && cutById(state.cutId) ? state.cutId : (ids[0] || "");
+          const fieldSel = mode === "caption"
+            ? "textarea.gg-caption-text"
+            : "textarea.gg-prompt-text:not(.gg-desc-text)";
+          const ta = id ? root.querySelector(`.gg-cut[data-cut-id="${CSS.escape(id)}"] ${fieldSel}`) : null;
+          if (ta && !ta.disabled && typeof ta._ggEnterEdit === "function") {
+            handled();
+            ta._ggEnterEdit();
+            return;
+          }
+        }
         if (ids.length !== 1) return;
         handled();
         selectCutFromKeys(ids[0]);
         return;
+      }
       case "rename":
         if (!isNativeProject()) return;
         if (selectedReference() && !state.cutSel.size) {
@@ -12815,6 +12813,8 @@ function mountShots(el) {
   const onShotsEmptyClick = (e) => {
     if (!root.contains(e.target)) return;
     if (e.target.closest(".gg-cut") || e.target.closest(".gg-grp-head") || e.target.closest(".gg-ref-group") || e.target.closest(".gg-sel-detail") || e.target.closest(".gg-selbar") || e.target.closest(".gg-iconrow") || e.target.closest(".gg-vstrip") || e.target.closest(".gg-cutpanel") || e.target.closest(".gg-ctx")) return;
+    const emptyList = e.target.closest(".gg-cutlist");
+    if (emptyList && !emptyList.querySelector(".gg-cut")) return;
     if (!state.cutSel.size && !shotsUi.selFromGroup) return;
     shotsUi.selFromGroup = false;
     shotsUi.selGroupKey = "";
@@ -13610,7 +13610,10 @@ function bindTrim(root) {
         marker.hidden = !snapped;
         if (snapped) marker.style.left = hit * ed.px + "px";
         const badge = el.querySelector(".gg-clip-dur");
-        if (badge) badge.textContent = `${c.sec.toFixed(1)}s`;
+        if (badge) {
+          badge.textContent = `${c.sec.toFixed(1)}s`;
+          badge.classList.toggle("gg-len-drift", !!formatCutListLength(c).drift);
+        }
         refreshCutRowBadges(c.id);
         if (state.cutId === c.id) paintStatusPanel(document.querySelector(".gg-shots .gg-cutpanel"));
         const inb = el.querySelector(".gg-clip-in");
@@ -13916,13 +13919,15 @@ function bindMove(root) {
   });
 }
 
-/** Drag a box on empty track to select clips. A click with no box clears the multi-selection. */
+/** Drag a dashed box on empty track space. Clips that meet the box become selected. Ctrl/Shift adds. */
 function bindTimelineMarquee(root) {
   const track = root.querySelector(".gg-track");
   if (!track || track.dataset.marquee) return;
   track.dataset.marquee = "1";
   track.addEventListener("pointerdown", (e) => {
-    if (e.button || e.target.closest(".gg-clip")) return;
+    if (e.button) return;
+    if (e.target.closest(".gg-clip, .gg-edge, .gg-ruler, .gg-head-line, .gg-zoombar, button, a, input, textarea")) return;
+    if (ed.dragging || ed.scrubbing) return;
     const x0 = e.clientX;
     const y0 = e.clientY;
     let active = false;
@@ -13955,7 +13960,7 @@ function bindTimelineMarquee(root) {
         active = true;
         box.style.left = x0 + "px";
         box.style.top = y0 + "px";
-        document.body.appendChild(box);
+        root.appendChild(box);
         try { track.setPointerCapture(e.pointerId); } catch (_) {}
       }
       paint(ev.clientX, ev.clientY);
@@ -13970,7 +13975,7 @@ function bindTimelineMarquee(root) {
         return;
       }
       const ids = hits(ev.clientX, ev.clientY);
-      if (ev.ctrlKey || ev.metaKey) setTimelineSelection([...state.cutSel, ...ids]);
+      if (ev.ctrlKey || ev.metaKey || ev.shiftKey) setTimelineSelection([...state.cutSel, ...ids]);
       else setTimelineSelection(ids);
     };
     window.addEventListener("pointermove", move);
@@ -15135,8 +15140,6 @@ function unbindEditPreviewObserver() {
   editPreviewObserver = null;
 }
 
-/** Thumbnail row height. Matches `.gg-vs-body`. The info grid stays in the shots column. */
-const EDIT_TAKES_ROW_PX = 72;
 /** Above ComfyUI's canvas menu (z-1200) and minimap (z-1300). Below our dialogs. */
 const EDIT_COVER_Z = 3600;
 
@@ -15154,65 +15157,13 @@ function clearEditTakesDock(body) {
 }
 
 /**
- * In Edit mode, with Timeline open, pin the take thumbnail row in the graph
- * column, directly under the preview and on top of the timeline. The preview
- * fills the space above that row, covering the canvas and its floating tools.
- * Other modes leave the row in the shots column.
- * @returns {number|null} top of the docked row, or null when it is not docked
+ * Takes and the reference row stay in the left sidebar in every mode, including Edit.
+ * Clears a dock left over from an older layout.
+ * @returns {null}
  */
 function placeEditTakesStrip() {
-  const body = document.querySelector(".gg-root.gg-shots .gg-vstrip .gg-vs-body");
-  const strip = body?.closest(".gg-vstrip");
-  const show = !!(
-    timelineEditModeOn
-    && isTimelinePanelOpen()
-    && body
-    && strip
-    && !strip.hidden
-  );
-  if (!show) {
-    clearEditTakesDock(body);
-    return null;
-  }
-  const column = graphColumnElement();
-  const graph = editPreviewBox(graphWorkAreaElement()) || (column ? editPreviewBox(column) : null);
-  if (!column || !graph) {
-    clearEditTakesDock(body);
-    return null;
-  }
-  const col = column.getBoundingClientRect();
-  const sides = measureEditPreviewSides(graph);
-  const barBottom = measureEditPreviewToolbarBottom(graph);
-  const docker = measureRightDockerLeft(graph, barBottom ?? graph.top);
-  let left = col.left;
-  let right = col.right;
-  if (sides.left != null) left = Math.max(left, sides.left);
-  if (sides.right != null) right = Math.min(right, sides.right);
-  if (docker != null) right = Math.min(right, docker);
-  const width = right - left;
-  if (width < 48) {
-    clearEditTakesDock(body);
-    return null;
-  }
-  const gap = 4;
-  const timelineTop = ownStripTop();
-  const bottomEdge = timelineTop != null ? timelineTop : graph.bottom;
-  const minTop = (barBottom != null ? barBottom : graph.top) + gap;
-  const links = body.querySelector(".gg-cut-reflinks");
-  const extra = links && !links.hidden ? Math.max(40, links.offsetHeight || 40) : 0;
-  const rowPx = EDIT_TAKES_ROW_PX + extra;
-  let top = Math.round(bottomEdge - rowPx);
-  if (top < minTop) top = Math.round(minTop);
-  body.classList.add("gg-vs-dock");
-  body.style.position = "fixed";
-  body.style.boxSizing = "border-box";
-  body.style.zIndex = String(EDIT_COVER_Z + 50);
-  body.style.left = `${Math.round(left)}px`;
-  body.style.width = `${Math.max(48, Math.round(width))}px`;
-  body.style.top = `${top}px`;
-  body.style.height = `${rowPx}px`;
-  if (!placingEditPreview && timelineEditModeOn) scheduleEditPreviewLayout();
-  return top;
+  clearEditTakesDock(document.querySelector(".gg-root.gg-shots .gg-vstrip .gg-vs-body"));
+  return null;
 }
 
 /** Preview stops at the docked take row when that row is on screen. */
@@ -15237,9 +15188,50 @@ function editOverlayBottom(graph) {
  */
 let placingEditPreview = false;
 
-function editPreviewCoverRect(dockTop) {
+/**
+ * Graph column box, extended up through same-width parents so the cover starts
+ * at the top line of that column (the toolbar row), not under it.
+ */
+function editPreviewColumnRect() {
   const column = graphColumnElement();
-  const host = column ? editPreviewBox(column) : null;
+  const box = column ? editPreviewBox(column) : null;
+  if (!box) return null;
+  let top = box.top;
+  let node = column.parentElement;
+  for (let i = 0; node && i < 8; i += 1, node = node.parentElement) {
+    if (node === document.body || node === document.documentElement) break;
+    const r = node.getBoundingClientRect();
+    if (r.width < 64 || r.height < 64) continue;
+    const sameSpan = Math.abs(r.left - box.left) < 28 && Math.abs(r.right - box.right) < 28;
+    if (!sameSpan) break;
+    if (r.top < top) top = r.top;
+  }
+  const wfTab = document.querySelector('[data-testid="workflow-tab"]');
+  const bar = wfTab?.closest("header") || wfTab?.parentElement;
+  if (bar) {
+    const r = bar.getBoundingClientRect();
+    const overlaps = r.right > box.left + 24 && r.left < box.right - 24;
+    const justAbove = r.bottom >= top - 12 && r.top < top && r.height > 8 && r.height < 120;
+    if (overlaps && justAbove) top = Math.min(top, r.top);
+  }
+  for (const el of document.querySelectorAll("button")) {
+    const text = (el.textContent || "").trim();
+    const aria = (el.getAttribute("aria-label") || el.title || "").trim();
+    const isRun = /^run$/i.test(text) || /^run$/i.test(aria);
+    if (!isRun && !/toggle properties panel|workflow overview/i.test(aria)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 8 || r.height < 8 || r.height > 80) continue;
+    if (r.left < box.left - 4 || r.right > box.right + 8) continue;
+    if (r.top > top + 4 || r.bottom < top - 80) continue;
+    const row = el.parentElement?.getBoundingClientRect();
+    const rowTop = row && row.height > 8 && row.height < 120 ? row.top : r.top;
+    if (rowTop < top) top = rowTop;
+  }
+  return { left: box.left, top, right: box.right, bottom: box.bottom, width: box.width, height: box.bottom - top };
+}
+
+function editPreviewCoverRect(dockTop) {
+  const host = editPreviewColumnRect();
   const bottomOf = (graph) => {
     const caps = [];
     const base = overlayBottomLimit(graph);
@@ -15692,7 +15684,7 @@ function mountTimeline(el) {
         <span class="gg-clip-dot gg-dot-empty"></span>
         <div class="gg-clip-label"><span class="gg-no">${esc(cutDisplayLabel(c, cutLabels))}</span>${esc(displayCutName(c))}</div>
         <div class="gg-clip-in">${kindOf(view) === "video" && c.in > 0 ? `in ${c.in.toFixed(1)}` : ""}</div>
-        <div class="gg-clip-dur">${c.sec.toFixed(1)}s</div>
+        <div class="gg-clip-dur${formatCutListLength(c).drift ? " gg-len-drift" : ""}">${c.sec.toFixed(1)}s</div>
         <span class="gg-render-badge gg-clip-rs" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
         <div class="gg-clip-prog" hidden><div class="gg-prog-bar"><div class="gg-prog-fill"></div></div></div>
         <div class="gg-edge gg-edge-l${i > 0 ? " gg-edge-split" : ""}" data-side="l" title="Trim in"></div>
@@ -16438,7 +16430,6 @@ app.registerExtension({
     const refreshAppUi = () => {
       if (document.hidden) return;
       try {
-        syncPromptBindLabels();
         paintAppControls();
       } catch (_) {}
     };
