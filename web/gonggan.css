@@ -230,7 +230,43 @@
 .gg-timeline .gg-clip-rs { position: absolute; left: 6px; bottom: 16px; z-index: 3; max-width: calc(100% - 12px); overflow: hidden; text-overflow: ellipsis; pointer-events: none; background: rgba(20, 30, 40, 0.85); }
 .gg-timeline .gg-clip-rs.gg-rs-rendering { background: rgba(25, 50, 30, 0.88); }
 .gg-timeline .gg-clip-rs.gg-rs-failed { background: rgba(74, 31, 34, 0.9); }
-.gg-shots .gg-cut-text { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; }
+.gg-shots .gg-cut-text { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: row; align-items: flex-start; gap: 6px; }
+.gg-shots .gg-cut-main { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 3px; }
+.gg-shots .gg-cut-side {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  max-width: 42%;
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--gg-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.gg-shots .gg-cut-header .gg-stage-row { margin-left: 4px; }
+.gg-shots .gg-cut-verline {
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 48%;
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 4px;
+  text-align: right;
+  font-size: 10px;
+  line-height: 13px;
+  font-weight: 400;
+  color: var(--gg-dim);
+  font-variant-numeric: tabular-nums;
+}
+.gg-shots .gg-cut-verline .gg-cut-cur,
+.gg-shots .gg-cut-verline .gg-cut-ver { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gg-shots .gg-cut-refthumbs { display: flex; flex-wrap: wrap; gap: 3px; pointer-events: none; }
+.gg-shots .gg-cut-refthumbs:empty { display: none; }
 .gg-shots .gg-cut-header {
   display: flex;
   align-items: baseline;
@@ -793,7 +829,19 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-shots .gg-ver-rep { position: absolute; right: 2px; top: 2px; font-size: 7px; padding: 0 2px; border-radius: 2px; background: var(--gg-acc); color: #1b1d22; font-weight: 600; }
 .gg-shots .gg-vstrip { position: relative; flex: 0 0 auto; min-height: 0; overflow: hidden; min-width: 0; display: flex; flex-direction: column; border-top: 1px solid var(--gg-line); background: #1f2228; }
 .gg-shots .gg-vs-head { display: none; height: 0; overflow: hidden; margin: 0; padding: 0; border: none; }
-.gg-shots .gg-vs-body { position: relative; flex: 0 0 auto; height: 72px; min-height: 0; }
+.gg-shots .gg-vs-body { position: relative; flex: 0 0 auto; height: auto; min-height: 0; display: flex; flex-direction: column; }
+.gg-shots .gg-vs-row { position: relative; flex: 0 0 72px; height: 72px; min-height: 72px; }
+.gg-shots .gg-cut-reflinks {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 2px;
+  overflow-x: auto;
+  min-height: 40px;
+  scrollbar-width: thin;
+}
+.gg-shots .gg-cut-reflinks[hidden] { display: none !important; }
 /* I26/I30: Edit mode pins the thumbnail row on the timeline, under the preview. */
 html.gg-edit-mode-on .gg-shots .gg-vs-body.gg-vs-dock {
   margin: 0;
@@ -1070,6 +1118,88 @@ html.gg-edit-mode-on .gg-bottom-strip {
 .gg-shots .gg-ref-main { min-width: 0; display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; }
 .gg-shots .gg-ref-status { font-size: 10px; opacity: .7; }
 .gg-shots .gg-ref-none { opacity: .7; padding: 4px 6px; font-size: 11px; }
+.gg-shots .gg-ref-library-bar { display: flex; justify-content: flex-end; padding: 4px 6px 2px; }
+.gg-shots .gg-ref-library .gg-ref-add-form { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 6px 6px; }
+.gg-shots .gg-ref-library .gg-ref-add-name { flex: 1; min-width: 0; }
+.gg-refthumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--gg-line, #353a44);
+  border-radius: 3px;
+  background: #1b1d22;
+  overflow: visible;
+  -webkit-user-drag: none;
+}
+.gg-refthumb-face { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; overflow: hidden; border-radius: 2px; }
+.gg-refthumb-face img { width: 100%; height: 100%; object-fit: cover; display: block; -webkit-user-drag: none; }
+.gg-cut-refthumbs .gg-refthumb { width: 18px; height: 18px; }
+.gg-refthumb-add {
+  border-style: dashed;
+  border-color: var(--gg-dim, #9aa0aa);
+  background: transparent;
+  cursor: pointer;
+}
+.gg-refthumb-add:hover { border-color: var(--gg-acc, #f2b84b); }
+.gg-refthumb-x {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  z-index: 2;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, .72);
+  color: #fff;
+  font-size: 11px;
+  line-height: 14px;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+.gg-refthumb:hover .gg-refthumb-x,
+.gg-refthumb-x:focus-visible { opacity: 1; pointer-events: auto; }
+.gg-refthumb-x:hover { background: rgba(180, 40, 40, .92); }
+.gg-refpick {
+  position: fixed;
+  z-index: 10060;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(420px, calc(100vh - 16px));
+  padding: 8px;
+  border: 1px solid var(--gg-line, #353a44);
+  border-radius: 6px;
+  background: #1b1d22;
+  color: var(--gg-fg, #e6e8ec);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+}
+.gg-refpick-filters { display: flex; flex-wrap: wrap; gap: 4px; }
+.gg-refpick-filters .gg-ref-filter { font: inherit; background: transparent; color: inherit; border: 1px solid var(--gg-line, #353a44); border-radius: 10px; padding: 1px 8px; cursor: pointer; }
+.gg-refpick-filters .gg-ref-filter.on { background: #3a5f9e; border-color: #3a5f9e; color: #fff; }
+.gg-refpick-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; overflow-y: auto; min-height: 0; }
+.gg-refpick-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.gg-refpick-item.on { border-color: var(--gg-acc, #f2b84b); background: rgba(242, 184, 75, .12); }
+.gg-refpick-item.gg-locked { cursor: default; opacity: .85; }
+.gg-refpick-item .gg-refthumb { width: 100%; height: auto; aspect-ratio: 1 / 1; }
+.gg-refpick-name { font-size: 10px; line-height: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+.gg-refpick-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.gg-refpick .gg-ref-none { grid-column: 1 / -1; }
 .gg-shots .gg-sel-detail-host { border-top: 1px solid var(--gg-line, #353a44); }
 .gg-shots .gg-sel-detail { display: flex; flex-direction: column; gap: 4px; padding: 6px; font-size: 11px; }
 .gg-shots .gg-sel-field { display: flex; flex-direction: column; gap: 2px; }

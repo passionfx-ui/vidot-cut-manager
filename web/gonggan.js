@@ -98,11 +98,9 @@ import {
   injectPromptText,
   mentionAutocomplete,
   mentionToken,
-  referenceStatusText,
   referenceUseMode,
   referencesConfirmLine,
   stripMention,
-  unknownMentionTokens,
 } from "./gg_reference_core.js";
 import {
   folderNotCreated,
@@ -581,11 +579,20 @@ let timelineAssignByLoad = false;
     },
   });
 }
+function loadRefTab() {
+  try { return localStorage.getItem("gg.refTab") === "1"; } catch { return false; }
+}
+
+function saveRefTab(on) {
+  try { localStorage.setItem("gg.refTab", on ? "1" : "0"); } catch { /* keep this session */ }
+}
+
 const shotsUi = {
   view: "cuts",
   needsRedoOnly: false,
   dragSession: null,
   listMode: loadListMode(localStorage),
+  refTab: loadRefTab(),
   playCutId: "",
   composing: false,
   paintDeferred: false,
@@ -1980,22 +1987,7 @@ function openProjectSettingsModal() {
   folderIn.focus();
 }
 
-const refsUi = { cat: "All", adding: false };
-const REFS_COLLAPSE_KEY = "gg.refsCollapsed";
-
-function refsCollapsed() {
-  try {
-    return localStorage.getItem(REFS_COLLAPSE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function setRefsCollapsed(on) {
-  try {
-    localStorage.setItem(REFS_COLLAPSE_KEY, on ? "1" : "0");
-  } catch { /* keep the fold for this paint only */ }
-}
+const refsUi = { cat: "All", adding: false, collapsed: {}, focusAdd: false };
 
 function activeReferences() {
   return (state.timeline?.references || []).filter((r) => r && r.id);
@@ -2041,30 +2033,32 @@ function referenceThumbHtml(media) {
     : `<span class="gg-ref-empty">No image yet</span>`;
 }
 
-function referenceCardHtml(r) {
-  const on = state.cutId === r.id ? " on" : "";
-  return `<div class="gg-ref-card${on}" data-ref-id="${esc(r.id)}" data-cut-id="${esc(r.id)}" title="${esc(r.name)}">
-    <div class="gg-ref-thumb">${referenceThumbHtml(r.media)}</div>
-    <div class="gg-ref-main">
-      <b class="gg-ref-name">${esc(r.name)}</b>
-      <span class="gg-ref-cat">${esc(r.category || "Other")}</span>
-      <span class="gg-ref-status">${esc(referenceStatusText(r))}</span>
-    </div>
-  </div>`;
+function selectedShot() {
+  const id = state.cutId;
+  if (!id || !state.timeline) return null;
+  return (state.timeline.cuts || []).find((c) => c && c.id === id) || null;
 }
 
-function referencesGroupHtml() {
-  if (!isNativeProject(state.timeline)) return "";
+function refSquareHtml(row, { unlink }) {
+  const name = row.missing ? `${row.name || "Reference"} missing` : (row.name || "Reference");
+  const face = row.missing ? `<span class="gg-ref-empty">?</span>` : referenceThumbHtml(row.media);
+  const x = unlink
+    ? `<button type="button" class="gg-refthumb-x" data-ref-unlink="${esc(row.ref_id)}" title="Unlink" aria-label="Unlink">×</button>`
+    : "";
+  return `<span class="gg-refthumb${row.missing ? " missing" : ""}" title="${esc(name)}" data-ref-id="${esc(row.ref_id)}"><span class="gg-refthumb-face">${face}</span>${x}</span>`;
+}
+
+function cutCardRefThumbsInner(cut) {
+  return cutRefRows(cut).map((row) => refSquareHtml(row, { unlink: false })).join("");
+}
+
+function cutRefStripInnerHtml(cut) {
+  const thumbs = cutRefRows(cut).map((row) => refSquareHtml(row, { unlink: true })).join("");
+  return `${thumbs}<button type="button" class="gg-refthumb gg-refthumb-add" title="Link reference" aria-label="Link reference"></button>`;
+}
+
+function referenceLibraryHtml() {
   const all = activeReferences();
-  const cat = refsUi.cat && (refsUi.cat === "All" || REFERENCE_CATEGORIES.includes(refsUi.cat)) ? refsUi.cat : "All";
-  refsUi.cat = cat;
-  const shown = cat === "All" ? all : all.filter((r) => r.category === cat);
-  const open = !refsCollapsed();
-  const chips = ["All", ...REFERENCE_CATEGORIES].map((c) =>
-    `<button type="button" class="gg-ref-filter${c === cat ? " on" : ""}" data-ref-filter="${esc(c)}">${esc(c)}</button>`
-  ).join("");
-  const cards = shown.map(referenceCardHtml).join("")
-    || `<div class="gg-ref-none">${all.length ? "No references in this category." : "No references yet."}</div>`;
   const form = refsUi.adding
     ? `<form class="gg-ref-add-form">
         <input class="gg-ref-add-name" maxlength="80" placeholder="Name" />
@@ -2073,14 +2067,26 @@ function referencesGroupHtml() {
         <button type="button" class="gg-ref-add-cancel">Cancel</button>
       </form>`
     : "";
-  return `<section class="gg-ref-group${open ? "" : " collapsed"}">
-    <div class="gg-ref-head">
-      <button type="button" class="gg-ref-fold" aria-expanded="${open ? "true" : "false"}">${open ? "▾" : "▸"}</button>
-      <span class="gg-ref-title">References (${all.length})</span>
-      <button type="button" class="gg-ref-add-btn">+ Add reference</button>
-    </div>
-    ${open ? `<div class="gg-ref-filters">${chips}</div>${form}<div class="gg-ref-cards">${cards}</div>` : ""}
-  </section>`;
+  const sections = REFERENCE_CATEGORIES.map((cat) => {
+    const rows = all.filter((r) => (r.category || "Other") === cat);
+    const collapsed = !!refsUi.collapsed[cat];
+    const cards = rows.map((r) =>
+      `<li class="gg-cut${state.cutId === r.id ? " gg-sel" : ""}" data-cut-id="${esc(r.id)}" data-kind="reference">${infoRowContent(r)}</li>`
+    ).join("");
+    return `<section class="gg-grp-sec gg-ref-sec" data-ref-cat="${esc(cat)}">
+      <header class="gg-grp-head">
+        <button type="button" class="gg-grp-fold" title="Collapse or expand">${collapsed ? "▸" : "▾"}</button>
+        <span class="gg-grp-title">${esc(cat)}</span>
+        <span class="gg-grp-meta">${rows.length}</span>
+      </header>
+      <ol class="gg-cutlist"${collapsed ? " hidden" : ""}>${cards}</ol>
+    </section>`;
+  }).join("");
+  return `<div class="gg-ref-library">
+    <div class="gg-ref-library-bar"><button type="button" class="gg-btn gg-ref-add-btn">+ Add reference</button></div>
+    ${form}
+    ${sections}
+  </div>`;
 }
 
 function refSlotOptions(cut, row) {
@@ -2095,47 +2101,17 @@ function refSlotOptions(cut, row) {
   return opts.join("");
 }
 
-function cutReferencesRowHtml(cut) {
-  const rows = cutRefRows(cut);
-  const chips = rows.map((row) => {
-    const thumb = row.missing
-      ? `<span class="gg-ref-empty">?</span>`
-      : referenceThumbHtml(row.media);
-    const label = row.missing ? `${row.name} missing` : `@${mentionToken(row.name)}`;
-    return `<span class="gg-ref-linkchip${row.missing ? " missing" : ""}" data-ref-id="${esc(row.ref_id)}">
-      <span class="gg-ref-chip-thumb">${thumb}</span>
-      <span class="gg-ref-chip-name">${esc(label)}</span>
-      <label class="gg-ref-slot">Slot <select data-ref-slot="${esc(row.ref_id)}">${refSlotOptions(cut, row)}</select></label>
-      <button type="button" class="gg-ref-unlink" data-ref-unlink="${esc(row.ref_id)}" title="Unlink">×</button>
-    </span>`;
-  }).join("");
-  const unknown = unknownMentionTokens(cutPromptNow(cut), activeReferences()).map((tok) =>
-    `<span class="gg-ref-linkchip unknown">Unknown @${esc(tok)}</span>`
-  ).join("");
-  const choices = activeReferences().filter((r) => !rows.some((row) => row.ref_id === r.id));
-  const menu = choices.length
-    ? `<select class="gg-ref-link-pick"><option value="">+ Link reference</option>${choices.map((r) =>
-        `<option value="${esc(r.id)}">${esc(r.name)} · ${esc(r.category || "Other")}</option>`
-      ).join("")}</select>`
-    : `<span class="gg-ref-link-empty">+ Link reference</span>`;
-  return `<div class="gg-sel-refs"><div class="gg-sel-label">References</div><div class="gg-sel-ref-row">${chips}${unknown}${menu}</div></div>`;
-}
-
 function selectionDetailHtml() {
   const ref = selectedReference();
-  if (ref) {
-    return `<div class="gg-sel-detail" data-sel-kind="reference">
-      <label class="gg-sel-field">Name <input data-field="name" value="${esc(ref.name)}" maxlength="80" /></label>
-      <label class="gg-sel-field">Category <select data-field="category">${REFERENCE_CATEGORIES.map((c) =>
-        `<option${c === ref.category ? " selected" : ""}>${esc(c)}</option>`
-      ).join("")}</select></label>
-      <label class="gg-sel-field gg-sel-grow">Description <textarea data-field="description" rows="3" maxlength="4000">${esc(ref.description || "")}</textarea></label>
-      <label class="gg-sel-field gg-sel-grow">Prompt <textarea class="gg-ref-prompt" data-field="prompt" rows="3">${esc(ref.prompt || "")}</textarea></label>
-    </div>`;
-  }
-  const cut = cutById(state.cutId, { cutsOnly: true });
-  if (!cut || !isNativeProject(state.timeline)) return "";
-  return `<div class="gg-sel-detail" data-sel-kind="cut">${cutReferencesRowHtml(cut)}</div>`;
+  if (!ref || !shotsUi.refTab) return "";
+  return `<div class="gg-sel-detail" data-sel-kind="reference">
+    <label class="gg-sel-field">Name <input data-field="name" value="${esc(ref.name)}" maxlength="80" /></label>
+    <label class="gg-sel-field">Category <select data-field="category">${REFERENCE_CATEGORIES.map((c) =>
+      `<option${c === ref.category ? " selected" : ""}>${esc(c)}</option>`
+    ).join("")}</select></label>
+    <label class="gg-sel-field gg-sel-grow">Description <textarea data-field="description" rows="3" maxlength="4000">${esc(ref.description || "")}</textarea></label>
+    <label class="gg-sel-field gg-sel-grow">Prompt <textarea class="gg-ref-prompt" data-field="prompt" rows="3">${esc(ref.prompt || "")}</textarea></label>
+  </div>`;
 }
 
 function referenceErrorText(err, fallback) {
@@ -2239,6 +2215,7 @@ function openReferenceMenu(id, x, y) {
   }));
   showCtxMenu(x, y, [
     { label: "Generate", action: () => generateReference(id) },
+    { label: "Load template…", submenu: templateChoicesForCut(id) },
     { label: "Set as Best", action: () => setReferenceBest(id).catch((e) => ggToast("Reference", e.message || "Could not set Best.", "warn")) },
     { label: "Import Media", action: () => importReferenceMedia(id).catch((e) => ggToast("Reference", e.message || "Could not import.", "warn")) },
     { label: "Use Last Output", action: () => useLastOutputOnReference(id).catch((e) => ggToast("Reference", e.message || "Could not use the last output.", "warn")) },
@@ -2266,12 +2243,131 @@ function saveReferenceLinks(cutId, rows, prompt) {
   return saveCutFields(cutId, fields);
 }
 
-function linkReferenceToCut(cut, refId) {
-  const ref = referenceById(refId);
-  if (!cut || !ref) return;
-  const rows = cutRefRows(cut).filter((row) => row.ref_id !== ref.id);
-  rows.push({ ref_id: ref.id, source: "manual", slot: null, name: ref.name });
+function linkReferencesToCut(cut, refIds) {
+  if (!cut) return;
+  const rows = cutRefRows(cut).slice();
+  const have = new Set(rows.map((row) => row.ref_id));
+  for (const id of refIds || []) {
+    const ref = referenceById(id);
+    if (!ref || have.has(ref.id)) continue;
+    rows.push({ ref_id: ref.id, source: "manual", slot: null, name: ref.name });
+    have.add(ref.id);
+  }
+  cut.ref_links = rows.map((row) => ({
+    ref_id: row.ref_id,
+    source: row.source === "mention" ? "mention" : "manual",
+    ...(row.slot ? { slot: row.slot } : {}),
+  }));
+  refreshOpenCutRefChips();
   saveReferenceLinks(cut.id, rows).catch((e) => ggToast("References", e.message || "Could not link.", "warn"));
+}
+
+function linkReferenceToCut(cut, refId) {
+  linkReferencesToCut(cut, [refId]);
+}
+
+let refPickerEl = null;
+let refPickerDoc = null;
+
+function closeRefPicker() {
+  if (refPickerEl) {
+    refPickerEl.remove();
+    refPickerEl = null;
+  }
+  document.removeEventListener("keydown", onRefPickerKey, true);
+  if (refPickerDoc) {
+    document.removeEventListener("mousedown", refPickerDoc, true);
+    refPickerDoc = null;
+  }
+}
+
+function onRefPickerKey(e) {
+  if (e.key !== "Escape" || !refPickerEl) return;
+  e.preventDefault();
+  e.stopPropagation();
+  closeRefPicker();
+}
+
+function openRefPicker(anchor, cut) {
+  closeRefPicker();
+  if (!anchor || !cut) return;
+  const picked = new Set();
+  let cat = "All";
+  const wrap = document.createElement("div");
+  wrap.className = "gg-refpick";
+  wrap.setAttribute("role", "dialog");
+  wrap.setAttribute("aria-label", "Link reference");
+  document.body.appendChild(wrap);
+  refPickerEl = wrap;
+  const place = () => {
+    const rect = anchor.getBoundingClientRect();
+    const w = Math.min(320, window.innerWidth - 16);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - w - 8));
+    wrap.style.left = `${left}px`;
+    wrap.style.width = `${w}px`;
+    const h = wrap.offsetHeight || 220;
+    let top = rect.top - h - 6;
+    if (top < 8) top = Math.min(window.innerHeight - h - 8, rect.bottom + 6);
+    wrap.style.top = `${Math.max(8, top)}px`;
+  };
+  const render = () => {
+    const all = activeReferences();
+    const linked = new Set(cutRefRows(cut).map((row) => row.ref_id));
+    const shown = cat === "All" ? all : all.filter((r) => (r.category || "Other") === cat);
+    const chips = ["All", ...REFERENCE_CATEGORIES].map((c) =>
+      `<button type="button" class="gg-ref-filter${c === cat ? " on" : ""}" data-ref-filter="${esc(c)}">${esc(c)}</button>`
+    ).join("");
+    const cells = shown.map((r) => {
+      const locked = linked.has(r.id);
+      const on = locked || picked.has(r.id);
+      return `<button type="button" class="gg-refpick-item${on ? " on" : ""}${locked ? " gg-locked" : ""}" data-ref-id="${esc(r.id)}" title="${esc(r.name)}"${locked ? " disabled" : ""}>
+        <span class="gg-refthumb"><span class="gg-refthumb-face">${referenceThumbHtml(r.media)}</span></span>
+        <span class="gg-refpick-name">${esc(r.name)}</span>
+      </button>`;
+    }).join("") || `<div class="gg-ref-none">${all.length ? "No references in this category." : "No references yet."}</div>`;
+    wrap.innerHTML = `
+      <div class="gg-refpick-filters">${chips}</div>
+      <div class="gg-refpick-grid">${cells}</div>
+      <div class="gg-refpick-actions">
+        <button type="button" class="gg-btn gg-refpick-cancel">Cancel</button>
+        <button type="button" class="gg-btn gg-primary gg-refpick-ok"${picked.size ? "" : " disabled"}>Link</button>
+      </div>`;
+    place();
+    wrap.querySelectorAll("[data-ref-filter]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        cat = btn.dataset.refFilter || "All";
+        render();
+      });
+    });
+    wrap.querySelectorAll(".gg-refpick-item:not(.gg-locked)").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.refId;
+        if (!id) return;
+        if (picked.has(id)) picked.delete(id);
+        else picked.add(id);
+        render();
+      });
+    });
+    wrap.querySelector(".gg-refpick-cancel")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeRefPicker();
+    });
+    wrap.querySelector(".gg-refpick-ok")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const ids = [...picked];
+      closeRefPicker();
+      if (ids.length) linkReferencesToCut(cut, ids);
+    });
+  };
+  render();
+  document.addEventListener("keydown", onRefPickerKey, true);
+  refPickerDoc = (e) => {
+    if (!refPickerEl || refPickerEl.contains(e.target) || anchor.contains?.(e.target)) return;
+    closeRefPicker();
+  };
+  setTimeout(() => document.addEventListener("mousedown", refPickerDoc, true), 0);
 }
 
 function unlinkReferenceFromCut(cut, refId) {
@@ -2287,7 +2383,10 @@ function unlinkReferenceFromCut(cut, refId) {
     source: item.source === "mention" ? "mention" : "manual",
     ...(item.slot ? { slot: item.slot } : {}),
   }));
-  scheduleCutFieldSave(cut.id, { ref_links: links, prompt }, { prompt: cut.prompt || "", ref_links: cut.ref_links || [] });
+  const prev = { prompt: cut.prompt || "", ref_links: cut.ref_links || [] };
+  cut.prompt = prompt;
+  cut.ref_links = links;
+  scheduleCutFieldSave(cut.id, { ref_links: links, prompt }, prev);
   refreshOpenCutRefChips();
 }
 
@@ -2394,25 +2493,13 @@ function repaintShots() {
 }
 
 function bindReferenceGroup(root) {
-  const group = root.querySelector(".gg-ref-group");
+  const group = root.querySelector(".gg-ref-library");
   if (!group) return;
-  group.querySelector(".gg-ref-fold")?.addEventListener("click", (e) => {
-    e.stopPropagation();
-    setRefsCollapsed(!refsCollapsed());
-    repaintShots();
-  });
   group.querySelector(".gg-ref-add-btn")?.addEventListener("click", (e) => {
     e.stopPropagation();
     refsUi.adding = true;
     refsUi.focusAdd = true;
     repaintShots();
-  });
-  group.querySelectorAll("[data-ref-filter]").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      refsUi.cat = btn.dataset.refFilter || "All";
-      repaintShots();
-    });
   });
   group.querySelector(".gg-ref-add-cancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -2425,16 +2512,12 @@ function bindReferenceGroup(root) {
     const category = group.querySelector(".gg-ref-add-cat")?.value || "Character";
     addReferenceFromGroup(name, category).catch((err) => ggToast("Reference", referenceErrorText(err, "References"), "warn"));
   });
-  group.querySelectorAll(".gg-ref-card").forEach((card) => {
-    card.addEventListener("click", (e) => {
+  group.querySelectorAll(".gg-ref-sec").forEach((sec) => {
+    sec.querySelector(".gg-grp-fold")?.addEventListener("click", (e) => {
       e.stopPropagation();
-      selectReference(card.dataset.refId);
-    });
-    card.addEventListener("contextmenu", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      selectReference(card.dataset.refId);
-      openReferenceMenu(card.dataset.refId, e.clientX, e.clientY);
+      const cat = sec.dataset.refCat || "";
+      refsUi.collapsed[cat] = !refsUi.collapsed[cat];
+      repaintShots();
     });
   });
   if (refsUi.focusAdd) {
@@ -2450,34 +2533,13 @@ function bindSelectionDetail(root) {
   detail.querySelectorAll("[data-field='prompt'], .gg-prompt-text").forEach((el) => bindMentionField(el));
   detail.addEventListener("change", (e) => {
     const ref = selectedReference();
-    const slot = e.target?.dataset?.refSlot;
-    const liveCut = () => (state.timeline?.cuts || []).find((c) => c.id === state.cutId) || null;
-    if (slot && !ref) {
-      const live = liveCut();
-      if (live) setReferenceSlot(live, slot, e.target.value || "");
-      return;
-    }
-    if (!ref) {
-      if (e.target?.classList?.contains("gg-ref-link-pick") && e.target.value) {
-        const live = liveCut();
-        if (live) linkReferenceToCut(live, e.target.value);
-      }
-      return;
-    }
+    if (!ref) return;
     const field = e.target?.dataset?.field;
     if (field === "name") {
       renameReference(ref.id, e.target.value).catch((err) => ggToast("Reference", referenceErrorText(err, "References"), "warn"));
     } else if (field === "category") {
       changeReferenceCategory(ref.id, e.target.value).catch((err) => ggToast("Reference", referenceErrorText(err, "References"), "warn"));
     }
-  });
-  detail.addEventListener("click", (e) => {
-    const btn = e.target.closest?.("[data-ref-unlink]");
-    if (!btn) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const live = (state.timeline?.cuts || []).find((c) => c.id === state.cutId);
-    if (live) unlinkReferenceFromCut(live, btn.dataset.refUnlink);
   });
   detail.addEventListener("input", (e) => {
     const ref = selectedReference();
@@ -2487,14 +2549,31 @@ function bindSelectionDetail(root) {
   });
 }
 
+function paintCutRefStrip(root) {
+  const host = root?.querySelector?.(".gg-cut-reflinks") || document.querySelector("#gg-root .gg-cut-reflinks");
+  if (!host) return;
+  const cut = selectedShot();
+  const show = !!(cut && isNativeProject());
+  host.hidden = !show;
+  if (!show) {
+    host.dataset.html = "";
+    host.innerHTML = "";
+    return;
+  }
+  const html = cutRefStripInnerHtml(cut);
+  if (host.dataset.html !== html) {
+    host.dataset.html = html;
+    host.innerHTML = html;
+  }
+}
+
 function refreshOpenCutRefChips() {
-  const host = document.querySelector("#gg-root .gg-sel-detail[data-sel-kind='cut'] .gg-sel-ref-row");
-  const cut = cutById(state.cutId, { cutsOnly: true });
-  if (!host || !cut) return;
-  const wrap = document.createElement("div");
-  wrap.innerHTML = cutReferencesRowHtml(cut);
-  const row = wrap.querySelector(".gg-sel-ref-row");
-  if (row) host.replaceWith(row);
+  const cut = selectedShot();
+  paintCutRefStrip(document.querySelector("#gg-root"));
+  if (!cut) return;
+  const row = document.querySelector(`#gg-root .gg-cut[data-cut-id="${CSS.escape(cut.id)}"] .gg-cut-refthumbs`);
+  if (row) row.innerHTML = cutCardRefThumbsInner(cut);
+  placeEditTakesStrip();
 }
 let askTextEl = null;
 
@@ -6285,6 +6364,14 @@ function openSceneContextMenu(e, groupId) {
 }
 
 function openShotsPanelContextMenu(e) {
+  if (shotsUi.refTab && isNativeProject() && state.projects.length) {
+    e.preventDefault();
+    e.stopPropagation();
+    showCtxMenu(e.clientX, e.clientY, [
+      { label: "Add reference", action: () => { refsUi.adding = true; refsUi.focusAdd = true; repaintShots(); } },
+    ]);
+    return;
+  }
   if (state.projectsLoaded && !state.projects.length) {
     openProjectContextMenu(e); // nothing to add cuts to yet: offer New Project…
     return;
@@ -7813,9 +7900,11 @@ function cutThumbHtml(c) {
 }
 
 function infoRowContent(c, labels) {
-  const nat = isNativeProject();
-  const warn = lengthWarning(c);
-  const lenInfo = formatCutListLength(c);
+  const asRef = c?.kind === "reference";
+  const warn = asRef ? null : lengthWarning(c);
+  const lenInfo = asRef && !(c.media?.kind === "video" && Number(c.media?.seconds) > 0)
+    ? { text: "—", title: "No duration", drift: false }
+    : formatCutListLength(c);
   const verInfo = formatCutVersionStatus(c);
   const head = cutHeaderParts(c, state.timeline, labels);
   const rv = cutRenderView(c.id);
@@ -7830,29 +7919,38 @@ function infoRowContent(c, labels) {
   });
   const nameTitle = `${c.story || c.prompt || c.name || ""}`.trim();
   const headName = head.name && cutShowsEditedMarker(c) ? `${head.name} *` : head.name;
-  const headerBadges = [
+  const headerBadges = asRef ? "" : [
     warn ? `<span class="gg-warn3" title="${esc(warn.message)}">&gt; 3s</span>` : "",
     c.end_card ? `<span class="gg-endcard-badge">End card</span>` : "",
     c.needs_redo ? `<span class="gg-redo-badge">Needs redo</span>` : "",
   ].filter(Boolean).join("");
+  const titleInner = asRef
+    ? `<span class="gg-cut-title">${esc(c.name || "Reference")}</span>`
+    : `<span class="gg-num">${esc(head.cutLabel)}</span> <span class="gg-cut-title">${esc(headName)}</span>`;
   const stageDots = `<span class="gg-stage-dot gg-off" data-k="image"></span><span class="gg-stage-dot gg-off" data-k="video"></span><span class="gg-stage-dot gg-off" data-k="best"></span>`;
+  const refThumbs = asRef ? "" : `<div class="gg-cut-refthumbs">${cutCardRefThumbsInner(c)}</div>`;
   return `
       <div class="gg-cut-thumb-col">
         ${cutThumbHtml(c)}
         <div class="gg-live-chip" hidden><span class="gg-live-dot"></span><span class="gg-live-text"></span></div>
       </div>
       <div class="gg-cut-text">
-        <div class="gg-cut-header" title="${esc(nameTitle)}">
-          ${isNativeProject() ? '<span class="gg-drag-handle" title="Drag to reorder (or Alt+Up/Down)" aria-hidden="true">\u22EE\u22EE</span>' : ""}
-          <span class="gg-cut-head"><span class="gg-num">${esc(head.cutLabel)}</span> <span class="gg-cut-title">${esc(headName)}</span></span>
-          ${headerBadges ? `<span class="gg-cut-header-badges">${headerBadges}</span>` : ""}
-          <div class="gg-stage-row" title="">${stageDots}</div>
+        <div class="gg-cut-main">
+          <div class="gg-cut-header" title="${esc(nameTitle)}">
+            ${asRef || !isNativeProject() ? "" : '<span class="gg-drag-handle" title="Drag to reorder (or Alt+Up/Down)" aria-hidden="true">\u22EE\u22EE</span>'}
+            <span class="gg-cut-head">${titleInner}</span>
+            ${asRef ? "" : `<span class="gg-cut-header-badges">${headerBadges}</span>`}
+            <span class="gg-cut-verline" title="${esc(verInfo.title)}">
+              <span class="gg-cut-cur">${esc(verInfo.text || "—")}</span>
+              <span class="gg-cut-ver">${esc(verInfo.detail)}</span>
+            </span>
+            <div class="gg-stage-row" title="">${stageDots}</div>
+          </div>
+          ${refThumbs}
         </div>
-        <div class="gg-cut-status">
-          <span class="gg-cut-state"><span class="gg-render-badge" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span><span class="gg-rs-pos"></span></span><span class="gg-cut-idle" title="${esc(idle.title)}">${esc(idle.text)}</span></span>
-          <span class="gg-cut-cur" title="${esc(verInfo.title)}">${esc(verInfo.text || "—")}</span>
-          <span class="gg-cut-ver" title="${esc(verInfo.title)}">${esc(verInfo.detail)}</span>
+        <div class="gg-cut-side">
           <span class="gg-cut-len${lenInfo.drift ? " gg-len-drift" : ""}" title="${esc(lenInfo.title)}">${esc(lenInfo.text)}</span>
+          <span class="gg-cut-state"><span class="gg-render-badge" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span><span class="gg-rs-pos"></span></span><span class="gg-cut-idle" title="${esc(idle.title)}">${esc(idle.text)}</span></span>
         </div>
       </div>`;
 }
@@ -8653,8 +8751,11 @@ function updateSelectionBar(root) {
   if (row) {
     const r = iconRowView({ count: n, hasProject, native: isNativeProject() });
     setBtn(row, ".gg-ir-scene", r.scene.disabled, r.scene.title);
-    setBtn(row, ".gg-ir-cut", r.cut.disabled, r.cut.title);
+    setBtn(row, ".gg-ir-cut", r.cut.disabled, shotsUi.refTab ? "New reference" : r.cut.title);
     setBtn(row, ".gg-ir-del", r.del.disabled, r.del.title);
+    if (shotsUi.refTab && isNativeProject() && referenceById(state.cutId)) {
+      setBtn(row, ".gg-ir-del", false, "Delete");
+    }
   }
   const queueIds = timelineSelectedCutIds();
   const allCount = generateAllCutIds().length;
@@ -10766,8 +10867,8 @@ function mountShots(el) {
     const host = root.querySelector(".gg-sel-detail-host");
     if (!host) return;
     const show = !!state.timeline && shotsViewOf(SHOW_FINAL_LIST, shotsUi.view) !== "final";
-    host.hidden = !show;
     const html = show ? selectionDetailHtml() : "";
+    host.hidden = !html;
     if (host.contains(document.activeElement) && host.dataset.html) return;
     if (host.dataset.html === html) return;
     host.dataset.html = html;
@@ -10776,7 +10877,9 @@ function mountShots(el) {
   };
   const paintPanel = () => {
     paintDetail();
+    paintCutRefStrip(root);
     paintVersionStrip();
+    placeEditTakesStrip();
     const panel = root.querySelector(".gg-cutpanel");
     const badge = root.querySelector(".gg-sdk-slot");
     if (badge) badge.innerHTML = sdkBadge();
@@ -11116,6 +11219,7 @@ function mountShots(el) {
 
   const paint = () => {
     if (shotsUi.dragSession) return;
+    closeRefPicker();
     if (shouldDeferListPaint({ composing: shotsUi.composing, inlineRenaming: !!shotsUi.inlineRename || !!shotsUi.inlineSceneRename })) {
       shotsUi.paintDeferred = true;
       return;
@@ -11141,16 +11245,16 @@ function mountShots(el) {
         ? `<div class="gg-dim gg-list-empty gg-no-projects"><span>${esc(hintInfo.text)}</span>
             <button type="button" class="gg-btn gg-primary gg-new-project-btn">${esc(hintInfo.button)}</button></div>`
         : `<div class="gg-dim gg-list-empty">${esc(hintInfo.text)}</div>`;
-    const refsHtml = !viewFinal && tl && isNativeProject() ? referencesGroupHtml() : "";
-    const listHtml = emptyHint || groupedListHtml(sections, {
+    const refTab = !!shotsUi.refTab && !!tl && isNativeProject() && !viewFinal;
+    const listHtml = refTab ? referenceLibraryHtml() : (emptyHint || groupedListHtml(sections, {
       cutHtml: (c) => cutRowHtml(c, cutLabels),
       groupHue: groupColor,
       groupProgress: (secCuts) => {
         const { best, total } = sceneBestProgress(secCuts);
         return `${best}/${total}`;
       },
-    });
-    root.className = `gg-root gg-shots${listCaption ? " gg-list-caption" : ""}${listPrompt ? " gg-list-prompt" : ""}${CUT_PANEL_ROOT_CLASS}`;
+    }));
+    root.className = `gg-root gg-shots${listCaption && !refTab ? " gg-list-caption" : ""}${listPrompt && !refTab ? " gg-list-prompt" : ""}${refTab ? " gg-list-reference" : ""}${CUT_PANEL_ROOT_CLASS}`;
     root.innerHTML = `
       <div class="gg-head">
         <span class="gg-sdk-slot"></span>
@@ -11178,17 +11282,18 @@ function mountShots(el) {
           <button type="button" class="gg-btn gg-view-final${viewFinal ? " gg-on" : ""}" data-view="final">Final cut list</button>
         </div>` : ""}
         <div class="gg-list-toggle"${viewFinal ? " hidden" : ""}>
-          <button type="button" class="gg-btn${listMode === "info" ? " gg-on" : ""}" data-mode="info" title="Show cut details">Info</button>
-          <button type="button" class="gg-btn${listPrompt ? " gg-on" : ""}" data-mode="prompt" title="Edit prompts per cut">Prompt</button>
-          <button type="button" class="gg-btn${listCaption ? " gg-on" : ""}" data-mode="caption" title="Edit dialogue per cut">Caption</button>
+          <button type="button" class="gg-btn${!refTab && listMode === "info" ? " gg-on" : ""}" data-mode="info" title="Show cut details">Info</button>
+          <button type="button" class="gg-btn${!refTab && listPrompt ? " gg-on" : ""}" data-mode="prompt" title="Edit prompts per cut">Prompt</button>
+          <button type="button" class="gg-btn${!refTab && listCaption ? " gg-on" : ""}" data-mode="caption" title="Edit dialogue per cut">Caption</button>
+          ${tl && isNativeProject() ? `<button type="button" class="gg-btn${refTab ? " gg-on" : ""}" data-mode="reference" title="References">Reference</button>` : ""}
         </div>
         ${SHOW_REDO_FILTER ? `<label class="gg-filter-redo" title="Show only cuts marked for redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Show redo cuts only</label>` : ""}
       </div>
       <div class="gg-meta">
-        <span class="gg-meta-text">${tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : ""}</span>
+        <span class="gg-meta-text">${refTab ? `${activeReferences().length} references` : (tl ? `${tl.cuts.length} shots · ${groups.length} scenes · ${fmt(tl.total_sec)}` : "")}</span>
         <button type="button" class="gg-btn gg-history-btn" title="History" aria-label="History" aria-haspopup="dialog" aria-expanded="false">History</button>
       </div>
-      <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${refsHtml}${listHtml}</div>
+      <div class="gg-grp-wrap"${viewFinal ? " hidden" : ""}>${listHtml}</div>
       <div class="gg-final-wrap"${viewFinal ? "" : " hidden"}>${viewFinal && tl ? finalCutListHtml(tl) : ""}</div>
       ${SHOW_SEL_BAR ? `<div class="gg-selbar">
         <span class="gg-sel-label"><span class="gg-sel-count">0</span> selected</span>
@@ -11200,8 +11305,11 @@ function mountShots(el) {
       <div class="gg-sel-detail-host"${tl && !viewFinal ? "" : " hidden"}></div>
       <div class="gg-vstrip" role="group" aria-label="${esc(takesNoun(captionLangNow()))}"${tl && !viewFinal ? "" : " hidden"}>
         <div class="gg-vs-body">
-          <div class="gg-vs-list"></div>
-          <button type="button" class="gg-btn gg-vs-newest" hidden title="Back to newest" aria-label="Back to newest">‹</button>
+          <div class="gg-cut-reflinks" hidden></div>
+          <div class="gg-vs-row">
+            <div class="gg-vs-list"></div>
+            <button type="button" class="gg-btn gg-vs-newest" hidden title="Back to newest" aria-label="Back to newest">‹</button>
+          </div>
         </div>
         <div class="gg-vs-info" aria-live="polite"></div>
       </div>
@@ -11224,6 +11332,14 @@ function mountShots(el) {
     });
     root.querySelectorAll(".gg-list-toggle .gg-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
+        if (btn.dataset.mode === "reference") {
+          shotsUi.refTab = true;
+          saveRefTab(true);
+          paint();
+          return;
+        }
+        shotsUi.refTab = false;
+        saveRefTab(false);
         const mode = normalizeListMode(btn.dataset.mode);
         shotsUi.listMode = mode;
         saveListMode(localStorage, mode);
@@ -11270,9 +11386,23 @@ function mountShots(el) {
     root.querySelector(".gg-sel-ungroup")?.addEventListener("click", () => ungroupCuts(cutSelIds()));
     root.querySelector(".gg-ir-scene")?.addEventListener("click", () =>
       isNativeProject() ? void addEmptyScene() : createSceneGroup(cutSelIds()));
-    root.querySelector(".gg-ir-cut")?.addEventListener("click", () => addLocalCut());
+    root.querySelector(".gg-ir-cut")?.addEventListener("click", () => {
+      if (shotsUi.refTab && isNativeProject()) {
+        refsUi.adding = true;
+        refsUi.focusAdd = true;
+        repaintShots();
+        return;
+      }
+      addLocalCut();
+    });
     root.querySelector(".gg-ai-split")?.addEventListener("click", () => openAiCutSplitModal());
-    root.querySelector(".gg-ir-del")?.addEventListener("click", () => void confirmDeleteSelectedCuts());
+    root.querySelector(".gg-ir-del")?.addEventListener("click", () => {
+      if (shotsUi.refTab && referenceById(state.cutId)) {
+        void deleteReference(state.cutId);
+        return;
+      }
+      void confirmDeleteSelectedCuts();
+    });
     root.querySelector(".gg-queue-btn")?.addEventListener("click", () => void queueButtonClick());
     const randomSeedCb = root.querySelector(".gg-random-seed-cb");
     if (randomSeedCb && !randomSeedCb.dataset.bound) {
@@ -11320,7 +11450,40 @@ function mountShots(el) {
       sec.querySelector(".gg-grp-ren")?.addEventListener("click", (e) => { e.stopPropagation(); renameSceneGroup(gid); });
       sec.querySelector(".gg-grp-del")?.addEventListener("click", (e) => { e.stopPropagation(); deleteSceneGroup(gid); });
     });
+    root.querySelector(".gg-cut-reflinks")?.addEventListener("click", (e) => {
+      const cut = selectedShot();
+      if (!cut) return;
+      const x = e.target.closest("[data-ref-unlink]");
+      if (x) {
+        e.preventDefault();
+        e.stopPropagation();
+        unlinkReferenceFromCut(cut, x.dataset.refUnlink);
+        return;
+      }
+      const add = e.target.closest(".gg-refthumb-add");
+      if (!add) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openRefPicker(add, cut);
+    });
     root.querySelectorAll(".gg-cut").forEach((li) => {
+      if (li.dataset.kind === "reference") {
+        li.addEventListener("click", (e) => {
+          e.stopPropagation();
+          selectReference(li.dataset.cutId);
+          paintSelection(root);
+          paintPanel();
+        });
+        li.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          selectReference(li.dataset.cutId);
+          openReferenceMenu(li.dataset.cutId, e.clientX, e.clientY);
+          paintSelection(root);
+          paintPanel();
+        });
+        return;
+      }
       li.addEventListener("click", (e) => {
         const fieldEl = e.target.closest(FIELD_TEXT_SEL);
         if (fieldEl && shouldSkipCardSelect({ inEditMode: isCardFieldEditing(fieldEl) })) return;
@@ -11346,7 +11509,7 @@ function mountShots(el) {
     });
     bindHoverPlay(root);
     bindThumbFallbacks(root);
-    bindShotsReorder(root);
+    if (!refTab) bindShotsReorder(root);
     bindReferenceGroup(root);
     bindCutFieldTextareas();
     restoreFieldTextFocus(storyCap);
@@ -13327,7 +13490,10 @@ function placeEditTakesStrip() {
   const timelineTop = ownStripTop();
   const bottomEdge = timelineTop != null ? timelineTop : graph.bottom;
   const minTop = (barBottom != null ? barBottom : graph.top) + gap;
-  let top = Math.round(bottomEdge - EDIT_TAKES_ROW_PX);
+  const links = body.querySelector(".gg-cut-reflinks");
+  const extra = links && !links.hidden ? (links.offsetHeight || 40) : 0;
+  const rowPx = EDIT_TAKES_ROW_PX + extra;
+  let top = Math.round(bottomEdge - rowPx);
   if (top < minTop) top = Math.round(minTop);
   body.classList.add("gg-vs-dock");
   body.style.position = "fixed";
@@ -13336,7 +13502,7 @@ function placeEditTakesStrip() {
   body.style.left = `${Math.round(left)}px`;
   body.style.width = `${Math.max(48, Math.round(width))}px`;
   body.style.top = `${top}px`;
-  body.style.height = `${EDIT_TAKES_ROW_PX}px`;
+  body.style.height = `${rowPx}px`;
   return top;
 }
 
