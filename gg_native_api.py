@@ -1026,7 +1026,7 @@ def _apply_cut_prompt_to_workflow(graph: dict, cut: dict, *, require: bool, vide
         return graph
     g = copy.deepcopy(graph)
     try:
-        gg_wfnodes.set_prompt(g, text)
+        gg_wfnodes.write_generation_prompt(g, text)
     except gg_wfnodes.NodeNotFound as ex:
         if require:
             raise ValueError(f"Image template: {ex}") from ex
@@ -1221,15 +1221,16 @@ def apply_reference_images(doc: dict, cut: dict, wf: dict, exclude_ids: list | N
 
 
 def apply_cut_references(doc: dict, cut: dict, wf: dict, *, video: bool = False) -> tuple[dict, list]:
-    """Write the injected prompt when it differs, then fill reference image slots. Never queues.
+    """Write the cut prompt into the workflow, then fill reference image slots. Never queues.
 
+    The prompt is written with or without linked references (the reference block is included when
+    there are links). Image and video templates both get it, including a subgraph-promoted text widget.
     The caption field is not edited. A video prompt still gets the same Dialogue suffix after the
     reference block.
     """
     if not isinstance(cut, dict) or not isinstance(wf, dict):
         return wf, []
     base = cut_prompt_text(cut)
-    plain = cut_video_prompt_text(cut) if video else base
     injected = ""
     if base:
         raw_prompt = cut.get("prompt") if isinstance(cut.get("prompt"), str) else ""
@@ -1238,9 +1239,9 @@ def apply_cut_references(doc: dict, cut: dict, wf: dict, *, video: bool = False)
             cap = cut_caption_text(cut)
             if cap:
                 injected = f'{injected} Dialogue: "{cap}"'
-    if injected and injected != plain:
+    if injected:
         try:
-            gg_wfnodes.set_prompt(wf, injected)
+            gg_wfnodes.write_generation_prompt(wf, injected)
         except gg_wfnodes.NodeNotFound:
             pass
     return wf, apply_reference_images(doc, cut, wf)

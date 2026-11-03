@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -193,11 +194,18 @@ class LocalStore:
         path = self._project_path(pid)
         if not path.is_file():
             return None
-        try:
-            doc = _read_json(path)
-        except (OSError, ValueError):
-            return None
-        return doc if isinstance(doc, dict) else None
+        # A version ingest replaces project.json. A read that lands on that replace used to
+        # look like a missing project. Retry a busy or half-written file before giving up.
+        for attempt in range(3):
+            try:
+                doc = _read_json(path)
+            except (OSError, ValueError):
+                if attempt == 2:
+                    return None
+                time.sleep(0.05)
+                continue
+            return doc if isinstance(doc, dict) else None
+        return None
 
     def _save_project_doc(self, pid: str, doc: dict[str, Any], op: str, entity_id: str) -> None:
         _atomic_write_json(self._project_path(pid), doc)
@@ -1168,10 +1176,11 @@ class LocalStore:
         return out
 
     def to_timeline(self, pid: str) -> dict | None:
-        doc = self._load_project_doc(pid)
-        if not doc or doc.get("deleted_at"):
-            return None
-        return build_timeline(self.root, doc)
+        with self._lock:
+            doc = self._load_project_doc(pid)
+            if not doc or doc.get("deleted_at"):
+                return None
+            return build_timeline(self.root, doc)
 
     def apply_timeline_edit(self, pid: str, order: list[str], clips: dict) -> dict:
         """Timeline track: clip order and per-clip in/sec/start in doc["timeline"]. Also writes trimmed `sec`

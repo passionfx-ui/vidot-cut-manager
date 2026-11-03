@@ -68,7 +68,9 @@ export function snapMoveStart(want, sec, targets, thresholdSec) {
  * Move clip `idx` to `want` seconds without overlapping:
  * - free spot: it goes there (a gap stays behind);
  * - its middle is over a gap that is too small or it only touches a neighbour: clamped to the gap edge;
- * - its middle is over another clip: reordered before/after that clip and the track is packed (no gaps).
+ * - its middle is over another clip: it is placed just before or after that clip.
+ * Other clips keep their start times. Overlap still pushes a later clip forward.
+ * Remove gaps is the only pack.
  * @returns {{ order: string[], starts: Record<string, number>, start: number }}
  */
 export function placeClip(items, idx, want) {
@@ -84,14 +86,9 @@ export function placeClip(items, idx, want) {
   if (overlaps(start)) {
     const hit = others.find((o) => mid >= o.s && mid < o.e);
     if (hit) {
-      // Dropped onto another clip: reorder and ripple-pack the whole track (no gap left behind).
-      const seq = others.slice();
-      const k = seq.indexOf(hit) + (mid <= (hit.s + hit.e) / 2 ? 0 : 1);
-      seq.splice(k, 0, { id: me.id, sec });
-      const { starts } = layoutTrack(seq.map((x) => ({ sec: x.sec })), false);
-      const out = {};
-      seq.forEach((x, j) => { out[x.id] = starts[j]; });
-      return { order: seq.map((x) => x.id), starts: out, start: out[me.id], packed: true };
+      // Dropped onto another clip: only this clip moves, to just before or after the target.
+      const before = mid <= (hit.s + hit.e) / 2;
+      start = before ? Math.max(0, hit.s - sec) : hit.e;
     } else {
       const k = others.findIndex((o) => o.s > mid);
       const lo = k <= 0 ? 0 : others[k - 1].e;
@@ -134,8 +131,9 @@ export function moveClipBlock(order, movingIds, insertAt) {
 /**
  * Move every clip in `movingIds` with `anchorId`, keeping their spacing.
  * Empty space: the group slides (a gap stays behind) and never overlaps other clips.
- * The anchor's middle on another clip: the group is inserted there as a block and the track packs,
- * same as placeClip dropped onto a clip.
+ * The anchor's middle on another clip: the block is placed just before or after that clip
+ * and keeps its own spacing. Other clips keep their starts. Overlap still pushes forward.
+ * Remove gaps is the only pack.
  * One id delegates to placeClip.
  * @returns {{ order: string[], starts: Record<string, number>, start: number, packed?: boolean }}
  */
@@ -192,14 +190,22 @@ export function placeSelection(items, movingIds, anchorId, want) {
   const mid = (anchorProp.s + anchorProp.e) / 2;
   const hit = others.find((o) => mid >= o.s && mid < o.e);
   if (hit) {
-    const seq = others.slice();
-    const k = seq.indexOf(hit) + (mid <= (hit.s + hit.e) / 2 ? 0 : 1);
-    const block = moving.map((id) => {
-      const it = list.find((x) => x.id === id);
-      return { id, sec: Number(it.sec) || 0 };
-    });
-    seq.splice(k, 0, ...block);
-    return finish(seq, false);
+    const block = list.filter((it) => movingSet.has(it.id));
+    const first = block[0];
+    const last = block[block.length - 1];
+    const firstStart = Number(first?.start) || 0;
+    const span = ((Number(last?.start) || 0) + (Number(last?.sec) || 0)) - firstStart;
+    const before = mid <= (hit.s + hit.e) / 2;
+    let delta = (before ? hit.s - span : hit.e) - firstStart;
+    const earliest = Math.min(...block.map((it) => Number(it.start) || 0));
+    if (earliest + delta < 0) delta = -earliest;
+    const index = new Map(list.map((it, i) => [it.id, i]));
+    const seq = [
+      ...others.map((o) => ({ id: o.id, s: o.s, sec: o.sec })),
+      ...block.map((it) => ({ id: it.id, s: r2((Number(it.start) || 0) + delta), sec: Number(it.sec) || 0 })),
+    ];
+    seq.sort((a, b) => a.s - b.s || index.get(a.id) - index.get(b.id));
+    return finish(seq, true);
   }
   const sec = Number(anchor.sec) || 0;
   const k = others.findIndex((o) => o.s > mid);

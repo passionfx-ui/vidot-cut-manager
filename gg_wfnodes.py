@@ -168,6 +168,175 @@ def _parse_linear_input(row: Any) -> tuple[str, str, str, str] | None:
     return None
 
 
+_PROMPT_WIDGET_NAMES = {"text", "prompt"}
+
+
+def _linear_rows(graph: dict) -> list:
+    extra = graph.get("extra") if isinstance(graph.get("extra"), dict) else None
+    linear = extra.get("linearData") if isinstance(extra, dict) else None
+    rows = linear.get("inputs") if isinstance(linear, dict) else None
+    return rows if isinstance(rows, list) else []
+
+
+def _is_prompt_widget(widget: str, label: str) -> bool:
+    return (str(widget or "").strip().casefold() in _PROMPT_WIDGET_NAMES
+            or str(label or "").strip().casefold() in _PROMPT_WIDGET_NAMES)
+
+
+def _write_ui_string_widget(node: dict, widget_name: str, text: str) -> bool:
+    """Write one text widget. A linked or numeric widget is left alone."""
+    wrote = False
+    named = node.get("widgets_values_named")
+    if isinstance(named, dict) and widget_name in named and isinstance(named.get(widget_name), str):
+        named[widget_name] = text
+        values = node.get("widgets_values")
+        if isinstance(values, list):
+            idx = list(named).index(widget_name)
+            if 0 <= idx < len(values):
+                values[idx] = text
+        wrote = True
+    wv = node.get("widgets_values")
+    if isinstance(wv, dict):
+        key = widget_name if isinstance(wv.get(widget_name), str) else next(
+            (k for k in TEXT_KEYS if isinstance(wv.get(k), str)), None)
+        if key:
+            wv[key] = text
+            wrote = True
+    elif isinstance(wv, list) and not wrote:
+        i = _ui_text_index(node)
+        if i is not None and (widget_name in TEXT_KEYS or widget_name.casefold() in _PROMPT_WIDGET_NAMES):
+            wv[i] = text
+            wrote = True
+    inputs = node.get("inputs")
+    if isinstance(inputs, dict) and isinstance(inputs.get(widget_name), str):
+        inputs[widget_name] = text
+        wrote = True
+    return wrote
+
+
+def _mirror_promoted_text(root: dict, graph_id: str, widget_name: str, text: str) -> None:
+    """Copy a subgraph prompt onto the instance node ComfyUI shows and queues."""
+    if not graph_id or not widget_name or not is_ui(root):
+        return
+    for _nid, node in _nodes(root):
+        if str(node.get("type") or "") != graph_id:
+            continue
+        named = node.get("widgets_values_named")
+        if isinstance(named, dict) and widget_name in named and isinstance(named.get(widget_name), str):
+            named[widget_name] = text
+            values = node.get("widgets_values")
+            if isinstance(values, list):
+                idx = list(named).index(widget_name)
+                if 0 <= idx < len(values):
+                    values[idx] = text
+        inputs = node.get("inputs")
+        if isinstance(inputs, dict) and isinstance(inputs.get(widget_name), str):
+            inputs[widget_name] = text
+
+
+def set_linear_prompt(graph: dict, text: str) -> bool:
+    """Write `text` into the first linearData text/prompt widget, including a subgraph-promoted one."""
+    if not isinstance(graph, dict):
+        return False
+    rows = _linear_rows(graph)
+    if not rows:
+        return False
+    if is_ui(graph):
+        nodes = _nodes_deep(graph)
+        for row in rows:
+            parsed = _parse_linear_input(row)
+            if not parsed:
+                continue
+            graph_id, node_id, widget, label = parsed
+            if not _is_prompt_widget(widget, label):
+                continue
+            matches = [item for item in nodes if item[0] == node_id]
+            if graph_id:
+                exact = [item for item in matches if item[2] == graph_id]
+                if exact:
+                    matches = exact
+            wrote = False
+            for _nid, node, gid in matches:
+                if _write_ui_string_widget(node, widget, text):
+                    wrote = True
+                    _mirror_promoted_text(graph, gid or graph_id, widget, text)
+            if wrote:
+                return True
+        return False
+    for row in rows:
+        parsed = _parse_linear_input(row)
+        if not parsed:
+            continue
+        _graph_id, node_id, widget, label = parsed
+        if not _is_prompt_widget(widget, label):
+            continue
+        wrote = False
+        for key, node in graph.items():
+            if not isinstance(node, dict) or "class_type" not in node:
+                continue
+            sid = str(key)
+            if sid != node_id and not sid.endswith(":" + node_id):
+                continue
+            inputs = node.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            key_name = widget if isinstance(inputs.get(widget), str) else next(
+                (k for k in ("text", "prompt") if isinstance(inputs.get(k), str)), None)
+            if key_name is None or isinstance(inputs.get(key_name), list):
+                continue
+            inputs[key_name] = text
+            wrote = True
+        if wrote:
+            return True
+    return False
+
+
+def _write_lone_api_prompt(graph: dict, text: str) -> bool:
+    """API graphs with no titled Prompt node: the one text/prompt string, or the input titled Prompt."""
+    if not isinstance(graph, dict) or is_ui(graph):
+        return False
+    hits = []
+    for node in graph.values():
+        if not isinstance(node, dict) or "class_type" not in node:
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        title = str((node.get("_meta") or {}).get("title") or "")
+        for name in ("text", "prompt"):
+            if isinstance(inputs.get(name), str):
+                hits.append((inputs, name, title))
+    if not hits:
+        return False
+    titled = [h for h in hits if h[2].strip().casefold() == "prompt"]
+    chosen = titled[0] if len(titled) == 1 else None
+    if chosen is None and len(hits) == 1:
+        chosen = hits[0]
+    if chosen is None:
+        plain = [h for h in hits if "negative" not in h[2].casefold() and "negative" not in h[1].casefold()]
+        if len(plain) == 1:
+            chosen = plain[0]
+    if chosen is None:
+        return False
+    chosen[0][chosen[1]] = text
+    return True
+
+
+def write_generation_prompt(graph: dict, text: str) -> str:
+    """Write generation text into the prompt widget.
+
+    Image and video, with or without linked references. A subgraph-promoted text widget is written
+    on the inner node and mirrored onto the instance. Raises NodeNotFound when nothing can take the text.
+    """
+    wrote_linear = set_linear_prompt(graph, text)
+    try:
+        return set_prompt(graph, text)
+    except NodeNotFound:
+        if wrote_linear or _write_lone_api_prompt(graph, text):
+            return ""
+        raise
+
+
 def _nodes_deep(graph: dict) -> list[tuple[str, dict, str]]:
     """(id, node, graph id) for the root graph, then each subgraph definition."""
     ui = is_ui(graph)

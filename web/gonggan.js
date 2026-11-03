@@ -749,10 +749,16 @@ async function refreshProjectListForDropdown() {
       state.projectsLoaded = true;
       state.error = "";
       if (!state.projects.some((p) => p.id === keepPid)) {
-        const pick = state.projects.find((p) => p.id === data.active_project_id) || state.projects[0];
-        state.pid = pick ? pick.id : "";
-        bus.dispatchEvent(new Event("projects"));
-        await loadTimeline();
+        // A version write can make the project list miss the open project for a moment.
+        // Keep the project the timeline is already showing.
+        if (keepPid && state.timeline?.project?.id === keepPid) {
+          syncProjectSelectElements(keepPid);
+        } else {
+          const pick = state.projects.find((p) => p.id === data.active_project_id) || state.projects[0];
+          state.pid = pick ? pick.id : "";
+          bus.dispatchEvent(new Event("projects"));
+          await loadTimeline();
+        }
       } else {
         syncProjectSelectElements(keepPid);
       }
@@ -797,9 +803,46 @@ function adoptMutationTimeline(tl, requestPid) {
   return true;
 }
 
+function knownProjectPid(id) {
+  const text = String(id || "");
+  if (!text || !state.projectsLoaded) return "";
+  return state.projects.some((p) => p.id === text) ? text : "";
+}
+
+/** A queued graph's extra.gonggan wins only when that id is the open project. A workflow or subgraph id is not. */
+function queueCutTarget(graphExtra) {
+  const target = promptCutTarget({
+    graphExtra,
+    loadedCutId: wfLastLoadedCutId,
+    currentProjectId: state.pid,
+    shotTabActive: isGongganShotTabOpenAndActive(),
+  });
+  if (!target) return null;
+  if (!state.projectsLoaded) return target;
+  if (knownProjectPid(target.projectId)) return target;
+  const current = knownProjectPid(state.pid);
+  if (!current) return null;
+  return { cutId: target.cutId, projectId: current };
+}
+
+/** Timeline reloads use the open project, not a workflow id or a cut id left on the graph. */
+function currentTimelinePid() {
+  const known = knownProjectPid(state.pid);
+  if (known) return known;
+  const shown = state.timeline?.project?.id;
+  const shownKnown = knownProjectPid(shown);
+  if (shownKnown) {
+    state.pid = shownKnown;
+    try { localStorage.setItem(PID_KEY, shownKnown); } catch (_) {}
+    return shownKnown;
+  }
+  return state.pid;
+}
+
 async function loadTimeline(opts) {
-  if (!state.pid) { state.timeline = null; bus.dispatchEvent(new Event("timeline")); return; }
-  const token = timelineGuard.begin(state.pid);
+  const pid = currentTimelinePid();
+  if (!pid) { state.timeline = null; bus.dispatchEvent(new Event("timeline")); return; }
+  const token = timelineGuard.begin(pid);
   let next = null;
   let failure = "";
   try {
@@ -809,6 +852,10 @@ async function loadTimeline(opts) {
   }
   // A slower, older response must not overwrite a newer timeline (newer load, mutation response, other project).
   if (timelineGuard.isStale(token, state.pid)) return;
+  if (failure === "project not found" && !(opts && opts._retried)) {
+    await new Promise((r) => setTimeout(r, 200));
+    if (!timelineGuard.isStale(token, state.pid)) return loadTimeline({ ...(opts || {}), _retried: true });
+  }
   timelineAssignByLoad = true;
   state.timeline = next;
   timelineAssignByLoad = false;
@@ -4611,8 +4658,49 @@ function setLiveBoundWidget(binding, value) {
     const inner = innerList.find((n) => n && String(n.id) === id);
     if (inner && writeNamedOnNode(inner, want, value, "")) ok = true;
   }
+  if (!ok) ok = writeBoundWidgetFallback(id, want, value, graphId);
   if (ok) {
     try { app.canvas?.setDirty?.(true, true); } catch (_) {}
+  }
+  return ok;
+}
+
+/** Promoted subgraph widgets sometimes miss sourceNodeId. Write the named value anyway. */
+function writeBoundWidgetFallback(nodeId, widgetName, value, graphId) {
+  const id = String(nodeId || "");
+  const want = String(widgetName || "");
+  let ok = false;
+  const writeStore = (node) => {
+    if (!node) return false;
+    let hit = false;
+    const named = node.widgets_values_named;
+    if (named && typeof named === "object" && !Array.isArray(named) && Object.prototype.hasOwnProperty.call(named, want)
+      && (named[want] == null || typeof named[want] !== "object")) {
+      named[want] = value;
+      if (Array.isArray(node.widgets_values)) {
+        const idx = Object.keys(named).indexOf(want);
+        if (idx >= 0 && idx < node.widgets_values.length) node.widgets_values[idx] = value;
+      }
+      hit = true;
+    }
+    for (const w of node.widgets || []) {
+      if (!widgetNameHit(w, want)) continue;
+      writeLiveWidget(w, value);
+      hit = true;
+    }
+    return hit;
+  };
+  if (!graphId) {
+    return writeStore(liveNodeById(id));
+  }
+  for (const node of liveGraphNodes()) {
+    const type = String(node?.type || node?.comfyClass || "");
+    const subId = String(node?.subgraph?.id || "");
+    if (type !== graphId && subId !== graphId) continue;
+    if (writeStore(node)) ok = true;
+    const innerList = node?.subgraph?._nodes || node?.subgraph?.nodes || [];
+    const inner = innerList.find((n) => n && String(n.id) === id);
+    if (writeStore(inner)) ok = true;
   }
   return ok;
 }
@@ -4640,14 +4728,31 @@ function promptBindLabel(cutId) {
   return linearPromptLabel(linearBindings(workflowSnapshotForCut(cutId)));
 }
 
-function openCutForLinear() {
+/**
+ * The cut whose graph is being queued.
+ * A stale or empty extra.gonggan pid (a workflow id, a subgraph id) must not skip the write
+ * when this shot tab is the current project. The stamp is put back to state.pid.
+ */
+function openQueuedCut() {
   const extra = app.graph?.extra?.gonggan;
-  const cutId = extra?.cutId;
-  const pid = extra?.pid || extra?.projectId;
-  if (!cutId || !pid || pid !== state.pid || !isNativeProject()) return null;
-  if (!isGongganShotTabOpenAndActive() && wfLastLoadedCutId !== cutId) return null;
+  const cutId = extra?.cutId ? String(extra.cutId) : "";
+  if (!cutId || !state.pid || !isNativeProject()) return null;
   const cut = cutById(cutId);
-  return cut || null;
+  if (!cut) return null;
+  const stamped = String(extra?.pid || extra?.projectId || "");
+  const loadedHere = wfLastLoadedCutId === cutId && wfLastLoadedProjectId === state.pid;
+  const stampOk = !stamped || stamped === state.pid;
+  if (!loadedHere && !stampOk) return null;
+  if (!loadedHere && !isGongganShotTabOpenAndActive()) return null;
+  if (extra && (extra.pid !== state.pid || extra.projectId !== state.pid)) {
+    extra.pid = state.pid;
+    extra.projectId = state.pid;
+  }
+  return cut;
+}
+
+function openCutForLinear() {
+  return openQueuedCut();
 }
 
 /** Prompt tab text for this cut. The visible field wins over the stored value. */
@@ -4670,7 +4775,8 @@ function applyLinearPromptsForOpenCut() {
   if (!cut) return null;
   const binding = linearBindings(captureGraphWorkflowSnapshot());
   if (!binding?.positive) return binding;
-  setLiveBoundWidget(binding.positive, promptTextForQueue(cut));
+  const pack = ggQueuedPromptPack || queuePromptPack(cut);
+  setLiveBoundWidget(binding.positive, liveQueuePrompt(pack));
   if (binding.negative) {
     const data = readCutData(cut);
     setLiveBoundWidget(binding.negative, data.negative || "");
@@ -9607,8 +9713,9 @@ async function captureFinishedPrompt(promptId) {
   let res;
   let d = {};
   const snap = runSnapshots.byPrompt?.[String(promptId)] || null;
+  const projectId = knownProjectPid(t.projectId) || knownProjectPid(state.pid) || state.pid || t.projectId;
   try {
-    const body = { pid: t.projectId, cut_id: t.cutId, prompt_id: String(promptId) };
+    const body = { pid: projectId, cut_id: t.cutId, prompt_id: String(promptId) };
     if (snap) {
       const merged = mergeLegacyTake(null, snap);
       const outputNodes = expandLinearOutputIds(snap.workflow);
@@ -9643,7 +9750,8 @@ async function captureFinishedPrompt(promptId) {
     return;
   }
   const tl = state.timeline;
-  const shown = state.pid === t.projectId && tl?.project?.id === t.projectId;
+  const shownPid = knownProjectPid(state.pid) || state.pid;
+  const shown = shownPid === projectId && tl?.project?.id === shownPid;
   const cut = shown ? tl.cuts.find((c) => c.id === t.cutId) : null;
   const cutText = cut ? `${cutDisplayLabel(cut, computeCutLabels(tl))} ${cut.name || ""}`.trim() : "";
   const msg = captureToast(d, cutText);
@@ -9653,9 +9761,9 @@ async function captureFinishedPrompt(promptId) {
     runSnapshots.byVersion[d.version.id] = snap;
     scheduleRunSnapFile();
   }
-  if (d?.ok && !d.duplicate && state.pid === t.projectId) {
+  if (d?.ok && !d.duplicate && shownPid && shownPid === projectId) {
     await loadTimeline({ reloadWorkflows: true });
-    if (d.version?.id) selectArrivedVersion(t.projectId, t.cutId, d.version.id);
+    if (d.version?.id) selectArrivedVersion(shownPid, t.cutId, d.version.id);
   }
 }
 
@@ -10149,6 +10257,13 @@ function queuePromptPack(cut) {
   return { raw, base, injected, video, caption };
 }
 
+/** Text that must land in the prompt widget. References change it; a plain prompt is written too. */
+function liveQueuePrompt(pack) {
+  if (!pack) return "";
+  if (pack.injected && pack.injected !== pack.base) return pack.injected;
+  return pack.raw || pack.injected || pack.base || "";
+}
+
 function patchQueueString(value, pack) {
   if (typeof value !== "string" || !pack?.injected) return value;
   if (value === pack.raw || value === pack.base) return pack.injected;
@@ -10160,16 +10275,136 @@ function patchQueueString(value, pack) {
   return value;
 }
 
-function patchQueuedReferenceText(prompt, pack) {
-  const output = prompt?.output;
-  if (!output || !pack?.injected || pack.injected === pack.base) return;
-  for (const node of Object.values(output)) {
-    const inputs = node?.inputs;
-    if (!inputs || typeof inputs !== "object") continue;
-    for (const key of Object.keys(inputs)) {
-      if (typeof inputs[key] === "string") inputs[key] = patchQueueString(inputs[key], pack);
+function promptNodeMatches(id, binding) {
+  if (!binding?.nodeId) return false;
+  const sid = String(id);
+  const nid = String(binding.nodeId);
+  if (sid === nid) return true;
+  const local = promptLocalId(nid);
+  return sid === local || sid.endsWith(`:${local}`);
+}
+
+function writePromptInput(node, widget, text) {
+  const inputs = node?.inputs;
+  if (!inputs || typeof inputs !== "object" || !text) return false;
+  const names = [];
+  const widgetName = widget ? String(widget) : "";
+  if (widgetName) names.push(widgetName);
+  for (const name of ["text", "prompt"]) if (!names.includes(name)) names.push(name);
+  for (const name of names) {
+    if (typeof inputs[name] === "string") {
+      inputs[name] = text;
+      return true;
     }
   }
+  const title = String(node?._meta?.title || "").trim().toLowerCase();
+  if (node?.class_type !== "CLIPTextEncode" && title !== "prompt") return false;
+  const key = names.find((name) => name === "text" || name === "prompt" || name === widgetName);
+  if (!key || Array.isArray(inputs[key])) return false;
+  inputs[key] = text;
+  return true;
+}
+
+function patchWorkflowPromptWidgets(workflow, binding, text) {
+  if (!workflow || !binding?.nodeId || !text) return;
+  const wantId = String(binding.nodeId);
+  const widget = String(binding.widget || "text");
+  const graphs = [];
+  if (Array.isArray(workflow.nodes)) graphs.push({ id: "", nodes: workflow.nodes });
+  const subs = workflow.definitions?.subgraphs;
+  if (Array.isArray(subs)) {
+    for (const sg of subs) {
+      if (sg && Array.isArray(sg.nodes)) graphs.push({ id: String(sg.id || ""), nodes: sg.nodes });
+    }
+  }
+  const writeNode = (node) => {
+    if (!node) return;
+    const named = node.widgets_values_named;
+    if (named && typeof named === "object" && !Array.isArray(named) && typeof named[widget] === "string") {
+      named[widget] = text;
+      if (Array.isArray(node.widgets_values)) {
+        const idx = Object.keys(named).indexOf(widget);
+        if (idx >= 0 && idx < node.widgets_values.length) node.widgets_values[idx] = text;
+      }
+      return;
+    }
+    if (Array.isArray(node.widgets_values)) {
+      const i = node.widgets_values.findIndex((v) => typeof v === "string");
+      if (i >= 0) node.widgets_values[i] = text;
+    }
+  };
+  for (const graph of graphs) {
+    if (binding.graphId && graph.id && graph.id !== String(binding.graphId)) continue;
+    for (const node of graph.nodes) {
+      if (node && String(node.id) === wantId) writeNode(node);
+    }
+  }
+  if (!binding.graphId || !Array.isArray(workflow.nodes)) return;
+  for (const node of workflow.nodes) {
+    if (!node || String(node.type || "") !== String(binding.graphId)) continue;
+    const named = node.widgets_values_named;
+    if (!named || typeof named !== "object" || Array.isArray(named) || typeof named[widget] !== "string") continue;
+    named[widget] = text;
+    if (Array.isArray(node.widgets_values)) {
+      const idx = Object.keys(named).indexOf(widget);
+      if (idx >= 0 && idx < node.widgets_values.length) node.widgets_values[idx] = text;
+    }
+  }
+}
+
+function patchQueuedReferenceText(prompt, pack) {
+  const output = prompt?.output;
+  if (!output || !pack) return;
+  const text = liveQueuePrompt(pack);
+  if (!text) return;
+  const binding = pack.binding;
+  let wrote = false;
+  if (binding?.nodeId) {
+    for (const [id, node] of Object.entries(output)) {
+      if (!promptNodeMatches(id, binding)) continue;
+      const inputs = node?.inputs;
+      if (!inputs || typeof inputs !== "object") continue;
+      const widget = String(binding.widget || "");
+      const current = typeof inputs[widget] === "string" ? inputs[widget]
+        : (typeof inputs.text === "string" ? inputs.text : (typeof inputs.prompt === "string" ? inputs.prompt : ""));
+      const next = typeof current === "string" && current ? patchQueueString(current, pack) : text;
+      if (writePromptInput(node, widget, next === current ? text : next)) wrote = true;
+    }
+  }
+  if (!wrote) {
+    const clips = [];
+    for (const node of Object.values(output)) {
+      const title = String(node?._meta?.title || "").trim().toLowerCase();
+      const inputs = node?.inputs;
+      if (!inputs) continue;
+      const has = typeof inputs.text === "string" || typeof inputs.prompt === "string";
+      if (!has) continue;
+      if (title === "prompt") {
+        const current = typeof inputs.text === "string" ? inputs.text : inputs.prompt;
+        const replaced = patchQueueString(current, pack);
+        if (writePromptInput(node, "text", replaced !== current ? replaced : text)) {
+          wrote = true;
+          break;
+        }
+      }
+      if (node.class_type === "CLIPTextEncode" && title !== "negative") clips.push(node);
+    }
+    if (!wrote && clips.length === 1) {
+      const inputs = clips[0].inputs;
+      const current = typeof inputs.text === "string" ? inputs.text : inputs.prompt;
+      writePromptInput(clips[0], "text", patchQueueString(current, pack) === current ? text : patchQueueString(current, pack));
+    }
+  }
+  if (pack.injected && pack.injected !== pack.base) {
+    for (const node of Object.values(output)) {
+      const inputs = node?.inputs;
+      if (!inputs || typeof inputs !== "object") continue;
+      for (const key of Object.keys(inputs)) {
+        if (typeof inputs[key] === "string") inputs[key] = patchQueueString(inputs[key], pack);
+      }
+    }
+  }
+  patchWorkflowPromptWidgets(prompt.workflow, binding, text);
 }
 
 function matchQueuedLoadImage(output, preferId) {
@@ -10269,15 +10504,12 @@ async function stageReferenceQueue(cut) {
 /** Queue the graph that is open. A video graph also receives the cut's selected image Take. */
 async function injectCutDataForQueue() {
   ggPendingQueueSnap = null;
-  const extra = app.graph?.extra?.gonggan;
-  const cutId = extra?.cutId;
-  const pid = extra?.pid || extra?.projectId;
-  if (!cutId || !pid || pid !== state.pid || !isNativeProject()) return true;
-  if (!isGongganShotTabOpenAndActive() && wfLastLoadedCutId !== cutId) return true;
+  const cut = openQueuedCut();
+  if (!cut) return true;
+  const cutId = cut.id;
+  const pid = state.pid;
   await flushPendingCutFields();
   await persistOpenGraphEdits();
-  const cut = cutById(cutId);
-  if (!cut) return true;
   const video = queueGraphIsVideo(cut);
   const controls = projectRandomSeedOn() ? pinSeedControls() : [];
   let sourceImageTake = "";
@@ -10285,8 +10517,10 @@ async function injectCutDataForQueue() {
   try {
     const linearSnap = captureGraphWorkflowSnapshot();
     const linear = linearBindings(linearSnap);
+    const pack = queuePromptPack(cut);
+    const promptText = liveQueuePrompt(pack);
     if (linear?.positive) {
-      setLiveBoundWidget(linear.positive, promptTextForQueue(cut));
+      setLiveBoundWidget(linear.positive, promptText);
       if (linear.negative) {
         setLiveBoundWidget(linear.negative, readCutData(cut).negative || "");
       }
@@ -10314,7 +10548,7 @@ async function injectCutDataForQueue() {
   const take = extractTakeSnapshot(after);
   const bound = linearBindings(after);
   if (bound) {
-    if (bound.positive) take.positive = promptTextForQueue(cut);
+    if (bound.positive) take.positive = liveQueuePrompt(queuePromptPack(cut));
     if (bound.negative) take.negative = readCutData(cut).negative || "";
     const numerics = { ...(take.numerics || {}) };
     for (const c of bound.controls) {
@@ -10330,6 +10564,7 @@ async function injectCutDataForQueue() {
   const refQueue = await stageReferenceQueue(cut);
   ggQueuedRefFiles = refQueue.files;
   ggQueuedPromptPack = queuePromptPack(cut);
+  ggQueuedPromptPack.binding = bound?.positive || linearBindings(captureGraphWorkflowSnapshot())?.positive || null;
   ggPendingQueueSnap = {
     cutId,
     pid,
@@ -12839,7 +13074,7 @@ function bindReorder(root) {
   });
 }
 
-/** Native timeline: drag a clip (or the whole selection) in time. A gap stays behind unless the drop lands on another clip. */
+/** Native timeline: drag a clip (or the whole selection) in time. Other gaps stay. Remove gaps is what packs the track. */
 function bindMove(root) {
   const marker = root.querySelector(".gg-drop");
   root.querySelectorAll(".gg-clip").forEach((el) => {
@@ -14605,12 +14840,7 @@ app.registerExtension({
         try {
           if (res?.prompt_id) {
             if (ggPendingQueueSnap) rememberRunSnapshot(res.prompt_id, ggPendingQueueSnap);
-            const target = promptCutTarget({
-              graphExtra: args[1]?.workflow?.extra?.gonggan ?? app.graph?.extra?.gonggan,
-              loadedCutId: wfLastLoadedCutId,
-              currentProjectId: state.pid,
-              shotTabActive: isGongganShotTabOpenAndActive(),
-            });
+            const target = queueCutTarget(args[1]?.workflow?.extra?.gonggan ?? app.graph?.extra?.gonggan);
             paintRenderStatus(renderStatus.queued(res.prompt_id, target));
             autoCapture.remember(res.prompt_id, target);
           }
