@@ -807,6 +807,38 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
 .gg-root .gg-btn.gg-on { border-color: var(--gg-acc); color: var(--gg-acc); }
 .gg-timeline .gg-editor { flex: 1; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
+.gg-timeline .gg-tl-body { flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; flex-direction: row; }
+.gg-timeline .gg-tl-prompt {
+  flex: 0 1 220px;
+  width: 220px;
+  min-width: 120px;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--gg-line);
+  background: #1c1f25;
+  box-sizing: border-box;
+}
+.gg-timeline .gg-tl-prompt-text {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+  resize: none;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.35;
+  padding: 6px 8px;
+  overflow: auto;
+}
+.gg-timeline .gg-tl-prompt-text:disabled { color: var(--gg-dim); cursor: default; }
+.gg-timeline .gg-tl-prompt-text:focus { outline: none; box-shadow: inset 0 0 0 1px var(--gg-acc); }
+.gg-timeline .gg-tl-trackcol { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .gg-timeline .gg-tl-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 4px 8px; border-bottom: 1px solid var(--gg-line); }
 .gg-timeline .gg-tl-title { font-weight: 600; white-space: nowrap; }
 .gg-timeline .gg-tl-info { color: var(--gg-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -1327,6 +1359,23 @@ html.gg-edit-mode-on .gg-bottom-strip {
   max-height: none;
 }
 .gg-bottom-strip .gg-export-panel { overflow: auto; }
+/* Export keeps the Edit strip (preview, timeline, prompt). Its pane is only the extra controls. */
+.gg-bottom-strip.gg-strip-export .gg-strip-pane[data-tab="gg-export"] {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 42%;
+  overflow: auto;
+}
+.gg-bottom-strip.gg-strip-export .gg-export-panel {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+}
+.gg-bottom-strip.gg-strip-export .gg-strip-pane[data-tab="gg-timeline"] {
+  flex: 1 1 auto;
+  min-height: 0;
+}
 
 .gg-shots .gg-ref-group { border-bottom: 1px solid var(--gg-line, #353a44); margin-bottom: 4px; }
 .gg-shots .gg-ref-head { display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: var(--gg-panel); font-size: 11px; }
