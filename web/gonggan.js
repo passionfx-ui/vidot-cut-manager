@@ -675,21 +675,15 @@ function thumbHtml(media, cls) {
   if (!media) return `<div class="${cls} gg-thumb-empty">no media</div>`;
   const url = esc(mediaUrl(media.id));
   if (playsAsVideo(media)) {
-    // Timeline clips preload a real frame. The element stays invisible (gg-vid-hold)
-    // until that frame is copied to a canvas — Chromium paints an empty green
-    // surface while preload=none, and again when currentTime is exactly 0.
-    const onTimeline = String(cls).split(/\s+/).includes("gg-clip-thumb");
-    const hold = onTimeline ? " gg-vid-hold" : "";
-    const preload = onTimeline ? "auto" : "none";
-    return `<video class="${cls} gg-thumb-vid${hold}" draggable="false" src="${url}" poster="${esc(posterUrl(media.id))}" muted playsinline preload="${preload}"></video>`;
+    // Same still as a timeline cut: preload a real frame, keep the element
+    // invisible (gg-vid-hold) until that frame is on a canvas. Chromium paints
+    // an empty green surface while preload=none, and again at currentTime 0.
+    return `<video class="${cls} gg-thumb-vid gg-vid-hold" draggable="false" src="${url}" poster="${esc(posterUrl(media.id))}" muted playsinline preload="auto"></video>`;
   }
   if (isAnimatedImage(media)) {
-    // Timeline track: do not put the animated file in the <img> until hover.
-    // A resting <img> keeps playing WebP/GIF. The still is drawn onto a canvas.
-    if (String(cls).split(/\s+/).includes("gg-clip-thumb")) {
-      return `<span class="${cls} gg-anim-thumb" data-gg-anim-id="${esc(media.id)}"><canvas class="gg-anim-still" hidden></canvas><img class="gg-anim-live" draggable="false" alt="" hidden /></span>`;
-    }
-    return `<img class="${cls} gg-thumb-img" draggable="false" src="${url}" alt="" />`;
+    // Do not put the animated file in the <img> until hover. A resting <img>
+    // keeps playing WebP/GIF. The still is drawn onto a canvas.
+    return `<span class="${cls} gg-anim-thumb" data-gg-anim-id="${esc(media.id)}"><canvas class="gg-anim-still" hidden></canvas><img class="gg-anim-live" draggable="false" alt="" hidden /></span>`;
   }
   return `<img class="${cls} gg-thumb-img" draggable="false" src="${esc(posterUrl(media.id))}" loading="lazy" decoding="async" alt="" />`;
 }
@@ -2103,7 +2097,7 @@ function loadImageChoicesForCut(cutId) {
 
 function referenceThumbHtml(media) {
   return media?.id
-    ? `<img src="${esc(posterUrl(media.id))}" loading="lazy" alt="" />`
+    ? thumbHtml(media, "gg-ref-face")
     : `<span class="gg-ref-empty">No image yet</span>`;
 }
 
@@ -2226,7 +2220,7 @@ function referenceVersionThumbsHtml(ref) {
     const best = ref.pick === v.id ? " best" : "";
     const face = v.missing
       ? `<span class="gg-ref-empty">?</span>`
-      : `<img class="gg-thumb-img" src="${esc(posterUrl(v.id))}" loading="lazy" alt="" />`;
+      : thumbHtml(versionMedia(v), "gg-ref-face");
     const label = ref.pick === v.id ? "Best" : (v.kind === "video" ? "Video" : "Image");
     return `<button type="button" class="gg-ref-ver${best}" data-vid="${esc(v.id)}" title="${esc(label)}">${face}</button>`;
   }).join("");
@@ -2620,6 +2614,8 @@ function openRefPicker(anchor, cut) {
         <button type="button" class="gg-btn gg-refpick-cancel">Cancel</button>
         <button type="button" class="gg-btn gg-primary gg-refpick-ok"${picked.size ? "" : " disabled"}>Link</button>
       </div>`;
+    bindHoverPlay(wrap);
+    bindThumbFallbacks(wrap);
     place();
     wrap.querySelectorAll("[data-ref-filter]").forEach((btn) => {
       btn.addEventListener("click", (e) => {
@@ -2854,6 +2850,8 @@ function paintCutRefStrip(root) {
   if (host.dataset.html !== html) {
     host.dataset.html = html;
     host.innerHTML = html;
+    bindHoverPlay(host);
+    bindThumbFallbacks(host);
   }
 }
 
@@ -2862,7 +2860,11 @@ function refreshOpenCutRefChips() {
   paintCutRefStrip(document.querySelector("#gg-root"));
   if (!cut) return;
   const row = document.querySelector(`#gg-root .gg-cut[data-cut-id="${CSS.escape(cut.id)}"] .gg-cut-refthumbs`);
-  if (row) row.innerHTML = cutCardRefThumbsInner(cut);
+  if (row) {
+    row.innerHTML = cutCardRefThumbsInner(cut);
+    bindHoverPlay(row);
+    bindThumbFallbacks(row);
+  }
   placeEditTakesStrip();
 }
 let askTextEl = null;
@@ -11648,6 +11650,7 @@ function mountShots(el) {
       list.scrollLeft = left;
       syncStripNewest();
       if (c) {
+        bindHoverPlay(list);
         bindThumbFallbacks(list);
         bindStripItems(list, c);
         probeStripDurations(c);
@@ -11694,6 +11697,7 @@ function mountShots(el) {
     const c = state.timeline && state.timeline.cuts.find((x) => x.id === state.cutId);
     const labels = computeCutLabels(state.timeline);
     panel.innerHTML = cutPanelHtml(c, labels);
+    bindHoverPlay(panel);
     bindThumbFallbacks(panel);
     panel.querySelectorAll(".gg-promote").forEach((b) => b.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -15556,39 +15560,20 @@ window.addEventListener("keyup", (e) => {
   e.stopPropagation();
 }, true);
 
+/** Box the pointer has to be over for a thumb to play. Edit preview is not a thumb. */
+function hoverPlayZone(el) {
+  if (!el || el.closest?.(".gg-edit-preview")) return null;
+  return el.closest(".gg-clip, .gg-cut-thumb, .gg-ver, .gg-ref-ver, .gg-refthumb, .gg-final-thumb") || el.parentElement;
+}
+
 function bindHoverPlay(root) {
-  if (!root) return;
+  if (!root || root.closest?.(".gg-edit-preview")) return;
   root.querySelectorAll("video.gg-thumb-vid").forEach((v) => {
-    if (v._ggHoverBound) return;
-    v._ggHoverBound = true;
-    const host = v.parentElement;
+    if (v._ggHoverBound || v.closest(".gg-edit-preview")) return;
+    const host = hoverPlayZone(v);
     if (!host) return;
-    if (v.closest(".gg-timeline")) {
-      bindTimelineVideoThumb(v, host);
-      return;
-    }
-    const showFirstFrame = () => {
-      if (v._ggHoverOn) return;
-      try { v.currentTime = 0; } catch (_) {}
-    };
-    host.addEventListener("mouseenter", () => {
-      if (!v.isConnected) return;
-      v._ggHoverOn = true;
-      v.preload = "auto";
-      v.loop = true;
-      v.play().catch(() => {});
-    });
-    host.addEventListener("mouseleave", () => {
-      v._ggHoverOn = false;
-      v.pause();
-      if (v.readyState >= 1) showFirstFrame();
-      else v.addEventListener("loadedmetadata", showFirstFrame, { once: true });
-    });
-    if (!host.matches(":hover") && !v.paused) {
-      v._ggHoverOn = false;
-      try { v.pause(); } catch (_) {}
-      showFirstFrame();
-    }
+    v._ggHoverBound = true;
+    bindTimelineVideoThumb(v, host);
   });
   bindAnimThumbHover(root);
 }
@@ -15606,9 +15591,10 @@ function revealThumbCanvas(canvas) {
 }
 
 /**
- * Timeline mp4/webm/mov thumb. The <video> stays opacity 0 until a decoded
- * frame is on the canvas, then that still covers the clip while idle.
- * Playback is hover-only and returns to the same first frame on leave.
+ * mp4/webm/mov thumb (timeline cut, takes strip, cut card, reference).
+ * The <video> stays opacity 0 until a decoded frame is on the canvas, then
+ * that still covers the thumb while idle. Playback is hover-only and
+ * returns to the same first frame on leave. Edit preview does not use this.
  */
 function bindTimelineVideoThumb(v, host) {
   v.muted = true;
@@ -15821,9 +15807,10 @@ async function paintCachedAnimStill(canvas, id) {
 }
 
 /**
- * Timeline animated WebP/GIF thumbs (and any other <img> on the track that would
- * keep animating) show a cached first frame, and play only while the cut is hovered.
- * Viewer play/scrub uses .gg-v-img, which is outside the track.
+ * Animated WebP/GIF thumbs show a cached first frame and play only while hovered.
+ * Timeline cuts, the takes strip, cut cards, and reference thumbs share this.
+ * A loose <img> on the track is frozen the same way. Viewer play/scrub uses
+ * .gg-v-img, which is outside the track. Edit preview is left alone.
  */
 function timelineTracks(root) {
   if (!root || !root.querySelectorAll) return [];
@@ -15831,44 +15818,48 @@ function timelineTracks(root) {
   return [...root.querySelectorAll(".gg-track")];
 }
 
+function bindOneAnimThumb(host) {
+  if (!host || host._ggAnimBound || host.closest(".gg-edit-preview")) return;
+  const zone = hoverPlayZone(host);
+  if (!zone) return;
+  host._ggAnimBound = true;
+  const id = host.dataset.ggAnimId;
+  const canvas = host.querySelector(".gg-anim-still");
+  const img = host.querySelector(".gg-anim-live");
+  const showStill = () => {
+    host._ggHoverOn = false;
+    if (img) {
+      img.hidden = true;
+      img.removeAttribute("src");
+    }
+    revealThumbCanvas(canvas);
+  };
+  const showAnim = () => {
+    if (!img || !host.isConnected) return;
+    host._ggHoverOn = true;
+    const url = mediaUrl(id);
+    img.removeAttribute("src");
+    img.src = url;
+    if (img.complete && img.naturalWidth) {
+      img.hidden = false;
+      if (canvas) canvas.hidden = true;
+    }
+  };
+  img?.addEventListener("load", () => {
+    if (!host._ggHoverOn) return;
+    img.hidden = false;
+    if (canvas) canvas.hidden = true;
+  });
+  void paintCachedAnimStill(canvas, id);
+  zone.addEventListener("mouseenter", showAnim);
+  zone.addEventListener("mouseleave", showStill);
+  if (zone.matches(":hover")) showAnim();
+}
+
 function bindAnimThumbHover(root) {
+  if (!root || !root.querySelectorAll) return;
+  root.querySelectorAll(".gg-anim-thumb[data-gg-anim-id]").forEach(bindOneAnimThumb);
   for (const track of timelineTracks(root)) {
-    track.querySelectorAll(".gg-anim-thumb[data-gg-anim-id]").forEach((host) => {
-      if (host._ggAnimBound) return;
-      host._ggAnimBound = true;
-      const id = host.dataset.ggAnimId;
-      const canvas = host.querySelector(".gg-anim-still");
-      const img = host.querySelector(".gg-anim-live");
-      const clip = host.closest(".gg-clip") || host;
-      const showStill = () => {
-        host._ggHoverOn = false;
-        if (img) {
-          img.hidden = true;
-          img.removeAttribute("src");
-        }
-        revealThumbCanvas(canvas);
-      };
-      const showAnim = () => {
-        if (!img || !host.isConnected) return;
-        host._ggHoverOn = true;
-        const url = mediaUrl(id);
-        img.removeAttribute("src");
-        img.src = url;
-        if (img.complete && img.naturalWidth) {
-          img.hidden = false;
-          if (canvas) canvas.hidden = true;
-        }
-      };
-      img?.addEventListener("load", () => {
-        if (!host._ggHoverOn) return;
-        img.hidden = false;
-        if (canvas) canvas.hidden = true;
-      });
-      void paintCachedAnimStill(canvas, id);
-      clip.addEventListener("mouseenter", showAnim);
-      clip.addEventListener("mouseleave", showStill);
-      if (clip.matches(":hover")) showAnim();
-    });
     track.querySelectorAll("img.gg-thumb-img").forEach((img) => {
       if (img.closest(".gg-anim-thumb") || img._ggAnimBound) return;
       const clip = img.closest(".gg-clip");

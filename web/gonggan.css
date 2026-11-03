@@ -96,11 +96,14 @@
 .gg-shots .gg-ref-card-main { display: flex; gap: 8px; align-items: flex-start; min-width: 0; width: 100%; }
 .gg-shots .gg-ref-versions { display: flex; gap: 4px; overflow-x: auto; min-height: 28px; padding: 0 2px; }
 .gg-shots .gg-ref-ver {
+  position: relative;
   flex: 0 0 auto; width: 48px; height: 32px; padding: 0; border: 1px solid var(--gg-line); border-radius: 3px;
   background: #000; overflow: hidden; cursor: pointer;
 }
 .gg-shots .gg-ref-ver.best { border: 2px solid #e8c547; }
-.gg-shots .gg-ref-ver img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gg-shots .gg-ref-ver img,
+.gg-shots .gg-ref-ver video,
+.gg-shots .gg-ref-ver .gg-anim-thumb { width: 100%; height: 100%; object-fit: cover; display: block; }
 .gg-shots .gg-ref-fields { display: flex; flex-direction: column; gap: 4px; padding: 0 2px 6px; width: 100%; min-width: 0; }
 .gg-shots .gg-ref-field { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--gg-dim); min-width: 0; }
 .gg-shots .gg-grp-fold, .gg-shots .gg-grp-ren, .gg-shots .gg-grp-del { background: transparent; border: none; color: var(--gg-dim); cursor: pointer; padding: 0 4px; }
@@ -561,7 +564,7 @@
 .gg-shots .gg-final-items { list-style: none; margin: 0; padding: 0; }
 .gg-shots .gg-final-item { display: flex; gap: 6px; align-items: center; padding: 2px 4px; border-radius: 4px; cursor: pointer; border: 1px solid transparent; }
 .gg-shots .gg-final-item:hover { background: var(--gg-panel); }
-.gg-shots .gg-final-thumb { width: 48px; height: 27px; flex-shrink: 0; border-radius: 3px; overflow: hidden; background: #000; }
+.gg-shots .gg-final-thumb { position: relative; width: 48px; height: 27px; flex-shrink: 0; border-radius: 3px; overflow: hidden; background: #000; }
 .gg-shots .gg-final-meta { min-width: 0; flex: 1; }
 .gg-shots .gg-final-name { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gg-shots .gg-final-sub { font-size: 10px; color: var(--gg-dim); }
@@ -901,7 +904,43 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
   pointer-events: none;
   opacity: .85;
 }
-.gg-timeline video.gg-thumb-vid.gg-vid-hold { opacity: 0; }
+video.gg-thumb-vid.gg-vid-hold { opacity: 0; }
+/* First-frame still shared by timeline cuts, takes, cut cards, and reference thumbs. */
+.gg-anim-thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+canvas.gg-vid-still,
+.gg-anim-thumb > .gg-anim-still,
+.gg-anim-thumb > .gg-anim-live {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+.gg-anim-live[hidden],
+.gg-anim-still[hidden],
+canvas.gg-vid-still[hidden] { display: none !important; }
+.gg-cut-thumb > .gg-anim-thumb,
+.gg-cut-thumb > video.gg-thumb-vid,
+.gg-ver > .gg-anim-thumb,
+.gg-ver > video.gg-thumb-vid,
+.gg-ref-ver > .gg-anim-thumb,
+.gg-ref-ver > video.gg-thumb-vid,
+.gg-final-thumb > .gg-anim-thumb,
+.gg-final-thumb > video.gg-thumb-vid,
+.gg-refthumb-face > .gg-anim-thumb,
+.gg-refthumb-face > video.gg-thumb-vid {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
 .gg-timeline .gg-clip-label { position: absolute; left: 0; right: 0; top: 0; padding: 2px 6px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: linear-gradient(rgba(0,0,0,.75), transparent); pointer-events: none; }
 .gg-timeline .gg-clip-dur { position: absolute; right: 7px; bottom: 2px; font-size: 10px; background: rgba(0,0,0,.6); border-radius: 3px; padding: 0 3px; font-variant-numeric: tabular-nums; pointer-events: none; }
 .gg-timeline .gg-clip-in { position: absolute; left: 7px; bottom: 2px; font-size: 10px; color: #6ee07a; pointer-events: none; }
@@ -1322,8 +1361,10 @@ html.gg-edit-mode-on .gg-bottom-strip {
   overflow: visible;
   -webkit-user-drag: none;
 }
-.gg-refthumb-face { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; overflow: hidden; border-radius: 2px; }
-.gg-refthumb-face img { width: 100%; height: 100%; object-fit: cover; display: block; -webkit-user-drag: none; }
+.gg-refthumb-face { position: relative; display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; overflow: hidden; border-radius: 2px; }
+.gg-refthumb-face img,
+.gg-refthumb-face video,
+.gg-refthumb-face .gg-anim-thumb { width: 100%; height: 100%; max-width: 100%; object-fit: cover; display: block; min-width: 0; -webkit-user-drag: none; }
 .gg-cut-refthumbs .gg-refthumb { width: 18px; height: 18px; }
 .gg-refthumb-add {
   border-style: dashed;
