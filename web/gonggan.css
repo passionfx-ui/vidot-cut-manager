@@ -598,6 +598,10 @@ html.gg-edit-mode-on .gg-timeline .gg-viewer { display: none; }
   --gg-line: #353a44;
   --gg-dim: #9aa0aa;
   --gg-fg: #e6e8ec;
+  --gg-gate-x: 18px;
+  --gg-gate-y: 28px;
+  --gg-peek: 14px;
+  --gg-film-ms: 300ms;
   position: fixed;
   z-index: 3600;
   display: flex;
@@ -605,15 +609,33 @@ html.gg-edit-mode-on .gg-timeline .gg-viewer { display: none; }
   padding: 0;
   color: var(--gg-fg);
   background: #000;
-  border: 1px solid var(--gg-line);
-  border-radius: 4px;
+  border: 0;
+  border-radius: 12px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
   pointer-events: auto;
   overflow: hidden;
+  box-sizing: border-box;
 }
-.gg-edit-preview img,
-.gg-edit-preview video,
-.gg-edit-preview canvas { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.gg-edit-preview-stage {
+  position: absolute;
+  left: var(--gg-gate-x);
+  right: var(--gg-gate-x);
+  top: var(--gg-gate-y);
+  bottom: var(--gg-gate-y);
+  overflow: hidden;
+  border-radius: 6px;
+  background: #000;
+}
+.gg-edit-preview-stage > img,
+.gg-edit-preview-stage > video,
+.gg-edit-preview-stage > canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
 html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-transport { margin-top: 0; flex: 0 0 auto; }
 html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
 .gg-edit-preview [hidden] { display: none !important; }
@@ -621,6 +643,7 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
   position: absolute;
   left: 8px;
   top: 6px;
+  z-index: 4;
   max-width: calc(100% - 44px);
   font-size: 11px;
   padding: 1px 5px;
@@ -649,7 +672,7 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
   position: absolute;
   top: 6px;
   right: 8px;
-  z-index: 3;
+  z-index: 4;
 }
 .gg-edit-preview-best.gg-on { color: #e8c547; }
 .gg-edit-preview-nav {
@@ -657,7 +680,7 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
   right: 8px;
   top: 50%;
   transform: translateY(-50%);
-  z-index: 3;
+  z-index: 4;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -673,6 +696,99 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
   color: var(--gg-dim);
   padding: 12px;
   text-align: center;
+}
+/* Black film gate: the stage sits inside the preview, so the margin is the frame.
+   Neighbor takes peek through the top and bottom bands. A take change slides the
+   two frames as one vertical strip. */
+.gg-edit-preview-peek {
+  position: absolute;
+  left: var(--gg-gate-x);
+  right: var(--gg-gate-x);
+  height: var(--gg-peek);
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+  background: #000;
+}
+.gg-edit-preview-peek-prev { top: calc(var(--gg-gate-y) - var(--gg-peek)); }
+.gg-edit-preview-peek-next { bottom: calc(var(--gg-gate-y) - var(--gg-peek)); }
+.gg-edit-preview-peek img {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 96px;
+  object-fit: cover;
+  filter: blur(3px) brightness(0.55) saturate(0.85);
+  background: #000;
+}
+.gg-edit-preview-peek-prev img { bottom: 0; object-position: center bottom; }
+.gg-edit-preview-peek-next img { top: 0; object-position: center top; }
+.gg-edit-preview-peek::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+}
+.gg-edit-preview.gg-film-move .gg-edit-preview-peek { opacity: 0; }
+.gg-edit-preview-slide {
+  position: absolute;
+  left: var(--gg-gate-x);
+  right: var(--gg-gate-x);
+  top: var(--gg-gate-y);
+  bottom: var(--gg-gate-y);
+  z-index: 3;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #000;
+  pointer-events: none;
+}
+.gg-edit-preview-slide-track {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 200%;
+  display: flex;
+  flex-direction: column;
+}
+.gg-edit-preview.gg-film-move .gg-edit-preview-slide-track {
+  transition: transform var(--gg-film-ms) cubic-bezier(0.22, 0.61, 0.36, 1);
+  will-change: transform;
+}
+.gg-edit-preview-slide-frame {
+  position: relative;
+  flex: 0 0 50%;
+  height: 50%;
+  overflow: hidden;
+  background: #000;
+}
+.gg-edit-preview-slide-frame > img,
+.gg-edit-preview-slide-frame > canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+.gg-edit-preview-slide-frame > .gg-film-blank {
+  position: absolute;
+  inset: 0;
+  background: #000;
+}
+.gg-edit-preview.gg-film-move .gg-edit-preview-slide-frame > img,
+.gg-edit-preview.gg-film-move .gg-edit-preview-slide-frame > canvas {
+  animation: gg-film-soft var(--gg-film-ms) ease forwards;
+}
+@keyframes gg-film-soft {
+  0% { filter: blur(0); transform: scale(1); }
+  42% { filter: blur(1.5px); transform: scale(0.978); }
+  100% { filter: blur(0); transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gg-edit-preview.gg-film-move .gg-edit-preview-slide-track { transition: none; }
+  .gg-edit-preview.gg-film-move .gg-edit-preview-slide-frame > img,
+  .gg-edit-preview.gg-film-move .gg-edit-preview-slide-frame > canvas { animation: none; }
 }
 .gg-timeline .gg-screen { position: relative; flex: 0 0 auto; min-height: 168px; aspect-ratio: 16 / 9; background: #000; border-radius: 4px; overflow: hidden; }
 .gg-timeline .gg-screen img, .gg-timeline .gg-screen video, .gg-timeline .gg-screen canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }

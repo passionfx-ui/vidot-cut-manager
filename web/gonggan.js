@@ -8554,6 +8554,9 @@ document.documentElement.classList.toggle(EDIT_MODE_ON_CLASS, !!timelineEditMode
 let editPreviewLayoutRaf = 0;
 let editPreviewObserver = null;
 let editPreviewLoadToken = 0;
+let editPreviewAnimating = false;
+let editPreviewWheelAcc = 0;
+let editPreviewWheelAt = 0;
 
 /** Persisted height of our strip. Separate from older gg.timelineHeight values. */
 const STRIP_HEIGHT_KEY = "gg.stripHeight";
@@ -13238,12 +13241,13 @@ function mirrorEditPreviewFrame(still, frameIdx) {
   canvas.height = still.height;
   canvas.getContext("2d").drawImage(still, 0, 0);
   canvas.hidden = false;
-  const img = el.querySelector("img");
+  const img = editPreviewMainImg(el);
   if (img) img.hidden = true;
-  const vid = el.querySelector("video");
+  const vid = el.querySelector("video.gg-edit-preview-vid");
   if (vid) vid.hidden = true;
   el.dataset.previewReady = "1";
   if (frameIdx != null) el.dataset.ggFrame = previewFrameAttr(frameIdx);
+  releaseEditPreviewFilmHold(el);
 }
 
 function preloadNext(i) {
@@ -13988,24 +13992,39 @@ function ensureEditPreviewEl() {
     el = document.createElement("div");
     el.className = "gg-edit-preview";
     el.setAttribute("role", "img");
-    el.innerHTML = `<img alt="" /><video class="gg-edit-preview-vid" playsinline muted preload="auto" hidden></video><canvas class="gg-edit-preview-still" hidden></canvas><div class="gg-edit-preview-label"></div><div class="gg-edit-preview-empty" hidden></div>`;
+    el.innerHTML = `<div class="gg-edit-preview-stage"><img alt="" /><video class="gg-edit-preview-vid" playsinline muted preload="auto" hidden></video><canvas class="gg-edit-preview-still" hidden></canvas><div class="gg-edit-preview-empty" hidden></div></div><div class="gg-edit-preview-label"></div>`;
     document.body.appendChild(el);
-  } else if (!el.querySelector("video")) {
+  }
+  ensureEditPreviewFilm(el);
+  const stage = el.querySelector(".gg-edit-preview-stage");
+  if (stage && !stage.querySelector("video")) {
     const vid = document.createElement("video");
     vid.className = "gg-edit-preview-vid";
     vid.muted = true;
     vid.playsInline = true;
     vid.preload = "auto";
     vid.hidden = true;
-    el.querySelector("img")?.after(vid);
+    stage.querySelector("img")?.after(vid);
   }
-  if (el && !el.querySelector(".gg-edit-preview-still")) {
+  if (stage && !stage.querySelector(".gg-edit-preview-still")) {
     const canvas = document.createElement("canvas");
     canvas.className = "gg-edit-preview-still";
     canvas.hidden = true;
-    (el.querySelector("video") || el.querySelector("img"))?.after(canvas);
+    (stage.querySelector("video") || stage.querySelector("img"))?.after(canvas);
+  }
+  if (stage && !stage.querySelector(".gg-edit-preview-empty")) {
+    const empty = document.createElement("div");
+    empty.className = "gg-edit-preview-empty";
+    empty.hidden = true;
+    stage.appendChild(empty);
   }
   return el;
+}
+
+function removeEditPreviewEl() {
+  editPreviewAnimating = false;
+  editPreviewWheelAcc = 0;
+  document.querySelector(".gg-edit-preview")?.remove();
 }
 
 /** Playhead time inside `cut` when the playhead is on that cut; otherwise the cut in-point. */
@@ -14037,6 +14056,7 @@ function showEditPreviewVideoFrame(el, vid) {
   el.dataset.previewReady = "1";
   const empty = el.querySelector(".gg-edit-preview-empty");
   if (empty) empty.hidden = true;
+  releaseEditPreviewFilmHold(el);
 }
 
 function wireEditPreviewVideo(vid) {
@@ -14102,7 +14122,7 @@ function followEditPreviewVideo(el, vid) {
 function applyEditPreviewVideo(el, vid, plan) {
   wireEditPreviewVideo(vid);
   vid.muted = true;
-  const img = el.querySelector("img");
+  const img = editPreviewMainImg(el);
   if (img) {
     img.hidden = true;
     if (img.getAttribute("src")) {
@@ -14204,13 +14224,282 @@ function showPreviewTake(c, vid) {
 }
 
 /** dir -1 is the newer take (left on the strip), +1 is the older take. */
+const EDIT_PREVIEW_FILM_MS = 300;
+
+function editPreviewReducedMotion() {
+  try {
+    return !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  } catch (_) {
+    return false;
+  }
+}
+
+function editPreviewMainImg(el) {
+  const stage = el?.querySelector(".gg-edit-preview-stage");
+  if (stage) {
+    for (const node of stage.children) {
+      if (node.tagName === "IMG") return node;
+    }
+  }
+  for (const node of el?.querySelectorAll?.("img") || []) {
+    if (node.closest(".gg-edit-preview-peek") || node.closest(".gg-edit-preview-slide")) continue;
+    return node;
+  }
+  return null;
+}
+
+/** Still used for a sliding frame and for the blurred edge of a neighbor take. */
+function filmStillUrl(c, id) {
+  if (!c || !id) return "";
+  const v = (c.versions_list || []).find((x) => x && String(x.id) === String(id));
+  const media = versionMedia(v);
+  if (!media?.id) return "";
+  if (playsAsVideo(media) || isAnimatedImage(media)) return posterUrl(media.id);
+  return mediaUrl(media.id);
+}
+
+function ensureEditPreviewFilm(el) {
+  if (!el) return;
+  let stage = el.querySelector(".gg-edit-preview-stage");
+  if (!stage) {
+    stage = document.createElement("div");
+    stage.className = "gg-edit-preview-stage";
+    el.insertBefore(stage, el.firstChild);
+  }
+  const video = el.querySelector("video.gg-edit-preview-vid");
+  const canvas = el.querySelector("canvas.gg-edit-preview-still");
+  const empty = el.querySelector(".gg-edit-preview-empty");
+  const img = editPreviewMainImg(el);
+  if (img && img.parentElement !== stage) stage.insertBefore(img, stage.firstChild);
+  if (video && video.parentElement !== stage) img ? img.after(video) : stage.appendChild(video);
+  if (canvas && canvas.parentElement !== stage) {
+    if (video && video.parentElement === stage) video.after(canvas);
+    else if (img && img.parentElement === stage) img.after(canvas);
+    else stage.appendChild(canvas);
+  }
+  if (empty && empty.parentElement !== stage) stage.appendChild(empty);
+  const peek = (cls) => {
+    let node = el.querySelector("." + cls);
+    if (!node) {
+      node = document.createElement("div");
+      node.className = `gg-edit-preview-peek ${cls}`;
+      node.hidden = true;
+      node.setAttribute("aria-hidden", "true");
+      const pimg = document.createElement("img");
+      pimg.alt = "";
+      pimg.draggable = false;
+      node.appendChild(pimg);
+      el.appendChild(node);
+    }
+    return node;
+  };
+  peek("gg-edit-preview-peek-prev");
+  peek("gg-edit-preview-peek-next");
+}
+
+function paintEditPreviewPeek(node, c, id) {
+  if (!node) return;
+  const img = node.querySelector("img");
+  const url = filmStillUrl(c, id);
+  if (!url) {
+    node.hidden = true;
+    if (img) {
+      img.removeAttribute("src");
+      delete img.dataset.src;
+    }
+    return;
+  }
+  node.hidden = false;
+  if (img && img.dataset.src !== url) {
+    img.dataset.src = url;
+    img.src = url;
+  }
+}
+
+/** Top band is the previous take, bottom band is the next. Empty when that neighbor does not exist. */
+function syncEditPreviewPeeks() {
+  const el = document.querySelector(".gg-edit-preview");
+  if (!el || editPreviewAnimating) return;
+  ensureEditPreviewFilm(el);
+  const c = takeBrowserSubject();
+  const { order, index } = takeBrowserIndex(c);
+  const prevId = index > 0 ? order[index - 1] : "";
+  const nextId = index >= 0 && index < order.length - 1 ? order[index + 1] : "";
+  paintEditPreviewPeek(el.querySelector(".gg-edit-preview-peek-prev"), c, prevId);
+  paintEditPreviewPeek(el.querySelector(".gg-edit-preview-peek-next"), c, nextId);
+}
+
+function releaseEditPreviewFilmHold(el) {
+  if (!el || editPreviewAnimating) return;
+  if (el.dataset.previewReady !== "1") return;
+  el.querySelector(".gg-edit-preview-slide.gg-film-hold")?.remove();
+}
+
+function cloneFilmImg(url) {
+  const img = document.createElement("img");
+  img.alt = "";
+  img.draggable = false;
+  if (url) img.src = url;
+  return img;
+}
+
+function blankFilmFrame() {
+  const d = document.createElement("div");
+  d.className = "gg-film-blank";
+  return d;
+}
+
+function cloneFilmSurface(source) {
+  const w = source.videoWidth || source.width;
+  const h = source.videoHeight || source.height;
+  if (!w || !h) return null;
+  const copy = document.createElement("canvas");
+  copy.width = w;
+  copy.height = h;
+  try {
+    copy.getContext("2d").drawImage(source, 0, 0, w, h);
+  } catch (_) {
+    return null;
+  }
+  return copy;
+}
+
+function captureEditPreviewFrame(el) {
+  const hold = el.querySelector(".gg-film-hold .gg-film-in");
+  if (hold && (hold.currentSrc || hold.getAttribute("src"))) return cloneFilmImg(hold.currentSrc || hold.src);
+  const img = editPreviewMainImg(el);
+  if (img && !img.hidden && img.naturalWidth > 0 && (img.currentSrc || img.getAttribute("src"))) {
+    return cloneFilmImg(img.currentSrc || img.src);
+  }
+  const canvas = el.querySelector("canvas.gg-edit-preview-still");
+  if (canvas && !canvas.hidden) {
+    const copy = cloneFilmSurface(canvas);
+    if (copy) return copy;
+  }
+  const vid = el.querySelector("video.gg-edit-preview-vid");
+  if (vid && !vid.hidden && vid.readyState >= 2) {
+    const copy = cloneFilmSurface(vid);
+    if (copy) return copy;
+  }
+  const id = el.dataset.previewMedia || "";
+  const mode = el.dataset.previewMode || "";
+  const url = !id ? "" : (mode === "video" || mode === "frames" ? posterUrl(id) : (el.dataset.previewUrl || mediaUrl(id)));
+  if (url) return cloneFilmImg(url);
+  return blankFilmFrame();
+}
+
+function filmIncomingNode(c, id) {
+  const url = filmStillUrl(c, id);
+  if (!url) return blankFilmFrame();
+  const img = cloneFilmImg(url);
+  img.className = "gg-film-in";
+  return img;
+}
+
+/**
+ * Slide the current picture out and the neighbor in, like a frame of film advancing.
+ * dir > 0 brings the next take up from below. The live preview keeps loading underneath.
+ */
+function startEditPreviewFilm(c, dir, incomingId) {
+  const el = document.querySelector(".gg-edit-preview");
+  if (!el) return;
+  ensureEditPreviewFilm(el);
+  const down = dir > 0;
+  const outgoing = captureEditPreviewFrame(el);
+  el.querySelector(".gg-edit-preview-slide")?.remove();
+  const slide = document.createElement("div");
+  slide.className = "gg-edit-preview-slide";
+  const track = document.createElement("div");
+  track.className = "gg-edit-preview-slide-track";
+  const outFrame = document.createElement("div");
+  outFrame.className = "gg-edit-preview-slide-frame";
+  outFrame.appendChild(outgoing);
+  const inFrame = document.createElement("div");
+  inFrame.className = "gg-edit-preview-slide-frame";
+  inFrame.appendChild(filmIncomingNode(c, incomingId));
+  if (down) {
+    track.append(outFrame, inFrame);
+    track.style.transform = "translateY(0)";
+  } else {
+    track.append(inFrame, outFrame);
+    track.style.transform = "translateY(-50%)";
+  }
+  slide.appendChild(track);
+  el.appendChild(slide);
+  editPreviewAnimating = true;
+  el.classList.add("gg-film-move");
+  void track.offsetWidth;
+  const end = down ? "translateY(-50%)" : "translateY(0)";
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (track.isConnected) track.style.transform = end;
+    });
+  });
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    el.classList.remove("gg-film-move");
+    editPreviewAnimating = false;
+    syncEditPreviewPeeks();
+    if (!slide.isConnected) return;
+    if (el.dataset.previewReady === "1") {
+      slide.remove();
+      return;
+    }
+    slide.classList.add("gg-film-hold");
+    track.style.transition = "none";
+    track.style.transform = end;
+    window.setTimeout(() => {
+      if (slide.isConnected) slide.remove();
+    }, 700);
+  };
+  track.addEventListener("transitionend", (ev) => {
+    if (ev.target !== track || ev.propertyName !== "transform") return;
+    finish();
+  });
+  window.setTimeout(finish, EDIT_PREVIEW_FILM_MS + 200);
+}
+
 function stepPreviewTake(dir) {
+  if (editPreviewAnimating) return;
   const c = takeBrowserSubject();
   const { order, index } = takeBrowserIndex(c);
   if (!order.length || index < 0) return;
   const next = index + (dir < 0 ? -1 : 1);
   if (next < 0 || next >= order.length) return;
-  showPreviewTake(c, order[next]);
+  const vid = order[next];
+  if (!editPreviewReducedMotion()) startEditPreviewFilm(c, dir, vid);
+  showPreviewTake(c, vid);
+}
+
+function editPreviewWheelPixels(e) {
+  const dy = Number(e.deltaY) || 0;
+  if (e.deltaMode === 1) return dy * 40;
+  if (e.deltaMode === 2) return dy * 800;
+  return dy;
+}
+
+/** One wheel notch over the preview is one take. Ignored while the film is moving. */
+function onEditPreviewWheel(e) {
+  const raw = e.target && e.target.nodeType === 1 ? e.target : e.target?.parentElement;
+  const preview = raw && raw.closest ? raw.closest(".gg-edit-preview") : null;
+  if (!preview) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+  const now = performance.now();
+  if (now - editPreviewWheelAt > 220) editPreviewWheelAcc = 0;
+  editPreviewWheelAt = now;
+  if (editPreviewAnimating) return;
+  if (Math.abs(e.deltaX || 0) > Math.abs(e.deltaY || 0)) return;
+  const dy = editPreviewWheelPixels(e);
+  if (!dy) return;
+  editPreviewWheelAcc += dy;
+  if (Math.abs(editPreviewWheelAcc) < 40) return;
+  const step = editPreviewWheelAcc > 0 ? 1 : -1;
+  editPreviewWheelAcc = 0;
+  stepPreviewTake(step);
 }
 
 function togglePreviewBest() {
@@ -14273,6 +14562,7 @@ function syncEditPreviewTakeChrome(shown) {
   const down = el.querySelector(".gg-edit-preview-down");
   if (up) up.disabled = !(order.length && index > 0);
   if (down) down.disabled = !(order.length && index >= 0 && index < order.length - 1);
+  syncEditPreviewPeeks();
 }
 
 function takeNavZoneActive() {
@@ -14313,8 +14603,8 @@ function refreshEditPreviewStill(cut) {
       localSec: timing.localSec,
     },
   );
-  const img = el.querySelector("img");
-  const vid = el.querySelector("video");
+  const img = editPreviewMainImg(el);
+  const vid = el.querySelector("video.gg-edit-preview-vid");
   const label = el.querySelector(".gg-edit-preview-label");
   const empty = el.querySelector(".gg-edit-preview-empty");
   const labels = computeCutLabels(state.timeline || { cuts: [] });
@@ -14341,6 +14631,7 @@ function refreshEditPreviewStill(cut) {
     const still = viewer?.still;
     const key = String(still?._ggKey || "");
     if (still && plan.url && key.startsWith(plan.url + "#")) mirrorEditPreviewFrame(still, null);
+    releaseEditPreviewFilmHold(el);
     return;
   }
   if (plan.mode === "video" && vid) {
@@ -14356,6 +14647,7 @@ function refreshEditPreviewStill(cut) {
     el.dataset.previewReady = "1";
     img.hidden = false;
     empty.hidden = true;
+    releaseEditPreviewFilmHold(el);
     return;
   }
   // Hide first so the previous bitmap cannot stay on screen while the new still loads.
@@ -14390,6 +14682,7 @@ function refreshEditPreviewStill(cut) {
     el.dataset.previewReady = "1";
     img.hidden = false;
     empty.hidden = true;
+    releaseEditPreviewFilmHold(el);
   };
   img.addEventListener("load", reveal, { once: true });
   img.src = assigned;
@@ -14518,12 +14811,12 @@ function applyEditPreviewLayout() {
   document.documentElement.classList.toggle(EDIT_MODE_ON_CLASS, !!timelineEditModeOn);
   placeEditTakesStrip();
   if (!timelineEditModeOn || !isTimelinePanelOpen()) {
-    document.querySelector(".gg-edit-preview")?.remove();
+    removeEditPreviewEl();
     return;
   }
   const graph = editPreviewBox(graphWorkAreaElement());
   if (!graph) {
-    document.querySelector(".gg-edit-preview")?.remove();
+    removeEditPreviewEl();
     return;
   }
   const toolbarBottom = measureEditPreviewToolbarBottom(graph);
@@ -14537,7 +14830,7 @@ function applyEditPreviewLayout() {
     bottomPanelTop: editOverlayBottom(graph),
   });
   if (!rect) {
-    document.querySelector(".gg-edit-preview")?.remove();
+    removeEditPreviewEl();
     return;
   }
   const el = ensureEditPreviewEl();
@@ -14569,7 +14862,7 @@ function setTimelineEditMode(on) {
     applyEditPreviewLayout();
   } else {
     unbindEditPreviewObserver();
-    document.querySelector(".gg-edit-preview")?.remove();
+    removeEditPreviewEl();
     placeEditTakesStrip();
   }
 }
@@ -14994,7 +15287,7 @@ function mountTimeline(el) {
   }
   return () => {
     stopPlay();
-    document.querySelector(".gg-edit-preview")?.remove();
+    removeEditPreviewEl();
     unbindEditPreviewObserver();
     if (ro) ro.disconnect();
     if (zoomRo) zoomRo.disconnect();
@@ -15237,6 +15530,8 @@ window.addEventListener("keydown", (e) => {
   e.stopImmediatePropagation();
   stepPreviewTake(e.key === "ArrowUp" ? -1 : 1);
 }, true);
+
+window.addEventListener("wheel", onEditPreviewWheel, { capture: true, passive: false });
 
 // Space = play/pause, only while the pointer is over (or focus is inside) the Timeline panel,
 // so ComfyUI's own space-drag canvas panning keeps working everywhere else.

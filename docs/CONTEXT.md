@@ -17,6 +17,7 @@
 - MiniMax H3 보너스는 메인 상과 중복 가능.
 
 ## 3. 결정 사항 (시간순)
+- 2026-11-03: **I40 미리보기 필름 게이트** — Edit 출력 미리보기는 검은 테두리와 살짝 둥근 모서리로 감싼다. 테이크를 바꾸면 세로 필름처럼 약 300ms에 미끄러지고, 살짝 흐려지거나 작아진다. 프레임 아래 가장자리는 다음 테이크의 흐리고 어두운 조각이고, 위는 이전 테이크다. 그 테이크가 없으면 조각은 없다. 미리보기 위 휠은 한 칸에 테이크 하나이고, 움직이는 동안은 무시한다. 페이지나 캔버스 확대는 미리보기 위에서만 막는다. 위·아래 키와 화살표 버튼도 같은 이동이다. Best 별, 테이크 줄, 영상 재생은 그대로다. 움직임 줄이기가 켜져 있으면 바로 바꾼다. 프론트만(Ctrl+F5).
 - 2026-11-03: **I42 영상 템플릿 큐** — 영상 템플릿(`LTX 4b video mp4.app.json`, `builtin:video-ltx`)을 큐하면 컷 프롬프트가 프롬프트 칸에 들어가고, 고른 정지 테이크가 LoadImage(linearData가 가리키면 그 노드, 없으면 Start Image)에 들어간다. `linearData.outputs`가 있으면 그 출력만 테이크다. Qwen 참조(image1–3)는 `TextEncodeQwenImageEditPlus`가 있는 템플릿에만 넣는다. Python이라 ComfyUI 재시작 후.
 - 2026-11-03: **I39 미리보기 테이크 위·아래와 Best 별** — Edit 미리보기와 테이크 줄 위에 포인터가 있거나 그 안에 포커스가 있고, 글 입력 중이 아닐 때 Up/Down은 그 줄의 이전/다음 테이크다(줄에서 왼쪽이 최신). 컷 목록의 Up/Down, Alt+Up/Down, 타임라인 키는 그대로다. 미리보기 오른쪽에는 같은 동작의 위·아래 화살표가 있다. 미리보기 오른쪽 위 별은 지금 보이는 테이크가 Best인지 보여 주고, 누르면 테이크 줄의 별과 같은 경로로 Best를 켜거나 끈다. 컷과 레퍼런스 버전 모두 된다. 프론트만(Ctrl+F5).
 - 2026-11-03: **I38 Qwen Image Edit 2511 참조 템플릿** — 이미지 템플릿 `Qwen Image Edit 2511 ref.app.json`은 ComfyUI `user/default/workflows`의 앱 워크플로다. 모델은 Qwen Image Edit 2511 fp8, 텍스트 인코더 qwen 2.5 vl 7b fp8, VAE qwen image, Lightning LoRA 4 steps / cfg 1이다. 컷의 연결 참조(Best, 없으면 최신 정지 이미지)가 링크 순서대로 TextEncodeQwenImageEditPlus의 image1, image2, image3에 들어간다. 0개면 글만, 또는 고른 테이크가 있으면 image1. 1–3개는 그 개수만 연결하고 나머지는 끊는다. 4개 이상은 앞의 3개만 쓰고 경고를 남긴다. 컷 프롬프트는 긍정 글이다. 프론트는 Ctrl+F5. 서버 쪽 주입은 Python이라 ComfyUI 재시작 후.
