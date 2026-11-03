@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { isAnimatedImage, noMediaText, noMediaThumbClass, playsAsVideo, versionMedia } from "../../web/gg_missing_media_core.js";
+import { isAnimatedImage, noMediaText, noMediaThumbClass, playsAsVideo, timelineClipVersionId, versionMedia } from "../../web/gg_missing_media_core.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const js = readFileSync(join(__dirname, "../../web/gonggan.js"), "utf8");
@@ -19,6 +19,20 @@ describe("versionMedia (0.9.102)", () => {
     assert.deepEqual(versionMedia(v), { id: "v1", kind: "video", animated: false, width: 640, height: 360, seconds: 2, model: "m", source: "native" });
     assert.deepEqual(versionMedia({ ...v, missing: false }), versionMedia(v));
     assert.equal(versionMedia({ ...v, animated: true }).animated, true);
+  });
+});
+
+describe("timeline clip source (I44)", () => {
+  const vers = [{ id: "best" }, { id: "shown" }, { id: "new" }];
+  it("uses Best when the cut has one, even if another take is selected", () => {
+    assert.equal(timelineClipVersionId({ pick: "best", display: "shown", media: { id: "shown" }, versions_list: vers }), "best");
+  });
+  it("uses the selected take when Best is unset", () => {
+    assert.equal(timelineClipVersionId({ pick: null, display: "shown", media: { id: "shown" }, versions_list: vers }), "shown");
+    assert.equal(timelineClipVersionId({ display: "shown", media: { id: "new" }, versions_list: vers }), "shown");
+  });
+  it("ignores a Best id that is not on the cut", () => {
+    assert.equal(timelineClipVersionId({ pick: "gone", display: "shown", media: { id: "shown" }, versions_list: vers }), "shown");
   });
 });
 
