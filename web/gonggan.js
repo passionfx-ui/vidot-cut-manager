@@ -8555,6 +8555,10 @@ let timelineEditModeOn = loadEditPreviewMode(localStorage);
 document.documentElement.classList.toggle(EDIT_MODE_ON_CLASS, !!timelineEditModeOn);
 let editPreviewLayoutRaf = 0;
 let editPreviewObserver = null;
+let editPreviewProxyRO = null;
+let editPreviewProxyMO = null;
+let editPreviewProxyWatched = new WeakSet();
+let editPreviewProxySyncing = false;
 let editPreviewLoadToken = 0;
 let editPreviewAnimating = false;
 let editPreviewWheelAcc = 0;
@@ -14162,13 +14166,18 @@ function ensureEditPreviewEl() {
     el.appendChild(cap);
   }
   if (!el.hasAttribute("tabindex")) el.tabIndex = 0;
+  watchEditPreviewBox(el);
+  syncEditPreviewFilmMetrics(el);
   return el;
 }
 
 function removeEditPreviewEl() {
   editPreviewAnimating = false;
   editPreviewWheelAcc = 0;
-  document.querySelector(".gg-edit-preview")?.remove();
+  const el = document.querySelector(".gg-edit-preview");
+  el?._ggBoxRO?.disconnect();
+  clearPreviewProxies();
+  el?.remove();
 }
 
 /** Playhead time inside `cut` when the playhead is on that cut; otherwise the cut in-point. */
@@ -14201,6 +14210,7 @@ function showEditPreviewVideoFrame(el, vid) {
   const empty = el.querySelector(".gg-edit-preview-empty");
   if (empty) empty.hidden = true;
   releaseEditPreviewFilmHold(el);
+  syncEditPreviewFilmMetrics(el);
 }
 
 function wireEditPreviewVideo(vid) {
@@ -14392,6 +14402,105 @@ function editPreviewMainImg(el) {
   return null;
 }
 
+/**
+ * Frame, peek, and slide sizes for one preview box.
+ * Most of each neighbor peek lies on the current frame. The rest sits in the gate.
+ */
+function editPreviewFilmMetrics(width, height) {
+  const H = Math.max(0, Math.round(Number(height) || 0));
+  const W = Math.max(0, Math.round(Number(width) || 0));
+  if (H < 64 || W < 64) return null;
+  const gateX = Math.round(Math.min(22, Math.max(12, W * 0.016)));
+  let peek = Math.round(Math.min(140, Math.max(52, H * 0.22)));
+  let overlap = Math.round(peek * 0.68);
+  let gateOuter = Math.round(Math.min(16, Math.max(6, H * 0.012)));
+  let gateY = gateOuter + (peek - overlap);
+  let frameH = H - gateY * 2;
+  const minFrame = Math.round(H * 0.58);
+  if (frameH < minFrame) {
+    frameH = minFrame;
+    gateY = Math.floor((H - frameH) / 2);
+    const outside = Math.max(4, Math.min(Math.floor(gateY * 0.45), Math.round(H * 0.05)));
+    gateOuter = Math.max(4, gateY - outside);
+    peek = Math.max(16, outside + Math.min(Math.round(frameH * 0.24), Math.floor(H / 2) - gateOuter - 4));
+    overlap = gateOuter + peek - gateY;
+    if (overlap < 8) overlap = Math.min(peek - 4, Math.round(frameH * 0.16));
+  }
+  if (frameH < 24 || peek < 12) return null;
+  return { gateX, gateY, peek, overlap, frameH, slide: frameH };
+}
+
+/** Write gate, peek, and slide lengths from the preview's current box. */
+function syncEditPreviewFilmMetrics(el) {
+  if (!el || !el.isConnected) return;
+  const m = editPreviewFilmMetrics(el.clientWidth, el.clientHeight);
+  if (!m) return;
+  el.style.setProperty("--gg-gate-x", `${m.gateX}px`);
+  el.style.setProperty("--gg-gate-y", `${m.gateY}px`);
+  el.style.setProperty("--gg-peek", `${m.peek}px`);
+  el.style.setProperty("--gg-peek-overlap", `${m.overlap}px`);
+  const stage = el.querySelector(".gg-edit-preview-stage");
+  const measured = Math.round(stage?.clientHeight || 0);
+  const frameH = measured > 16 ? measured : m.frameH;
+  const aspect = mediaFrameAspect(el);
+  const key = `${el.clientWidth}x${el.clientHeight}:${m.gateX}:${m.gateY}:${m.peek}:${m.overlap}:${frameH}:${aspect}`;
+  const track = el.querySelector(".gg-edit-preview-slide-track");
+  if (el.dataset.ggFilm === key) {
+    if (track) layoutFilmTrack(track, frameH);
+    return;
+  }
+  el.dataset.ggFilm = key;
+  el.style.setProperty("--gg-frame-h", `${frameH}px`);
+  el.dataset.ggSlide = String(frameH);
+  const placePeek = (node, edge) => {
+    if (!node) return;
+    node.style.left = `${m.gateX}px`;
+    node.style.right = `${m.gateX}px`;
+    node.style.height = `${m.peek}px`;
+    node.style.width = "";
+    const inset = Math.max(0, m.gateY - (m.peek - m.overlap));
+    if (edge === "top") node.style.top = `${inset}px`;
+    else node.style.bottom = `${inset}px`;
+    const img = node.querySelector("img");
+    if (img) img.style.height = `${frameH}px`;
+  };
+  placePeek(el.querySelector(".gg-edit-preview-peek-prev"), "top");
+  placePeek(el.querySelector(".gg-edit-preview-peek-next"), "bottom");
+  if (track) layoutFilmTrack(track, frameH);
+}
+
+/** Natural aspect of the picture in the frame, so a different take recomputes the strip. */
+function mediaFrameAspect(el) {
+  const img = editPreviewMainImg(el);
+  const vid = el.querySelector("video.gg-edit-preview-vid");
+  const w = img && !img.hidden && img.naturalWidth ? img.naturalWidth : (vid && !vid.hidden ? vid.videoWidth : 0);
+  const h = img && !img.hidden && img.naturalHeight ? img.naturalHeight : (vid && !vid.hidden ? vid.videoHeight : 0);
+  if (!w || !h) return "0";
+  return `${w}x${h}`;
+}
+
+function layoutFilmTrack(track, frameH) {
+  if (!track || !(frameH > 0)) return;
+  track.style.height = `${frameH * 2}px`;
+  for (const frame of track.children) {
+    frame.style.flexBasis = `${frameH}px`;
+    frame.style.height = `${frameH}px`;
+  }
+  const down = track.dataset.down === "1";
+  const atEnd = track.dataset.phase === "end";
+  const y = down ? (atEnd ? -frameH : 0) : (atEnd ? 0 : -frameH);
+  track.style.transform = `translateY(${y}px)`;
+}
+
+function watchEditPreviewBox(el) {
+  if (!el || !window.ResizeObserver || el._ggBoxRO) return;
+  el._ggBoxRO = new ResizeObserver(() => {
+    syncEditPreviewFilmMetrics(el);
+    syncPreviewProxies();
+  });
+  el._ggBoxRO.observe(el);
+}
+
 /** Still used for a sliding frame and for the blurred edge of a neighbor take. */
 function filmStillUrl(c, id) {
   if (!c || !id) return "";
@@ -14548,6 +14657,8 @@ function startEditPreviewFilm(c, dir, incomingId) {
   const el = document.querySelector(".gg-edit-preview");
   if (!el) return;
   ensureEditPreviewFilm(el);
+  syncEditPreviewFilmMetrics(el);
+  const frameH = Number(el.dataset.ggSlide) || el.querySelector(".gg-edit-preview-stage")?.clientHeight || 0;
   const down = dir > 0;
   const outgoing = captureEditPreviewFrame(el);
   el.querySelector(".gg-edit-preview-slide")?.remove();
@@ -14555,28 +14666,27 @@ function startEditPreviewFilm(c, dir, incomingId) {
   slide.className = "gg-edit-preview-slide";
   const track = document.createElement("div");
   track.className = "gg-edit-preview-slide-track";
+  track.dataset.down = down ? "1" : "0";
+  track.dataset.phase = "start";
   const outFrame = document.createElement("div");
   outFrame.className = "gg-edit-preview-slide-frame";
   outFrame.appendChild(outgoing);
   const inFrame = document.createElement("div");
   inFrame.className = "gg-edit-preview-slide-frame";
   inFrame.appendChild(filmIncomingNode(c, incomingId));
-  if (down) {
-    track.append(outFrame, inFrame);
-    track.style.transform = "translateY(0)";
-  } else {
-    track.append(inFrame, outFrame);
-    track.style.transform = "translateY(-50%)";
-  }
+  if (down) track.append(outFrame, inFrame);
+  else track.append(inFrame, outFrame);
   slide.appendChild(track);
   el.appendChild(slide);
+  layoutFilmTrack(track, frameH);
   editPreviewAnimating = true;
   el.classList.add("gg-film-move");
   void track.offsetWidth;
-  const end = down ? "translateY(-50%)" : "translateY(0)";
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      if (track.isConnected) track.style.transform = end;
+      if (!track.isConnected) return;
+      track.dataset.phase = "end";
+      layoutFilmTrack(track, Number(el.dataset.ggSlide) || frameH);
     });
   });
   let done = false;
@@ -14592,8 +14702,9 @@ function startEditPreviewFilm(c, dir, incomingId) {
       return;
     }
     slide.classList.add("gg-film-hold");
+    track.dataset.phase = "end";
     track.style.transition = "none";
-    track.style.transform = end;
+    layoutFilmTrack(track, Number(el.dataset.ggSlide) || frameH);
     window.setTimeout(() => {
       if (slide.isConnected) slide.remove();
     }, 700);
@@ -14624,7 +14735,6 @@ function editPreviewWheelPixels(e) {
   return dy;
 }
 
-/** One wheel notch over the preview is one take. Ignored while the film is moving. */
 function onEditPreviewWheel(e) {
   const raw = e.target && e.target.nodeType === 1 ? e.target : e.target?.parentElement;
   const preview = raw && raw.closest ? raw.closest(".gg-edit-preview") : null;
@@ -14636,6 +14746,7 @@ function onEditPreviewWheel(e) {
   if (now - editPreviewWheelAt > 220) editPreviewWheelAcc = 0;
   editPreviewWheelAt = now;
   if (editPreviewAnimating) return;
+  if (raw?.closest?.(".gg-preview-proxy")) return;
   if (Math.abs(e.deltaX || 0) > Math.abs(e.deltaY || 0)) return;
   const dy = editPreviewWheelPixels(e);
   if (!dy) return;
@@ -14644,6 +14755,161 @@ function onEditPreviewWheel(e) {
   const step = editPreviewWheelAcc > 0 ? 1 : -1;
   editPreviewWheelAcc = 0;
   stepPreviewTake(step);
+}
+
+/** Right-side top controls hidden under the preview. Left mode tabs stay out of this set. */
+function coveredPreviewTopControl(el, pr) {
+  if (!el || !pr) return false;
+  if (el.classList?.contains("gg-preview-proxy")) return false;
+  if (el.closest?.(".gg-edit-preview, .gg-shots, .gg-bottom-strip, .gg-inputs-pane")) return false;
+  const tag = el.tagName;
+  if (tag !== "BUTTON" && tag !== "INPUT") return false;
+  const r = el.getBoundingClientRect();
+  if (r.width < 8 || r.height < 8) return false;
+  const ix = Math.max(0, Math.min(r.right, pr.right) - Math.max(r.left, pr.left));
+  const iy = Math.max(0, Math.min(r.bottom, pr.bottom) - Math.max(r.top, pr.top));
+  if ((ix * iy) / (r.width * r.height) < 0.55) return false;
+  const cy = r.top + r.height / 2;
+  if (cy < pr.top - 2 || cy > pr.top + 78) return false;
+  const cx = r.left + r.width / 2;
+  return cx >= pr.left + pr.width * 0.45;
+}
+
+function previewProxyMarkup(native) {
+  if (native.tagName === "INPUT") return native.value || "";
+  return native.innerHTML
+    .replace(/\sdata-v-[\w-]+(?:="[^"]*")?/g, "")
+    .replace(/\sid="[^"]*"/g, "");
+}
+
+function mirrorPreviewProxy(proxy, native) {
+  const r = native.getBoundingClientRect();
+  proxy.style.left = `${r.left}px`;
+  proxy.style.top = `${r.top}px`;
+  proxy.style.width = `${r.width}px`;
+  proxy.style.height = `${r.height}px`;
+  const cls = `gg-preview-proxy ${String(native.className || "")}`.replace(/\s+/g, " ").trim();
+  if (proxy.className !== cls) proxy.className = cls;
+  proxy.disabled = !!native.disabled || native.getAttribute("aria-disabled") === "true";
+  const label = native.getAttribute("aria-label") || native.getAttribute("title") || "";
+  if (label) proxy.setAttribute("aria-label", label);
+  else proxy.removeAttribute("aria-label");
+  if (native.title) proxy.title = native.title;
+  for (const name of ["aria-pressed", "aria-expanded", "aria-selected", "data-state"]) {
+    const v = native.getAttribute(name);
+    if (v == null) proxy.removeAttribute(name);
+    else if (proxy.getAttribute(name) !== v) proxy.setAttribute(name, v);
+  }
+  const pressed = native.getAttribute("aria-pressed") === "true"
+    || native.getAttribute("aria-expanded") === "true"
+    || native.getAttribute("aria-selected") === "true"
+    || native.getAttribute("data-state") === "open";
+  proxy.classList.toggle("gg-proxy-on", pressed);
+  if (proxy.tagName === "INPUT") {
+    proxy.type = native.type || "text";
+    if (document.activeElement !== proxy && proxy.value !== native.value) proxy.value = native.value;
+    return;
+  }
+  const html = previewProxyMarkup(native);
+  if (proxy.dataset.ggHtml !== html) {
+    proxy.dataset.ggHtml = html;
+    proxy.innerHTML = html;
+  }
+}
+
+function watchPreviewProxyNative(native) {
+  if (!native || editPreviewProxyWatched.has(native)) return;
+  editPreviewProxyWatched.add(native);
+  if (!editPreviewProxyRO && window.ResizeObserver) {
+    editPreviewProxyRO = new ResizeObserver(() => syncPreviewProxies());
+  }
+  if (!editPreviewProxyMO && window.MutationObserver) {
+    editPreviewProxyMO = new MutationObserver(() => syncPreviewProxies());
+  }
+  editPreviewProxyRO?.observe(native);
+  editPreviewProxyMO?.observe(native, {
+    attributes: true,
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributeFilter: ["class", "disabled", "aria-pressed", "aria-expanded", "aria-selected", "aria-disabled", "data-state", "value"],
+  });
+}
+
+function clearPreviewProxies() {
+  document.querySelectorAll(".gg-preview-proxies").forEach((el) => el.remove());
+  editPreviewProxyRO?.disconnect();
+  editPreviewProxyMO?.disconnect();
+  editPreviewProxyRO = null;
+  editPreviewProxyMO = null;
+  editPreviewProxyWatched = new WeakSet();
+}
+
+function makePreviewProxy(native) {
+  const proxy = document.createElement(native.tagName === "INPUT" ? "input" : "button");
+  if (proxy.tagName === "BUTTON") proxy.type = "button";
+  proxy.className = "gg-preview-proxy";
+  proxy._ggNative = native;
+  if (proxy.tagName === "INPUT") {
+    const forward = (type) => {
+      native.value = proxy.value;
+      native.dispatchEvent(new Event(type, { bubbles: true }));
+    };
+    proxy.addEventListener("input", () => forward("input"));
+    proxy.addEventListener("change", () => forward("change"));
+  } else {
+    proxy.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!native.isConnected || native.disabled) return;
+      native.click();
+      requestAnimationFrame(() => syncPreviewProxies());
+    });
+  }
+  return proxy;
+}
+
+/** Lightweight stand-ins for the native controls the overlay covers. One listener on the proxy only. */
+function syncPreviewProxies() {
+  if (editPreviewProxySyncing) return;
+  const preview = document.querySelector(".gg-edit-preview");
+  if (!preview || !preview.isConnected) {
+    clearPreviewProxies();
+    return;
+  }
+  editPreviewProxySyncing = true;
+  try {
+    const pr = preview.getBoundingClientRect();
+    const natives = [];
+    for (const el of document.querySelectorAll("button, input")) {
+      if (coveredPreviewTopControl(el, pr)) natives.push(el);
+    }
+    let host = preview.querySelector(".gg-preview-proxies");
+    if (!natives.length) {
+      host?.remove();
+      return;
+    }
+    if (!host) {
+      host = document.createElement("div");
+      host.className = "gg-preview-proxies";
+      preview.appendChild(host);
+    }
+    const keep = new Set(natives);
+    for (const proxy of [...host.querySelectorAll(".gg-preview-proxy")]) {
+      if (!keep.has(proxy._ggNative) || !proxy._ggNative.isConnected) proxy.remove();
+    }
+    for (const native of natives) {
+      let proxy = [...host.querySelectorAll(".gg-preview-proxy")].find((node) => node._ggNative === native);
+      if (!proxy) {
+        proxy = makePreviewProxy(native);
+        host.appendChild(proxy);
+      }
+      watchPreviewProxyNative(native);
+      mirrorPreviewProxy(proxy, native);
+    }
+  } finally {
+    editPreviewProxySyncing = false;
+  }
 }
 
 function togglePreviewBest() {
@@ -14735,6 +15001,7 @@ function refreshEditPreviewStill(cut) {
   if (!timelineEditModeOn) return;
   const el = document.querySelector(".gg-edit-preview");
   if (!el) return;
+  syncEditPreviewFilmMetrics(el);
   const c = previewTakeView(cut === undefined ? currentEditPreviewCut() : cut);
   const mediaId = c?.media?.id != null && String(c.media.id) !== "" ? String(c.media.id) : "";
   const timing = editPreviewPlayheadTiming(c);
@@ -14835,6 +15102,7 @@ function refreshEditPreviewStill(cut) {
     img.hidden = false;
     empty.hidden = true;
     releaseEditPreviewFilmHold(el);
+    syncEditPreviewFilmMetrics(el);
   };
   img.addEventListener("load", reveal, { once: true });
   img.src = assigned;
@@ -15025,8 +15293,10 @@ function applyEditPreviewLayout() {
   el.style.top = `${top}px`;
   el.style.width = `${Math.round(rect.width)}px`;
   el.style.height = `${Math.max(32, bottom - top)}px`;
+  syncEditPreviewFilmMetrics(el);
   paintViewerCaption();
   refreshEditPreviewStill();
+  syncPreviewProxies();
   bindEditPreviewObserver();
 }
 

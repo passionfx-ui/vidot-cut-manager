@@ -601,9 +601,11 @@ html.gg-edit-mode-on .gg-timeline .gg-viewer { display: none; }
   --gg-line: #353a44;
   --gg-dim: #9aa0aa;
   --gg-fg: #e6e8ec;
-  --gg-gate-x: 18px;
-  --gg-gate-y: 28px;
-  --gg-peek: 14px;
+  --gg-gate-x: 16px;
+  --gg-gate-y: 42px;
+  --gg-peek: 108px;
+  --gg-peek-overlap: 72px;
+  --gg-frame-h: 320px;
   --gg-film-ms: 300ms;
   position: fixed;
   z-index: 3600;
@@ -735,9 +737,9 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
   padding: 12px;
   text-align: center;
 }
-/* Black film gate: the stage sits inside the preview, so the margin is the frame.
-   Neighbor takes peek through the top and bottom bands. A take change slides the
-   two frames as one vertical strip. */
+/* Black film gate. Neighbor takes are the same frame height as the current
+   picture and overlap it. The overlap edge fades out so the strip still reads
+   as one film inside the gate. Sizes are written from the preview box. */
 .gg-edit-preview-peek {
   position: absolute;
   left: var(--gg-gate-x);
@@ -746,17 +748,25 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
   overflow: hidden;
   pointer-events: none;
   z-index: 2;
-  background: #000;
+  background: transparent;
 }
-.gg-edit-preview-peek-prev { top: calc(var(--gg-gate-y) - var(--gg-peek)); }
-.gg-edit-preview-peek-next { bottom: calc(var(--gg-gate-y) - var(--gg-peek)); }
+.gg-edit-preview-peek-prev {
+  top: calc(var(--gg-gate-y) - (var(--gg-peek) - var(--gg-peek-overlap)));
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.72) 38%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.72) 38%, transparent 100%);
+}
+.gg-edit-preview-peek-next {
+  bottom: calc(var(--gg-gate-y) - (var(--gg-peek) - var(--gg-peek-overlap)));
+  -webkit-mask-image: linear-gradient(to top, #000 0%, rgba(0, 0, 0, 0.72) 38%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 0%, rgba(0, 0, 0, 0.72) 38%, transparent 100%);
+}
 .gg-edit-preview-peek img {
   position: absolute;
   left: 0;
   width: 100%;
-  height: 96px;
-  object-fit: cover;
-  filter: blur(3px) brightness(0.55) saturate(0.85);
+  height: var(--gg-frame-h);
+  object-fit: contain;
+  filter: blur(8px) brightness(0.5) saturate(0.78);
   background: #000;
 }
 .gg-edit-preview-peek-prev img { bottom: 0; object-position: center bottom; }
@@ -765,8 +775,24 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
   content: "";
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.28);
+  pointer-events: none;
 }
+.gg-edit-preview-peek-prev::after {
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.04) 0%, rgba(0, 0, 0, 0.16) 40%, rgba(0, 0, 0, 0.9) 100%);
+}
+.gg-edit-preview-peek-next::after {
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.04) 0%, rgba(0, 0, 0, 0.16) 40%, rgba(0, 0, 0, 0.9) 100%);
+}
+/* Proxies sit on the overlay at the native button's screen box. The native control stays put. */
+.gg-preview-proxies { position: static; pointer-events: none; }
+.gg-preview-proxy {
+  position: fixed;
+  z-index: 12;
+  box-sizing: border-box;
+  margin: 0;
+  pointer-events: auto;
+}
+html.gg-edit-mode-on [data-reka-popper-content-wrapper] { z-index: 4200 !important; }
 .gg-edit-preview.gg-film-move .gg-edit-preview-peek { opacity: 0; }
 .gg-edit-preview-slide {
   position: absolute;
@@ -785,7 +811,7 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
   left: 0;
   top: 0;
   width: 100%;
-  height: 200%;
+  height: calc(var(--gg-frame-h) * 2);
   display: flex;
   flex-direction: column;
 }
@@ -795,8 +821,8 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
 }
 .gg-edit-preview-slide-frame {
   position: relative;
-  flex: 0 0 50%;
-  height: 50%;
+  flex: 0 0 var(--gg-frame-h);
+  height: var(--gg-frame-h);
   overflow: hidden;
   background: #000;
 }
