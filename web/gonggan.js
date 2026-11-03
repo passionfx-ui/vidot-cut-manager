@@ -102,6 +102,7 @@ import {
   referencesConfirmLine,
   stripMention,
 } from "./gg_reference_core.js";
+import { applyQwenRefImages, qwenRefWarning, workflowHasQwenEdit } from "./gg_qwen_ref_core.js";
 import {
   folderNotCreated,
   loadLastLocation,
@@ -4150,6 +4151,8 @@ let ggQueuedStartNode = "";
 /** Snapshot taken just before queuePrompt, attached to the returned prompt_id. */
 let ggPendingQueueSnap = null;
 let ggQueuedRefFiles = [];
+/** image1..image3 filenames for a Qwen Image Edit queue. null = this queue is not that template. */
+let ggQueuedQwenImages = null;
 let ggQueuedPromptPack = null;
 /** Per-cut negative prompt, seed, input image, and frames. Positive prompt stays on the cut. */
 const cutDataMap = new Map();
@@ -10912,9 +10915,58 @@ async function stageReferenceStill(media) {
   return copyVersionImageToInput(media.id);
 }
 
+async function stageQwenReferenceQueue(cut, rows) {
+  const live = (rows || []).filter((row) => row && !row.missing);
+  const warn = qwenRefWarning(live.length);
+  if (warn) console.warn(`[gonggan] ${warn}`);
+  const chosen = live.slice(0, 3);
+  const images = ["", "", ""];
+  const used = [];
+  for (let i = 0; i < chosen.length; i++) {
+    const row = chosen[i];
+    let file = "";
+    if (row.media?.id) {
+      try {
+        file = await stageReferenceStill(row.media);
+      } catch {
+        file = "";
+      }
+    }
+    images[i] = file || "";
+    const item = {
+      ref_id: row.ref_id,
+      name: row.name || "",
+      category: row.category || "Other",
+      mode: file ? "image" : "text",
+    };
+    if (file) item.slot = `image${i + 1}`;
+    used.push(item);
+  }
+  for (const row of live.slice(3)) {
+    used.push({
+      ref_id: row.ref_id,
+      name: row.name || "",
+      category: row.category || "Other",
+      mode: "text",
+    });
+  }
+  if (!images.some(Boolean) && !chosen.length) {
+    const ver = findCutVersion(cut, selectedStillTakeId(cut));
+    if (isStillVersion(ver)) {
+      try {
+        images[0] = (await copyVersionImageToInput(ver.id)) || "";
+      } catch {
+        images[0] = "";
+      }
+    }
+  }
+  return { files: [], used, qwenImages: images };
+}
+
 async function stageReferenceQueue(cut) {
   const rows = cutRefRows(cut);
   const wf = workflowSnapshotForCut(cut.id);
+  if (workflowHasQwenEdit(wf)) return stageQwenReferenceQueue(cut, rows);
   let startId = "";
   try {
     startId = findVideoImageTarget(wf)?.id || "";
@@ -10953,7 +11005,7 @@ async function stageReferenceQueue(cut) {
     if (item.mode === "image" && slot) item.slot = slot;
     used.push(item);
   }
-  return { files, used };
+  return { files, used, qwenImages: null };
 }
 
 /** Queue the graph that is open. A video graph also receives the cut's selected image Take. */
@@ -11018,6 +11070,7 @@ async function injectCutDataForQueue() {
   }
   const refQueue = await stageReferenceQueue(cut);
   ggQueuedRefFiles = refQueue.files;
+  ggQueuedQwenImages = refQueue.qwenImages || null;
   ggQueuedPromptPack = queuePromptPack(cut);
   ggQueuedPromptPack.binding = bound?.positive || linearBindings(captureGraphWorkflowSnapshot())?.positive || null;
   ggPendingQueueSnap = {
@@ -15518,6 +15571,7 @@ app.registerExtension({
           if (ggQueuedStartFile) patchQueuedStartImage(result, ggQueuedStartFile, ggQueuedStartNode);
           patchQueuedReferenceText(result, ggQueuedPromptPack);
           patchQueuedReferenceImages(result, ggQueuedRefFiles, ggQueuedStartNode);
+          if (Array.isArray(ggQueuedQwenImages)) applyQwenRefImages(result?.output, ggQueuedQwenImages);
           return result;
         };
         try {
@@ -15527,6 +15581,7 @@ app.registerExtension({
           ggQueuedStartFile = "";
           ggQueuedStartNode = "";
           ggQueuedRefFiles = [];
+          ggQueuedQwenImages = null;
           ggQueuedPromptPack = null;
           restoreSeedControls(ggPendingQueueSnap?.controls);
           if (ggPendingQueueSnap) ggPendingQueueSnap.controls = null;

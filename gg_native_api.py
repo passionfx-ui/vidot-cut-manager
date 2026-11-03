@@ -1178,16 +1178,115 @@ def reference_prompt_text(doc: dict, cut: dict, text: str, *, mention_prompt: st
     return inject_prompt_text(text or "", cuts, cut if isinstance(cut, dict) else {}, source)
 
 
+def _stage_reference_image(pid: str, ref: dict) -> str | None:
+    """Best (else latest) still of a reference, copied into ComfyUI input. None means text only."""
+    found = _reference_version_file(pid, ref)
+    if not found:
+        return None
+    ver, path = found
+    still = reference_still_file(path, ver.get("id") or "")
+    if still is None:
+        return None
+    return stage_start_image(still, ver["id"])
+
+
+def _cut_current_still_name(pid: str, cut: dict) -> str | None:
+    """Still for a cut with no linked references: displayed version, else Best, else newest."""
+    if not isinstance(pid, str) or not pid or not isinstance(cut, dict):
+        return None
+    store = native_store()
+    versions = store.list_versions(pid, cut.get("id") or "")
+    order: list[str] = []
+    for key in ("display_version_id", "pick_version_id"):
+        vid = cut.get(key)
+        if isinstance(vid, str) and vid:
+            order.append(vid)
+    for ver in versions:
+        vid = ver.get("id")
+        if isinstance(vid, str) and vid:
+            order.append(vid)
+    seen: set[str] = set()
+    for vid in order:
+        if vid in seen:
+            continue
+        seen.add(vid)
+        ver = next((row for row in versions if row.get("id") == vid), None)
+        path = store.version_file(pid, ver) if ver else None
+        if ver and is_still_version(ver, path):
+            try:
+                return stage_start_image(path, ver["id"])
+            except (OSError, ValueError):
+                return None
+    return None
+
+
+def _apply_qwen_edit_references(doc: dict, cut: dict, wf: dict) -> list:
+    """image1..image3 from linked references, in link order. The first three only.
+
+    Zero links use the cut's current still as image1, or text only when it has none.
+    A reference without a still stays text and that input is left disconnected.
+    """
+    from gg_project.ref_links import generation_links
+    from gg_qwen_ref import apply_qwen_ref_images, qwen_ref_warning
+
+    cuts = doc.get("cuts") if isinstance(doc, dict) and isinstance(doc.get("cuts"), dict) else {}
+    prompt = cut.get("prompt") if isinstance(cut.get("prompt"), str) else ""
+    links = [row for row in generation_links(cuts, cut, prompt) if not row.get("missing")]
+    warning = qwen_ref_warning(len(links))
+    if warning:
+        log.warning(warning)
+    chosen = links[:3]
+    by_id = cuts if isinstance(cuts, dict) else {}
+    pid = doc.get("id") if isinstance(doc, dict) else ""
+    files = ["", "", ""]
+    used = []
+    for index, link in enumerate(chosen):
+        file_name = ""
+        ref = by_id.get(link["ref_id"])
+        if isinstance(ref, dict) and isinstance(pid, str) and pid:
+            try:
+                file_name = _stage_reference_image(pid, ref) or ""
+            except (OSError, ValueError):
+                file_name = ""
+        files[index] = file_name
+        item = {
+            "ref_id": link["ref_id"],
+            "name": link.get("name") or "",
+            "category": link.get("category") or "Other",
+            "mode": "image" if file_name else "text",
+        }
+        if file_name:
+            item["slot"] = f"image{index + 1}"
+        used.append(item)
+    for link in links[3:]:
+        used.append({
+            "ref_id": link["ref_id"],
+            "name": link.get("name") or "",
+            "category": link.get("category") or "Other",
+            "mode": "text",
+        })
+    if not any(files) and not chosen and isinstance(pid, str) and pid:
+        take = _cut_current_still_name(pid, cut)
+        if take:
+            files[0] = take
+    apply_qwen_ref_images(wf, files)
+    return used
+
+
 def apply_reference_images(doc: dict, cut: dict, wf: dict, exclude_ids: list | None = None) -> list:
     """Stage each linked reference into the Load Image node stored on its link.
 
-    The Start Image / selected-take node is never written. No slot, no still, or a failed
+    A Qwen Image Edit prompt instead fills image1..image3 in link order. The Start Image /
+    selected-take node is never written on other templates. No slot, no still, or a failed
     copy leaves that reference as text. Returns refs_used for the version meta.
     """
     from gg_project.ref_links import generation_links
+    from gg_qwen_ref import is_qwen_edit_api
 
     if not isinstance(wf, dict) or not isinstance(cut, dict):
         return []
+    if is_qwen_edit_api(wf):
+        return _apply_qwen_edit_references(doc, cut, wf)
     cuts = doc.get("cuts") if isinstance(doc, dict) and isinstance(doc.get("cuts"), dict) else {}
     prompt = cut.get("prompt") if isinstance(cut.get("prompt"), str) else ""
     links = generation_links(cuts, cut, prompt)
