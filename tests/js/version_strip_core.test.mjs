@@ -285,10 +285,13 @@ describe("version strip wiring", () => {
     assert.match(fnBody("toggleBest"), /setPick\(cutId, c\.pick === vid \? null : vid\)/);
   });
 
-  it("clearing Best makes the newest version current again (local, same as the server)", () => {
-    const body = fnBody("applyPickLocally");
+  it("clearing Best leaves the shown take, so the timeline falls back to it", () => {
+    const at = js.indexOf("function applyPickLocally(");
+    const body = js.slice(at, js.indexOf("function toggleBest(", at));
     assert.match(body, /const clear = vid === null;/);
-    assert.match(body, /c\.pick = clear \? null : vid;/);
+    assert.match(body, /c\.pick = null;/);
+    assert.match(body, /x\.id === c\.display/);
+    assert.doesNotMatch(body, /c\.pick = clear \? null : vid/);
   });
 });
 

@@ -319,7 +319,7 @@ import {
   timelineClipTypeClassSuffix,
 } from "./gg_timeline_clip_type_core.js";
 import { animatedWebpFrameBytes, parseAnimatedWebp } from "./gg_webp_anim_core.js";
-import { noMediaText, noMediaThumbClass, playsAsVideo, isAnimatedImage, versionMedia } from "./gg_missing_media_core.js";
+import { noMediaText, noMediaThumbClass, playsAsVideo, isAnimatedImage, versionMedia, timelineClipVersionId } from "./gg_missing_media_core.js";
 import {
   needsDurationProbe,
   formatClipDuration,
@@ -9400,20 +9400,23 @@ function recomputeCutStarts() {
   tl.total_sec = total;
 }
 
-/** Optimistic display version: swap timeline media + clamp trim, then persist via /gonggan/edit. Does not change Best. */
+/** Optimistic display version. Best stays the timeline clip, so a different shown take does not retarget trim. */
 function applyDisplayVersionLocally(c, vid) {
   if (!c || !vid) return false;
   const v = (c.versions_list || []).find((x) => x.id === vid);
   if (!v) return false;
   if (c.display === vid && c.media?.id === vid) return false;
+  const timelineLocked = !!c.pick;
   c.display = vid;
   c.media = versionMedia(v);
-  c.src_dur = c.media && c.media.kind === "video" ? Math.max(0, Number(v?.seconds) || 0) : 0;
-  const clamped = clampClip(c, c.in, c.sec);
-  c.in = clamped.in;
-  c.sec = clamped.sec;
+  if (!timelineLocked) {
+    c.src_dur = c.media && c.media.kind === "video" ? Math.max(0, Number(v?.seconds) || 0) : 0;
+    const clamped = clampClip(c, c.in, c.sec);
+    c.in = clamped.in;
+    c.sec = clamped.sec;
+    recomputeCutStarts();
+  }
   c.edited = true;
-  recomputeCutStarts();
   play.idx = -1;
   return true;
 }
@@ -9459,18 +9462,27 @@ async function setDisplayVersion(cutId, vid) {
   ggToast("Version not applied", `Reverted to the previous version: ${msg}`, "warn");
 }
 
-/** Optimistic promote: swap timeline media + clamp trim, then persist via /gonggan/edit. `vid` null = clear
- * Best, so the newest version is current again (same as the server). */
+/** Optimistic Best. Setting Best also shows that take. Clearing Best leaves the shown take, and the timeline follows it. */
 function applyPickLocally(c, vid) {
   const clear = vid === null;
   if (!c || (clear ? !c.pick : !vid || c.pick === vid)) return false;
-  const v = clear ? (c.versions_list || []).find((x) => x && x.id) : (c.versions_list || []).find((x) => x.id === vid);
-  if (!v && !clear) return false;
-  c.pick = clear ? null : vid;
-  if (clear) c.display = v?.id || null;
-  else c.display = vid;
-  c.media = versionMedia(v);
-  c.src_dur = c.media && c.media.kind === "video" ? Math.max(0, Number(v?.seconds) || 0) : 0;
+  if (!clear) {
+    const v = (c.versions_list || []).find((x) => x.id === vid);
+    if (!v) return false;
+    c.pick = vid;
+    c.display = vid;
+    c.media = versionMedia(v);
+    c.src_dur = c.media && c.media.kind === "video" ? Math.max(0, Number(v.seconds) || 0) : 0;
+  } else {
+    c.pick = null;
+    const shown = (c.versions_list || []).find((x) => x && x.id === c.display)
+      || (c.versions_list || []).find((x) => x && x.id);
+    if (shown) {
+      c.display = shown.id;
+      c.media = versionMedia(shown);
+      c.src_dur = c.media && c.media.kind === "video" ? Math.max(0, Number(shown.seconds) || 0) : 0;
+    }
+  }
   const clamped = clampClip(c, c.in, c.sec);
   c.in = clamped.in;
   c.sec = clamped.sec;
@@ -11355,40 +11367,145 @@ function placeAppControls(el) {
   return true;
 }
 
+let inputsTabBtn = null;
+let inputsPane = null;
+let inputsTabOn = false;
+let inputsTabWanted = false;
+
+function cutManagerVisible() {
+  const shots = document.querySelector(".gg-root.gg-shots");
+  if (!shots?.isConnected) return false;
+  const r = shots.getBoundingClientRect();
+  return r.width > 40 && r.height > 40;
+}
+
+/** The existing right-panel tab row. Never a copy of that row. */
+function nativeRightTabRow() {
+  const tab = document.getElementById("tab-parameters");
+  const row = tab?.parentElement;
+  if (!row || !row.querySelector("#tab-nodes") || !row.querySelector("#tab-settings")) return null;
+  return row;
+}
+
+function removeInputsTab() {
+  inputsTabWanted = false;
+  inputsTabOn = false;
+  inputsTabBtn?.remove();
+  if (inputsPane) inputsPane.hidden = true;
+  inputsPane?.remove();
+}
+
+function applyInputsTabState() {
+  if (inputsTabBtn) inputsTabBtn.setAttribute("aria-selected", inputsTabOn ? "true" : "false");
+  if (inputsPane) inputsPane.hidden = !inputsTabOn;
+}
+
+function selectInputsTab(on) {
+  inputsTabOn = !!on && cutManagerVisible();
+  applyInputsTabState();
+  if (inputsTabOn) paintAppControls();
+}
+
+function placeInputsPane() {
+  const pane = inputsPane;
+  const tab = document.getElementById("tab-parameters");
+  const panel = tab?.closest(".p-splitterpanel");
+  if (!pane || pane.hidden || !panel) return;
+  const nav = panel.querySelector("nav");
+  const pr = panel.getBoundingClientRect();
+  const top = nav ? nav.getBoundingClientRect().bottom : pr.top + 48;
+  const bottom = Math.min(window.innerHeight, pr.bottom);
+  pane.style.left = `${Math.round(pr.left)}px`;
+  pane.style.top = `${Math.round(top)}px`;
+  pane.style.width = `${Math.round(pr.width)}px`;
+  pane.style.height = `${Math.max(80, Math.round(bottom - top))}px`;
+}
+
+function bindInputsTabOnce() {
+  if (globalThis.__ggInputsTabClick) return;
+  globalThis.__ggInputsTabClick = true;
+  const mo = new MutationObserver(() => {
+    if (!inputsTabWanted || !inputsTabBtn || !cutManagerVisible()) return;
+    const row = nativeRightTabRow();
+    if (!row || inputsTabBtn.parentElement === row) return;
+    row.appendChild(inputsTabBtn);
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
+  document.addEventListener("click", (e) => {
+    const btn = e.target?.closest?.("#gg-tab-inputs, #tab-parameters, #tab-nodes, #tab-settings");
+    if (!btn || !cutManagerVisible()) return;
+    if (btn.id === "gg-tab-inputs") {
+      e.preventDefault();
+      e.stopPropagation();
+      selectInputsTab(true);
+      return;
+    }
+    selectInputsTab(false);
+  }, true);
+}
+
+/** One Inputs button on ComfyUI's own right tab row, only while Cut Manager is open. */
+function ensureInputsTab() {
+  if (!cutManagerVisible()) {
+    removeInputsTab();
+    return;
+  }
+  const row = nativeRightTabRow();
+  if (!row) return;
+  inputsTabWanted = true;
+  if (!inputsTabBtn) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "gg-tab-inputs";
+    btn.className = "gg-inputs-tab";
+    btn.setAttribute("role", "tab");
+    btn.textContent = "Inputs";
+    btn.title = "Workflow inputs";
+    inputsTabBtn = btn;
+  }
+  if (inputsTabBtn.parentElement !== row) row.appendChild(inputsTabBtn);
+  if (!inputsPane) {
+    const pane = document.createElement("div");
+    pane.className = "gg-inputs-pane gg-app-controls";
+    pane.hidden = true;
+    pane.setAttribute("role", "tabpanel");
+    pane.setAttribute("aria-label", "Inputs");
+    document.body.appendChild(pane);
+    pane.addEventListener("input", onAppControlEdit);
+    pane.addEventListener("change", onAppControlEdit);
+    inputsPane = pane;
+  } else if (!inputsPane.isConnected) {
+    document.body.appendChild(inputsPane);
+  }
+  applyInputsTabState();
+  bindInputsTabOnce();
+}
+
 function paintAppControls() {
-  const el = ensureAppControlsEl();
+  ensureInputsTab();
+  document.querySelectorAll(".gg-app-controls:not(.gg-inputs-pane)").forEach((el) => { el.hidden = true; });
+  const pane = inputsPane;
+  if (!pane || pane.hidden) return;
+  placeInputsPane();
   const spec = openAppControls();
   if (!spec) {
-    el.hidden = true;
+    if (pane.dataset.key !== "empty") {
+      pane.dataset.key = "empty";
+      pane.dataset.random = "";
+      pane.innerHTML = `<p class="gg-inputs-empty">No inputs on this workflow.</p>`;
+    }
     return;
   }
-  if (!placeAppControls(el)) {
-    el.hidden = true;
-    return;
-  }
-  el.hidden = false;
-  const open = appControlsOpen();
-  el.classList.toggle("gg-app-collapsed", !open);
-  const fold = el.querySelector(".gg-app-fold");
-  if (fold) {
-    fold.textContent = open ? "▾" : "▸";
-    fold.title = open ? "Collapse" : "Expand";
-    fold.setAttribute("aria-expanded", open ? "true" : "false");
-    fold.setAttribute("aria-label", open ? "Collapse inputs" : "Expand inputs");
-  }
-  const body = el.querySelector(".gg-app-body");
-  if (!body) return;
-  body.hidden = !open;
   const key = spec.controls.map((c) => `${c.nodeId}:${c.widget}:${c.kind}`).join("|");
   const randomOn = projectRandomSeedOn() ? "1" : "0";
-  if (body.dataset.key !== key || body.dataset.random !== randomOn) {
-    body.dataset.key = key;
-    body.dataset.random = randomOn;
-    body.innerHTML = spec.controls.map(appControlRowHtml).join("");
+  if (pane.dataset.key !== key || pane.dataset.random !== randomOn) {
+    pane.dataset.key = key;
+    pane.dataset.random = randomOn;
+    pane.innerHTML = spec.controls.map(appControlRowHtml).join("");
     return;
   }
   for (const c of spec.controls) {
-    const input = body.querySelector(`[data-node="${CSS.escape(c.nodeId)}"][data-widget="${CSS.escape(c.widget)}"]`);
+    const input = pane.querySelector(`[data-node="${CSS.escape(c.nodeId)}"][data-widget="${CSS.escape(c.widget)}"]`);
     if (!input || document.activeElement === input) continue;
     const view = liveControlView(c);
     if (view.kind === "toggle") input.checked = !!view.value;
@@ -12715,7 +12832,9 @@ function mountShots(el) {
   root.addEventListener("dblclick", onShotsTitleDblClick);
   document.addEventListener("keydown", onShotsKey);
   window.addEventListener("keydown", onShotsSelectAllKey, true);
+  ensureInputsTab();
   return () => {
+    removeInputsTab();
     closeHistoryPopover();
     shotsUi.inlineRename?.finish(true);
     shotsUi.inlineSceneRename?.finish(true);
@@ -12918,9 +13037,22 @@ function itemAt(t) {
 let viewer = null;  // { box, img, vid, next, label, clock, playBtn, soundBtn }
 
 function paintViewerCaption() {
-  if (!viewer) return;
-  const text = viewer.mode === "export" ? "" : captionAtTime(trackClips(), play.t);
-  if (viewer.caption.textContent !== text) viewer.caption.textContent = text;
+  const text = viewer && viewer.mode === "export" ? "" : captionAtTime(trackClips(), play.t);
+  if (viewer?.caption && viewer.caption.textContent !== text) viewer.caption.textContent = text;
+  const cap = document.querySelector(".gg-edit-preview-cap");
+  if (cap && cap.textContent !== text) cap.textContent = text;
+}
+
+/** Timeline thumb and playback. Best when the cut has one; otherwise the shown take. Does not replace the cut. */
+function clipForTimeline(c) {
+  if (!c || c.kind === "reference") return c;
+  const id = timelineClipVersionId(c);
+  if (!id || c.media?.id === id) return c;
+  const v = (c.versions_list || []).find((x) => x && x.id === id);
+  const media = v ? versionMedia(v) : null;
+  if (!media) return { ...c, media: null };
+  const src = media.kind === "video" ? Math.max(0, Number(v.seconds) || 0) : 0;
+  return { ...c, media, src_dur: src || c.src_dur };
 }
 
 function showFrame(force) {
@@ -12929,7 +13061,8 @@ function showFrame(force) {
   if (viewer.mode === "export") { paintHead(); return; }
   const cuts = trackClips();
   const { i, local } = itemAt(play.t);
-  const c = cuts[i];
+  const raw = cuts[i] || null;
+  const c = clipForTimeline(raw);
   const { img, vid, label, blank } = viewer;
   if (i !== play.idx || force) {
     if (i !== play.idx) pauseAllTimelineMedia(viewer, viewer?.box);
@@ -13012,7 +13145,7 @@ function showFrame(force) {
     if (idx != null) setPreviewFrameIndex(idx);
   }
   paintHead();
-  refreshEditPreviewStill(c);
+  refreshEditPreviewStill(raw);
 }
 
 const animScrubBytesCache = new Map();
@@ -13033,7 +13166,7 @@ function animFailToImg(url) {
   if (!url || animImgFallbackUrls.has(url)) return;
   animImgFallbackUrls.add(url);
   if (!viewer) return;
-  const cur = trackClips()[play.idx];
+  const cur = clipForTimeline(trackClips()[play.idx]);
   if (!cur?.media || mediaUrl(cur.media.id) !== url) return;
   setPreviewFrameIndex(null);
   syncAnimatedStillImg(cur);
@@ -13255,7 +13388,7 @@ function mirrorEditPreviewFrame(still, frameIdx) {
 }
 
 function preloadNext(i) {
-  const c = trackClips()[i];
+  const c = clipForTimeline(trackClips()[i]);
   if (!viewer || !c || !c.media) return;
   const url = mediaUrl(c.media.id);
   if (playsAsVideo(c.media)) {
@@ -13273,7 +13406,7 @@ function preloadNext(i) {
 /** The current clip's file failed to load (e.g. deleted on disk): show the same blank as a cut with no media. */
 function showViewerNoMedia(el) {
   if (!viewer || viewer.mode === "export") return false;
-  const c = trackClips()[play.idx];
+  const c = clipForTimeline(trackClips()[play.idx]);
   if (!c || !c.media || el.dataset.src !== mediaUrl(c.media.id)) return false;
   const { img, vid, blank } = viewer;
   vid.pause(); vid.hidden = true; img.hidden = true; blank.hidden = false;
@@ -13996,7 +14129,8 @@ function ensureEditPreviewEl() {
     el = document.createElement("div");
     el.className = "gg-edit-preview";
     el.setAttribute("role", "img");
-    el.innerHTML = `<div class="gg-edit-preview-stage"><img alt="" /><video class="gg-edit-preview-vid" playsinline muted preload="auto" hidden></video><canvas class="gg-edit-preview-still" hidden></canvas><div class="gg-edit-preview-empty" hidden></div></div><div class="gg-edit-preview-label"></div>`;
+    el.innerHTML = `<div class="gg-edit-preview-stage"><img alt="" /><video class="gg-edit-preview-vid" playsinline muted preload="auto" hidden></video><canvas class="gg-edit-preview-still" hidden></canvas><div class="gg-edit-preview-empty" hidden></div></div><div class="gg-edit-preview-cap"></div><div class="gg-edit-preview-label"></div>`;
+    el.tabIndex = 0;
     document.body.appendChild(el);
   }
   ensureEditPreviewFilm(el);
@@ -14022,6 +14156,12 @@ function ensureEditPreviewEl() {
     empty.hidden = true;
     stage.appendChild(empty);
   }
+  if (!el.querySelector(".gg-edit-preview-cap")) {
+    const cap = document.createElement("div");
+    cap.className = "gg-edit-preview-cap";
+    el.appendChild(cap);
+  }
+  if (!el.hasAttribute("tabindex")) el.tabIndex = 0;
   return el;
 }
 
@@ -14528,6 +14668,13 @@ function ensureEditPreviewChrome(el) {
     nav.innerHTML = `<button type="button" class="gg-edit-preview-up" aria-label="Previous take" title="Previous take">▴</button><button type="button" class="gg-edit-preview-down" aria-label="Next take" title="Next take">▾</button>`;
     el.appendChild(nav);
   }
+  if (!el._ggPreviewFocus) {
+    el._ggPreviewFocus = true;
+    el.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("button, a, input, textarea, select")) return;
+      try { el.focus({ preventScroll: true }); } catch (_) { el.focus(); }
+    });
+  }
   if (el._ggTakeNav) return;
   el._ggTakeNav = true;
   el.querySelector(".gg-edit-preview-up")?.addEventListener("click", (e) => {
@@ -14553,6 +14700,7 @@ function syncEditPreviewTakeChrome(shown) {
   ensureEditPreviewChrome(el);
   const vid = shown?.media?.id ? String(shown.media.id) : "";
   const on = !!(shown && vid && shown.pick === vid);
+  el.classList.toggle("gg-is-best", on);
   const star = el.querySelector(".gg-edit-preview-best");
   if (star) {
     star.classList.toggle("gg-on", on);
@@ -14793,6 +14941,7 @@ function placeEditTakesStrip() {
   body.style.width = `${Math.max(48, Math.round(width))}px`;
   body.style.top = `${top}px`;
   body.style.height = `${rowPx}px`;
+  if (!placingEditPreview && timelineEditModeOn) scheduleEditPreviewLayout();
   return top;
 }
 
@@ -14811,21 +14960,39 @@ function editOverlayBottom(graph) {
   return Math.min(...caps);
 }
 
-function applyEditPreviewLayout() {
-  document.documentElement.classList.toggle(EDIT_MODE_ON_CLASS, !!timelineEditModeOn);
-  placeEditTakesStrip();
-  if (!timelineEditModeOn || !isTimelinePanelOpen()) {
-    removeEditPreviewEl();
-    return;
+/**
+ * Fixed overlay for the graph column only: from the top of that column down to the
+ * take row or the timeline. Side panels stay in their own columns, so this does not
+ * resize them or cover the right tab bar.
+ */
+let placingEditPreview = false;
+
+function editPreviewCoverRect(dockTop) {
+  const column = graphColumnElement();
+  const host = column ? editPreviewBox(column) : null;
+  const bottomOf = (graph) => {
+    const caps = [];
+    const base = overlayBottomLimit(graph);
+    if (base != null) caps.push(base);
+    if (Number.isFinite(dockTop) && dockTop > 0) caps.push(dockTop + EDIT_PREVIEW_GAP_PX);
+    else {
+      const docked = editOverlayBottom(graph);
+      if (docked != null) caps.push(docked);
+    }
+    if (!caps.length) return null;
+    return Math.min(...caps);
+  };
+  if (host) {
+    return editPreviewOverlayRect({
+      graphRect: host,
+      bottomPanelTop: bottomOf(host),
+    });
   }
   const graph = editPreviewBox(graphWorkAreaElement());
-  if (!graph) {
-    removeEditPreviewEl();
-    return;
-  }
+  if (!graph) return null;
   const toolbarBottom = measureEditPreviewToolbarBottom(graph);
   const sides = measureEditPreviewSides(graph);
-  const rect = editPreviewOverlayRect({
+  return editPreviewOverlayRect({
     graphRect: graph,
     toolbarBottom,
     shotsRect: sides.left != null ? { right: sides.left, width: 100 } : null,
@@ -14833,16 +15000,32 @@ function applyEditPreviewLayout() {
     rightDockerLeft: measureRightDockerLeft(graph, toolbarBottom ?? graph.top),
     bottomPanelTop: editOverlayBottom(graph),
   });
+}
+
+function applyEditPreviewLayout() {
+  document.documentElement.classList.toggle(EDIT_MODE_ON_CLASS, !!timelineEditModeOn);
+  placingEditPreview = true;
+  const dockTop = placeEditTakesStrip();
+  placingEditPreview = false;
+  ensureInputsTab();
+  if (!timelineEditModeOn || !isTimelinePanelOpen()) {
+    removeEditPreviewEl();
+    return;
+  }
+  const rect = editPreviewCoverRect(dockTop);
   if (!rect) {
     removeEditPreviewEl();
     return;
   }
   const el = ensureEditPreviewEl();
   if (!el) return;
+  const top = Math.round(rect.top);
+  const bottom = Math.round(rect.bottom);
   el.style.left = `${Math.round(rect.left)}px`;
-  el.style.top = `${Math.round(rect.top)}px`;
+  el.style.top = `${top}px`;
   el.style.width = `${Math.round(rect.width)}px`;
-  el.style.height = `${Math.round(rect.height)}px`;
+  el.style.height = `${Math.max(32, bottom - top)}px`;
+  paintViewerCaption();
   refreshEditPreviewStill();
   bindEditPreviewObserver();
 }
@@ -15219,23 +15402,24 @@ function mountTimeline(el) {
     err.hidden = !state.error;
     err.textContent = state.error || "";
     $r(".gg-track").innerHTML = cuts.map((c, i) => {
+      const view = clipForTimeline(c);
       const run = isSceneRunStart(c, i > 0 ? cuts[i - 1] : null);
       const hue = c.group_id ? groupColor(c.group_id) : 0;
       const showBand = showTimelineSceneBand(c);
-      const tip = `${c.group_name ? `${c.group_name}\n` : ""}${cutDisplayLabel(c, cutLabels)}. ${c.name}  ${c.sec.toFixed(1)}s${c.src_dur ? ` (src ${c.src_dur}s)` : ""}${(() => {
+      const tip = `${c.group_name ? `${c.group_name}\n` : ""}${cutDisplayLabel(c, cutLabels)}. ${c.name}  ${c.sec.toFixed(1)}s${view.src_dur ? ` (src ${view.src_dur}s)` : ""}${(() => {
         const cap = effectiveCaption(c).trim();
         return cap ? `\n${cap}` : "";
       })()}`;
       return `
-      <div class="gg-clip${c.media ? "" : " gg-clip-empty"}${timelineClipTypeClassSuffix(c)}${c.pos !== c.index ? " gg-moved" : ""}${c.group_id ? " gg-in-scene" : ""}${run ? " gg-scene-start" : ""}"
+      <div class="gg-clip${view.media ? "" : " gg-clip-empty"}${timelineClipTypeClassSuffix(view)}${c.pos !== c.index ? " gg-moved" : ""}${c.group_id ? " gg-in-scene" : ""}${run ? " gg-scene-start" : ""}"
            data-cut-id="${esc(c.id)}" style="width:${c.sec * ed.px}px;${c.group_id ? `--gg-grp:${hue}` : ""}"
            title="${esc(tip)}">
         ${showBand ? `<div class="gg-scene-band">${esc(c.group_name)}</div>` : ""}
-        ${thumbHtml(c.media, "gg-clip-thumb")}
-        ${timelineClipTypeBadgeHtml(c, esc)}
+        ${thumbHtml(view.media, "gg-clip-thumb")}
+        ${timelineClipTypeBadgeHtml(view, esc)}
         <span class="gg-clip-dot gg-dot-empty"></span>
         <div class="gg-clip-label"><span class="gg-no">${esc(cutDisplayLabel(c, cutLabels))}</span>${esc(displayCutName(c))}</div>
-        <div class="gg-clip-in">${kindOf(c) === "video" && c.in > 0 ? `in ${c.in.toFixed(1)}` : ""}</div>
+        <div class="gg-clip-in">${kindOf(view) === "video" && c.in > 0 ? `in ${c.in.toFixed(1)}` : ""}</div>
         <div class="gg-clip-dur">${c.sec.toFixed(1)}s</div>
         <span class="gg-render-badge gg-clip-rs" hidden><span class="gg-rs-dot"></span><span class="gg-rs-text"></span></span>
         <div class="gg-clip-prog" hidden><div class="gg-prog-bar"><div class="gg-prog-fill"></div></div></div>
@@ -15533,6 +15717,22 @@ window.addEventListener("keydown", (e) => {
   e.stopPropagation();
   e.stopImmediatePropagation();
   stepPreviewTake(e.key === "ArrowUp" ? -1 : 1);
+}, true);
+
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.isComposing) return;
+  if (isTypingKeyTarget(e.target) || isTypingKeyTarget(document.activeElement)) return;
+  if (ggModalOpen() || comfyPromptDialogOpen() || ctxUi.el) return;
+  const preview = document.querySelector(".gg-edit-preview");
+  if (!preview || !preview.isConnected) return;
+  const ae = document.activeElement;
+  const hovered = preview.matches(":hover");
+  const focused = !!(ae && ae !== document.body && preview.contains(ae));
+  if (!hovered && !focused) return;
+  if (ae && ae.closest && ae.closest("button, a")) return;
+  e.preventDefault();
+  e.stopPropagation();
+  togglePreviewBest();
 }, true);
 
 window.addEventListener("wheel", onEditPreviewWheel, { capture: true, passive: false });

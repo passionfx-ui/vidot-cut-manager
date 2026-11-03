@@ -644,10 +644,10 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
 .gg-edit-preview [hidden] { display: none !important; }
 .gg-edit-preview-label {
   position: absolute;
-  left: 8px;
-  top: 6px;
+  left: 52px;
+  top: 10px;
   z-index: 4;
-  max-width: calc(100% - 44px);
+  max-width: calc(100% - 96px);
   font-size: 11px;
   padding: 1px 5px;
   border-radius: 3px;
@@ -657,7 +657,6 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
   text-overflow: ellipsis;
 }
 .gg-edit-preview-label:empty { display: none; }
-.gg-edit-preview-best,
 .gg-edit-preview-nav button {
   width: 22px;
   height: 22px;
@@ -673,11 +672,47 @@ html.gg-edit-mode-on .gg-timeline .gg-tl-tools .gg-clock { flex: 0 0 auto; }
 }
 .gg-edit-preview-best {
   position: absolute;
-  top: 6px;
-  right: 8px;
-  z-index: 4;
+  top: 8px;
+  left: 10px;
+  z-index: 6;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #ccc;
+  font-size: 24px;
+  line-height: 36px;
+  text-align: center;
+  cursor: pointer;
 }
 .gg-edit-preview-best.gg-on { color: #e8c547; }
+.gg-edit-preview.gg-is-best {
+  box-shadow: 0 0 0 3px #e8c547, 0 4px 24px rgba(0, 0, 0, 0.45);
+}
+.gg-edit-preview-cap {
+  position: absolute;
+  left: 50%;
+  bottom: 84px;
+  transform: translateX(-50%);
+  z-index: 5;
+  width: max-content;
+  max-width: calc(100% - 48px);
+  max-height: 30%;
+  overflow: hidden;
+  padding: 3px 10px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: center;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.gg-edit-preview-cap:empty { display: none; }
 .gg-edit-preview-nav {
   position: absolute;
   right: 8px;
@@ -1222,6 +1257,30 @@ html.gg-edit-mode-on .gg-shots .gg-vs-body.gg-vs-dock {
   font: 12px/1.3 system-ui, "Segoe UI", "Malgun Gothic", sans-serif;
 }
 .gg-app-controls[hidden] { display: none !important; }
+.gg-inputs-tab {
+  flex: 0 0 auto;
+  height: 32px;
+  margin: 0;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.gg-inputs-tab[aria-selected="true"] { background: rgba(255, 255, 255, 0.14); }
+.gg-inputs-pane.gg-app-controls {
+  z-index: 3700;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: auto;
+  max-height: none;
+  pointer-events: auto;
+}
+.gg-inputs-pane .gg-inputs-empty { margin: 8px 4px; color: var(--gg-dim); font-size: 12px; }
 .gg-app-controls .gg-app-head { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--gg-line); }
 .gg-app-controls.gg-app-collapsed .gg-app-head { border-bottom: 0; }
 .gg-app-controls .gg-app-fold { flex: 0 0 auto; width: 22px; height: 20px; padding: 0; border: 0; background: transparent; color: var(--gg-fg); cursor: pointer; }

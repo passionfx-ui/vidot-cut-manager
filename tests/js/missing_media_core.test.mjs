@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { isAnimatedImage, noMediaText, noMediaThumbClass, playsAsVideo, versionMedia } from "../../web/gg_missing_media_core.js";
+import { isAnimatedImage, noMediaText, noMediaThumbClass, playsAsVideo, timelineClipVersionId, versionMedia } from "../../web/gg_missing_media_core.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const js = readFileSync(join(__dirname, "../../web/gonggan.js"), "utf8");
@@ -47,6 +47,27 @@ describe("animated images (0.9.119)", () => {
     assert.equal(versionMedia({ id: "v1", kind: "image", missing: true }), null);
     assert.equal(versionMedia(undefined), null);
     assert.equal(versionMedia(null), null);
+  });
+});
+
+describe("timelineClipVersionId", () => {
+  const cut = (extra) => ({
+    pick: null,
+    display: "sel",
+    media: { id: "media" },
+    versions_list: [{ id: "best" }, { id: "sel" }, { id: "media" }],
+    ...extra,
+  });
+
+  it("uses Best when the cut has one, otherwise the selected take", () => {
+    assert.equal(timelineClipVersionId(cut({ pick: "best" })), "best");
+    assert.equal(timelineClipVersionId(cut({ pick: null })), "sel");
+    assert.equal(timelineClipVersionId(cut({ pick: "", display: "" })), "media");
+    assert.equal(timelineClipVersionId(null), "");
+  });
+
+  it("ignores a Best id that is not in versions_list", () => {
+    assert.equal(timelineClipVersionId(cut({ pick: "gone" })), "sel");
   });
 });
 
@@ -94,6 +115,15 @@ describe("gonggan.js wiring", () => {
   it("promote uses versionMedia (missing version = no media)", () => {
     assert.match(fnBody("applyPickLocally"), /c\.media = versionMedia\(v\)/);
     assert.equal(js.includes("mediaFromVersion"), false);
+  });
+
+  it("timeline paint uses Best, and the preview does not clone the right tab bar", () => {
+    assert.match(js, /function clipForTimeline\(c\)/);
+    assert.match(js, /timelineClipVersionId\(c\)/);
+    assert.equal(js.includes("placeOverviewOnPreview"), false);
+    assert.equal(js.includes("gg-panel-on-preview"), false);
+    assert.match(js, /id = "gg-tab-inputs"/);
+    assert.match(js, /row\.appendChild\(inputsTabBtn\)/);
   });
 
   it("viewer shows the no media blank when the current clip fails to load", () => {
