@@ -1,18 +1,3 @@
-/**
- * Timeline clip source: the Best take when the cut has one, otherwise the selected take.
- * A Best take stays on the timeline when the shown take changes. An id that is not in
- * versions_list is ignored when that list is present.
- */
-export function timelineClipVersionId(cut) {
-  if (!cut) return "";
-  const list = Array.isArray(cut.versions_list) ? cut.versions_list : [];
-  const known = new Set(list.map((v) => v && v.id).filter(Boolean));
-  const usable = (id) => typeof id === "string" && !!id && (known.size === 0 || known.has(id));
-  if (usable(cut.pick)) return cut.pick;
-  if (usable(cut.display)) return cut.display;
-  return cut.media && cut.media.id ? String(cut.media.id) : "";
-}
-
 /** A version whose file is gone on disk is shown and played exactly like a cut with no media. */
 
 /** Clip media for a versions_list row; null when there is no row or its file is missing. */

@@ -414,10 +414,7 @@ def native_save_edit(pid: str, order, clips) -> dict | None:
         if not (isinstance(display, str) and display in valid):
             display = None
         src_dur = c.get("src_dur")
-        # Timeline length follows Best when the cut has one. The shown take (display)
-        # only sizes the clip when Best is unset. The media id on the payload stays
-        # the shown take (current_version); the timeline UI reads Best itself.
-        ref = pick or display
+        ref = display or pick
         if ref and ref in valid:
             ver = valid[ref]
             kind = None if ver.get("missing") else ver["kind"]
