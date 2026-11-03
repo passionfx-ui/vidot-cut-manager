@@ -14404,30 +14404,31 @@ function editPreviewMainImg(el) {
 
 /**
  * Frame, peek, and slide sizes for one preview box.
- * Most of each neighbor peek lies on the current frame. The rest sits in the gate.
+ * The current frame is a little smaller than the black gate.
+ * Previous and next takes use that freed space as separate frames, with a gap,
+ * and do not cover the current frame.
  */
 function editPreviewFilmMetrics(width, height) {
   const H = Math.max(0, Math.round(Number(height) || 0));
   const W = Math.max(0, Math.round(Number(width) || 0));
   if (H < 64 || W < 64) return null;
   const gateX = Math.round(Math.min(22, Math.max(12, W * 0.016)));
-  let peek = Math.round(Math.min(140, Math.max(52, H * 0.22)));
-  let overlap = Math.round(peek * 0.68);
-  let gateOuter = Math.round(Math.min(16, Math.max(6, H * 0.012)));
-  let gateY = gateOuter + (peek - overlap);
+  const gap = Math.round(Math.min(10, Math.max(6, H * 0.01)));
+  let outer = Math.round(Math.min(14, Math.max(6, H * 0.012)));
+  let peek = Math.round(Math.min(96, Math.max(32, H * 0.08)));
+  let gateY = outer + peek + gap;
   let frameH = H - gateY * 2;
-  const minFrame = Math.round(H * 0.58);
+  const minFrame = Math.round(H * 0.64);
   if (frameH < minFrame) {
     frameH = minFrame;
     gateY = Math.floor((H - frameH) / 2);
-    const outside = Math.max(4, Math.min(Math.floor(gateY * 0.45), Math.round(H * 0.05)));
-    gateOuter = Math.max(4, gateY - outside);
-    peek = Math.max(16, outside + Math.min(Math.round(frameH * 0.24), Math.floor(H / 2) - gateOuter - 4));
-    overlap = gateOuter + peek - gateY;
-    if (overlap < 8) overlap = Math.min(peek - 4, Math.round(frameH * 0.16));
+    const room = gateY - gap;
+    outer = Math.max(4, Math.min(outer, Math.floor(room * 0.22)));
+    peek = room - outer;
   }
-  if (frameH < 24 || peek < 12) return null;
-  return { gateX, gateY, peek, overlap, frameH, slide: frameH };
+  if (frameH < 24 || peek < 12 || gateY <= peek + gap) return null;
+  frameH = H - gateY * 2;
+  return { gateX, gateY, peek, gap, outer, frameH, slide: frameH };
 }
 
 /** Write gate, peek, and slide lengths from the preview's current box. */
@@ -14438,12 +14439,13 @@ function syncEditPreviewFilmMetrics(el) {
   el.style.setProperty("--gg-gate-x", `${m.gateX}px`);
   el.style.setProperty("--gg-gate-y", `${m.gateY}px`);
   el.style.setProperty("--gg-peek", `${m.peek}px`);
-  el.style.setProperty("--gg-peek-overlap", `${m.overlap}px`);
+  el.style.setProperty("--gg-film-gap", `${m.gap}px`);
+  el.style.removeProperty("--gg-peek-overlap");
   const stage = el.querySelector(".gg-edit-preview-stage");
   const measured = Math.round(stage?.clientHeight || 0);
   const frameH = measured > 16 ? measured : m.frameH;
   const aspect = mediaFrameAspect(el);
-  const key = `${el.clientWidth}x${el.clientHeight}:${m.gateX}:${m.gateY}:${m.peek}:${m.overlap}:${frameH}:${aspect}`;
+  const key = `${el.clientWidth}x${el.clientHeight}:${m.gateX}:${m.gateY}:${m.peek}:${m.gap}:${frameH}:${aspect}`;
   const track = el.querySelector(".gg-edit-preview-slide-track");
   if (el.dataset.ggFilm === key) {
     if (track) layoutFilmTrack(track, frameH);
@@ -14458,7 +14460,7 @@ function syncEditPreviewFilmMetrics(el) {
     node.style.right = `${m.gateX}px`;
     node.style.height = `${m.peek}px`;
     node.style.width = "";
-    const inset = Math.max(0, m.gateY - (m.peek - m.overlap));
+    const inset = Math.max(0, m.gateY - m.peek - m.gap);
     if (edge === "top") node.style.top = `${inset}px`;
     else node.style.bottom = `${inset}px`;
     const img = node.querySelector("img");
