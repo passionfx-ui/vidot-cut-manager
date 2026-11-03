@@ -5967,7 +5967,7 @@ function selectCutRange(fromId, toId) {
   cutSelAnchor = fromId;
   bus.dispatchEvent(new Event("select"));
   const t = clipStartOf(toId);
-  if (t != null && typeof seek === "function" && !play.on) {
+  if (t != null && typeof seek === "function" && selectionMovesPlayhead()) {
     play.idx = -1;
     seek(t + 0.001);
   }
@@ -6112,10 +6112,15 @@ function selectListedGroup(ids, { multi = false, range = false, groupKey = "" } 
   noteLastShot(state.cutId);
   bus.dispatchEvent(new Event("select"));
   const t = clipStartOf(state.cutId);
-  if (t != null && typeof seek === "function" && !play.on) {
+  if (t != null && typeof seek === "function" && selectionMovesPlayhead()) {
     play.idx = -1;
     seek(t + 0.001);
   }
+}
+
+/** Selection seeks the playhead, except while a playback stop is applying the cut under it. */
+function selectionMovesPlayhead() {
+  return !play.on && !selectionHoldsPlayhead;
 }
 
 function selectCut(cutId, opts) {
@@ -6146,8 +6151,9 @@ function selectCut(cutId, opts) {
   noteLastShot(cutId);
   rememberReferenceGroup(cutId);
   bus.dispatchEvent(new Event("select"));
+  const keepPlayhead = !!(opts && opts.keepPlayhead);
   const t = clipStartOf(cutId);
-  if (t != null && typeof seek === "function" && !play.on) {
+  if (t != null && typeof seek === "function" && selectionMovesPlayhead() && !keepPlayhead) {
     play.idx = -1;
     seek(t + 0.001);
   }
@@ -8651,6 +8657,7 @@ let editPreviewProxyWatched = new WeakSet();
 let editPreviewProxySyncing = false;
 let editPreviewLoadToken = 0;
 let editPreviewAnimating = false;
+let editPreviewFilmGen = 0;
 let editPreviewWheelAcc = 0;
 let editPreviewWheelAt = 0;
 
@@ -13022,6 +13029,8 @@ const ed = {
   tlResizing: false,
 };
 const play = { on: false, t: 0, idx: -1, raf: 0, last: 0, gen: 0, tickGen: 0 };
+/** True while a pause/stop writes the cut under the playhead. That must not seek. */
+let selectionHoldsPlayhead = false;
 
 const IMG_MIN = 0.5, IMG_MAX = 60, VID_MIN = 0.2;
 const r2 = (x) => Math.round(x * 100 + 1e-6) / 100;
@@ -13203,6 +13212,7 @@ function showFrame(force) {
   const { i, local } = itemAt(play.t);
   const raw = cuts[i] || null;
   const c = clipForTimeline(raw);
+  if (play.on && i !== play.idx) cancelEditPreviewFilm();
   const { img, vid, label, blank } = viewer;
   if (i !== play.idx || force) {
     if (i !== play.idx) pauseAllTimelineMedia(viewer, viewer?.box);
@@ -13285,7 +13295,7 @@ function showFrame(force) {
     if (idx != null) setPreviewFrameIndex(idx);
   }
   paintHead();
-  refreshEditPreviewStill(raw);
+  refreshEditPreviewStill(raw ? c : null);
 }
 
 const animScrubBytesCache = new Map();
@@ -13646,6 +13656,7 @@ function startPlay() {
   leaveExportView();
   if (play.t >= totalSec() - 0.05) play.t = 0;
   if (play.raf) cancelAnimationFrame(play.raf);
+  cancelEditPreviewFilm();
   bumpPlaybackGen(play);
   play.tickGen = play.gen;
   play.on = true;
@@ -13654,7 +13665,7 @@ function startPlay() {
   play.raf = requestAnimationFrame(tick);
 }
 
-function stopPlay() {
+function stopPlay(opts) {
   bumpPlaybackGen(play);
   play.on = false;
   if (play.raf) cancelAnimationFrame(play.raf);
@@ -13663,6 +13674,22 @@ function stopPlay() {
   document.querySelectorAll(".gg-timeline").forEach((r) => pauseAllTimelineMedia(null, r));
   showFrame(true);
   paintHead();
+  if (!opts?.keepSelection) selectCutUnderPlayhead();
+}
+
+/** Cut under the playhead becomes the selected cut. The playhead stays where playback stopped. */
+function selectCutUnderPlayhead() {
+  const cuts = trackClips();
+  const { i } = itemAt(play.t);
+  const cut = cuts[i];
+  if (!cut || cut.kind === "reference") return;
+  if (state.cutId === cut.id && state.cutSel.size === 0 && state.groupSel.size === 0) return;
+  selectionHoldsPlayhead = true;
+  try {
+    selectCut(cut.id, { fromTimeline: true, keepPlayhead: true });
+  } finally {
+    selectionHoldsPlayhead = false;
+  }
 }
 
 function togglePlay() { play.on ? stopPlay() : startPlay(); }
@@ -13670,10 +13697,12 @@ function togglePlay() { play.on ? stopPlay() : startPlay(); }
 function seek(t, opts) {
   leaveExportView();
   const scrubbing = !!opts?.scrubbing;
-  if (play.on && !scrubbing) stopPlay();
+  const stopped = play.on && !scrubbing;
+  if (stopped) stopPlay({ keepSelection: true });
   play.t = Math.max(0, Math.min(totalSec(), t));
   play.last = performance.now();
   showFrame();
+  if (stopped) selectCutUnderPlayhead();
 }
 
 function timelineInnerLeft(root) {
@@ -13816,32 +13845,75 @@ function selectTimelineCut(cutId, ev) {
     selectTimelineRange(cutId);
     return;
   }
-  selectCut(cutId, { multi: !!(ev && (ev.ctrlKey || ev.metaKey)), fromTimeline: true });
+  presentTimelineCut(cutId, () => {
+    selectCut(cutId, { multi: !!(ev && (ev.ctrlKey || ev.metaKey)), fromTimeline: true });
+  });
 }
 
 function selectTimelineRange(toId) {
-  clearSceneGroupSelection();
-  const order = trackClips().map((c) => c.id);
-  const anchor = cutSelAnchor || state.cutId || toId;
-  const i = order.indexOf(anchor);
-  const j = order.indexOf(toId);
-  if (i < 0 || j < 0) {
-    selectCut(toId, { fromTimeline: true });
-    return;
-  }
-  const lo = Math.min(i, j);
-  const hi = Math.max(i, j);
-  state.cutSel.clear();
-  for (let k = lo; k <= hi; k++) state.cutSel.add(order[k]);
-  state.cutId = toId;
-  noteLastShot(toId);
-  cutSelAnchor = anchor;
-  bus.dispatchEvent(new Event("select"));
-  const t = clipStartOf(toId);
-  if (t != null && !play.on) {
-    play.idx = -1;
-    seek(t + 0.001);
-  }
+  presentTimelineCut(toId, () => {
+    clearSceneGroupSelection();
+    const order = trackClips().map((c) => c.id);
+    const anchor = cutSelAnchor || state.cutId || toId;
+    const i = order.indexOf(anchor);
+    const j = order.indexOf(toId);
+    if (i < 0 || j < 0) {
+      selectCut(toId, { fromTimeline: true });
+      return;
+    }
+    const lo = Math.min(i, j);
+    const hi = Math.max(i, j);
+    state.cutSel.clear();
+    for (let k = lo; k <= hi; k++) state.cutSel.add(order[k]);
+    state.cutId = toId;
+    noteLastShot(toId);
+    cutSelAnchor = anchor;
+    bus.dispatchEvent(new Event("select"));
+    const t = clipStartOf(toId);
+    if (t != null && selectionMovesPlayhead()) {
+      play.idx = -1;
+      seek(t + 0.001);
+    }
+  });
+}
+
+/**
+ * A timeline clip click selects that cut and slides the edit preview to its timeline take
+ * (Best when set, otherwise the selected take). Playback is stopped first so the slide is not overwritten.
+ */
+function presentTimelineCut(cutId, selectFn) {
+  if (play.on) stopPlay({ keepSelection: true });
+  const cut = cutById(cutId);
+  armTimelinePreviewTransition(cut);
+  selectFn();
+  if (timelineEditModeOn && cut) refreshEditPreviewStill(clipForTimeline(cut));
+}
+
+/** Later clip on the track advances the film downward. Same cut uses take-strip order. */
+function timelinePreviewDir(fromCutId, toCutId, fromMediaId, toMediaId, cut) {
+  const ids = trackClips().map((c) => c.id);
+  const a = ids.indexOf(fromCutId);
+  const b = ids.indexOf(toCutId);
+  if (fromCutId && toCutId && fromCutId !== toCutId && a >= 0 && b >= 0 && a !== b) return b > a ? 1 : -1;
+  const order = cut ? versionStripRows(cut, stripProbe.dur).map((r) => r.id) : [];
+  const i0 = order.indexOf(fromMediaId);
+  const i1 = order.indexOf(toMediaId);
+  if (i0 >= 0 && i1 >= 0 && i0 !== i1) return i1 > i0 ? 1 : -1;
+  return 1;
+}
+
+function armTimelinePreviewTransition(cut) {
+  if (!timelineEditModeOn || editPreviewReducedMotion() || !cut) return;
+  const el = document.querySelector(".gg-edit-preview");
+  if (!el) return;
+  const view = clipForTimeline(cut);
+  const incomingId = view?.media?.id ? String(view.media.id) : "";
+  const prevCut = el.dataset.previewCut || "";
+  const prevMedia = el.dataset.previewMedia || "";
+  const nextCut = view?.id != null ? String(view.id) : "";
+  if (prevCut === nextCut && prevMedia === incomingId) return;
+  if (editPreviewAnimating) cancelEditPreviewFilm();
+  startEditPreviewFilm(view, timelinePreviewDir(prevCut, nextCut, prevMedia, incomingId, view), incomingId);
 }
 
 function setTimelineSelection(ids, { keepGroups = false } = {}) {
@@ -14390,7 +14462,7 @@ function ensureEditPreviewEl() {
 }
 
 function removeEditPreviewEl() {
-  editPreviewAnimating = false;
+  cancelEditPreviewFilm();
   editPreviewWheelAcc = 0;
   const el = document.querySelector(".gg-edit-preview");
   el?._ggBoxRO?.disconnect();
@@ -14586,7 +14658,7 @@ function showPreviewTake(c, vid) {
   shotsUi.selTarget = "versions";
   Object.assign(stripPick, { pid: state.pid, cutId: c.id, vid });
   noteTakeKind(c, vid);
-  if (play.on) stopPlay();
+  if (play.on) stopPlay({ keepSelection: true });
   if (c.kind !== "reference") void setDisplayVersion(c.id, vid);
   bus.dispatchEvent(new Event("select"));
   requestAnimationFrame(() => {
@@ -14802,6 +14874,16 @@ function syncEditPreviewPeeks() {
   paintEditPreviewPeek(el.querySelector(".gg-edit-preview-peek-next"), c, nextId);
 }
 
+/** Drop a running slide so playback can cut to the next take with no blur. */
+function cancelEditPreviewFilm() {
+  editPreviewFilmGen += 1;
+  editPreviewAnimating = false;
+  const el = document.querySelector(".gg-edit-preview");
+  if (!el) return;
+  el.classList.remove("gg-film-move");
+  el.querySelectorAll(".gg-edit-preview-slide").forEach((node) => node.remove());
+}
+
 function releaseEditPreviewFilmHold(el) {
   if (!el || editPreviewAnimating) return;
   if (el.dataset.previewReady !== "1") return;
@@ -14876,6 +14958,7 @@ function filmIncomingNode(c, id) {
 function startEditPreviewFilm(c, dir, incomingId) {
   const el = document.querySelector(".gg-edit-preview");
   if (!el) return;
+  const gen = ++editPreviewFilmGen;
   ensureEditPreviewFilm(el);
   syncEditPreviewFilmMetrics(el);
   const frameH = Number(el.dataset.ggSlide) || el.querySelector(".gg-edit-preview-stage")?.clientHeight || 0;
@@ -14911,7 +14994,7 @@ function startEditPreviewFilm(c, dir, incomingId) {
   });
   let done = false;
   const finish = () => {
-    if (done) return;
+    if (done || gen !== editPreviewFilmGen) return;
     done = true;
     el.classList.remove("gg-film-move");
     editPreviewAnimating = false;
@@ -15788,9 +15871,11 @@ function mountTimeline(el) {
     e.stopPropagation();
     const ruler = $r(".gg-ruler");
     if (!ruler) return;
+    const wasPlaying = play.on;
     ed.scrubbing = true;
     ed.scrubResumePlay = false;
     if (play.on) {
+      cancelEditPreviewFilm();
       bumpPlaybackGen(play);
       play.on = false;
       if (play.raf) cancelAnimationFrame(play.raf);
@@ -15851,6 +15936,7 @@ function mountTimeline(el) {
       go(ev.clientX || e.clientX);
       paintPlayTransport();
       showFrame(true);
+      if (wasPlaying) selectCutUnderPlayhead();
     };
     try { overlay.setPointerCapture(e.pointerId); } catch (_) {}
     window.addEventListener("pointermove", move);
@@ -15934,7 +16020,8 @@ function mountTimeline(el) {
   const onDirty = () => paintRuler(root);
   const onSel = () => {
     paintSelection(root);
-    if (!play.on && state.cutId) {
+    if (!selectionMovesPlayhead()) return;
+    if (state.cutId) {
       const t = clipStartOf(state.cutId);
       if (t != null) {
         play.idx = -1;
@@ -15942,9 +16029,9 @@ function mountTimeline(el) {
         showFrame(true);
       }
     }
-    if (!play.on) refreshEditPreviewStill(state.cutId ? cutById(state.cutId) || null : null);
+    refreshEditPreviewStill(state.cutId ? cutById(state.cutId) || null : null);
   };
-  const onProjects = () => { stopPlay(); play.t = 0; paintTimelineNativeLocks(); };
+  const onProjects = () => { stopPlay({ keepSelection: true }); play.t = 0; paintTimelineNativeLocks(); };
   bus.addEventListener("timeline", onTimeline);
   bus.addEventListener("projects", onProjects);
   const onTimelineLocks = () => paintTimelineNativeLocks();
@@ -15964,7 +16051,7 @@ function mountTimeline(el) {
     requestAnimationFrame(applyEditPreviewLayout);
   }
   return () => {
-    stopPlay();
+    stopPlay({ keepSelection: true });
     removeEditPreviewEl();
     unbindEditPreviewObserver();
     if (ro) ro.disconnect();
