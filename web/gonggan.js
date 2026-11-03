@@ -2671,7 +2671,6 @@ function unlinkReferenceFromCut(cut, refId) {
   cut.prompt = prompt;
   cut.ref_links = links;
   scheduleCutFieldSave(cut.id, { ref_links: links, prompt }, prev);
-  mirrorPromptFields(cut.id, prompt, ta);
   refreshOpenCutRefChips();
 }
 
@@ -5044,76 +5043,14 @@ function setLiveFrames(id, frames) {
   else if (node.widgets && node.widgets[2]) node.widgets[2].value = n;
 }
 
-function timelinePromptBox() {
-  return document.querySelector(".gg-timeline .gg-tl-prompt-text");
-}
-
-const TL_PROMPT_EMPTY = "Select a cut";
-
-/** Timeline prompt column: the selected cut, or an empty placeholder. */
-function paintTimelinePrompt(root) {
-  const ta = (root || document).querySelector?.(".gg-tl-prompt-text") || timelinePromptBox();
-  if (!ta) return;
-  const cut = selectedShot();
-  if (!cut) {
-    if (document.activeElement === ta) ta.blur();
-    ta.value = "";
-    ta.placeholder = TL_PROMPT_EMPTY;
-    ta.disabled = true;
-    ta.title = TL_PROMPT_EMPTY;
-    delete ta.dataset.cutId;
-    return;
-  }
-  const nat = isNativeProject();
-  ta.disabled = !nat;
-  ta.placeholder = "Prompt";
-  ta.title = nat ? "Prompt" : NATIVE_READONLY_TIP;
-  const same = ta.dataset.cutId === cut.id;
-  ta.dataset.cutId = cut.id;
-  if (document.activeElement === ta && same) return;
-  const listTa = document.querySelector(`#gg-root .gg-cut[data-cut-id="${CSS.escape(cut.id)}"] textarea.gg-prompt-text:not(.gg-desc-text)`);
-  const next = listTa && document.activeElement === listTa
-    ? listTa.value
-    : (cut.prompt != null ? String(cut.prompt) : "");
-  if (ta.value !== next) ta.value = next;
-}
-
-/** Copy a prompt into the Prompt panel and the timeline prompt, skipping the field being typed in. */
-function mirrorPromptFields(cutId, value, source) {
-  const text = value == null ? "" : String(value);
-  const id = String(cutId || "");
-  if (!id) return;
-  document.querySelectorAll(`.gg-cut[data-cut-id="${CSS.escape(id)}"] textarea.gg-prompt-text:not(.gg-desc-text)`).forEach((ta) => {
-    if (ta === source || document.activeElement === ta) return;
-    if (ta.value !== text) ta.value = text;
-  });
-  const tl = timelinePromptBox();
-  if (!tl || tl === source || document.activeElement === tl) return;
-  if (tl.dataset.cutId && tl.dataset.cutId !== id) return;
-  if (!tl.dataset.cutId && selectedShot()?.id !== id) return;
-  if (tl.value !== text) tl.value = text;
-  tl.dataset.cutId = id;
-}
-
-/** Prompt panel save: cut.prompt, debounced /gonggan/cut/update, and the open graph widget. */
-function writePromptFromField(cutId, text, source) {
-  const row = cutById(cutId);
-  if (!row) return;
-  const value = text == null ? "" : String(text);
-  const prev = row.prompt;
-  row.prompt = value;
-  scheduleCutFieldSave(cutId, { prompt: value }, { prompt: prev });
-  syncPromptNodeFromField(cutId, value);
-  mirrorPromptFields(cutId, value, source);
-}
-
 function syncPromptFieldFromGraph(cutId, text) {
   const c = cutById(cutId);
   if (!c || String(c.prompt || "") === String(text ?? "")) return;
   const before = c.prompt;
   c.prompt = text == null ? "" : String(text);
   scheduleCutFieldSave(cutId, { prompt: c.prompt }, { prompt: before || "" });
-  mirrorPromptFields(cutId, c.prompt, null);
+  const ta = document.querySelector(`.gg-cut[data-cut-id="${CSS.escape(cutId)}"] textarea.gg-prompt-text:not(.gg-desc-text)`);
+  if (ta && document.activeElement !== ta) ta.value = c.prompt;
 }
 
 function syncPromptNodeFromField(cutId, text) {
@@ -8515,13 +8452,9 @@ function timelineBottomTabActive() {
   return isTimelinePanelOpen();
 }
 
-/**
- * Edit layout stays up while our strip is on screen.
- * The Export tab adds its controls beside that layout, so the preview and
- * timeline stay open on Export as well as on Timeline.
- */
+/** Timeline tab inside our strip (not the native bottom panel). */
 function isTimelinePanelOpen() {
-  return isOwnStripShown();
+  return isOwnStripShown() && ownStripTabId === TIMELINE_TAB;
 }
 
 function shotsSidebarActive() {
@@ -8575,7 +8508,6 @@ function openFieldExpandModal(ta, cutId) {
             c.prompt = text;
             scheduleCutFieldSave(cutId, { prompt: text }, { prompt: initial });
             syncPromptNodeFromField(cutId, text);
-            mirrorPromptFields(cutId, text, ta);
           }
         }
         void flushPendingCutFields();
@@ -8924,13 +8856,7 @@ function syncOwnStripTabs() {
     btn.setAttribute("aria-selected", on ? "true" : "false");
     btn.tabIndex = on ? 0 : -1;
   });
-  el.classList.toggle("gg-strip-export", ownStripTabId === EXPORT_TAB);
   el.querySelectorAll(".gg-strip-pane").forEach((pane) => {
-    // Timeline (prompt column, tracks, playback) stays put. Export only adds its pane.
-    if (pane.dataset.tab === TIMELINE_TAB) {
-      pane.hidden = false;
-      return;
-    }
     pane.hidden = pane.dataset.tab !== ownStripTabId;
   });
 }
@@ -11846,7 +11772,6 @@ function mountShots(el) {
         const prev = c.prompt;
         c.prompt = cap.value;
         scheduleCutFieldSave(cap.cutId, { prompt: cap.value }, { prompt: prev });
-        mirrorPromptFields(cap.cutId, cap.value, ta);
       }
     }
     const nat = isNativeProject() && !ta.disabled;
@@ -12040,7 +11965,12 @@ function mountShots(el) {
           scheduleCutFieldSave(id, { caption: ta.value }, { caption: prev });
           paintViewerCaption();
         } else if (kind === "prompt") {
-          writePromptFromField(id, ta.value, ta);
+          const row = cutById(id);
+          if (!row) return;
+          const prev = row.prompt;
+          row.prompt = ta.value;
+          scheduleCutFieldSave(id, { prompt: ta.value }, { prompt: prev });
+          syncPromptNodeFromField(id, ta.value);
         } else if (kind === "description") {
           const row = cutById(id);
           if (!row) return;
@@ -15031,11 +14961,6 @@ function mountTimeline(el) {
         <button class="gg-btn gg-reset" title="Reset to original order and lengths">Reset</button>
       </div>
       <div class="gg-error" hidden></div>
-      <div class="gg-tl-body">
-      <aside class="gg-tl-prompt" aria-label="Prompt">
-        <textarea class="gg-tl-prompt-text" spellcheck="true" autocomplete="off" placeholder="Select a cut" disabled></textarea>
-      </aside>
-      <div class="gg-tl-trackcol">
       <div class="gg-tl-scroll">
         <div class="gg-tl-inner">
           <div class="gg-ruler" title="Click to seek"></div>
@@ -15046,8 +14971,6 @@ function mountTimeline(el) {
       </div>
       <div class="gg-zoombar" title="Drag to scroll · drag an end to zoom · double-click to fit (Alt+wheel, = / -)">
         <div class="gg-zb-thumb"><span class="gg-zb-handle gg-zb-l" data-side="l"></span><span class="gg-zb-handle gg-zb-r" data-side="r"></span></div>
-      </div>
-      </div>
       </div>
     </div>
     </div>`;
@@ -15070,16 +14993,6 @@ function mountTimeline(el) {
     guardMediaWithTransport(v.next, play, () => false);
   }
   const $r = (q) => root.querySelector(q);
-  const promptTa = $r(".gg-tl-prompt-text");
-  if (promptTa) {
-    bindMentionField(promptTa);
-    promptTa.addEventListener("input", () => {
-      const id = promptTa.dataset.cutId;
-      if (!id || promptTa.disabled) return;
-      writePromptFromField(id, promptTa.value, promptTa);
-    });
-    promptTa.addEventListener("blur", () => { flushPendingCutFields(); });
-  }
   const paintButtons = () => {
     $r(".gg-snap").classList.toggle("gg-on", ed.snap);
     $r(".gg-sound").textContent = ed.sound ? "🔊" : "🔇";
@@ -15336,7 +15249,6 @@ function mountTimeline(el) {
     bindTrim(root);
     bindReorder(root);
     paintSelection(root);
-    paintTimelinePrompt(root);
     paintButtons();
     paintAllCutProgress();
     syncProgressWireState();
@@ -15357,7 +15269,6 @@ function mountTimeline(el) {
       }
     }
     if (!play.on) refreshEditPreviewStill(state.cutId ? cutById(state.cutId) || null : null);
-    paintTimelinePrompt(root);
   };
   const onProjects = () => { stopPlay(); play.t = 0; paintTimelineNativeLocks(); };
   bus.addEventListener("timeline", onTimeline);
