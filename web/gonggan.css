@@ -896,7 +896,16 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-timeline .gg-ruler { position: relative; flex: 0 0 20px; height: 20px; border-bottom: 1px solid var(--gg-line); cursor: col-resize; box-sizing: border-box; }
 .gg-timeline .gg-tick { position: absolute; top: 12px; width: 1px; height: 8px; background: var(--gg-line); font-size: 9px; color: var(--gg-dim); text-indent: 3px; white-space: nowrap; line-height: 10px; pointer-events: none; }
 .gg-timeline .gg-tick.gg-major { top: 0; height: 20px; background: #555c68; }
-.gg-timeline .gg-track { display: flex; flex: 1 1 auto; min-height: 84px; max-height: 150px; height: auto; margin-top: 6px; }
+.gg-timeline .gg-tl-groups { position: relative; flex: 0 0 16px; height: 16px; margin-top: 2px; }
+.gg-timeline .gg-tl-groups[hidden] { display: none; }
+.gg-timeline .gg-tl-group {
+  position: absolute; top: 0; height: 14px; box-sizing: border-box; padding: 0 4px;
+  font-size: 9px; line-height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: #f7f9fc; background: hsl(var(--gg-grp, 200) 48% 34%); border-radius: 2px; cursor: pointer; user-select: none;
+}
+.gg-timeline .gg-tl-group.gg-tl-group-empty { border: 1px dashed rgba(255,255,255,.5); background: hsl(var(--gg-grp, 200) 32% 28%); }
+.gg-timeline .gg-tl-group.gg-sel { outline: 2px solid #f2b84b; outline-offset: -1px; z-index: 1; }
+.gg-timeline .gg-track { display: flex; flex: 1 1 auto; min-height: 84px; max-height: 150px; height: auto; margin-top: 4px; }
 .gg-timeline .gg-clip { position: relative; flex: 0 0 auto; box-sizing: border-box; height: 100%; overflow: hidden; border: 2px solid #0b0c0e; border-radius: 4px; background: #2b3d55; cursor: grab; user-select: none; touch-action: none; }
 .gg-timeline .gg-clip-type-image { border-color: #4a8fd4; background: #2a3d52; }
 .gg-timeline .gg-clip-video { background: #3b2b55; }

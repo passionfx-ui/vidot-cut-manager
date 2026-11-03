@@ -564,7 +564,7 @@ function aiFeaturesActive() {
   return AI_CUT_SPLIT_VISIBLE && aiFeaturesOn;
 }
 const bus = new EventTarget();
-const state = { projects: [], projectsLoaded: false, pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), error: "" };
+const state = { projects: [], projectsLoaded: false, pid: localStorage.getItem(PID_KEY) || "", timeline: null, cutId: "", cutSel: new Set(), groupSel: new Set(), error: "" };
 /** Workflow graphs for the open project. Cut switches read this; only open/reload/save fill it. */
 const projectMemory = createProjectMemory();
 // Every assignment to state.timeline that is not a load result counts as a mutation (see gg_timeline_guard_core.js).
@@ -636,6 +636,7 @@ const PROGRESS_API_EVENTS = [
   "executed", "execution_success", "execution_error", "execution_interrupted",
 ];
 let cutSelAnchor = "";
+let groupSelAnchor = "";
 const ctxUi = { el: null, sub: null, onDoc: null, onKey: null };
 const reorderUndoBurst = createUndoBurst({ windowMs: 1500 });
 // One project History for Shots and Timeline. ComfyUI's own graph undo is left alone on the canvas.
@@ -1110,6 +1111,8 @@ function selectProject(pid) {
   state.cutId = "";
   state.cutSel.clear();
   cutSelAnchor = "";
+  state.groupSel.clear();
+  groupSelAnchor = "";
   wfLastLoadedCutId = "";
   wfLastLoadedProjectId = "";
   localStorage.setItem(PID_KEY, pid);
@@ -5950,6 +5953,7 @@ function selectionListOrder() {
 }
 
 function selectCutRange(fromId, toId) {
+  clearSceneGroupSelection();
   const order = selectionListOrder();
   const i = order.indexOf(fromId);
   const j = order.indexOf(toId);
@@ -5976,8 +5980,95 @@ function rememberReferenceGroup(id) {
   if (group) refsUi.groupId = group.id;
 }
 
+/** Scene ids in cut-list order, including empty scenes. */
+function sceneGroupOrder() {
+  const cuts = state.timeline?.cuts || [];
+  const groups = state.timeline?.groups || [];
+  return shotsSections(cuts, groups).filter((s) => s.type === "group" && s.group?.id).map((s) => s.group.id);
+}
+
+function selectedSceneGroupIds() {
+  const have = state.groupSel;
+  return sceneGroupOrder().filter((id) => have.has(id));
+}
+
+/** Keep New Cut aimed at a single selected scene. Leave reference-group selection alone. */
+function syncGroupSelectionFlags(focusId) {
+  const ids = selectedSceneGroupIds();
+  if (ids.length === 1) {
+    shotsUi.selFromGroup = true;
+    shotsUi.selGroupKey = ids[0];
+    return;
+  }
+  if (ids.length > 1) {
+    shotsUi.selFromGroup = false;
+    shotsUi.selGroupKey = focusId && ids.includes(focusId) ? focusId : ids[ids.length - 1];
+    return;
+  }
+  if ((state.timeline?.groups || []).some((g) => g.id === shotsUi.selGroupKey)) {
+    shotsUi.selFromGroup = false;
+    shotsUi.selGroupKey = "";
+  }
+}
+
+function clearSceneGroupSelection() {
+  if (!state.groupSel.size && !groupSelAnchor) {
+    syncGroupSelectionFlags("");
+    return;
+  }
+  state.groupSel.clear();
+  groupSelAnchor = "";
+  syncGroupSelectionFlags("");
+}
+
+/** Replace the scene selection. `keepCuts` leaves a marquee's cut selection in place. */
+function setSceneGroupSelection(ids, { keepCuts = false, focusId = "" } = {}) {
+  const have = new Set(ids || []);
+  state.groupSel.clear();
+  for (const id of sceneGroupOrder()) if (have.has(id)) state.groupSel.add(id);
+  const picked = selectedSceneGroupIds();
+  groupSelAnchor = picked[0] || "";
+  if (!keepCuts) {
+    state.cutSel.clear();
+    cutSelAnchor = "";
+  }
+  shotsUi.selTarget = "list";
+  syncGroupSelectionFlags(focusId || picked[picked.length - 1] || "");
+  bus.dispatchEvent(new Event("select"));
+}
+
+/** Click a scene header or timeline scene bar. Ctrl toggles, Shift extends, like cuts. */
+function selectSceneGroup(groupId, { multi = false, range = false } = {}) {
+  const order = sceneGroupOrder();
+  if (!order.includes(groupId)) return;
+  shotsUi.selTarget = "list";
+  if (range) {
+    const anchor = groupSelAnchor && order.includes(groupSelAnchor) ? groupSelAnchor : (selectedSceneGroupIds()[0] || groupId);
+    const i = order.indexOf(anchor);
+    const j = order.indexOf(groupId);
+    const lo = Math.min(i < 0 ? j : i, j);
+    const hi = Math.max(i < 0 ? j : i, j);
+    state.groupSel.clear();
+    for (let k = lo; k <= hi; k++) state.groupSel.add(order[k]);
+    groupSelAnchor = anchor;
+  } else if (multi) {
+    if (state.groupSel.has(groupId)) state.groupSel.delete(groupId);
+    else state.groupSel.add(groupId);
+    groupSelAnchor = groupId;
+  } else {
+    state.groupSel.clear();
+    state.groupSel.add(groupId);
+    groupSelAnchor = groupId;
+  }
+  state.cutSel.clear();
+  cutSelAnchor = "";
+  syncGroupSelectionFlags(groupId);
+  bus.dispatchEvent(new Event("select"));
+}
+
 /** Click a scene or reference-group header: select every item in it. Ctrl toggles, Shift extends. */
 function selectListedGroup(ids, { multi = false, range = false, groupKey = "" } = {}) {
+  clearSceneGroupSelection();
   const order = selectionListOrder();
   const raw = ids.filter(Boolean);
   const inOrder = order.filter((id) => raw.includes(id));
@@ -6031,6 +6122,7 @@ function selectCut(cutId, opts) {
   const range = opts && opts.range;
   const multi = opts && opts.multi;
   const fromTimeline = !!(opts && opts.fromTimeline);
+  clearSceneGroupSelection();
   shotsUi.selFromGroup = false;
   shotsUi.selTarget = "list";
   if (range) {
@@ -6583,6 +6675,7 @@ async function commitShotsReorder(order, groups, opts = {}) {
 }
 
 function selectOnlyCut(cutId) {
+  clearSceneGroupSelection();
   state.cutSel.clear();
   state.cutSel.add(cutId);
   cutSelAnchor = cutId;
@@ -6886,6 +6979,7 @@ function selectAllListCuts() {
   if (shotsUi.refTab && isNativeProject()) {
     const ids = referenceDisplayOrder();
     if (!ids.length) return false;
+    clearSceneGroupSelection();
     state.cutSel.clear();
     for (const id of ids) state.cutSel.add(id);
     if (!state.cutSel.has(state.cutId)) state.cutId = ids[ids.length - 1];
@@ -6899,6 +6993,7 @@ function selectAllListCuts() {
   const { order, hidden } = shotsNavOrder();
   const ids = selectAllCutIds(order, hidden);
   if (!ids.length) return false;
+  clearSceneGroupSelection();
   state.cutSel.clear();
   for (const id of ids) state.cutSel.add(id);
   cutSelAnchor = state.cutSel.has(state.cutId) ? state.cutId : ids[0];
@@ -7061,10 +7156,24 @@ async function renameSceneGroup(groupId) {
   await saveSceneGroupName(groupId, title);
 }
 
+async function deleteSceneGroups(groupIds) {
+  const drop = new Set((groupIds || []).filter((id) => (state.timeline?.groups || []).some((g) => g.id === id)));
+  const ids = sceneGroupOrder().filter((id) => drop.has(id));
+  if (!ids.length) return;
+  const message = ids.length === 1
+    ? "Delete this scene?\nCuts become ungrouped. You can restore it from History."
+    : `Delete ${ids.length} scenes?\nCuts become ungrouped. You can restore them from History.`;
+  if (!(await askConfirm({ message, danger: true }))) return;
+  recordShotsUndo(ids.length === 1 ? "Delete scene" : `Delete ${ids.length} scenes`);
+  await persistGroups(groupsClone().filter((g) => !drop.has(g.id)));
+  state.groupSel.clear();
+  groupSelAnchor = "";
+  syncGroupSelectionFlags("");
+  bus.dispatchEvent(new Event("select"));
+}
+
 async function deleteSceneGroup(groupId) {
-  if (!(await askConfirm({ message: "Delete this scene?\nCuts become ungrouped. You can restore it from History.", danger: true }))) return;
-  recordShotsUndo("Delete scene");
-  await persistGroups(groupsClone().filter((g) => g.id !== groupId));
+  await deleteSceneGroups([groupId]);
 }
 
 async function toggleGroupCollapsed(groupId) {
@@ -9232,6 +9341,7 @@ function updateSelectionBar(root) {
     setBtn(row, ".gg-ir-scene", refMode ? !hasProject : r.scene.disabled, sceneTitle);
     setBtn(row, ".gg-ir-cut", refMode ? !hasProject : r.cut.disabled, cutTitle);
     setBtn(row, ".gg-ir-del", r.del.disabled, r.del.title);
+    if (!refMode && selectedSceneGroupIds().length) setBtn(row, ".gg-ir-del", false, "Delete");
     if (refMode) setBtn(row, ".gg-ir-del", !cutsForDelete().length, "Delete");
     for (const sel of [".gg-ir-scene", ".gg-ir-cut", ".gg-ir-del"]) {
       const b = row.querySelector(sel);
@@ -9329,8 +9439,12 @@ function paintSelection(root) {
     const gid = sec.dataset.groupId || sec.dataset.refGroup || (sec.hasAttribute("data-loose") ? "ungrouped" : "");
     const allRows = rowIds.length > 0 && rowIds.every((id) => picked.has(id));
     const emptyHit = !!emptyKey && gid === emptyKey && rowIds.length === 0;
-    sec.classList.toggle("gg-grp-picked", allRows || emptyHit);
+    const groupOn = !!(sec.dataset.groupId && state.groupSel.has(sec.dataset.groupId));
+    sec.classList.toggle("gg-grp-picked", allRows || emptyHit || groupOn);
     if (sec.dataset.refGroup) sec.classList.toggle("gg-on", sec.dataset.refGroup === refsUi.groupId || emptyHit);
+  });
+  root.querySelectorAll(".gg-tl-group").forEach((el) => {
+    el.classList.toggle("gg-sel", state.groupSel.has(el.dataset.groupId || ""));
   });
   updateSelectionBar(root);
 }
@@ -11237,6 +11351,10 @@ function iconRowHtml() {
 
 /** Icon row Delete: the same soft delete as the cut menu / Delete key, after the in-app confirm. */
 async function confirmDeleteSelectedCuts() {
+  if (!shotsUi.refTab && selectedSceneGroupIds().length) {
+    await deleteSceneGroups(selectedSceneGroupIds());
+    return;
+  }
   const n = cutsForDelete().length;
   if (!n) return;
   const message = shotsUi.refTab
@@ -12246,6 +12364,7 @@ function mountShots(el) {
         if (btn.dataset.mode === "reference") {
           if (!shotsUi.refTab) {
             noteLastShot(state.cutId);
+            clearSceneGroupSelection();
             shotsUi.selFromGroup = false;
             shotsUi.selGroupKey = "";
           }
@@ -12368,6 +12487,7 @@ function mountShots(el) {
     root.querySelector(".gg-sel-x")?.addEventListener("click", () => {
       state.cutSel.clear();
       cutSelAnchor = "";
+      clearSceneGroupSelection();
       updateSelectionBar(root);
       paintSelection(root);
       bus.dispatchEvent(new Event("select"));
@@ -12440,16 +12560,20 @@ function mountShots(el) {
         paintPanel();
       });
     });
-    const bindGroupHead = (head, groupKey) => {
+    const bindGroupHead = (head, groupKey, { scene = false } = {}) => {
       head.addEventListener("click", (e) => {
         if (e.target.closest("button, input, textarea, a")) return;
         if (shotsUi.blockHeadSelect) {
           shotsUi.blockHeadSelect = false;
           return;
         }
-        const sec = head.closest(".gg-grp-sec");
-        const ids = [...(sec?.querySelectorAll(".gg-cut") || [])].map((li) => li.dataset.cutId).filter(Boolean);
-        selectListedGroup(ids, { multi: !!(e.ctrlKey || e.metaKey), range: !!e.shiftKey, groupKey });
+        if (scene) {
+          selectSceneGroup(groupKey, { multi: !!(e.ctrlKey || e.metaKey), range: !!e.shiftKey });
+        } else {
+          const sec = head.closest(".gg-grp-sec");
+          const ids = [...(sec?.querySelectorAll(".gg-cut") || [])].map((li) => li.dataset.cutId).filter(Boolean);
+          selectListedGroup(ids, { multi: !!(e.ctrlKey || e.metaKey), range: !!e.shiftKey, groupKey });
+        }
         paintSelection(root);
         paintPanel();
       });
@@ -12459,7 +12583,7 @@ function mountShots(el) {
       const gid = sec?.dataset?.groupId;
       if (!gid || sec.classList.contains("gg-ref-sec")) return;
       head.addEventListener("contextmenu", (e) => openSceneContextMenu(e, gid));
-      bindGroupHead(head, gid);
+      bindGroupHead(head, gid, { scene: true });
     });
     root.querySelectorAll(".gg-grp-sec[data-loose] > .gg-grp-head").forEach((head) => bindGroupHead(head, "ungrouped"));
     root.querySelectorAll(".gg-grp-sec > .gg-cutlist").forEach((list) => {
@@ -12469,8 +12593,12 @@ function mountShots(el) {
         const sec = list.closest(".gg-grp-sec");
         const groupKey = sec?.dataset.groupId || sec?.dataset.refGroup || (sec?.hasAttribute("data-loose") ? "ungrouped" : "");
         if (!groupKey) return;
-        if (sec.dataset.refGroup) refsUi.groupId = sec.dataset.refGroup;
-        selectListedGroup([], { multi: !!(e.ctrlKey || e.metaKey), range: !!e.shiftKey, groupKey });
+        if (sec.dataset.groupId && !sec.dataset.refGroup && !sec.classList.contains("gg-ref-sec")) {
+          selectSceneGroup(sec.dataset.groupId, { multi: !!(e.ctrlKey || e.metaKey), range: !!e.shiftKey });
+        } else {
+          if (sec.dataset.refGroup) refsUi.groupId = sec.dataset.refGroup;
+          selectListedGroup([], { multi: !!(e.ctrlKey || e.metaKey), range: !!e.shiftKey, groupKey });
+        }
         paintSelection(root);
         paintPanel();
       });
@@ -12688,9 +12816,10 @@ function mountShots(el) {
         verSel.ids.clear();
         verSel.anchor = "";
       }
-      if (state.cutSel.size) {
+      if (state.cutSel.size || state.groupSel.size) {
         state.cutSel.clear();
         cutSelAnchor = "";
+        clearSceneGroupSelection();
         updateSelectionBar(root);
         paintSelection(root);
         bus.dispatchEvent(new Event("select"));
@@ -12710,6 +12839,11 @@ function mountShots(el) {
         const ids = pickedVersions.length ? pickedVersions : [stripVid];
         handled();
         if (!e.repeat) void deleteVersions(c.id, ids);
+        return;
+      }
+      if (!shotsUi.refTab && selectedSceneGroupIds().length) {
+        handled();
+        if (!e.repeat) void confirmDeleteSelectedCuts();
         return;
       }
       if (!cutsForDelete().length) return;
@@ -12815,11 +12949,13 @@ function mountShots(el) {
     if (e.target.closest(".gg-cut") || e.target.closest(".gg-grp-head") || e.target.closest(".gg-ref-group") || e.target.closest(".gg-sel-detail") || e.target.closest(".gg-selbar") || e.target.closest(".gg-iconrow") || e.target.closest(".gg-vstrip") || e.target.closest(".gg-cutpanel") || e.target.closest(".gg-ctx")) return;
     const emptyList = e.target.closest(".gg-cutlist");
     if (emptyList && !emptyList.querySelector(".gg-cut")) return;
-    if (!state.cutSel.size && !shotsUi.selFromGroup) return;
+    if (!state.cutSel.size && !shotsUi.selFromGroup && !state.groupSel.size) return;
     shotsUi.selFromGroup = false;
     shotsUi.selGroupKey = "";
     state.cutSel.clear();
     cutSelAnchor = "";
+    state.groupSel.clear();
+    groupSelAnchor = "";
     updateSelectionBar(root);
     paintSelection(root);
     bus.dispatchEvent(new Event("select"));
@@ -13666,9 +13802,11 @@ function timelineGestureIds(anchorId) {
 }
 
 function clearTimelineMultiSelection() {
-  if (!state.cutSel.size) return;
+  const had = state.cutSel.size > 0 || state.groupSel.size > 0;
+  if (!had) return;
   state.cutSel.clear();
   cutSelAnchor = "";
+  clearSceneGroupSelection();
   bus.dispatchEvent(new Event("select"));
 }
 
@@ -13682,6 +13820,7 @@ function selectTimelineCut(cutId, ev) {
 }
 
 function selectTimelineRange(toId) {
+  clearSceneGroupSelection();
   const order = trackClips().map((c) => c.id);
   const anchor = cutSelAnchor || state.cutId || toId;
   const i = order.indexOf(anchor);
@@ -13705,7 +13844,7 @@ function selectTimelineRange(toId) {
   }
 }
 
-function setTimelineSelection(ids) {
+function setTimelineSelection(ids, { keepGroups = false } = {}) {
   const order = trackClips().map((c) => c.id);
   const have = new Set(ids || []);
   const picked = order.filter((id) => have.has(id));
@@ -13718,6 +13857,7 @@ function setTimelineSelection(ids) {
   } else {
     cutSelAnchor = "";
   }
+  if (!keepGroups) clearSceneGroupSelection();
   bus.dispatchEvent(new Event("select"));
 }
 
@@ -13919,15 +14059,15 @@ function bindMove(root) {
   });
 }
 
-/** Drag a dashed box on empty track space. Clips that meet the box become selected. Ctrl/Shift adds. */
+/** Drag a dashed box on empty track space. Clips and scene bars that meet the box become selected. Ctrl/Shift adds. */
 function bindTimelineMarquee(root) {
-  const track = root.querySelector(".gg-track");
-  if (!track || track.dataset.marquee) return;
-  track.dataset.marquee = "1";
-  track.addEventListener("pointerdown", (e) => {
+  const surfaces = [root.querySelector(".gg-track"), root.querySelector(".gg-tl-groups")].filter(Boolean);
+  if (!surfaces.length || surfaces[0].dataset.marquee) return;
+  const onDown = (e) => {
     if (e.button) return;
-    if (e.target.closest(".gg-clip, .gg-edge, .gg-ruler, .gg-head-line, .gg-zoombar, button, a, input, textarea")) return;
+    if (e.target.closest(".gg-clip, .gg-edge, .gg-ruler, .gg-head-line, .gg-zoombar, .gg-tl-group, button, a, input, textarea")) return;
     if (ed.dragging || ed.scrubbing) return;
+    const surface = e.currentTarget;
     const x0 = e.clientX;
     const y0 = e.clientY;
     let active = false;
@@ -13946,13 +14086,18 @@ function bindTimelineMarquee(root) {
       const r = Math.max(x0, x);
       const t = Math.min(y0, y);
       const b = Math.max(y0, y);
+      const overlap = (rect) => !(rect.right < l || rect.left > r || rect.bottom < t || rect.top > b);
       const ids = [];
+      const groups = [];
       root.querySelectorAll(".gg-clip").forEach((el) => {
-        const rect = el.getBoundingClientRect();
-        if (rect.right < l || rect.left > r || rect.bottom < t || rect.top > b) return;
+        if (!overlap(el.getBoundingClientRect())) return;
         if (el.dataset.cutId) ids.push(el.dataset.cutId);
       });
-      return ids;
+      root.querySelectorAll(".gg-tl-group").forEach((el) => {
+        if (!overlap(el.getBoundingClientRect())) return;
+        if (el.dataset.groupId) groups.push(el.dataset.groupId);
+      });
+      return { ids, groups };
     };
     const move = (ev) => {
       if (!active && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 6) return;
@@ -13961,7 +14106,7 @@ function bindTimelineMarquee(root) {
         box.style.left = x0 + "px";
         box.style.top = y0 + "px";
         root.appendChild(box);
-        try { track.setPointerCapture(e.pointerId); } catch (_) {}
+        try { surface.setPointerCapture(e.pointerId); } catch (_) {}
       }
       paint(ev.clientX, ev.clientY);
     };
@@ -13974,14 +14119,21 @@ function bindTimelineMarquee(root) {
         clearTimelineMultiSelection();
         return;
       }
-      const ids = hits(ev.clientX, ev.clientY);
-      if (ev.ctrlKey || ev.metaKey || ev.shiftKey) setTimelineSelection([...state.cutSel, ...ids]);
-      else setTimelineSelection(ids);
+      const hit = hits(ev.clientX, ev.clientY);
+      const add = !!(ev.ctrlKey || ev.metaKey || ev.shiftKey);
+      const cutIds = add ? [...state.cutSel, ...hit.ids] : hit.ids;
+      const groupIds = add ? [...state.groupSel, ...hit.groups] : hit.groups;
+      setTimelineSelection(cutIds, { keepGroups: true });
+      setSceneGroupSelection(groupIds, { keepCuts: true });
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
-  });
+  };
+  for (const surface of surfaces) {
+    surface.dataset.marquee = "1";
+    surface.addEventListener("pointerdown", onDown);
+  }
 }
 
 function layoutClips(root) {
@@ -13996,6 +14148,67 @@ function layoutClips(root) {
     prevEnd = c.start + c.sec;
   });
   paintRuler(root);
+  layoutSceneGroupBars(root);
+}
+
+/** One bar per contiguous scene run, plus a chip for each empty scene so the marquee can hit it. */
+function layoutSceneGroupBars(root) {
+  const host = root.querySelector(".gg-tl-groups");
+  if (!host) return;
+  const clips = trackClips();
+  const px = ed.px || 1;
+  const bars = [];
+  const seen = new Set();
+  let i = 0;
+  while (i < clips.length) {
+    const id = clips[i].group_id;
+    if (!id) { i += 1; continue; }
+    const start = Number(clips[i].start) || 0;
+    let end = start + (Number(clips[i].sec) || 0);
+    const name = clips[i].group_name || "Scene";
+    let j = i + 1;
+    while (j < clips.length && clips[j].group_id === id) {
+      const s = Number(clips[j].start) || 0;
+      end = Math.max(end, s + (Number(clips[j].sec) || 0));
+      j += 1;
+    }
+    seen.add(id);
+    bars.push({ id, name, left: start * px, width: Math.max(12, (end - start) * px), hue: groupColor(id) });
+    i = j;
+  }
+  let endSec = 0;
+  for (const c of clips) endSec = Math.max(endSec, (Number(c.start) || 0) + (Number(c.sec) || 0));
+  let left = clips.length ? (endSec + 0.35) * px : 4;
+  for (const sec of shotsSections(state.timeline?.cuts || [], state.timeline?.groups || [])) {
+    if (sec.type !== "group" || !sec.group?.id || seen.has(sec.group.id) || sec.cuts.length) continue;
+    const id = sec.group.id;
+    bars.push({ id, name: sec.group.name || "Scene", left, width: 72, hue: groupColor(id), empty: true });
+    left += 76;
+  }
+  host.hidden = bars.length === 0;
+  host.innerHTML = bars.map((b) => {
+    const sel = state.groupSel.has(b.id) ? " gg-sel" : "";
+    const empty = b.empty ? " gg-tl-group-empty" : "";
+    return `<div class="gg-tl-group${empty}${sel}" data-group-id="${esc(b.id)}" style="left:${b.left}px;width:${b.width}px;--gg-grp:${b.hue}" title="${esc(b.name)}">${esc(b.name)}</div>`;
+  }).join("");
+  const inner = root.querySelector(".gg-tl-inner");
+  if (inner && left > 4) {
+    const w = Math.max(parseFloat(inner.style.width) || 0, Math.ceil(left + 8));
+    inner.style.width = w + "px";
+  }
+}
+
+function bindTimelineGroupSelect(root) {
+  const host = root.querySelector(".gg-tl-groups");
+  if (!host || host.dataset.bound) return;
+  host.dataset.bound = "1";
+  host.addEventListener("pointerdown", (e) => {
+    const el = e.target.closest(".gg-tl-group");
+    if (!el || e.button) return;
+    e.preventDefault();
+    e.stopPropagation();
+    selectSceneGroup(el.dataset.groupId, { multi: !!(e.ctrlKey || e.metaKey), range: !!e.shiftKey });
+  });
 }
 
 function paintRuler(root) {
@@ -15411,6 +15624,7 @@ function mountTimeline(el) {
       <div class="gg-tl-scroll">
         <div class="gg-tl-inner">
           <div class="gg-ruler" title="Click to seek"></div>
+          <div class="gg-tl-groups" hidden></div>
           <div class="gg-track"></div>
           <div class="gg-drop" hidden></div>
           <div class="gg-head-line"></div>
@@ -15541,15 +15755,26 @@ function mountTimeline(el) {
   };
   window.addEventListener("keydown", onZoomKey, true);
   const onTimelineKey = (e) => {
-    if (e.key !== "Escape" || e.isComposing) return;
+    if (e.isComposing) return;
     if (ggModalOpen() || comfyPromptDialogOpen() || ctxUi.el) return;
     const t = e.target;
     if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ""))) return;
     if (!pluginKeyScopeActive({ hoverTimeline: ggElHovered(root), focusTimeline: ggElHasFocus(root) })) return;
-    if (!state.cutSel.size) return;
-    e.preventDefault();
-    e.stopPropagation();
-    clearTimelineMultiSelection();
+    if (e.key === "Escape") {
+      if (!state.cutSel.size && !state.groupSel.size) return;
+      e.preventDefault();
+      e.stopPropagation();
+      clearTimelineMultiSelection();
+      return;
+    }
+    if ((e.key === "Delete" || e.key === "Backspace") && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const shots = document.querySelector(".gg-root.gg-shots");
+      if (shots && pluginKeyScopeActive({ hoverShots: ggElHovered(shots), focusShots: ggElHasFocus(shots) })) return;
+      if (!selectedSceneGroupIds().length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void confirmDeleteSelectedCuts();
+    }
   };
   document.addEventListener("keydown", onTimelineKey);
   const zoomRo = window.ResizeObserver ? new ResizeObserver(() => paintZoomBar(root)) : null;
@@ -15634,6 +15859,7 @@ function mountTimeline(el) {
     window.addEventListener("pointercancel", end);
   };
   bindTimelineMarquee(root);
+  bindTimelineGroupSelect(root);
   $r(".gg-ruler").addEventListener("pointerdown", beginTimelineScrub);
   const headLine = $r(".gg-head-line");
   headLine?.addEventListener("pointerdown", beginTimelineScrub, true);

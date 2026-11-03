@@ -137,7 +137,7 @@ export function groupedListHtml(sections, { cutHtml, groupHue = () => 200, group
     const g = sec.group;
     const collapsed = !!g.collapsed;
     return `<section class="gg-grp-sec" data-group-id="${escHtml(g.id)}" style="--gg-grp:${groupHue(g.id)}">
-        <header class="gg-grp-head" title="Click to select all cuts in this scene. Double-click to rename.">
+        <header class="gg-grp-head" title="Click to select this scene. Ctrl or Shift adds more. Double-click to rename.">
           <button type="button" class="gg-grp-fold" title="Collapse or expand">${collapsed ? "▸" : "▾"}</button>
           <span class="gg-grp-title">${escHtml(g.name)}</span>
           <span class="gg-grp-prog">${escHtml(groupProgress(sec.cuts))}</span>
