@@ -551,7 +551,7 @@ html.gg-edit-mode-on .gg-timeline .gg-viewer { display: none; }
   --gg-dim: #9aa0aa;
   --gg-fg: #e6e8ec;
   position: fixed;
-  z-index: 2400;
+  z-index: 3600;
   display: flex;
   margin: 0;
   padding: 0;
@@ -560,7 +560,7 @@ html.gg-edit-mode-on .gg-timeline .gg-viewer { display: none; }
   border: 1px solid var(--gg-line);
   border-radius: 4px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
-  pointer-events: none;
+  pointer-events: auto;
   overflow: hidden;
 }
 .gg-edit-preview img,
@@ -794,7 +794,7 @@ html.gg-edit-mode-on .gg-timeline .gg-editor { flex: 1 1 auto; min-width: 0; }
 .gg-shots .gg-vstrip { position: relative; flex: 0 0 auto; min-height: 0; overflow: hidden; min-width: 0; display: flex; flex-direction: column; border-top: 1px solid var(--gg-line); background: #1f2228; }
 .gg-shots .gg-vs-head { display: none; height: 0; overflow: hidden; margin: 0; padding: 0; border: none; }
 .gg-shots .gg-vs-body { position: relative; flex: 0 0 auto; height: 72px; min-height: 0; }
-/* I26: Edit mode pins the thumbnail row under the preview. The info grid stays in Shots. */
+/* I26/I30: Edit mode pins the thumbnail row on the timeline, under the preview. */
 html.gg-edit-mode-on .gg-shots .gg-vs-body.gg-vs-dock {
   margin: 0;
   background: #1f2228;
@@ -934,7 +934,7 @@ html.gg-edit-mode-on .gg-shots .gg-vs-body.gg-vs-dock {
   --gg-fg: #e6e8ec;
   --gg-panel: #23262d;
   position: fixed;
-  z-index: 2500;
+  z-index: 3700;
   display: flex;
   flex-direction: column;
   margin: 0;
@@ -993,6 +993,10 @@ html.gg-edit-mode-on .gg-shots .gg-vs-body.gg-vs-dock {
   border-top: 1px solid var(--gg-line);
   overflow: hidden;
   font: 12px/1.35 system-ui, "Segoe UI", "Malgun Gothic", sans-serif;
+}
+/* I30: while Edit is on, our strip stacks above the canvas zoom/minimap tools. */
+html.gg-edit-mode-on .gg-bottom-strip {
+  z-index: 3600;
 }
 .gg-bottom-strip[hidden] { display: none !important; }
 .gg-bottom-strip .gg-strip-resize {

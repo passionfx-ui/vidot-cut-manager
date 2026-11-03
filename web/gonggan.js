@@ -422,6 +422,7 @@ import {
 import {
   EDIT_MODE_LABEL,
   EDIT_MODE_ON_CLASS,
+  EDIT_PREVIEW_GAP_PX,
   editPreviewAtPlayhead,
   editPreviewOverlayRect,
   loadEditPreviewMode,
@@ -13265,8 +13266,8 @@ function unbindEditPreviewObserver() {
 
 /** Thumbnail row height. Matches `.gg-vs-body`. The info grid stays in the shots column. */
 const EDIT_TAKES_ROW_PX = 72;
-/** Room left for the canvas toolbar when it cannot be measured yet. */
-const EDIT_TAKES_TOOLBAR_FALLBACK_PX = 56;
+/** Above ComfyUI's canvas menu (z-1200) and minimap (z-1300). Below our dialogs. */
+const EDIT_COVER_Z = 3600;
 
 function clearEditTakesDock(body) {
   const el = body || document.querySelector(".gg-shots .gg-vs-body");
@@ -13281,27 +13282,11 @@ function clearEditTakesDock(body) {
   el.style.boxSizing = "";
 }
 
-/** Top of the floating canvas toolbar (zoom / fit / minimap), not a selection toolbox. */
-function measureCanvasToolbarTop(graphRect) {
-  const panel = document.querySelector(".graph-canvas-panel");
-  if (!panel || !graphRect) return null;
-  let top = null;
-  for (const el of panel.querySelectorAll('[role="toolbar"]')) {
-    const hostClass = typeof el.parentElement?.className === "string" ? el.parentElement.className : "";
-    if (!hostClass.includes("bottom-0")) continue;
-    const r = el.getBoundingClientRect();
-    if (r.width < 80 || r.height < 20 || r.height > 96) continue;
-    if (r.bottom < graphRect.top + 40) continue;
-    if (r.left > graphRect.right - 8 || r.right < graphRect.left + 8) continue;
-    top = top == null ? r.top : Math.min(top, r.top);
-  }
-  return top;
-}
-
 /**
  * In Edit mode, with Timeline open, pin the take thumbnail row in the graph
- * column, directly under the preview and above the timeline. It stays above
- * the canvas toolbar. Other modes leave the row in the shots column.
+ * column, directly under the preview and on top of the timeline. The preview
+ * fills the space above that row, covering the canvas and its floating tools.
+ * Other modes leave the row in the shots column.
  * @returns {number|null} top of the docked row, or null when it is not docked
  */
 function placeEditTakesStrip() {
@@ -13340,17 +13325,14 @@ function placeEditTakesStrip() {
   }
   const gap = 4;
   const timelineTop = ownStripTop();
-  const toolbarTop = measureCanvasToolbarTop(graph);
-  let bottomEdge = timelineTop != null ? timelineTop - gap : graph.bottom - gap;
-  if (toolbarTop != null) bottomEdge = Math.min(bottomEdge, toolbarTop - gap);
-  else bottomEdge -= EDIT_TAKES_TOOLBAR_FALLBACK_PX;
+  const bottomEdge = timelineTop != null ? timelineTop : graph.bottom;
   const minTop = (barBottom != null ? barBottom : graph.top) + gap;
   let top = Math.round(bottomEdge - EDIT_TAKES_ROW_PX);
   if (top < minTop) top = Math.round(minTop);
   body.classList.add("gg-vs-dock");
   body.style.position = "fixed";
   body.style.boxSizing = "border-box";
-  body.style.zIndex = "2300";
+  body.style.zIndex = String(EDIT_COVER_Z + 50);
   body.style.left = `${Math.round(left)}px`;
   body.style.width = `${Math.max(48, Math.round(width))}px`;
   body.style.top = `${top}px`;
@@ -13366,7 +13348,8 @@ function editOverlayBottom(graph) {
   const dock = document.querySelector(".gg-vs-body.gg-vs-dock");
   if (dock) {
     const top = dock.getBoundingClientRect().top;
-    if (Number.isFinite(top) && top > 0) caps.push(top);
+    // The overlay rect insets by EDIT_PREVIEW_GAP_PX, so add it back and the preview meets the row.
+    if (Number.isFinite(top) && top > 0) caps.push(top + EDIT_PREVIEW_GAP_PX);
   }
   if (!caps.length) return null;
   return Math.min(...caps);
@@ -13805,6 +13788,7 @@ function mountTimeline(el) {
       </div>`;
     }).join("");
     bindThumbFallbacks($r(".gg-track"));
+    bindHoverPlay($r(".gg-track"));
     layoutClips(root);
     bindTrim(root);
     bindReorder(root);
@@ -14111,17 +14095,22 @@ function bindHoverPlay(root) {
     v._ggHoverBound = true;
     const host = v.parentElement;
     if (!host) return;
+    const showFirstFrame = () => {
+      if (v._ggHoverOn) return;
+      try { v.currentTime = 0; } catch (_) {}
+    };
     host.addEventListener("mouseenter", () => {
       if (!v.isConnected) return;
+      v._ggHoverOn = true;
       v.preload = "auto";
       v.loop = true;
       v.play().catch(() => {});
     });
     host.addEventListener("mouseleave", () => {
+      v._ggHoverOn = false;
       v.pause();
-      try {
-        v.currentTime = 0;
-      } catch (_) {}
+      if (v.readyState >= 1) showFirstFrame();
+      else v.addEventListener("loadedmetadata", showFirstFrame, { once: true });
     });
   });
 }

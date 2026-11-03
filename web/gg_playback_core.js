@@ -117,6 +117,8 @@ export function pauseAllTimelineMedia(viewer, scope) {
   const seen = new Set();
   const pause = (el) => {
     if (!el || seen.has(el)) return;
+    // Timeline cut thumbs play only while hovered. Transport stop/seek must not pause them.
+    if (el.classList && el.classList.contains("gg-thumb-vid")) return;
     seen.add(el);
     try {
       el.pause();
