@@ -6065,6 +6065,8 @@ function setSceneGroupSelection(ids, { keepCuts = false, focusId = "" } = {}) {
 function selectSceneGroup(groupId, { multi = false, range = false } = {}) {
   const order = sceneGroupOrder();
   if (!order.includes(groupId)) return;
+  const list = document.querySelector(".gg-root.gg-shots .gg-grp-wrap");
+  const heldScroll = list ? list.scrollTop : 0;
   shotsUi.selTarget = "list";
   if (range) {
     const anchor = groupSelAnchor && order.includes(groupSelAnchor) ? groupSelAnchor : (selectedSceneGroupIds()[0] || groupId);
@@ -6088,6 +6090,11 @@ function selectSceneGroup(groupId, { multi = false, range = false } = {}) {
   cutSelAnchor = "";
   syncGroupSelectionFlags(groupId);
   bus.dispatchEvent(new Event("select"));
+  if (list) {
+    const pin = () => { if (list.isConnected) list.scrollTop = heldScroll; };
+    pin();
+    requestAnimationFrame(() => { pin(); requestAnimationFrame(pin); });
+  }
 }
 
 /** Click a scene or reference-group header: select every item in it. Ctrl toggles, Shift extends. */
@@ -7850,6 +7857,24 @@ async function persistShotsReorder(order0, groups) {
   return true;
 }
 
+/** True when the pointer is inside the element's border box. Margins and row gaps are outside. */
+function pointerInElementBox(el, e) {
+  if (!el || !e) return false;
+  const r = el.getBoundingClientRect();
+  return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+}
+
+/** Topmost cut row whose border box contains the point. A gap between rows matches nothing. */
+function cutRowAtClientPoint(wrap, x, y) {
+  if (!wrap) return null;
+  let hit = null;
+  wrap.querySelectorAll(".gg-cut").forEach((li) => {
+    const r = li.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) hit = li;
+  });
+  return hit;
+}
+
 function collectShotRowRects(wrap) {
   const wrapRect = wrap.getBoundingClientRect();
   const rows = [];
@@ -7914,6 +7939,7 @@ function bindShotsReorder(root) {
         "mousedown",
         (e) => {
           if (e.button !== 0) return;
+          if (!pointerInElementBox(el, e)) return;
           const blocker = e.target.closest("input, textarea, button, select, a");
           if (blocker) {
             if (blocker.tagName === "TEXTAREA" && !isCardFieldEditing(blocker)) {
@@ -7929,6 +7955,7 @@ function bindShotsReorder(root) {
     }
     el.addEventListener("pointerdown", (e) => {
       if (!isNativeProject() || e.button) return;
+      if (!pointerInElementBox(el, e)) return;
       const blocker = e.target.closest("input, textarea, button, select, a");
       // Card caption textareas only block a drag while they are in edit mode (double-click).
       if (blocker && !(blocker.tagName === "TEXTAREA" && !isCardFieldEditing(blocker))) return;
@@ -8555,8 +8582,20 @@ function captionRowContent(c) {
   });
 }
 
+/** Left cut-list thumbnail. A Best take stays on the card while other takes are browsed. */
+function cutListThumbMedia(c) {
+  if (!c) return null;
+  if (c.pick) {
+    const v = (c.versions_list || []).find((x) => x && x.id === c.pick);
+    const best = v ? versionMedia(v) : null;
+    if (best) return best;
+  }
+  return c.media || null;
+}
+
 function cutThumbHtml(c) {
-  return `<div class="gg-cut-thumb">${thumbHtml(c.media, "gg-thumb")}${c.media && c.media.kind === "video" ? '<span class="gg-badge">▶</span>' : ""}${c.media && c.media.source && fmtSrc(c.media.source) && c.media.source !== "gonggan" ? `<span class="gg-badge gg-badge-l gg-src-${esc(c.media.source)}">${esc(fmtSrc(c.media.source))}</span>` : ""}</div>`;
+  const media = cutListThumbMedia(c);
+  return `<div class="gg-cut-thumb">${thumbHtml(media, "gg-thumb")}${media && media.kind === "video" ? '<span class="gg-badge">▶</span>' : ""}${media && media.source && fmtSrc(media.source) && media.source !== "gonggan" ? `<span class="gg-badge gg-badge-l gg-src-${esc(media.source)}">${esc(fmtSrc(media.source))}</span>` : ""}</div>`;
 }
 
 function infoRowContent(c, labels) {
@@ -9507,7 +9546,8 @@ function paintSelection(root) {
   });
   const on = root.querySelector(`[data-cut-id="${CSS.escape(state.cutId)}"]`);
   const view = on?.closest(".gg-grp-wrap, .gg-final-wrap");
-  if (on && view) {
+  // A scene-group click must not pull the list back to the current cut.
+  if (on && view && !state.groupSel.size) {
     const r = on.getBoundingClientRect();
     const v = view.getBoundingClientRect();
     if (rowFullyHidden({ viewTop: v.top, viewBottom: v.bottom, rowTop: r.top, rowBottom: r.bottom })) {
@@ -12680,6 +12720,7 @@ function mountShots(el) {
     root.querySelectorAll(".gg-cut").forEach((li) => {
       if (li.dataset.kind === "reference") {
         li.addEventListener("click", (e) => {
+          if (!pointerInElementBox(li, e)) return;
           const fieldEl = e.target.closest(FIELD_TEXT_SEL);
           if (fieldEl && shouldSkipCardSelect({ inEditMode: isCardFieldEditing(fieldEl) })) return;
           e.stopPropagation();
@@ -12707,6 +12748,7 @@ function mountShots(el) {
         return;
       }
       li.addEventListener("click", (e) => {
+        if (!pointerInElementBox(li, e)) return;
         const fieldEl = e.target.closest(FIELD_TEXT_SEL);
         if (fieldEl && shouldSkipCardSelect({ inEditMode: isCardFieldEditing(fieldEl) })) return;
         const id = li.dataset.cutId;
@@ -12723,6 +12765,30 @@ function mountShots(el) {
         paintPanel();
       });
     });
+    const cutWrap = root.querySelector(".gg-grp-wrap");
+    cutWrap?.addEventListener("click", (e) => {
+      if (e.target.closest(".gg-grp-head, button, a, input, select")) return;
+      const field = e.target.closest("textarea");
+      if (field && isCardFieldEditing(field)) return;
+      const hit = cutRowAtClientPoint(cutWrap, e.clientX, e.clientY);
+      const owner = e.target.closest?.(".gg-cut");
+      if (!hit) {
+        if (owner && cutWrap.contains(owner)) e.stopPropagation();
+        return;
+      }
+      if (owner === hit) return;
+      e.stopPropagation();
+      const id = hit.dataset.cutId;
+      if (!id) return;
+      if (e.shiftKey) selectCut(id, { range: true });
+      else selectCut(id, { multi: e.ctrlKey || e.metaKey });
+      if (hit.dataset.kind !== "reference") {
+        openTimelinePanelIfAllowed();
+        if (isTimelinePanelOpen()) scheduleRestoreTimelinePanelHeight();
+      }
+      paintSelection(root);
+      paintPanel();
+    }, true);
     const bindGroupHead = (head, groupKey, { scene = false } = {}) => {
       head.addEventListener("click", (e) => {
         if (e.target.closest("button, input, textarea, a")) return;
@@ -14380,51 +14446,12 @@ function layoutClips(root) {
   layoutSceneGroupBars(root);
 }
 
-/** One bar per contiguous scene run, plus a chip for each empty scene so the marquee can hit it. */
+/** The extra scene-bar row is not shown. Scene names stay on the clip band only. */
 function layoutSceneGroupBars(root) {
-  const host = root.querySelector(".gg-tl-groups");
+  const host = root?.querySelector(".gg-tl-groups");
   if (!host) return;
-  const clips = trackClips();
-  const px = ed.px || 1;
-  const bars = [];
-  const seen = new Set();
-  let i = 0;
-  while (i < clips.length) {
-    const id = clips[i].group_id;
-    if (!id) { i += 1; continue; }
-    const start = Number(clips[i].start) || 0;
-    let end = start + (Number(clips[i].sec) || 0);
-    const name = clips[i].group_name || "Scene";
-    let j = i + 1;
-    while (j < clips.length && clips[j].group_id === id) {
-      const s = Number(clips[j].start) || 0;
-      end = Math.max(end, s + (Number(clips[j].sec) || 0));
-      j += 1;
-    }
-    seen.add(id);
-    bars.push({ id, name, left: start * px, width: Math.max(12, (end - start) * px), hue: groupColor(id) });
-    i = j;
-  }
-  let endSec = 0;
-  for (const c of clips) endSec = Math.max(endSec, (Number(c.start) || 0) + (Number(c.sec) || 0));
-  let left = clips.length ? (endSec + 0.35) * px : 4;
-  for (const sec of shotsSections(state.timeline?.cuts || [], state.timeline?.groups || [])) {
-    if (sec.type !== "group" || !sec.group?.id || seen.has(sec.group.id) || sec.cuts.length) continue;
-    const id = sec.group.id;
-    bars.push({ id, name: sec.group.name || "Scene", left, width: 72, hue: groupColor(id), empty: true });
-    left += 76;
-  }
-  host.hidden = bars.length === 0;
-  host.innerHTML = bars.map((b) => {
-    const sel = state.groupSel.has(b.id) ? " gg-sel" : "";
-    const empty = b.empty ? " gg-tl-group-empty" : "";
-    return `<div class="gg-tl-group${empty}${sel}" data-group-id="${esc(b.id)}" style="left:${b.left}px;width:${b.width}px;--gg-grp:${b.hue}" title="${esc(b.name)}">${esc(b.name)}</div>`;
-  }).join("");
-  const inner = root.querySelector(".gg-tl-inner");
-  if (inner && left > 4) {
-    const w = Math.max(parseFloat(inner.style.width) || 0, Math.ceil(left + 8));
-    inner.style.width = w + "px";
-  }
+  host.hidden = true;
+  host.replaceChildren();
 }
 
 function bindTimelineGroupSelect(root) {
@@ -14858,82 +14885,77 @@ function editPreviewMainImg(el) {
 }
 
 /**
- * Frame, peek, and slide sizes for one preview box.
- * The current frame is a little smaller than the black gate.
- * Previous and next takes use that freed space as separate frames, with a gap,
- * and do not cover the current frame.
+ * Frame sizes for one preview box.
+ * Current, previous, and next takes share one frame height. The current frame
+ * is centered. Neighbors sit fully above and below it, separated by a gap,
+ * so the preview only shows part of each neighbor. Nothing overlaps.
  */
 function editPreviewFilmMetrics(width, height) {
   const H = Math.max(0, Math.round(Number(height) || 0));
   const W = Math.max(0, Math.round(Number(width) || 0));
   if (H < 64 || W < 64) return null;
   const gateX = Math.round(Math.min(22, Math.max(12, W * 0.016)));
-  const gap = Math.round(Math.min(10, Math.max(6, H * 0.01)));
-  let outer = Math.round(Math.min(14, Math.max(6, H * 0.012)));
-  let peek = Math.round(Math.min(96, Math.max(32, H * 0.08)));
-  let gateY = outer + peek + gap;
+  const gap = Math.round(Math.min(10, Math.max(6, H * 0.012)));
+  let peek = Math.round(Math.min(Math.round(H * 0.14), Math.max(28, Math.round(H * 0.09))));
+  let gateY = peek + gap;
   let frameH = H - gateY * 2;
-  const minFrame = Math.round(H * 0.64);
+  const minFrame = Math.round(H * 0.62);
   if (frameH < minFrame) {
     frameH = minFrame;
     gateY = Math.floor((H - frameH) / 2);
-    const room = gateY - gap;
-    outer = Math.max(4, Math.min(outer, Math.floor(room * 0.22)));
-    peek = room - outer;
+    peek = Math.max(8, gateY - gap);
   }
-  if (frameH < 24 || peek < 12 || gateY <= peek + gap) return null;
   frameH = H - gateY * 2;
-  return { gateX, gateY, peek, gap, outer, frameH, slide: frameH };
+  if (frameH < 24 || peek < 8 || gateY < gap + peek) return null;
+  return { gateX, gateY, peek, gap, frameH, slide: frameH };
 }
 
-/** Write gate, peek, and slide lengths from the preview's current box. */
+/** Write the shared frame size from the preview's current box. Take changes call this too. */
 function syncEditPreviewFilmMetrics(el) {
   if (!el || !el.isConnected) return;
   const m = editPreviewFilmMetrics(el.clientWidth, el.clientHeight);
   if (!m) return;
+  const frameH = m.frameH;
   el.style.setProperty("--gg-gate-x", `${m.gateX}px`);
   el.style.setProperty("--gg-gate-y", `${m.gateY}px`);
   el.style.setProperty("--gg-peek", `${m.peek}px`);
   el.style.setProperty("--gg-film-gap", `${m.gap}px`);
-  el.style.removeProperty("--gg-peek-overlap");
-  const stage = el.querySelector(".gg-edit-preview-stage");
-  const measured = Math.round(stage?.clientHeight || 0);
-  const frameH = measured > 16 ? measured : m.frameH;
-  const aspect = mediaFrameAspect(el);
-  const key = `${el.clientWidth}x${el.clientHeight}:${m.gateX}:${m.gateY}:${m.peek}:${m.gap}:${frameH}:${aspect}`;
-  const track = el.querySelector(".gg-edit-preview-slide-track");
-  if (el.dataset.ggFilm === key) {
-    if (track) layoutFilmTrack(track, frameH);
-    return;
-  }
-  el.dataset.ggFilm = key;
   el.style.setProperty("--gg-frame-h", `${frameH}px`);
+  el.style.removeProperty("--gg-peek-overlap");
+  el.dataset.ggFilm = `${el.clientWidth}x${el.clientHeight}:${m.gateX}:${m.gateY}:${m.peek}:${m.gap}:${frameH}:${el.dataset.previewMedia || ""}`;
   el.dataset.ggSlide = String(frameH);
   const placePeek = (node, edge) => {
     if (!node) return;
     node.style.left = `${m.gateX}px`;
     node.style.right = `${m.gateX}px`;
-    node.style.height = `${m.peek}px`;
     node.style.width = "";
-    const inset = Math.max(0, m.gateY - m.peek - m.gap);
-    if (edge === "top") node.style.top = `${inset}px`;
-    else node.style.bottom = `${inset}px`;
+    node.style.height = `${frameH}px`;
+    node.style.bottom = "auto";
+    node.style.top = edge === "top"
+      ? `${m.gateY - m.gap - frameH}px`
+      : `${m.gateY + frameH + m.gap}px`;
     const img = node.querySelector("img");
-    if (img) img.style.height = `${frameH}px`;
+    if (img) {
+      img.style.top = "0";
+      img.style.bottom = "0";
+      img.style.height = "100%";
+      img.style.objectPosition = "center";
+    }
   };
   placePeek(el.querySelector(".gg-edit-preview-peek-prev"), "top");
   placePeek(el.querySelector(".gg-edit-preview-peek-next"), "bottom");
+  const pinFrame = (node) => {
+    if (!node) return;
+    node.style.left = `${m.gateX}px`;
+    node.style.right = `${m.gateX}px`;
+    node.style.top = `${m.gateY}px`;
+    node.style.bottom = "auto";
+    node.style.height = `${frameH}px`;
+  };
+  pinFrame(el.querySelector(".gg-edit-preview-stage"));
+  pinFrame(el.querySelector(".gg-edit-preview-slide"));
+  const track = el.querySelector(".gg-edit-preview-slide-track");
   if (track) layoutFilmTrack(track, frameH);
-}
-
-/** Natural aspect of the picture in the frame, so a different take recomputes the strip. */
-function mediaFrameAspect(el) {
-  const img = editPreviewMainImg(el);
-  const vid = el.querySelector("video.gg-edit-preview-vid");
-  const w = img && !img.hidden && img.naturalWidth ? img.naturalWidth : (vid && !vid.hidden ? vid.videoWidth : 0);
-  const h = img && !img.hidden && img.naturalHeight ? img.naturalHeight : (vid && !vid.hidden ? vid.videoHeight : 0);
-  if (!w || !h) return "0";
-  return `${w}x${h}`;
 }
 
 function layoutFilmTrack(track, frameH) {
@@ -15031,6 +15053,7 @@ function syncEditPreviewPeeks() {
   const el = document.querySelector(".gg-edit-preview");
   if (!el || editPreviewAnimating) return;
   ensureEditPreviewFilm(el);
+  syncEditPreviewFilmMetrics(el);
   const c = takeBrowserSubject();
   const { order, index } = takeBrowserIndex(c);
   const prevId = index > 0 ? order[index - 1] : "";
@@ -15937,7 +15960,6 @@ function mountTimeline(el) {
       <div class="gg-tl-scroll">
         <div class="gg-tl-inner">
           <div class="gg-ruler" title="Click to seek"></div>
-          <div class="gg-tl-groups" hidden></div>
           <div class="gg-track"></div>
           <div class="gg-drop" hidden></div>
           <div class="gg-head-line"></div>
