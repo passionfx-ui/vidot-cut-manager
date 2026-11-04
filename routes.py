@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import secrets
 from pathlib import Path
@@ -358,12 +359,44 @@ def _notify(job: dict) -> None:
 gg_export._notify = _notify
 
 
+def _request_peer_addr(request) -> str | None:
+    """TCP peer from request.remote, otherwise the transport peername. Never Host."""
+    remote = getattr(request, "remote", None)
+    if isinstance(remote, str) and remote.strip():
+        return remote.strip()
+    transport = getattr(request, "transport", None)
+    get_extra = getattr(transport, "get_extra_info", None) if transport is not None else None
+    if not callable(get_extra):
+        return None
+    peername = get_extra("peername")
+    host = peername[0] if isinstance(peername, (tuple, list)) and peername else None
+    if isinstance(host, str) and host.strip():
+        return host.strip()
+    return None
+
+
+def _peer_addr_is_loopback(addr: str) -> bool:
+    text = addr.split("%", 1)[0].strip()
+    try:
+        ip = ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address):
+        mapped = ip.ipv4_mapped
+        if mapped is not None:
+            ip = mapped
+        elif ip.is_loopback:
+            return True
+        else:
+            return False
+    return ip in ipaddress.ip_network("127.0.0.0/8")
+
+
 def _request_is_local(request) -> bool:
-    peer = request.remote or ""
-    if peer in ("127.0.0.1", "::1"):
-        return True
-    host = (request.host or "").split(":")[0].lower()
-    return host in ("127.0.0.1", "localhost")
+    addr = _request_peer_addr(request)
+    if not addr:
+        return False
+    return _peer_addr_is_loopback(addr)
 
 
 @routes.get("/gonggan/export/output-path")
