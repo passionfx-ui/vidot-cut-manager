@@ -40,7 +40,7 @@ describe("animated images (0.9.119)", () => {
     assert.match(show, /if \(playsAsVideo\(c\.media\)\) \{\n\s*img\.hidden = true; blank\.hidden = true; vid\.hidden = false;/);
     assert.match(show, /if \(c && playsAsVideo\(c\.media\)\) \{\n\s*vid\.muted/);
     assert.match(fnBody("preloadNext"), /if \(playsAsVideo\(c\.media\)\) \{/);
-    assert.match(js, /c\.media && c\.media\.kind === "video" \? '<span class="gg-badge">▶<\/span>'/, "still gets the video badge");
+    assert.match(js, /media && media\.kind === "video" \? '<span class="gg-badge">▶<\/span>'/, "still gets the video badge");
   });
 
   it("is no media for a missing file or no row", () => {
@@ -103,11 +103,11 @@ describe("gonggan.js wiring", () => {
 
   it("binds thumb fallbacks on the timeline track and cut panel", () => {
     assert.match(js, /bindThumbFallbacks\(\$r\("\.gg-track"\)\)/);
-    assert.match(js, /panel\.innerHTML = cutPanelHtml\(c, labels\);\n\s*bindThumbFallbacks\(panel\);/);
+    assert.match(js, /panel\.innerHTML = cutPanelHtml\(c, labels\);\n\s*bindHoverPlay\(panel\);\n\s*bindThumbFallbacks\(panel\);/);
   });
 
   it("version thumbs (cut panel and version strip) draw the placeholder for a missing version", () => {
-    assert.match(fnBody("versionThumbParts"), /v\.missing \? thumbHtml\(null, "gg-ver-img"\)/);
+    assert.match(fnBody("versionThumbParts"), /thumbHtml\(v\?\.missing \? null : versionMedia\(v\), "gg-ver-img"\)/);
     assert.match(fnBody("cutPanelHtml"), /versionThumbParts\(c, v, tabOpen\)/);
     assert.match(fnBody("versionStripHtml"), /versionThumbParts\(c, byId\.get\(r\.id\), tabOpen\)/);
   });
@@ -123,7 +123,7 @@ describe("gonggan.js wiring", () => {
     assert.equal(js.includes("placeOverviewOnPreview"), false);
     assert.equal(js.includes("gg-panel-on-preview"), false);
     assert.match(js, /id = "gg-tab-inputs"/);
-    assert.match(js, /row\.appendChild\(inputsTabBtn\)/);
+    assert.match(js, /row\.insertBefore\(inputsTabBtn, row\.firstElementChild\)/);
   });
 
   it("viewer shows the no media blank when the current clip fails to load", () => {

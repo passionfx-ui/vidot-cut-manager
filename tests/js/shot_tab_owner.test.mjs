@@ -189,10 +189,12 @@ describe("findWorkflowAtShotPath", () => {
     const start = src.indexOf("async function loadWorkflowIntoDedicatedTab");
     const end = src.indexOf("\nasync function loadShotApiIntoDedicatedTab");
     const fn = src.slice(start, end);
-    assert.match(fn, /const loadTarget = existingAtPath \|\| loadName/);
-    assert.match(fn, /await app\.loadApiJson\(workflow, loadTarget, \{ deferWarnings: true \}\)/);
-    assert.doesNotMatch(fn, /loadApiJson\(workflow, loadName/);
-    assert.equal(fn.includes("loadGraphData(workflow, true, true, loadName"), false);
-    assert.match(fn, /loadGraphData\(workflow, true, true, loadTarget, \{ deferWarnings: true \}\)/);
+    assert.match(fn, /let loadTarget = existingAtPath \|\| null;/);
+    assert.match(fn, /if \(!loadTarget && ownedOpen\?\.isTemporary\) \{\s*loadTarget = ownedOpen;/);
+    assert.match(fn, /\} else if \(!loadTarget\) \{[\s\S]*?loadTarget = loadName;/);
+    assert.match(fn, /await app\.loadApiJson\(graphToLoad, loadTarget, \{ deferWarnings: true \}\)/);
+    assert.doesNotMatch(fn, /loadApiJson\(graphToLoad, loadName/);
+    assert.equal(fn.includes("loadGraphData(graphToLoad, true, true, loadName"), false);
+    assert.match(fn, /loadGraphData\(graphToLoad, true, true, loadTarget, \{ deferWarnings: true \}\)/);
   });
 });

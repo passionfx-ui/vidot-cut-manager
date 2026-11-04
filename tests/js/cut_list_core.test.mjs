@@ -243,7 +243,7 @@ describe("confirm + payload", () => {
   it("new cuts use the project's Video template (0.9.117)", () => {
     assert.deepEqual(cutListWorkflow({ video_template: "builtin:video-ltx-t2v" }),
       { id: "", label: "Project Video template (Video LTX text-to-video)" });
-    assert.equal(cutListWorkflow(null).label, "Project Video template (Video LTX (default))");
+    assert.equal(cutListWorkflow(null).label, "Project Video template (LTX 4b video mp4.app.json)");
     assert.equal(cutListWorkflow({ video_template: "my/ltx.json" }).label, "Project Video template (my/ltx.json)");
   });
 });

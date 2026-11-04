@@ -11,9 +11,9 @@ import {
 import { splitConfirmMessage } from "../../web/gg_confirm_core.js";
 
 describe("deleteCutsConfirmMessage", () => {
-  it("singular / plural heading with a Trash note", () => {
-    assert.deepEqual(splitConfirmMessage(deleteCutsConfirmMessage(1)), { title: "Delete 1 cut?", body: "It moves to Trash." });
-    assert.deepEqual(splitConfirmMessage(deleteCutsConfirmMessage(3)), { title: "Delete 3 cuts?", body: "They move to Trash." });
+  it("singular / plural heading with a History note", () => {
+    assert.deepEqual(splitConfirmMessage(deleteCutsConfirmMessage(1)), { title: "Delete 1 cut?", body: "You can restore it from History." });
+    assert.deepEqual(splitConfirmMessage(deleteCutsConfirmMessage(3)), { title: "Delete 3 cuts?", body: "You can restore them from History." });
   });
   it("invalid counts read as one cut", () => {
     assert.equal(deleteCutsConfirmMessage(0), deleteCutsConfirmMessage(1));
@@ -41,11 +41,11 @@ describe("trashButtonLabel", () => {
 
 describe("movedToTrashToastMessage", () => {
   it("singular", () => {
-    assert.equal(movedToTrashToastMessage(1), "Moved 1 cut to Trash");
+    assert.equal(movedToTrashToastMessage(1), "Deleted 1 cut");
   });
   it("plural", () => {
-    assert.equal(movedToTrashToastMessage(2), "Moved 2 cuts to Trash");
-    assert.equal(movedToTrashToastMessage(10), "Moved 10 cuts to Trash");
+    assert.equal(movedToTrashToastMessage(2), "Deleted 2 cuts");
+    assert.equal(movedToTrashToastMessage(10), "Deleted 10 cuts");
   });
 });
 

@@ -309,7 +309,7 @@ describe("AI Make Cut visible again behind the one flag (0.9.125)", () => {
   it("the wand icon is in the icon row when native and the flag is on (not the old toolbar button)", () => {
     assert.doesNotMatch(GONGGAN_JS, /gg-cutlist-btns">\$\{aiSplitButtonHtml\(\)\}/);
     assert.doesNotMatch(GONGGAN_JS, /function aiSplitButtonHtml\(/);
-    assert.match(fnBody("iconRowHtml"), /AI_CUT_SPLIT_VISIBLE && isNativeProject\(\)/);
+    assert.match(fnBody("iconRowHtml"), /aiFeaturesActive\(\) && isNativeProject\(\)/);
     assert.match(fnBody("iconRowHtml"), /gg-ir-aicut gg-ai-split/);
     assert.match(fnBody("iconRowHtml"), /aiMakeCutIconButtonState\(cutSplitUseAiOn\)/);
     assert.match(GONGGAN_JS, /gg-ir-aicut[\s\S]*gg-ir-scene/);
@@ -317,15 +317,17 @@ describe("AI Make Cut visible again behind the one flag (0.9.125)", () => {
 
   it("the Project Settings AI section (Use AI, model, pre-check) is rendered only when the flag is on", () => {
     const body = fnBody("openProjectSettingsModal");
-    assert.match(body, /\$\{nat && AI_CUT_SPLIT_VISIBLE \? `<label class="gg-modal-field gg-use-ai-field">/);
+    assert.match(body, /\$\{nat && AI_CUT_SPLIT_VISIBLE \? `<div class="gg-ai-features-panel"[\s\S]*?<label class="gg-modal-field gg-use-ai-field">/);
     const section = body.slice(body.indexOf("AI_CUT_SPLIT_VISIBLE ?"), body.indexOf('<div class="gg-modal-actions">'));
     assert.match(section, /gg-modal-use-ai[\s\S]*gg-modal-cut-split-model/);
-    assert.match(body, /if \(modelSel\) void getJson\("\/gonggan\/cut-split\/model"\)/, "no model list request when hidden");
+    assert.match(body, /if \(modelListStarted \|\| !modelSel\) return;/);
+    assert.match(body, /void getJson\("\/gonggan\/cut-split\/model"\)/);
+    assert.match(body, /if \(on\) loadCutSplitModelList\(\)/, "no model list request when AI features are off");
   });
 
   it("nothing calls the AI routes when the flag is off; the icon wand and two menu entries open the dialog", () => {
-    assert.match(fnBody("refreshCutSplitUseAi"), /if \(!AI_CUT_SPLIT_VISIBLE\) return;/);
-    assert.match(fnBody("openAiCutSplitModal"), /if \(!AI_CUT_SPLIT_VISIBLE \|\| !isNativeProject\(\)/);
+    assert.match(fnBody("refreshCutSplitUseAi"), /if \(!aiFeaturesActive\(\)\) return;/);
+    assert.match(fnBody("openAiCutSplitModal"), /if \(!aiFeaturesActive\(\) \|\| !isNativeProject\(\)/);
     assert.equal(GONGGAN_JS.match(/=> openAiCutSplitModal\(\)/g)?.length, 4, "toolbar, cut card menu, list menu, stored-result offer");
     assert.match(GONGGAN_JS, /querySelector\("\.gg-ai-split"\)\?\.addEventListener\("click", \(\) => openAiCutSplitModal\(\)\)/);
     assert.match(GONGGAN_JS, /title: AI_CUT_SPLIT_VISIBLE \? `Workflow for \$\{AI_MAKE_CUT_LABEL\} cuts and Image to Video` : "Workflow for Image to Video"/);
@@ -333,10 +335,10 @@ describe("AI Make Cut visible again behind the one flag (0.9.125)", () => {
 
   it("right-click: the cut card menu and the empty list menu list AI Make Cut… (native, flag on, Use AI)", () => {
     const card = fnBody("openCutContextMenu");
-    assert.match(card, /aiMakeCut: AI_CUT_SPLIT_VISIBLE,\s*useAi: cutSplitUseAiOn,/);
+    assert.match(card, /aiMakeCut: aiFeaturesActive\(\),\s*useAi: cutSplitUseAiOn,/);
     assert.match(card, /aiMakeCut: \(\) => openAiCutSplitModal\(\)/);
     const panel = fnBody("openShotsPanelContextMenu");
-    assert.match(panel, /if \(nat && AI_CUT_SPLIT_VISIBLE\) \{/);
+    assert.match(panel, /if \(nat && aiFeaturesActive\(\)\) \{/);
     assert.match(panel, /aiMakeCutMenuItem\(cutSplitUseAiOn\)/);
     assert.match(panel, /action: \(\) => openAiCutSplitModal\(\)/);
   });

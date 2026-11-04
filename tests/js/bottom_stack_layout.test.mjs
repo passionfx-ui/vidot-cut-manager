@@ -46,7 +46,7 @@ const rowHtml = js.slice(rowStart, js.indexOf("\n}\n", rowStart));
 describe("Shots icon row replaces the selection bar", () => {
   it("selection bar is hidden by a flag, its code kept", () => {
     assert.match(js, /^const SHOW_SEL_BAR = false;$/m);
-    assert.match(js, /\$\{SHOW_SEL_BAR \? `<div class="gg-selbar">[\s\S]*gg-sel-group[\s\S]*gg-sel-ungroup[\s\S]*` : ""\}\s*\$\{iconRowHtml\(\)\}\s*<div class="gg-vstrip"/);
+    assert.match(js, /\$\{SHOW_SEL_BAR \? `<div class="gg-selbar">[\s\S]*gg-sel-group[\s\S]*gg-sel-ungroup[\s\S]*` : ""\}\s*\$\{iconRowHtml\(\)\}\s*<div class="gg-sel-detail-host"[\s\S]*?<div class="gg-vstrip"/);
   });
 
   it("icon row: the version, then New scene, New cut, Delete buttons with English tooltips", () => {
@@ -54,19 +54,21 @@ describe("Shots icon row replaces the selection bar", () => {
     assert.match(rowHtml, /<div class="gg-iconrow">/);
     const order = ["gg-version", "gg-ir-scene", "gg-ir-cut", "gg-ir-del"].map((c) => rowHtml.indexOf(c));
     assert.ok(order.every((i, n) => i > 0 && (n === 0 || i > order[n - 1])), String(order));
-    assert.match(rowHtml, /"gg-ir-scene", "New scene", ICON_FOLDER/);
-    assert.match(rowHtml, /"gg-ir-cut", "New cut", ICON_NEW_PAGE/);
+    assert.match(rowHtml, /\$\{btn\("gg-ir-scene", shotsUi\.refTab \? "New Group" : "New scene", ICON_FOLDER\)\}/);
+    assert.match(rowHtml, /\$\{btn\("gg-ir-cut", shotsUi\.refTab \? "New Reference" : "New cut", ICON_NEW_PAGE\)\}/);
     assert.match(rowHtml, /"gg-ir-del", "Delete", ICON_TRASH/);
   });
 
   it("buttons reuse the existing actions; Delete goes through the in-app confirm", () => {
     // New scene: an empty scene on native projects, grouping the selection on imported ones (unchanged).
-    assert.match(js, /\.gg-ir-scene"\)\?\.addEventListener\("click", \(\) =>\s*isNativeProject\(\) \? void addEmptyScene\(\) : createSceneGroup\(cutSelIds\(\)\)\)/);
-    assert.match(js, /\.gg-ir-cut"\)\?\.addEventListener\("click", \(\) => addLocalCut\(\)\)/);
-    assert.match(js, /\.gg-ir-del"\)\?\.addEventListener\("click", \(\) => void confirmDeleteSelectedCuts\(\)\)/);
+    assert.match(js, /\.gg-ir-scene"\)\?\.addEventListener\("click", \(\) => \{\s*if \(shotsUi\.refTab && isNativeProject\(\)\) \{\s*void addReferenceGroup\(\);\s*return;\s*\}\s*if \(isNativeProject\(\)\) void addEmptyScene\(\);\s*else createSceneGroup\(cutSelIds\(\)\);\s*\}\)/);
+    assert.match(js, /\.gg-ir-cut"\)\?\.addEventListener\("click", \(\) => \{\s*if \(shotsUi\.refTab && isNativeProject\(\)\) \{\s*void addReferenceInSelectedGroup\(\);\s*return;\s*\}\s*addLocalCut\(\);\s*\}\)/);
+    assert.match(js, /\.gg-ir-del"\)\?\.addEventListener\("click", \(\) => \{\s*if \(shotsUi\.refTab && referenceById\(state\.cutId\)\) \{\s*void deleteReference\(state\.cutId\);\s*return;\s*\}\s*void confirmDeleteSelectedCuts\(\);\s*\}\)/);
     const s = js.indexOf("async function confirmDeleteSelectedCuts()");
     const body = js.slice(s, js.indexOf("\n}\n", s));
-    assert.match(body, /askConfirm\(\{ message: deleteCutsConfirmMessage\(n\), danger: true \}\)/);
+    assert.match(body, /: deleteCutsConfirmMessage\(n\);/);
+    assert.match(body, /if \(!\(await askConfirm\(\{ message, danger: true \}\)\)\) return;/);
+    assert.ok(body.indexOf("deleteCutsConfirmMessage") < body.indexOf("askConfirm"));
     assert.ok(body.indexOf("askConfirm") < body.indexOf("deleteSelectedCuts()"));
   });
 

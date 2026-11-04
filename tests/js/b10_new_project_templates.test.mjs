@@ -10,7 +10,7 @@ import { newProjectRequest } from "../../web/gg_new_project_core.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const GONGGAN_JS = readFileSync(path.join(root, "web/gonggan.js"), "utf8");
 const GONGGAN_CSS = readFileSync(path.join(root, "web/gonggan.css"), "utf8");
-const DEFAULT_TEMPLATES = { image_template: "builtin:image", video_template: "builtin:video-ltx" };
+const DEFAULT_TEMPLATES = { image_template: "builtin:image", video_template: "LTX 4b video mp4.app.json" };
 
 describe("B10 New Project Image / Video templates", () => {
   it("create body stores Image / Video templates and never a Default template_ref", () => {

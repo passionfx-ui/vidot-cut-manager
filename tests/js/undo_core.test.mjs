@@ -165,15 +165,16 @@ describe("Shots history entries", () => {
   });
   it("delete: undo restores then puts the layout back; redo deletes again", () => {
     const e = { kind: "cuts", op: "delete", ids: ["b"], before: L0 };
-    assert.deepEqual(shotsUndoSteps(e, "undo"), [{ type: "restore", ids: ["b"] }, { type: "layout", snap: L0 }]);
-    assert.deepEqual(shotsUndoSteps(e, "redo"), [{ type: "delete", ids: ["b"] }]);
+    assert.deepEqual(shotsUndoSteps(e, "undo"), [{ type: "restore", ids: ["b"], history_step: null }, { type: "layout", snap: L0 }]);
+    assert.deepEqual(shotsUndoSteps(e, "redo"), [{ type: "delete", ids: ["b"], history_step: null }]);
+    assert.deepEqual(shotsUndoSteps({ ...e, history_step: "s1" }, "redo"), [{ type: "delete", ids: ["b"], history_step: "s1" }]);
     assert.equal(shotsCounterpart(e, L1), e);
   });
   it("add (and Trash restore): undo soft-deletes; redo restores into the layout after the add", () => {
     const e = { kind: "cuts", op: "add", ids: ["n"], before: L0, after: L1 };
-    assert.deepEqual(shotsUndoSteps(e, "undo"), [{ type: "delete", ids: ["n"] }]);
-    assert.deepEqual(shotsUndoSteps(e, "redo"), [{ type: "restore", ids: ["n"] }, { type: "layout", snap: L1 }]);
-    assert.deepEqual(shotsUndoSteps({ kind: "cuts", op: "add", ids: ["n"] }, "redo"), [{ type: "restore", ids: ["n"] }]);
+    assert.deepEqual(shotsUndoSteps(e, "undo"), [{ type: "delete", ids: ["n"], history_step: null }]);
+    assert.deepEqual(shotsUndoSteps(e, "redo"), [{ type: "restore", ids: ["n"], history_step: null }, { type: "layout", snap: L1 }]);
+    assert.deepEqual(shotsUndoSteps({ kind: "cuts", op: "add", ids: ["n"] }, "redo"), [{ type: "restore", ids: ["n"], history_step: null }]);
     assert.deepEqual(shotsUndoSteps({ kind: "cuts", op: "add", ids: [] }, "undo"), []);
   });
   it("rename: undo sets the old name, redo the new one", () => {

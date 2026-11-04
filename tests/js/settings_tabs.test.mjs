@@ -90,7 +90,7 @@ describe("H5 Project Settings dialog", () => {
     assert.match(projectPane, /genSettingsModalHtml\(curSettings\)/);
     assert.match(projectPane, /templateFieldHtml\("image"\)/);
     assert.match(projectPane, /templateFieldHtml\("video"\)/);
-    assert.match(globalPane, /\$\{nat && AI_CUT_SPLIT_VISIBLE \? `<label class="gg-modal-field gg-use-ai-field">/);
+    assert.match(globalPane, /\$\{nat && AI_CUT_SPLIT_VISIBLE \? `<div class="gg-ai-features-panel"[\s\S]*?<label class="gg-modal-field gg-use-ai-field">/);
     assert.match(globalPane, /gg-ai-model-dirs/);
   });
 

@@ -23,7 +23,7 @@ describe("H4 New Project generation settings", () => {
     assert.equal(body.name, "A");
     assert.equal(body.location, "D:\\F");
     assert.equal(body.settings.image_template, "builtin:image");
-    assert.equal(body.settings.video_template, "builtin:video-ltx");
+    assert.equal(body.settings.video_template, "LTX 4b video mp4.app.json");
     for (const key of GEN_KEYS) assert.equal(body.settings[key], DEFAULT_PROJECT_SETTINGS[key], key);
   });
 
@@ -79,6 +79,6 @@ describe("H4 New Project generation settings", () => {
     assert.match(body, /\.gg-modal-gen-res/);
     assert.match(body, /\.gg-modal-gen-width/);
     assert.match(body, /\.gg-modal-gen-height/);
-    assert.match(body, /\.gg-modal-random-seed/);
+    assert.doesNotMatch(body, /\.gg-modal-random-seed/);
   });
 });

@@ -52,8 +52,10 @@ describe("selected media kind picks the workflow", () => {
   it("no stale saved Image/Video switch overrides the selected media", () => {
     assert.doesNotMatch(src, /readCutWorkflowKindSwitch\(/);
   });
-  it("a version without its own workflow opens the workflow of its kind", () => {
-    assert.match(src, /if \(await loadVersionKindWorkflow\(cut, ver, name, loadToken\)\) return;/);
+  it("a version without its own workflow stays on the cut workflow", () => {
+    assert.match(src, /async function loadVersionWorkflow\(cutId, vid\) \{\s*await loadWorkflowFromTake\(cutId, vid\);/);
+    assert.match(src, /This take has no stored workflow\./);
+    assert.doesNotMatch(src, /await loadVersionKindWorkflow\(/);
     assert.match(src, /fetchCutSourceWorkflowPayload\(cut\.id, cut, kind\)/);
   });
   it("a timeline click loads that clip only while the shot tab is already active", () => {

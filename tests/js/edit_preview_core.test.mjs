@@ -19,10 +19,10 @@ function storage() {
 const graph = { left: 40, top: 36, right: 1280, bottom: 900, width: 1240, height: 864 };
 
 describe("edit preview toggle", () => {
-  it("starts off and remembers the Edit toggle", () => {
+  it("starts on and remembers the Edit toggle", () => {
     const s = storage();
     assert.equal(EDIT_MODE_LABEL, "Edit Mode");
-    assert.equal(loadEditPreviewMode(s), false);
+    assert.equal(loadEditPreviewMode(s), true);
     saveEditPreviewMode(s, true);
     assert.equal(loadEditPreviewMode(s), true);
     saveEditPreviewMode(s, false);

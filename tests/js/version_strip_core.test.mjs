@@ -108,10 +108,15 @@ describe("versionStripRows", () => {
 });
 
 describe("versionStripMenuItems", () => {
-  it("offers Set as Best, off on the Best one", () => {
-    assert.deepEqual(versionStripMenuItems({ best: false }), [{ key: "best", label: "Set as Best", disabled: false, title: "" }]);
-    const [it0] = versionStripMenuItems({ best: true });
-    assert.equal(it0.disabled, true);
+  it("offers Load workflow, Set as Best, and Delete; Best is off on the Best one", () => {
+    assert.deepEqual(versionStripMenuItems({ best: false }), [
+      { key: "loadWf", label: "Load workflow from this take", title: "Make this take's stored workflow the current workflow of the cut" },
+      { key: "best", label: "Set as Best", disabled: false, title: "" },
+      { key: "del", label: "Delete", title: "Hide this version. History can restore it." },
+    ]);
+    const best = versionStripMenuItems({ best: true }).find((it) => it.key === "best");
+    assert.equal(best.disabled, true);
+    assert.equal(best.title, "Already Best");
   });
 });
 
@@ -243,7 +248,7 @@ describe("Image to Video (right-click, 0.9.117) and Make Video", () => {
     assert.match(body, /\.\.\.\(startVid \? \{ start_vid: startVid \} : \{\}\)/);
     assert.match(body, /if \(!makeVideoPlanOk\(plan, startVid\)\) throw new Error\(MAKE_VIDEO_OLD_SERVER\)/);
     assert.ok(body.indexOf("makeVideoPlanOk") < body.indexOf("askConfirm"), "checked before the confirm");
-    assert.match(body, /askConfirm\(\{ message: i2vConfirmMessage\(title, plan\) \}\)/);
+    assert.match(body, /askConfirm\(\{ message: withReferenceConfirm\(i2vConfirmMessage\(title, plan\), \[cutById\(cutId\) \|\| cut\]\) \}\)/);
     assert.match(body, /"\/gonggan\/regen", \{ pid, cut_id: cutId, dry_run: false, confirm: true, plan: plan\.plan \}/);
   });
 
@@ -263,7 +268,7 @@ describe("version strip wiring", () => {
   it("no header button row; import tile and info panel sit in the strip", () => {
     assert.ok(!js.includes("versionStripHeadHtml"), "header html removed");
     assert.ok(!js.includes("bindStripHeader"), "header bindings removed");
-    assert.match(js, /\$\{iconRowHtml\(\)\}\s*<div class="gg-vstrip"[^>]*>\s*<div class="gg-vs-body">\s*<div class="gg-vs-list"><\/div>/);
+    assert.match(js, /\$\{iconRowHtml\(\)\}\s*<div class="gg-sel-detail-host"[\s\S]*?<div class="gg-vstrip"[^>]*>\s*<div class="gg-vs-body">\s*<div class="gg-cut-reflinks"[^>]*><\/div>\s*<div class="gg-vs-row">\s*<div class="gg-vs-list"><\/div>/);
     assert.match(js, /<div class="gg-vs-info" aria-live="polite"><\/div>/);
     assert.match(css, /\.gg-shots \.gg-vs-head \{[^}]*display: none;/);
     assert.match(css, /\.gg-shots \.gg-vstrip \{[^}]*display: flex; flex-direction: column;/);
@@ -303,7 +308,7 @@ describe("gonggan.js wiring (0.9.118)", () => {
   };
 
   it("the row sits directly below the icon row (New scene / New cut), then the status panel (2026-10-31 decision)", () => {
-    assert.match(js, /\$\{iconRowHtml\(\)\}\s*<div class="gg-vstrip"[^>]*>\s*<div class="gg-vs-body">\s*<div class="gg-vs-list"><\/div>\s*<button[^>]*class="gg-btn gg-vs-newest"[^>]*>[^<]*<\/button>\s*<\/div>\s*<div class="gg-vs-info" aria-live="polite"><\/div>\s*<\/div>\s*<div class="gg-cutpanel">/);
+    assert.match(js, /\$\{iconRowHtml\(\)\}\s*<div class="gg-sel-detail-host"[\s\S]*?<div class="gg-vstrip"[^>]*>\s*<div class="gg-vs-body">\s*<div class="gg-cut-reflinks"[^>]*><\/div>\s*<div class="gg-vs-row">\s*<div class="gg-vs-list"><\/div>\s*<button[^>]*class="gg-btn gg-vs-newest"[^>]*>[^<]*<\/button>\s*<\/div>\s*<\/div>\s*<div class="gg-vs-info" aria-live="polite"><\/div>\s*<\/div>\s*<div class="gg-cutpanel">/);
     assert.match(js, /^const SHOW_SEL_BAR = false;$/m);
     assert.ok(!js.includes("gg-list-row") && !css.includes("gg-list-row"), "vertical strip layout removed");
   });
@@ -319,12 +324,14 @@ describe("gonggan.js wiring (0.9.118)", () => {
     assert.match(js, /closest\("\.gg-vstrip"\)/, "clicks in the row do not clear the cut selection");
   });
 
-  it("thumb click sets the displayed version (timeline + preview) and opens the workflow; Best stays separate", () => {
+  it("thumb click sets the displayed version; Load workflow is the menu; Best stays separate", () => {
     const at = js.indexOf("const bindStripItems");
     const body = js.slice(at, js.indexOf("const paintVersionStrip", at));
-    assert.match(body, /if \(e\.target\.closest\("\.gg-vs-star"\)\) return;\s*e\.stopPropagation\(\);\s*selectStripVersion\(c\.id, vid\);/);
-    assert.match(body, /versionStripMenuItems\(row\), \{ best: \(\) => setPick\(c\.id, vid\) \}/);
-    assert.match(body, /const selectStripVersion = \(cutId, vid\) => \{\s*Object\.assign\(stripPick, \{ pid: state\.pid, cutId, vid \}\);\s*void setDisplayVersion\(cutId, vid\);/);
+    assert.match(body, /if \(e\.target\.closest\("\.gg-vs-star, \.gg-vs-x"\)\) return;\s*e\.stopPropagation\(\);[\s\S]*?selectStripVersion\(c\.id, vid\);/);
+    assert.match(body, /loadWf: \(\) => \{ void loadWorkflowFromTake\(c\.id, vid\); \}/);
+    assert.match(body, /best: \(\) => setPick\(c\.id, vid\)/);
+    assert.doesNotMatch(body, /openVersionWorkflow/);
+    assert.match(body, /const selectStripVersion = \(cutId, vid\) => \{\s*Object\.assign\(stripPick, \{ pid: state\.pid, cutId, vid \}\);\s*noteTakeKind\(cutById\(cutId\), vid\);\s*void setDisplayVersion\(cutId, vid\);/);
     assert.match(js, /async function setDisplayVersion\(cutId, vid\)/);
     assert.match(js, /function applyDisplayVersionLocally\(c, vid\)/);
     assert.match(js, /display: c\.display \|\| null/);
@@ -337,7 +344,7 @@ describe("gonggan.js wiring (0.9.118)", () => {
     assert.match(html, /gg-vs-star/);
     for (const gone of ["☆", "▶", "gg-vs-plus", "gg-badge"]) assert.ok(!html.includes(gone), gone);
     assert.match(css, /\.gg-shots \.gg-vstrip \.gg-vs-import-tile/);
-    assert.match(html, /\$\{r\.best \? " gg-vs-best" : ""\}\$\{sel && !r\.best \? " gg-vs-sel" : ""\}/);
+    assert.match(html, /\$\{r\.best \? " gg-vs-best" : ""\}\$\{sel \? " gg-vs-sel" : ""\}/);
     assert.match(html, /\$\{r\.video \? `<span class="gg-vs-dur"/);
     assert.match(css, new RegExp(`\\.gg-shots \\.gg-vstrip \\.gg-vs-best \\.gg-ver \\{ border: 2px solid ${BEST_THUMB_BORDER.replace("#", "\\#")}; \\}`));
     assert.match(css, /\.gg-shots \.gg-vstrip \.gg-vs-sel \.gg-ver \{ box-shadow: 0 0 0 2px var\(--gg-fg\); \}/);

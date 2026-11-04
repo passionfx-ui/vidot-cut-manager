@@ -90,10 +90,10 @@ describe("New Project: request", () => {
     assert.deepEqual(newProjectRequest({ name: " ", location: "D:\\A" }), { error: "Enter a project name", field: "name" });
     assert.deepEqual(newProjectRequest({ name: "A", location: "  " }).body, {
       name: "A",
-      settings: { image_template: "builtin:image", video_template: "builtin:video-ltx" },
+      settings: { image_template: "builtin:image", video_template: "LTX 4b video mp4.app.json" },
     });
   });
-  const DEFAULT_TEMPLATES = { image_template: "builtin:image", video_template: "builtin:video-ltx" };
+  const DEFAULT_TEMPLATES = { image_template: "builtin:image", video_template: "LTX 4b video mp4.app.json" };
   it("body carries name, location and Image / Video templates in settings (0.9.138)", () => {
     assert.deepEqual(newProjectRequest({ name: " A ", location: " D:\\F " }), {
       body: { name: "A", location: "D:\\F", settings: DEFAULT_TEMPLATES },

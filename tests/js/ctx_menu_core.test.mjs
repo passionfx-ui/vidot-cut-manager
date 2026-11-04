@@ -9,7 +9,6 @@ import {
   attachMenuActions,
   SINGLE_CUT_TIP,
   BUSY_TIP,
-  TRASH_TIP,
   I2V_NO_IMAGE_TIP,
   MENU_SEPARATOR,
   MAKE_SCENE_LABEL,
@@ -55,13 +54,13 @@ describe("cutCardMenuItems (0.9.132 Premiere sections)", () => {
     });
     assert.deepEqual(keys(items), [
       "group", "sep",
-      "addCut", "importVer",
+      "addCut", "loadTemplate", "importVer",
       "sep",
       "queueSel", "i2v", "setBest", "redo",
       "sep",
       "moveUp", "moveDown", "moveToScene", "ungroup", "split",
       "sep",
-      "rename", "del", "trash",
+      "rename", "del",
     ]);
     assert.equal(byKey(items, "group").label, MAKE_SCENE_LABEL);
     assert.equal(byKey(items, "queueSel").label, "Generate Selected");
@@ -71,7 +70,8 @@ describe("cutCardMenuItems (0.9.132 Premiere sections)", () => {
     assert.equal(byKey(inScene, "ungroup").title, REMOVE_FROM_SCENE_TIP);
     assert.equal(byKey(inScene, "split").label, START_NEW_SCENE_LABEL);
     assert.equal(byKey(inScene, "split").title, START_NEW_SCENE_TIP);
-    assert.equal(byKey(items, "trash").label, restoreDeletedCutsMenuLabel(2));
+    assert.equal(byKey(items, "loadTemplate").label, "Load template…");
+    assert.ok(!keys(items).includes("trash"));
     assert.ok(!keys(items).includes("selectAll"));
   });
 

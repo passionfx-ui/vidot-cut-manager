@@ -46,7 +46,7 @@ describe("Project Settings modal: Output folder (0.9.82)", () => {
   });
   it("Image / Video templates default to the built-ins (0.9.117)", () => {
     assert.equal(DEFAULT_PROJECT_SETTINGS.image_template, "builtin:image");
-    assert.equal(DEFAULT_PROJECT_SETTINGS.video_template, "builtin:video-ltx");
+    assert.equal(DEFAULT_PROJECT_SETTINGS.video_template, "LTX 4b video mp4.app.json");
     assert.equal(normalizeProjectSettings({ image_template: "  ", video_template: " a\\b.json " }).image_template, "builtin:image");
     assert.equal(normalizeProjectSettings({ video_template: " a\\b.json " }).video_template, "a/b.json");
   });
@@ -55,7 +55,8 @@ describe("Project Settings modal: Output folder (0.9.82)", () => {
       video_template: "builtin:video-ltx-t2v",
     });
     assert.deepEqual(projectSettingsModalPatch(cur, "D:\\B", { image_template: "my.json" }), { project_folder: "D:\\B", image_template: "my.json" });
-    assert.equal(projectSettingsModalPatch(cur, "N:\\A", { image_template: "", video_template: "builtin:video-ltx" }), null, "blank = default");
+    assert.equal(projectSettingsModalPatch(cur, "N:\\A", { image_template: "", video_template: "" }), null, "blank = default");
+    assert.deepEqual(projectSettingsModalPatch(cur, "N:\\A", { video_template: "builtin:video-ltx" }), { video_template: "builtin:video-ltx" });
   });
   it("folder check errors: missing route asks for a restart, else the server message", () => {
     assert.match(folderCheckErrorText({ status: 404 }), /Restart ComfyUI/);

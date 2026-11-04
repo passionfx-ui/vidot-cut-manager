@@ -67,7 +67,7 @@ describe("groupedListHtml", () => {
 
   it("scene group headers invite double-click rename", () => {
     const html = groupedListHtml([{ type: "group", group: { id: "g1", name: "Intro", collapsed: false }, cuts: [{ id: "a" }] }], { cutHtml: () => "" });
-    assert.match(html, /class="gg-grp-head" title="Double-click to rename"/);
+    assert.match(html, /class="gg-grp-head" title="Click to select this scene\. Ctrl or Shift adds more\. Double-click to rename\."/);
   });
 
   it("escapes scene names", () => {

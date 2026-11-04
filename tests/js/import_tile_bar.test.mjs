@@ -18,7 +18,7 @@ const prop = (rule, name) => rule?.body.match(new RegExp(`(?:^|;)\\s*${name}\\s*
 
 const TILE = ".gg-shots .gg-vstrip .gg-vs-import-tile";
 const THUMB = ".gg-shots .gg-vstrip .gg-ver-wrap";
-const ROW = ".gg-shots .gg-vs-body";
+const ROW = ".gg-shots .gg-vs-row";
 
 describe("version-row Import button is a thin vertical bar", () => {
   it("is about one third as wide as a thumbnail and stretches the full row", () => {
@@ -32,7 +32,8 @@ describe("version-row Import button is a thin vertical bar", () => {
     assert.equal(prop(tile, "align-self"), "stretch", "bar should span the thumbnail row");
     const height = prop(tile, "height");
     assert.ok(height == null || height === "auto" || height === "100%", `fixed height ${height} does not span the row`);
-    assert.match(prop(ruleFor(ROW), "height") || "", /^\d+px$/, "thumbnail row keeps a fixed height");
+    assert.equal(prop(ruleFor(ROW), "height"), "72px", "thumbnail row keeps a fixed height");
+    assert.equal(prop(ruleFor(".gg-shots .gg-vs-body"), "height"), "auto");
     assert.equal(prop(tile, "background"), "#000");
     assert.equal(prop(tile, "display"), "flex");
     assert.equal(prop(tile, "align-items"), "center");
@@ -45,7 +46,7 @@ describe("version-row Import button is a thin vertical bar", () => {
     assert.match(js, /class="gg-vs-import-tile"\$\{tileDis\} title="\$\{esc\(IMPORT_TILE_TIP\)\}">\+<\/button>/);
     assert.match(
       js,
-      /list\.querySelector\("\.gg-vs-import-tile"\)\?\.addEventListener\("click", \(e\) => \{\s*e\.stopPropagation\(\);\s*if \(e\.currentTarget\.disabled\) return;\s*pickVersionImportFiles\(c\.id\);/,
+      /list\.querySelector\("\.gg-vs-import-tile"\)\?\.addEventListener\("click", \(e\) => \{\s*e\.stopPropagation\(\);\s*if \(e\.currentTarget\.disabled\) return;\s*if \(c\.kind === "reference"\) pickReferenceVersionFiles\(c\.id\);\s*else pickVersionImportFiles\(c\.id\);/,
     );
   });
 });
