@@ -6005,7 +6005,16 @@ function syncGroupSelectionFlags(focusId) {
     shotsUi.selGroupKey = focusId && ids.includes(focusId) ? focusId : ids[ids.length - 1];
     return;
   }
-  if ((state.timeline?.groups || []).some((g) => g.id === shotsUi.selGroupKey)) {
+  const groups = state.timeline?.groups || [];
+  const key = shotsUi.selGroupKey;
+  const keyIsLiveScene = !!key && groups.some((g) => g.id === key);
+  if (keyIsLiveScene) {
+    shotsUi.selFromGroup = false;
+    shotsUi.selGroupKey = "";
+    return;
+  }
+  // A deleted scene's id must not stay "selected" and light up again after History undo.
+  if (key && shotsUi.selFromGroup && key !== "ungrouped" && !referenceGroupById(key)) {
     shotsUi.selFromGroup = false;
     shotsUi.selGroupKey = "";
   }
@@ -7174,6 +7183,10 @@ async function deleteSceneGroups(groupIds) {
   await persistGroups(groupsClone().filter((g) => !drop.has(g.id)));
   state.groupSel.clear();
   groupSelAnchor = "";
+  if (drop.has(shotsUi.selGroupKey)) {
+    shotsUi.selFromGroup = false;
+    shotsUi.selGroupKey = "";
+  }
   syncGroupSelectionFlags("");
   bus.dispatchEvent(new Event("select"));
 }
@@ -8261,6 +8274,52 @@ function takeFieldHistory(cutId) {
   const row = fieldHistFrom.get(cutId);
   fieldHistFrom.delete(cutId);
   return row || null;
+}
+
+/** Drop one waiting field. Returns true when any other field is still waiting. */
+function dropPendingCutField(cutId, key) {
+  const all = cutFieldUi.pending.takeAll();
+  let any = false;
+  for (const p of all) {
+    const fields = { ...(p.fields || {}) };
+    if (p.cutId === cutId) delete fields[key];
+    if (!Object.keys(fields).length) continue;
+    cutFieldUi.pending.add(p.cutId, p.pid, fields);
+    any = true;
+  }
+  if (!any) {
+    clearTimeout(cutFieldUi.timer);
+    cutFieldUi.timer = 0;
+  }
+  return any;
+}
+
+/** Caption inline edit: Esc puts the original text back and does not keep the typed value. */
+function revertCaptionInlineEdit(ta, cutId) {
+  const orig = ta?._ggCaptionOrig;
+  if (orig == null || !cutId) return;
+  const c = cutByIdTimeline(cutId);
+  const typed = c ? String(c.caption ?? "") : String(ta.value ?? "");
+  const slot = cutFieldUi.pending.get(cutId);
+  const pendingHad = !!(slot?.fields && Object.prototype.hasOwnProperty.call(slot.fields, "caption"));
+  ta.value = orig;
+  if (c) c.caption = orig;
+  dropPendingCutField(cutId, "caption");
+  const bucket = cutFieldUi.unsaved[cutId];
+  if (bucket && Object.prototype.hasOwnProperty.call(bucket, "caption")) {
+    delete bucket.caption;
+    if (!Object.keys(bucket).length) delete cutFieldUi.unsaved[cutId];
+  }
+  const hist = fieldHistFrom.get(cutId);
+  if (hist) {
+    delete hist.from.caption;
+    delete hist.to.caption;
+    if (!Object.keys(hist.from).length && !Object.keys(hist.to).length) fieldHistFrom.delete(cutId);
+  }
+  paintViewerCaption();
+  refreshFieldTextUnsavedClasses();
+  // The debounced edit was still waiting: dropping it is the cancel. If it already left, put the original back.
+  if (!pendingHad && typed !== orig) scheduleCutFieldSave(cutId, { caption: orig }, { caption: orig });
 }
 
 function scheduleCutFieldSave(cutId, fields, from) {
@@ -9441,12 +9500,15 @@ function paintSelection(root) {
     }
   }
   root.querySelectorAll(".gg-grp-sec").forEach((sec) => {
+    const isScene = !!(sec.dataset.groupId && !sec.dataset.refGroup && !sec.classList.contains("gg-ref-sec"));
     const picked = new Set(state.cutSel);
-    if (!picked.size && state.cutId && !emptyKey) picked.add(state.cutId);
+    // A scene highlight is the scene selection or every cut actually selected.
+    // The current cut alone does not light the header (that mismatched History undo).
+    if (!isScene && !picked.size && state.cutId && !emptyKey) picked.add(state.cutId);
     const rowIds = [...sec.querySelectorAll(".gg-cut")].map((li) => li.dataset.cutId).filter(Boolean);
     const gid = sec.dataset.groupId || sec.dataset.refGroup || (sec.hasAttribute("data-loose") ? "ungrouped" : "");
     const allRows = rowIds.length > 0 && rowIds.every((id) => picked.has(id));
-    const emptyHit = !!emptyKey && gid === emptyKey && rowIds.length === 0;
+    const emptyHit = !!emptyKey && gid === emptyKey && rowIds.length === 0 && (!isScene || state.groupSel.has(gid));
     const groupOn = !!(sec.dataset.groupId && state.groupSel.has(sec.dataset.groupId));
     sec.classList.toggle("gg-grp-picked", allRows || emptyHit || groupOn);
     if (sec.dataset.refGroup) sec.classList.toggle("gg-on", sec.dataset.refGroup === refsUi.groupId || emptyHit);
@@ -11511,6 +11573,7 @@ function nativeRightTabRow() {
 function removeInputsTab() {
   inputsTabWanted = false;
   inputsTabOn = false;
+  inputsTabBtn?.parentElement?.classList.remove("gg-right-tab-row");
   inputsTabBtn?.remove();
   if (inputsPane) inputsPane.hidden = true;
   inputsPane?.remove();
@@ -11585,6 +11648,7 @@ function ensureInputsTab() {
     inputsTabBtn = btn;
   }
   if (inputsTabBtn.parentElement !== row) row.appendChild(inputsTabBtn);
+  row.classList.add("gg-right-tab-row");
   if (!inputsPane) {
     const pane = document.createElement("div");
     pane.className = "gg-inputs-pane gg-app-controls";
@@ -12095,6 +12159,7 @@ function mountShots(el) {
       const exitCardFieldEdit = () => {
         if (!isCardFieldEditing(ta)) return;
         delete ta.dataset.editing;
+        delete ta._ggCaptionOrig;
         ta.classList.remove("gg-field-editing");
         if (nat) ta.readOnly = true;
         ta.title = CARD_EDIT_IDLE_TIP;
@@ -12104,10 +12169,13 @@ function mountShots(el) {
 
       const enterCardFieldEdit = (caretAt) => {
         if (!nat) return;
+        if (fieldTextKind(ta) === "caption" && !isCardFieldEditing(ta)) ta._ggCaptionOrig = ta.value;
         ta.readOnly = false;
         ta.dataset.editing = "1";
         ta.classList.add("gg-field-editing");
-        ta.title = CARD_EDIT_ACTIVE_TIP;
+        ta.title = fieldTextKind(ta) === "caption"
+          ? "Enter = done, Esc = cancel, Shift+Enter = new line"
+          : CARD_EDIT_ACTIVE_TIP;
         ta.focus({ preventScroll: true });
         const pos =
           caretAt != null && Number.isFinite(Number(caretAt)) ? Math.min(Math.max(0, Number(caretAt)), ta.value.length) : ta.value.length;
@@ -12144,6 +12212,13 @@ function mountShots(el) {
       ta.addEventListener("keydown", (e) => {
         if (!isCardFieldEditing(ta)) return;
         e.stopPropagation();
+        if (e.key === "Escape" && fieldTextKind(ta) === "caption" && !(shotsUi.composing || e.isComposing)) {
+          e.preventDefault();
+          revertCaptionInlineEdit(ta, id);
+          exitCardFieldEdit();
+          ta.blur();
+          return;
+        }
         const action = cardEditKeyAction({
           key: e.key,
           shiftKey: e.shiftKey,
@@ -13296,7 +13371,8 @@ function showFrame(force) {
     if (idx != null) setPreviewFrameIndex(idx);
   }
   paintHead();
-  refreshEditPreviewStill(raw ? c : null);
+  // Timeline viewer above uses Best-else-selected. The edit preview follows the selected take.
+  refreshEditPreviewStill(raw || null);
 }
 
 const animScrubBytesCache = new Map();
@@ -13879,15 +13955,15 @@ function selectTimelineRange(toId) {
 }
 
 /**
- * A timeline clip click selects that cut and slides the edit preview to its timeline take
- * (Best when set, otherwise the selected take). Playback is stopped first so the slide is not overwritten.
+ * A timeline clip click selects that cut. The timeline keeps Best-else-selected.
+ * The edit preview follows that cut's selected take. Playback is stopped first so the slide is not overwritten.
  */
 function presentTimelineCut(cutId, selectFn) {
   if (play.on) stopPlay({ keepSelection: true });
   const cut = cutById(cutId);
   armTimelinePreviewTransition(cut);
   selectFn();
-  if (timelineEditModeOn && cut) refreshEditPreviewStill(clipForTimeline(cut));
+  if (timelineEditModeOn && cut) refreshEditPreviewStill(cut);
 }
 
 /** Later clip on the track advances the film downward. Same cut uses take-strip order. */
@@ -13907,7 +13983,7 @@ function armTimelinePreviewTransition(cut) {
   if (!timelineEditModeOn || editPreviewReducedMotion() || !cut) return;
   const el = document.querySelector(".gg-edit-preview");
   if (!el) return;
-  const view = clipForTimeline(cut);
+  const view = previewTakeView(cut);
   const incomingId = view?.media?.id ? String(view.media.id) : "";
   const prevCut = el.dataset.previewCut || "";
   const prevMedia = el.dataset.previewMedia || "";
@@ -14625,14 +14701,22 @@ function applyEditPreviewVideo(el, vid, plan) {
   el.dataset.ggFrame = previewFrameAttr(plan.frame);
 }
 
-/** Reference versions have no display slot. The strip pick is what the preview shows. */
+/**
+ * Edit preview media. References use the strip pick.
+ * A cut uses the selected take (strip, open tab, then display), never the timeline Best stand-in.
+ */
 function previewTakeView(c) {
-  if (!c || c.kind !== "reference") return c;
-  const vid = stripPick.pid === state.pid && stripPick.cutId === c.id ? stripPick.vid : "";
+  if (!c) return c;
+  const vid = c.kind === "reference"
+    ? (stripPick.pid === state.pid && stripPick.cutId === c.id ? stripPick.vid : "")
+    : stripSelectedVersionId(c);
   if (!vid) return c;
+  if (c.media?.id === vid) return c;
   const v = (c.versions_list || []).find((x) => x && x.id === vid);
   if (!v) return c;
-  return { ...c, media: versionMedia(v), display: vid };
+  const media = versionMedia(v);
+  if (!media) return { ...c, media: null, display: vid };
+  return { ...c, media, display: vid };
 }
 
 /** Cut whose takes Up/Down and the preview chevrons step. Reference tab uses the selected reference. */
@@ -15090,13 +15174,42 @@ function onEditPreviewWheel(e) {
   stepPreviewTake(step);
 }
 
-/** Right-side top controls hidden under the preview. Left mode tabs stay out of this set. */
+/** Graph-node collapse chevrons are about 14px and are not tab-bar actions. */
+function isNodeCollapseControl(el) {
+  if (!el) return true;
+  const label = `${el.getAttribute?.("aria-label") || ""} ${el.title || ""} ${el.className || ""}`;
+  if (/collapse|expand|chevron/i.test(label) && !/properties panel|workflow overview/i.test(label)) return true;
+  if (el.closest?.("[data-node-id], .comfy-vue-node, .litegraph-node, [class*='node-header'], [class*='node-title']")) return true;
+  const r = el.getBoundingClientRect?.();
+  if (r && r.width > 0 && r.width <= 16 && r.height > 0 && r.height <= 16) return true;
+  return false;
+}
+
+/** Icon buttons on the right tab chrome. Text tabs and node chrome are not proxied. */
+function isRightTabBarFunctionButton(el) {
+  if (!el || isNodeCollapseControl(el)) return false;
+  if (el.id === "tab-parameters" || el.id === "tab-nodes" || el.id === "tab-settings" || el.id === "gg-tab-inputs") return false;
+  const text = (el.textContent || "").trim();
+  if (/^(parameters|nodes|global settings|inputs)$/i.test(text)) return false;
+  const row = nativeRightTabRow();
+  const aria = `${el.getAttribute?.("aria-label") || ""} ${el.title || ""}`;
+  if (!row) return /toggle properties panel|workflow overview/i.test(aria);
+  const host = row.parentElement || row;
+  if (!host.contains(el)) return /toggle properties panel|workflow overview/i.test(aria);
+  const rowBox = row.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  if (r.top > rowBox.bottom + 6) return false;
+  return true;
+}
+
+/** Right-side tab-bar function buttons hidden under the preview. Node collapse arrows stay out. */
 function coveredPreviewTopControl(el, pr) {
   if (!el || !pr) return false;
   if (el.classList?.contains("gg-preview-proxy")) return false;
   if (el.closest?.(".gg-edit-preview, .gg-shots, .gg-bottom-strip, .gg-inputs-pane")) return false;
   const tag = el.tagName;
   if (tag !== "BUTTON" && tag !== "INPUT") return false;
+  if (!isRightTabBarFunctionButton(el)) return false;
   const r = el.getBoundingClientRect();
   if (r.width < 8 || r.height < 8) return false;
   const ix = Math.max(0, Math.min(r.right, pr.right) - Math.max(r.left, pr.left));
