@@ -13,6 +13,13 @@ Bug-fix release on top of 0.9.139. No changes to saved project data.
 - **AI Make Cut**: the menu opens in the right position, and the generated prompt is also written into prompt nodes inside subgraphs (`write_generation_prompt`).
 - Saving `project.json` retries when Windows briefly locks the file (WinError 5 / 32), instead of failing the save.
 
+### Security
+- Local-only routes now check the real peer address (`request.remote` / transport peername) for loopback instead of trusting the `Host` header, which can be spoofed (`routes.py`).
+
+### Tests
+- Updated stale Python and JS tests to current behavior; tests no longer create project folders in the repo `output/` folder (`tests/conftest.py`).
+- `pyproject.toml` display name uses the proper en dash; `routes.py` imports project history at module level.
+
 ### Packaging
 - `pyproject.toml` no longer starts with a UTF-8 BOM (strict TOML parsers rejected it).
 - Internal agent notes and scratch scripts are no longer tracked; `.gitignore` covers outputs, logs, `.env`, temp and test artifacts.
