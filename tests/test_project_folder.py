@@ -83,16 +83,19 @@ class ExportOutputFolderTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def test_export_requires_existing_writable(self):
+    def test_export_creates_missing_folder_later(self):
         from gg_project.project_settings import check_export_output_folder
 
         self.assertTrue(check_export_output_folder("")["ok"])
         missing = check_export_output_folder(str(self.root / "nope"))
-        self.assertFalse(missing["ok"])
-        self.assertIn("does not exist", missing["message"])
+        self.assertTrue(missing["ok"], missing)
+        self.assertFalse(missing.get("exists"))
         target = self.root / "writable"
         target.mkdir()
         self.assertTrue(check_export_output_folder(str(target))["ok"])
+        taken = self.root / "file.txt"
+        taken.write_text("x", encoding="utf-8")
+        self.assertFalse(check_export_output_folder(str(taken))["ok"])
 
 
 if __name__ == "__main__":

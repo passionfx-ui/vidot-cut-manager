@@ -285,18 +285,19 @@ def check_output_folder(value: Any) -> dict[str, Any]:
 
 
 def check_export_output_folder(value: Any) -> dict[str, Any]:
-    """Export tab output folder: empty = project default; otherwise must exist and be writable."""
+    """Export tab output folder.
+
+    Empty means the project default (`03_Edit`, or `edit` when that is absent).
+    A missing folder is allowed when its nearest existing parent is writable;
+    export creates the folder. A file, a bad name, or a parent that cannot be
+    written is rejected.
+    """
     base = check_output_folder(value)
     if not base.get("ok"):
         return base
-    if not base.get("path"):
-        return {"ok": True, "path": "", "use_default": True}
-    p = Path(base["path"]).expanduser()
-    if not p.is_dir():
-        return {"ok": False, "path": base["path"], "message": "This folder does not exist"}
-    if not os.access(p, os.W_OK):
-        return {"ok": False, "path": base["path"], "message": "This folder is not writable"}
-    return {"ok": True, "path": base["path"], "exists": True}
+    if not str(base.get("path") or "").strip():
+        return {"ok": True, "path": "", "use_default": True, "exists": False}
+    return base
 
 
 def mp4_export_dir_for_project(settings: dict[str, Any] | None, project_base: Path) -> Path:

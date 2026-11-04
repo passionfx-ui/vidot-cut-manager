@@ -341,6 +341,18 @@ def _worker(job_id: str, tl: dict, w: int, h: int, fps: int, sound: bool, resolv
             pass
 
 
+def ensure_export_dir(out_dir) -> Path:
+    """Create the export folder (and missing parents). Raises ValueError when it cannot."""
+    dest = Path(out_dir).expanduser()
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except OSError as ex:
+        raise ValueError(f"Could not create the export folder: {ex}") from ex
+    if not dest.is_dir():
+        raise ValueError("Could not create the export folder")
+    return dest
+
+
 def start(pid: str, preset: str = "720p", width=None, height=None, fps=24, sound=True,
           tl=None, resolve=None, out_dir=None) -> dict:
     """tl/resolve/out_dir: a prebuilt timeline, a media id -> Path resolver and an output folder (project export)."""
@@ -364,6 +376,8 @@ def start(pid: str, preset: str = "720p", width=None, height=None, fps=24, sound
         tl = gg_data.timeline(pid)
     if tl is None:
         return {"ok": False, "message": "project not found"}
+    if out_dir is not None:
+        out_dir = ensure_export_dir(out_dir)
     job_id = uuid.uuid4().hex[:10]
     _cancel.clear()
     with _lock:
@@ -425,17 +439,69 @@ def explorer_reveal_args(folder: Path, file: Path | None = None) -> list[str]:
     return ["xdg-open", str(folder)]
 
 
+def _explorer_path(path: Path) -> str:
+    """Path text for an Explorer command line. A trailing slash would escape the closing quote."""
+    text = str(path.resolve()).replace('"', "")
+    if len(text) <= 3 and len(text) >= 2 and text[1] == ":":
+        return text if text.endswith("\\") else text + "\\"
+    return text.rstrip("\\/")
+
+
 def run_explorer_reveal(folder: Path, file: Path | None = None) -> list[str]:
     folder = folder.resolve()
     if not folder.is_dir():
         raise OSError("Folder not found")
-    args = explorer_reveal_args(folder, file)
-    subprocess.run(args, check=False, creationflags=_flags() if os.name == "nt" else 0)
+    select = file if file is not None and file.is_file() else None
+    args = explorer_reveal_args(folder, select)
+    # Explorer's /select switch must be a raw command line. list2cmdline quotes a
+    # "/select,path" token that contains spaces, and Explorer then ignores it.
+    # CREATE_NO_WINDOW also keeps the Explorer window from appearing. Do not wait:
+    # the shell process stays up after the window opens.
+    if os.name == "nt":
+        if select is not None:
+            cmdline = 'explorer /select,"' + _explorer_path(select) + '"'
+        else:
+            cmdline = 'explorer "' + _explorer_path(folder) + '"'
+        subprocess.Popen(
+            cmdline,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    else:
+        subprocess.Popen(
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
     return args
 
 
-def _allowed_export_folder(pid: str, folder: Path) -> bool:
-    folder = folder.resolve()
+def _dir_key(path: Path) -> str:
+    try:
+        text = str(Path(path).expanduser().resolve())
+    except OSError:
+        text = str(Path(path).expanduser())
+    return os.path.normcase(unicodedata.normalize("NFC", text))
+
+
+def _same_dir(a: Path, b: Path) -> bool:
+    return _dir_key(a) == _dir_key(b)
+
+
+def _is_inside(folder: Path, allowed: Path) -> bool:
+    f = _dir_key(folder)
+    a = _dir_key(allowed)
+    if f == a:
+        return True
+    sep = "\\" if os.name == "nt" else "/"
+    base = a if a.endswith(sep) else a + sep
+    return f.startswith(base)
+
+
+def _configured_export_dir(pid: str) -> Path | None:
     try:
         from . import gg_native_api as na
     except ImportError:
@@ -443,61 +509,92 @@ def _allowed_export_folder(pid: str, folder: Path) -> bool:
     if na.is_native_pid(pid):
         got = na.native_export_timeline(pid)
         if got is None:
-            return False
-        allowed = got[1].resolve()
-        try:
-            folder.relative_to(allowed)
-            return True
-        except ValueError:
-            return folder == allowed
-    leg = output_dir().resolve()
+            return None
+        return Path(got[1])
+    return output_dir()
+
+
+def _allowed_export_folder(pid: str, folder: Path) -> bool:
+    configured = _configured_export_dir(pid)
+    if configured is None:
+        return False
+    return _is_inside(folder, configured)
+
+
+def _hint_export_target(hint_path: str, allowed: Path | None, job_folder: Path | None):
+    """Return (directory, file or None) when hint_path is the export file or its folder."""
+    raw = Path(hint_path.strip()).expanduser()
     try:
-        folder.relative_to(leg)
-        return True
-    except ValueError:
-        return folder == leg
+        resolved = raw.resolve()
+    except OSError:
+        resolved = raw
+    if resolved.is_file() or (not resolved.exists() and resolved.suffix.lower() == ".mp4"):
+        directory = resolved.parent
+        selected = resolved if resolved.is_file() else None
+    elif resolved.is_dir() or not resolved.exists():
+        directory, selected = resolved, None
+    else:
+        return None, None
+    if job_folder is not None and (_same_dir(directory, job_folder) or _is_inside(directory, job_folder)):
+        return directory, selected
+    if allowed is not None and (_same_dir(directory, allowed) or _is_inside(directory, allowed)):
+        return directory, selected
+    return None, None
 
 
-def reveal_project_export(pid: str, file_name: str | None = None) -> dict:
-    """Open the project's MP4 export folder in the system file manager (Windows Explorer on Windows)."""
+def reveal_project_export(pid: str, file_name: str | None = None, hint_path: str | None = None) -> dict:
+    """Open the export folder the mp4 was written to (Windows Explorer on Windows).
+
+    A missing export folder is created first so Explorer has a real directory to open.
+    """
     if not isinstance(pid, str) or not pid:
         return {"ok": False, "message": "pid required"}
-    folder: Path | None = None
-    select_file: Path | None = None
     with _lock:
         job = dict(_job)
+    configured = _configured_export_dir(pid)
+    folder: Path | None = None
+    select_file: Path | None = None
+    job_folder: Path | None = None
     if job.get("pid") == pid and job.get("status") == "done" and job.get("path"):
-        if file_name and job.get("file") != file_name:
-            return {"ok": False, "message": "That export file is not available"}
-        out = Path(job["path"])
-        if out.is_file():
-            folder = out.parent
+        out = Path(str(job["path"]))
+        job_folder = out.parent
+        folder = job_folder
+        name_ok = not file_name or job.get("file") == file_name
+        if name_ok and out.is_file():
             select_file = out
+    if folder is None and isinstance(hint_path, str) and hint_path.strip():
+        folder, select_file = _hint_export_target(hint_path, configured, job_folder)
     if folder is None:
-        try:
-            from . import gg_native_api as na
-        except ImportError:
-            import gg_native_api as na  # type: ignore
-        got = na.native_export_timeline(pid)
-        if got is None:
+        if configured is None:
             return {"ok": False, "message": "project not found"}
-        folder = got[1]
+        folder = configured
         if file_name:
-            candidate = (folder / file_name).resolve()
+            candidate = folder / file_name
             if candidate.is_file():
                 select_file = candidate
-    folder = folder.resolve()
+    allowed = False
+    if job_folder is not None and (_same_dir(folder, job_folder) or _is_inside(folder, job_folder)):
+        allowed = True
+    if configured is not None and _is_inside(folder, configured):
+        allowed = True
+    if not allowed:
+        return {"ok": False, "message": "folder not allowed"}
+    if not folder.exists():
+        try:
+            folder = ensure_export_dir(folder)
+        except ValueError as ex:
+            return {"ok": False, "message": str(ex)}
     if not folder.is_dir():
         return {"ok": False, "message": "Folder not found"}
-    if not _allowed_export_folder(pid, folder):
-        return {"ok": False, "message": "folder not allowed"}
+    if select_file is not None and not select_file.is_file():
+        select_file = None
     try:
         args = run_explorer_reveal(folder, select_file)
     except OSError as ex:
         return {"ok": False, "message": str(ex)[-200:]}
     return {
         "ok": True,
-        "path": str(folder),
+        "path": str(folder.resolve()),
         "selected": str(select_file.resolve()) if select_file else None,
         "args": args,
     }

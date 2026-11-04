@@ -16420,21 +16420,23 @@ async function saveExportFolder(path) {
 
 async function showExportOutputFolder(withLastFile = false) {
   const tl = state.timeline;
-  if (!tl?.project?.id) return;
   const job = exp.job;
-  const body = { pid: tl.project.id };
-  if (withLastFile && job?.status === "done" && job.file) body.name = job.file;
+  const finished = job && job.status === "done" && (job.path || job.file);
+  const pid = (withLastFile && finished && job.pid) || tl?.project?.id || (finished && job.pid) || "";
+  if (!pid) {
+    ggToast("Show in folder", "Open a project first.", "warn");
+    return;
+  }
+  const body = { pid };
+  if (finished && (withLastFile || job.pid === pid)) {
+    if (job.file) body.name = job.file;
+    if (job.path) body.path = job.path;
+  }
   try {
-    const res = await api.fetchApi("/gonggan/export/reveal", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.message || `HTTP ${res.status}`);
+    const data = await postJson("/gonggan/export/reveal", body);
     if (data.remote_host) ggToast("", EXPORT_REMOTE_EXPLORER_MSG, "info");
   } catch (e) {
-    ggToast("Show in folder", sentence(String(e.message || e), "Restart ComfyUI once if this button was just added."), "warn");
+    ggToast("Show in folder", sentence(String(e.message || e), "The output folder could not be opened."), "warn");
   }
 }
 

@@ -447,7 +447,8 @@ async def gg_export_reveal(request):
     if not isinstance(pid, str) or not pid:
         return _err(400, "pid required")
     name = data.get("name") if isinstance(data.get("name"), str) else None
-    res = await asyncio.to_thread(gg_export.reveal_project_export, pid, name)
+    hint = data.get("path") if isinstance(data.get("path"), str) else None
+    res = await asyncio.to_thread(gg_export.reveal_project_export, pid, name, hint)
     if res.get("ok") and not _request_is_local(request):
         res = {**res, "remote_host": True}
     return web.json_response(res, status=200 if res.get("ok") else 404)

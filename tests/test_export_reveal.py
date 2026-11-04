@@ -53,10 +53,15 @@ class RevealProjectExportTests(unittest.TestCase):
         na.set_native_store(None)
         self._tmp.cleanup()
 
-    def test_rejects_missing_folder(self):
+    @mock.patch.object(gg_export, "run_explorer_reveal", return_value=["explorer", "D:\\x"])
+    def test_missing_folder_is_created_and_opened(self, run):
+        out_dir = na.native_export_timeline(self.pid)[1]
+        self.assertFalse(out_dir.exists())
         res = gg_export.reveal_project_export(self.pid)
-        self.assertFalse(res["ok"])
-        self.assertIn("not found", res["message"].lower())
+        self.assertTrue(res["ok"], res)
+        self.assertTrue(out_dir.is_dir())
+        self.assertEqual(res["path"], str(out_dir.resolve()))
+        run.assert_called_once()
 
     @mock.patch.object(gg_export, "run_explorer_reveal", return_value=["explorer", "D:\\x"])
     def test_ok_with_existing_export_dir(self, run):
