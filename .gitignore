@@ -19,3 +19,27 @@ docs/FIX_LIST_*.md
 docs/*_question.md
 docs/_progress_*.txt
 .agent_*.txt
+
+# release hygiene (0.9.140)
+.env
+.env.*
+*.env
+output/
+outputs/
+logs/
+tmp/
+temp/
+_old/
+.worktrees/
+.agent_*
+AGENTS.md
+docs/CONTEXT.md
+docs/_test_result_*
+scripts/_*
+scripts/e138_*
+scripts/gen_e138_*
+scripts/patch_vstrip_*
+tests/e2e/_inspect_*
+tests/fixtures/
+*.safetensors
+*.ckpt
