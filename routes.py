@@ -17,11 +17,13 @@ from . import gg_wfstore
 
 try:
     from .gg_project import ConflictError
+    from .gg_project import history as _history
     from .gg_project.folder_list import folder_list_response
     from .gg_project.project_settings import check_output_folder, check_export_output_folder, comfyui_output_directory
     from .gg_project.ref_links import clean_refs_used
 except ImportError:  # unittest / plain script
     from gg_project import ConflictError  # type: ignore
+    from gg_project import history as _history  # type: ignore
     from gg_project.folder_list import folder_list_response  # type: ignore
     from gg_project.project_settings import check_output_folder, check_export_output_folder, comfyui_output_directory  # type: ignore
     from gg_project.ref_links import clean_refs_used  # type: ignore
@@ -35,11 +37,7 @@ def _err(status: int, message: str) -> web.Response:
 
 
 def _history_mod():
-    try:
-        from .gg_project import history as history_mod
-    except ImportError:
-        from gg_project import history as history_mod  # type: ignore
-    return history_mod
+    return _history
 
 
 def _history_steps_limit() -> int:

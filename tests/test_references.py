@@ -93,8 +93,9 @@ class ReferenceTests(unittest.TestCase):
             "references": [{"category": "Character", "name": "mina"}, {"category": "Place", "name": "Hall"}],
         })
         tl = self.store.to_timeline(self.pid)
+        # No saved reference_order: the list is by name (Hall, then Mina). The duplicate "mina" is skipped.
         self.assertEqual([(r["category"], r["name"]) for r in tl["references"]],
-                         [("Character", "Mina"), ("Place", "Hall")])
+                         [("Place", "Hall"), ("Character", "Mina")])
         self.assertEqual([c["name"] for c in tl["cuts"]], ["A"])
 
 

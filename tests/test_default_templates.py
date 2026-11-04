@@ -2,6 +2,7 @@
 Image to Video (SDK runner never called, nothing rendered)."""
 from __future__ import annotations
 
+import copy
 import json
 import re
 import struct
@@ -23,7 +24,13 @@ import gg_template
 import gg_wfconvert
 import gg_wfnodes as wn
 from gg_project import LocalStore
-from gg_project.project_settings import DEFAULT_PROJECT_SETTINGS, normalize_settings
+from gg_project.project_settings import (
+    BUILTIN_VIDEO_TEMPLATE,
+    DEFAULT_PROJECT_SETTINGS,
+    USER_DEFAULT_VIDEO_TEMPLATE,
+    normalize_settings,
+)
+from gg_workflow_size import apply_new_cut_generation_size
 
 
 def _node(graph: dict, nid: int) -> dict:
@@ -60,7 +67,9 @@ class BuiltinListTests(unittest.TestCase):
         pairs = re.findall(r'value: "([^"]+)", label: "([^"]+)"', body)
         self.assertEqual(pairs, [(t["ref"], t["label"]) for t in gg_template.list_builtin_templates()])
         self.assertIn('DEFAULT_IMAGE_TEMPLATE = "builtin:image"', js)
-        self.assertIn('DEFAULT_VIDEO_TEMPLATE = "builtin:video-ltx"', js)
+        self.assertIn(f'BUILTIN_VIDEO_TEMPLATE = "{BUILTIN_VIDEO_TEMPLATE}"', js)
+        self.assertIn(f'USER_DEFAULT_VIDEO_TEMPLATE = "{USER_DEFAULT_VIDEO_TEMPLATE}"', js)
+        self.assertIn("export const DEFAULT_VIDEO_TEMPLATE = USER_DEFAULT_VIDEO_TEMPLATE;", js)
 
     def test_builtin_refs_resolve_and_unknown_ones_do_not(self):
         for t in gg_template.list_builtin_templates():
@@ -216,7 +225,9 @@ class ProjectDefaultsBase(unittest.TestCase):
 class ProjectDefaultsTests(ProjectDefaultsBase):
     def test_settings_defaults_and_clamp(self):
         self.assertEqual((DEFAULT_PROJECT_SETTINGS["image_template"], DEFAULT_PROJECT_SETTINGS["video_template"]),
-                         ("builtin:image", "builtin:video-ltx"))
+                         ("builtin:image", USER_DEFAULT_VIDEO_TEMPLATE))
+        self.assertEqual(USER_DEFAULT_VIDEO_TEMPLATE, "LTX 4b video mp4.app.json")
+        self.assertEqual(BUILTIN_VIDEO_TEMPLATE, "builtin:video-ltx")
         s = normalize_settings({"image_template": "  ", "video_template": "a\\b.json"})
         self.assertEqual((s["image_template"], s["video_template"]), ("builtin:image", "a/b.json"))
 
@@ -226,7 +237,12 @@ class ProjectDefaultsTests(ProjectDefaultsBase):
         s = self.store.to_timeline(pid)["project"]["settings"]
         self.assertEqual((s["image_template"], s["video_template"]), ("builtin:image", "builtin:video-ltx-t2v"))
         first = next(iter(doc["cuts"]))
-        self.assertEqual(self.cut_graph(pid, first), gg_template.read_workflow_ref("builtin:image"))
+        expected = copy.deepcopy(gg_template.read_workflow_ref("builtin:image"))
+        written = apply_new_cut_generation_size(expected, 1280, 720, app=False)
+        self.assertTrue(written, "the Image template has a size node to stamp")
+        self.assertEqual(self.cut_graph(pid, first), expected)
+        latent = next(n for n in self.cut_graph(pid, first)["nodes"] if n["type"] == "EmptyFlux2LatentImage")
+        self.assertEqual(latent["widgets_values"][:2], [1280, 720])
 
     def test_unknown_template_is_refused(self):
         with self.assertRaisesRegex(ValueError, "Video template not found: nope.json"):
@@ -274,18 +290,19 @@ class ProjectDefaultsTests(ProjectDefaultsBase):
             na.native_add_cut_list(pid, [{"cut": 1, "duration": 2, "description": "Fox"}])
 
     def test_empty_cut_runs_image_template_with_info_notes(self):
+        """I14: a cut with no saved graph is not filled from the Image template, even when Info notes exist."""
         pid = self.new_project()
         before = set(self.store.get_project(pid)["cuts"])
         cid = next(c for c in self.store.add_cut(pid)["cuts"] if c not in before)
         self.store.update_cut(pid, cid, {"notes": "A lighthouse at dusk"})
-        res = na.native_cut_api_workflow(pid, cid, convert=True)
-        self.assertEqual(res["source"], "template")
-        self.assertEqual(wn.prompt_text(res["workflow"]), "A lighthouse at dusk")
+        with self.assertRaises(na.NativeWorkflowError) as cm:
+            na.native_cut_api_workflow(pid, cid, convert=True)
+        self.assertEqual(cm.exception.code, "empty")
+        self.assertIn("no workflow", str(cm.exception))
 
     def test_new_cut_without_text_refuses_generate(self):
         pid = self.new_project()
-        before = set(self.store.get_project(pid)["cuts"])
-        cid = next(c for c in self.store.add_cut(pid)["cuts"] if c not in before)
+        cid = next(iter(self.store.get_project(pid)["cuts"]))
         with self.assertRaisesRegex(ValueError, na.WRITE_PROMPT_FIRST):
             na.native_cut_api_workflow(pid, cid, convert=True)
 

@@ -185,7 +185,7 @@ class GenerateAllBase(unittest.TestCase):
         return _run
 
     def start(self, order, *, new_seed=False, **runner_kw):
-        cap = lambda pid, cut, job, wait_sec=0, api_workflow=None, poll_sec=0.25: {"ok": True, "version": {"id": f"v-{cut}"}}  # noqa: E731
+        cap = lambda pid, cut, job, wait_sec=0, api_workflow=None, poll_sec=0.25, gen=None, output_nodes=None: {"ok": True, "version": {"id": f"v-{cut}"}}  # noqa: E731
         with mock.patch.object(gg_sdk, "_runner", self.runner(**runner_kw)), \
                 mock.patch.object(na, "native_capture_prompt_output", cap):
             return gg_sdk.start_generate_all(self.pid, order, new_seed=new_seed)
@@ -210,10 +210,16 @@ class GenerateAllTests(GenerateAllBase):
         order = [self.ids[2], self.empty, self.ids[0], self.ids[1]]
         res = self.start(order)
         self.assertTrue(res["ok"])
-        self.assertEqual(self.ran, order, "0.9.117: the empty cut runs the project Image template")
+        # I14: a cut with no saved graph is skipped. Generate All does not fill in the Image template.
+        ran = [self.ids[2], self.ids[0], self.ids[1]]
+        self.assertEqual(self.ran, ran)
         b = gg_sdk.generate_all_status()
         self.assertEqual(b["status"], "done")
-        self.assertEqual([(it["cut_id"], it["status"]) for it in b["items"]], [(c, "done") for c in order])
+        self.assertEqual(
+            [(it["cut_id"], it["status"]) for it in b["items"]],
+            [(self.ids[2], "done"), (self.empty, "skipped"), (self.ids[0], "done"), (self.ids[1], "done")],
+        )
+        self.assertIn("no workflow", b["items"][1]["error"])
         self.assertEqual(b["items"][0]["version"], f"v-{self.ids[2]}")
         generating = [next(it["cut_id"] for it in e["items"] if it["status"] == "generating")
                       for e in self.events if any(it["status"] == "generating" for it in e["items"])]

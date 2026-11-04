@@ -136,6 +136,7 @@ class NativeCutSourceIntegrationTests(unittest.TestCase):
         return p
 
     def test_api_video_pick_beats_cut_workflow(self):
+        """I14: opening a cut returns that cut's graph. A video Best take does not replace it."""
         doc = self.store.create_project("P", template_graph=WF_CUT)
         pid = doc["id"]
         cut_id = next(iter(doc["cuts"].values()))["id"]
@@ -147,10 +148,16 @@ class NativeCutSourceIntegrationTests(unittest.TestCase):
         self.store.apply_timeline_edit(pid, [cut_id], {cut_id: {"in": 0, "sec": 3.0, "pick": v_vid["id"]}})
 
         data = na.native_cut_source_workflow(pid, cut_id)
-        self.assertEqual(data["workflow"], WF_VIDEO)
+        self.assertEqual(data["workflow"], WF_CUT)
+        self.assertEqual(data["source"], "stored")
         self.assertIsNone(data.get("fallback"))
+        self.assertEqual(na.native_version_workflow(pid, cut_id, v_vid["id"])["workflow"], WF_VIDEO)
+        again = na.native_cut_source_workflow(pid, cut_id, kind="video")
+        self.assertEqual(again["workflow"], WF_CUT)
+        self.assertIsNone(again.get("kind_used"))
 
     def test_api_kind_query_override(self):
+        """I14: kind=video does not substitute the project Video template."""
         doc = self.store.create_project("P")
         pid = doc["id"]
         cut_id = next(iter(doc["cuts"].values()))["id"]
@@ -159,12 +166,14 @@ class NativeCutSourceIntegrationTests(unittest.TestCase):
         self.store.apply_timeline_edit(pid, [cut_id], {cut_id: {"in": 0, "sec": 3.0, "pick": v_img["id"]}})
 
         data = na.native_cut_source_workflow(pid, cut_id, kind="video")
-        self.assertNotEqual(data["workflow"], WF_IMAGE)
-        self.assertEqual(data["source"], "template")
-        self.assertEqual(data["kind_used"], "video")
+        self.assertIsNone(data["workflow"])
+        self.assertIsNone(data["source"])
+        self.assertIsNone(data["kind_used"])
+        self.assertIsNone(data.get("fallback"))
+        self.assertEqual(na.native_version_workflow(pid, cut_id, v_img["id"])["workflow"], WF_IMAGE)
 
     def test_video_tab_gets_start_image_and_description(self):
-        """Make Video tab: project Video template, selected image in Start Image, description in Prompt."""
+        """I14: opening a cut does not build a Video-template tab. Image to Video is a separate plan."""
         video_tpl = {"nodes": [
             {"id": 1, "type": "LoadImage", "title": "Start Image",
              "widgets_values": ["old.png", "image"],
@@ -175,17 +184,16 @@ class NativeCutSourceIntegrationTests(unittest.TestCase):
         pid = doc["id"]
         cut_id = next(iter(doc["cuts"].values()))["id"]
         v_img = self.store.add_version(pid, cut_id, self._png("a.png"), workflow=WF_IMAGE)
-        with mock.patch.object(na, "project_video_template", return_value=("V", video_tpl)), \
+        with mock.patch.object(na, "project_video_template", return_value=("V", video_tpl)) as video_tpl_call, \
              mock.patch.object(na, "cut_prompt_text", return_value="a cat runs"), \
              mock.patch.object(na, "stage_start_image", return_value=f"gonggan/start_{v_img['id']}.png"):
             data = na.native_cut_source_workflow(pid, cut_id, kind="video")
-        nodes = {n["id"]: n for n in data["workflow"]["nodes"]}
-        self.assertEqual(nodes[1]["widgets_values"][0], f"gonggan/start_{v_img['id']}.png")
-        self.assertEqual(nodes[1]["widgets_values_named"]["image"], f"gonggan/start_{v_img['id']}.png")
-        self.assertEqual(nodes[2]["widgets_values"][0], "a cat runs")
+        video_tpl_call.assert_not_called()
+        self.assertIsNone(data["workflow"])
+        self.assertIsNone(data["source"])
         self.assertEqual(video_tpl["nodes"][1]["widgets_values"][0], "old")
-        # image request still opens the image workflow
-        self.assertEqual(na.native_cut_source_workflow(pid, cut_id, kind="image")["workflow"], WF_IMAGE)
+        self.assertEqual(na.native_version_workflow(pid, cut_id, v_img["id"])["workflow"], WF_IMAGE)
+        self.assertIsNone(na.native_cut_source_workflow(pid, cut_id, kind="image")["workflow"])
 
     def test_version_media_kind(self):
         self.assertEqual(version_media_kind({"asset": {"kind": "video"}}), "video")
@@ -200,14 +208,16 @@ class NativeCutSourceIntegrationTests(unittest.TestCase):
         self.store.add_version(pid, cut_id, self._png("a.png"))
         v_vid = self.store.add_version(pid, cut_id, mp4)
         video_tpl = {"nodes": [{"id": 5, "type": "LTXVImgToVideo"}], "links": [], "version": 0.4}
-        with mock.patch.object(na, "project_video_template", return_value=("V", video_tpl)):
+        with mock.patch.object(na, "project_video_template", return_value=("V", video_tpl)) as video_tpl_call:
             vid = na.native_cut_source_workflow(pid, cut_id, kind="video")
-            self.assertEqual(workflow_media_kind(vid["workflow"]), "video")
-            self.assertEqual(vid["source"], "template")
-            self.assertIn("Video template", vid["fallback"])
-            self.assertEqual(workflow_media_kind(na.native_cut_source_workflow(pid, cut_id, kind="image")["workflow"]), "image")
+            video_tpl_call.assert_not_called()
+            self.assertEqual(vid["workflow"], WF_IMAGE)
+            self.assertEqual(vid["source"], "stored")
+            self.assertIsNone(vid.get("fallback"))
+            self.assertEqual(workflow_media_kind(vid["workflow"]), "image")
+            self.assertEqual(na.native_cut_source_workflow(pid, cut_id, kind="image")["workflow"], WF_IMAGE)
             self.store.apply_timeline_edit(pid, [cut_id], {cut_id: {"in": 0, "sec": 3.0, "pick": v_vid["id"]}})
-            self.assertEqual(workflow_media_kind(na.native_cut_source_workflow(pid, cut_id)["workflow"]), "video")
+            self.assertEqual(na.native_cut_source_workflow(pid, cut_id)["workflow"], WF_IMAGE)
 
 
 class WorkflowMediaKindTests(unittest.TestCase):

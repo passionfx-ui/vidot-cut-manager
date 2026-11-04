@@ -152,9 +152,11 @@ class NativeMoveKeepsFilesTests(unittest.TestCase):
             self.assertIn(top, (self.c2, "images", "videos"), msg=str(path))
             self.assertTrue((self.pdir / "versions" / self.c2 / f"{vid}.json").is_file())
             self.assertEqual(na.native_version_workflow(self.pid, self.c2, vid)["workflow"], wf)
+        # I14: the cut's own graph stays empty. Take graphs stay on the versions (checked above).
         src = na.native_cut_source_workflow(self.pid, self.c2)
-        self.assertEqual(src["source"], "stored")
-        self.assertEqual(src["workflow"], self.vids[self.pick])
+        self.assertIsNone(src["source"])
+        self.assertIsNone(src["workflow"])
+        self.assertIsNone(self.store.get_project(self.pid)["cuts"][self.c2].get("workflow_sha"))
         self.assertEqual(self.store.get_project(self.pid)["cuts"][self.c2]["pick_version_id"], self.pick)
         row = self._row(tl, self.c2)
         self.assertEqual(row["media"]["id"], self.pick)

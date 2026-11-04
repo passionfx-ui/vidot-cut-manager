@@ -101,14 +101,20 @@ class WorkflowSelectionTests(NativeBase):
         self.assertEqual((res["source"], res["workflow"]), ("embedded", API))
 
     def test_stored_api_workflow(self):
-        self._version("a.mp4", API)
+        """I14: Queue uses the cut's saved graph. A take's graph does not replace it."""
+        self.store.set_cut_workflow(self.pid, self.cut, API)
+        other = {"3": {"class_type": "KSampler", "inputs": {"seed": 1, "steps": 4, "model": ["4", 0]}}}
+        self._version("a.mp4", other)
         res = na.native_cut_api_workflow(self.pid, self.cut)
         self.assertEqual((res["source"], res["workflow"]), ("stored", API))
 
     def test_newest_version_wins(self):
-        old = {**API, "3": {"class_type": "KSampler", "inputs": {"seed": 1}}}
+        """I14: a newer take does not replace the cut's saved graph."""
+        self.store.set_cut_workflow(self.pid, self.cut, API)
+        old = {"3": {"class_type": "KSampler", "inputs": {"seed": 1}}}
+        newer = {"3": {"class_type": "KSampler", "inputs": {"seed": 999, "steps": 4, "model": ["4", 0]}}}
         self._version("old.mp4", old)
-        self._version("new.mp4", API)
+        self._version("new.mp4", newer)
         self.assertEqual(na.native_cut_api_workflow(self.pid, self.cut)["workflow"], API)
 
     def test_history_prompt_of_current_run(self):
@@ -157,6 +163,7 @@ class _SyncThread:
 class NativeRunTests(NativeBase):
     def setUp(self):
         super().setUp()
+        self.store.set_cut_workflow(self.pid, self.cut, API)
         self._version("a.mp4", API)
         gg_sdk._job.clear()
         gg_sdk._job["status"] = "idle"
