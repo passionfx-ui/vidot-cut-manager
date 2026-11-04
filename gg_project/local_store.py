@@ -72,11 +72,37 @@ def _probe_video_seconds(path: Path) -> float | None:
         return None
 
 
+# Windows Defender and a reader of project.json can deny the tmp replace for a moment
+# (PermissionError, WinError 5 access denied, WinError 32 sharing violation).
+_REPLACE_ATTEMPTS = 10
+_REPLACE_BACKOFF_S = 0.02
+
+
+def _replace_is_locked(exc: OSError) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    return getattr(exc, "winerror", None) in (5, 32)
+
+
+def _replace_file(tmp: Path, path: Path) -> None:
+    """Move tmp onto path. Retry a brief lock, then re-raise that same error."""
+    delay = _REPLACE_BACKOFF_S
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            tmp.replace(path)
+            return
+        except OSError as ex:
+            if attempt + 1 >= _REPLACE_ATTEMPTS or not _replace_is_locked(ex):
+                raise
+            time.sleep(delay)
+            delay += _REPLACE_BACKOFF_S
+
+
 def _atomic_write_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(path)
+    _replace_file(tmp, path)
 
 
 def _read_json(path: Path) -> Any:

@@ -104,6 +104,27 @@ export function workflowGraphKind(wf) {
 }
 
 /**
+ * Image or video cut, from the workflow stored on the cut (`workflow_sha`).
+ * Subgraph nodes count: an app template's video nodes often live under `definitions.subgraphs`.
+ * The timeline payload does not carry this (its media kind is None when the cut has no current take).
+ * @param {unknown} wf
+ * @returns {"image" | "video" | null}
+ */
+export function storedCutKindFromWorkflow(wf) {
+  if (!wf || typeof wf !== "object") return null;
+  const parts = [wf];
+  const subs = wf.definitions?.subgraphs;
+  if (Array.isArray(subs)) parts.push(...subs);
+  let image = false;
+  for (const part of parts) {
+    const k = workflowGraphKind(part);
+    if (k === "video") return "video";
+    if (k === "image") image = true;
+  }
+  return image ? "image" : null;
+}
+
+/**
  * A graph opens for a selected image / video unless it clearly makes the other kind.
  * @param {unknown} wf
  * @param {"image" | "video" | null | undefined} kind

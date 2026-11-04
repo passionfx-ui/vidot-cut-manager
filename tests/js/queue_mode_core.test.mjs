@@ -38,20 +38,23 @@ describe("queueCutJob v4 scenarios", () => {
   const C = cut("c", { display: "v-vid" });
   const D = cut("d", { versions_list: [{ id: "v-only-vid", kind: "video" }] });
 
-  it("Auto: A skip, B video, C regen, D image", () => {
-    assert.deepEqual(queueCutJob(A, "auto", {}), { type: "skip", reason: "best" });
-    assert.deepEqual(queueCutJob(B, "auto", {}), { type: "job", job: "video", selectedVid: "v-img" });
-    assert.deepEqual(queueCutJob(C, "auto", {}), { type: "job", job: "regen", selectedVid: "v-vid" });
-    assert.deepEqual(queueCutJob(D, "auto", {}), { type: "job", job: "image" });
+  it("Auto follows the stored cut kind, not the shown take", () => {
+    assert.deepEqual(queueCutJob(A, "auto", { cutKind: "image" }), { type: "job", job: "image" });
+    assert.deepEqual(queueCutJob(B, "auto", { cutKind: "image" }), { type: "job", job: "image" });
+    assert.deepEqual(queueCutJob(C, "auto", { cutKind: "image" }), { type: "job", job: "image" });
+    assert.deepEqual(queueCutJob(D, "auto", { cutKind: "image" }), { type: "job", job: "image" });
+    assert.deepEqual(queueCutJob(B, "auto", {}), { type: "job", job: "image" });
+    assert.deepEqual(queueCutJob(B, "auto", { cutKind: "video" }), { type: "job", job: "video", selectedVid: "v-img" });
+    assert.deepEqual(queueCutJob(C, "auto", { cutKind: "video" }), { type: "job", job: "video" });
+    assert.deepEqual(queueCutJob(D, "auto", { cutKind: "video" }), { type: "skip", reason: "no_image" });
   });
 
-  it("Image: A skip, B/C/D image", () => {
-    assert.deepEqual(queueCutJob(A, "image", {}), { type: "skip", reason: "best" });
-    for (const c of [B, C, D]) assert.deepEqual(queueCutJob(c, "image", {}), { type: "job", job: "image" });
+  it("Image: every cut is an image job", () => {
+    for (const c of [A, B, C, D]) assert.deepEqual(queueCutJob(c, "image", {}), { type: "job", job: "image" });
   });
 
-  it("Video: A skip, B video, C regen, D skip no image", () => {
-    assert.deepEqual(queueCutJob(A, "video", {}), { type: "skip", reason: "best" });
+  it("Video: still is video, video take is regen, no still is skip", () => {
+    assert.deepEqual(queueCutJob(A, "video", {}), { type: "job", job: "video", selectedVid: "v-img" });
     assert.deepEqual(queueCutJob(B, "video", {}), { type: "job", job: "video", selectedVid: "v-img" });
     assert.deepEqual(queueCutJob(C, "video", {}), { type: "job", job: "regen", selectedVid: "v-vid" });
     assert.deepEqual(queueCutJob(D, "video", {}), { type: "skip", reason: "no_image" });
@@ -66,20 +69,21 @@ describe("queueBatchPlan", () => {
     cut("d", { versions_list: [{ id: "v-only-vid", kind: "video" }] }),
   ];
 
-  it("Auto tooltip counts match jobs", () => {
-    const p = queueBatchPlan(cuts, "auto", () => ({}));
+  it("Auto tooltip follows cut kind", () => {
+    const kinds = { a: "image", b: "image", c: "video", d: "video" };
+    const p = queueBatchPlan(cuts, "auto", (id) => ({ cutKind: kinds[id] }));
     assert.equal(p.actionable, 3);
-    assert.equal(p.counts.skipBest, 1);
+    assert.equal(p.counts.image, 2);
     assert.equal(p.counts.video, 1);
-    assert.equal(p.counts.regen, 1);
-    assert.equal(p.counts.image, 1);
-    assert.match(queuePlanTooltip(p.counts), /1 Video · 1 Regen · 1 Image · 1 skipped \(Best\)/);
+    assert.equal(p.counts.regen, 0);
+    assert.equal(p.counts.skipNoImage, 1);
+    assert.match(queuePlanTooltip(p.counts), /1 Video · 2 Image · 1 skipped \(no image\)/);
   });
 
-  it("Video mode all skipped when only Best or no image cuts selected", () => {
+  it("Video mode queues a still and skips a cut with no still", () => {
     const p = queueBatchPlan([cuts[0]], "video", () => ({}));
-    assert.equal(p.actionable, 0);
-    assert.match(queuePlanTooltip(p.counts), /skipped \(Best\)/);
+    assert.equal(p.actionable, 1);
+    assert.equal(p.counts.video, 1);
     const p2 = queueBatchPlan([cuts[3]], "video", () => ({}));
     assert.equal(p2.actionable, 0);
     assert.match(queuePlanTooltip(p2.counts), /no image/);

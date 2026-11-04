@@ -12,6 +12,7 @@ import {
   isOpenVersion,
   versionWorkflowSourceOrder,
   workflowFromVersionRecord,
+  storedCutKindFromWorkflow,
   workflowGraphKind,
   graphFitsKind,
 } from "../../web/gg_rep_wf_core.js";
@@ -25,6 +26,16 @@ describe("workflowGraphKind", () => {
     assert.equal(workflowGraphKind({ 1: { class_type: "PreviewImage" } }), "image");
     assert.equal(workflowGraphKind({ nodes: [{ type: "KSampler" }] }), null);
     assert.equal(workflowGraphKind(null), null);
+  });
+
+  it("stored cut kind reads the saved graph, including subgraphs", () => {
+    assert.equal(storedCutKindFromWorkflow({ nodes: [{ type: "SaveImage" }] }), "image");
+    assert.equal(storedCutKindFromWorkflow({
+      nodes: [{ type: "57" }],
+      definitions: { subgraphs: [{ nodes: [{ type: "LTXVImgToVideo" }] }] },
+    }), "video");
+    assert.equal(storedCutKindFromWorkflow({ nodes: [{ type: "KSampler" }] }), null);
+    assert.equal(storedCutKindFromWorkflow(null), null);
   });
 
   it("graphFitsKind rejects only the clearly other kind", () => {

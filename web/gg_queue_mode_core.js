@@ -1,4 +1,4 @@
-/** Queue mode (Image / Video / Auto): per-cut job planning from the shown take and mode. A Best take does not block a new take. Pure, no DOM. */
+/** Queue mode (Image / Video / Auto). Image and Video follow the shown take. Auto follows the cut's stored workflow kind (`ctx.cutKind`): image template or video template. A Best take does not block a new take. Pure, no DOM. */
 
 import { cutHasStartImage, isStillVersion, stripSelectedVid } from "./gg_version_strip_core.js";
 
@@ -64,8 +64,13 @@ export function queueCutJob(cut, mode, ctx = {}) {
     return { type: "skip", reason: "no_image" };
   }
 
-  if (still) return { type: "job", job: "video", selectedVid: selVid };
-  if (video) return { type: "job", job: "regen", selectedVid: selVid };
+  // Auto: the cut's stored workflow, not the shown take. Unknown kind is an image cut.
+  const cutKind = ctx.cutKind === "video" ? "video" : "image";
+  if (cutKind === "video") {
+    if (!cutHasStartImage(cut)) return { type: "skip", reason: "no_image" };
+    if (still) return { type: "job", job: "video", selectedVid: selVid };
+    return { type: "job", job: "video" };
+  }
   return { type: "job", job: "image" };
 }
 

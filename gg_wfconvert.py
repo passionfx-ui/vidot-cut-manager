@@ -1,10 +1,13 @@
 """UI (graph) workflow -> API prompt, so a cut's saved workflow can run through the Comfy SDK without its tab.
 
-Plain graphs only: no subgraphs, and no muted/bypassed node feeding an active one. Widget values are matched to
-input names in each node's INPUT_TYPES order (ComfyUI's NODE_CLASS_MAPPINGS when running inside ComfyUI, else the
-small table below that covers the bundled templates in examples/workflows)."""
+Subgraph instances (definitions.subgraphs) are flattened into ordinary nodes first: inner links stay,
+boundary inputs become links or widget values from the instance, and boundary outputs feed the parent.
+Muted/bypassed nodes that feed an active node are still refused. Widget values are matched to input names
+in each node's INPUT_TYPES order (ComfyUI's NODE_CLASS_MAPPINGS when running inside ComfyUI, else the small
+table below that covers the bundled templates in examples/workflows)."""
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 WIDGET_TYPES = {"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"}
@@ -52,7 +55,11 @@ _KNOWN: dict[str, list[tuple[str, Any, int]]] = {
 
 
 def _named_widget(value: Any) -> bool:
-    """A saved widgets_values_named entry that should win over the positional array."""
+    """A saved widgets_values_named entry that should win over the positional array.
+
+    An empty string does not win over a filled positional value, but it is still sent
+    (see the widget loop). Dropping it makes ComfyUI reject required text inputs.
+    """
     if isinstance(value, bool):
         return True
     if isinstance(value, str):
@@ -98,6 +105,259 @@ def _spec_for(node_type: str, mappings: dict) -> list[tuple[str, Any, int]] | No
     return _KNOWN.get(node_type)
 
 
+def _spec_from_saved_widgets(node: dict) -> list[tuple[str, Any, int]] | None:
+    """Widget list for a type that is not registered. App graphs still store the values on the node.
+    None when the node has nothing we can turn into inputs (unknown and empty)."""
+    if not isinstance(node, dict):
+        return None
+    names: list[str] = []
+    inputs = [i for i in (node.get("inputs") or []) if isinstance(i, dict)]
+    for inp in inputs:
+        widget = (inp.get("widget") or {}).get("name")
+        if isinstance(widget, str) and widget not in names:
+            names.append(widget)
+    named = node.get("widgets_values_named") if isinstance(node.get("widgets_values_named"), dict) else {}
+    if not names:
+        for key in named:
+            if (isinstance(key, str) and key not in ("upload", "control_after_generate", "fixed")
+                    and not key.endswith("_upload")):
+                names.append(key)
+    has_link = any(inp.get("link") is not None for inp in inputs)
+    if not names and not has_link and not node.get("outputs"):
+        return None
+    return [(name, None, 0) for name in names]
+
+
+def _subgraph_defs(graph: dict) -> dict[str, dict]:
+    raw = graph.get("definitions") if isinstance(graph, dict) else None
+    defs: dict[str, dict] = {}
+    if not isinstance(raw, dict):
+        return defs
+    for sg in raw.get("subgraphs") or []:
+        if isinstance(sg, dict) and sg.get("id") is not None:
+            defs[str(sg["id"])] = sg
+    return defs
+
+
+def _parse_link(link: Any):
+    if isinstance(link, (list, tuple)) and len(link) >= 5:
+        return link[1], link[2], link[3], link[4], link[5] if len(link) > 5 else None
+    if isinstance(link, dict) and "origin_id" in link and "target_id" in link:
+        return link.get("origin_id"), link.get("origin_slot"), link.get("target_id"), link.get("target_slot"), link.get("type")
+    return None
+
+
+def _join_id(prefix: str, nid: Any) -> Any:
+    if not prefix:
+        return nid
+    return f"{prefix}:{nid}"
+
+
+class _Linker:
+    def __init__(self):
+        self.links: list = []
+        self._n = 1
+
+    def add(self, origin_id, origin_slot, target: dict, target_slot, typ=None):
+        lid = self._n
+        self._n += 1
+        slot = int(target_slot)
+        row = [lid, origin_id, int(origin_slot), target.get("id"), slot]
+        if typ:
+            row.append(typ)
+        self.links.append(row)
+        inputs = target.get("inputs") or []
+        if 0 <= slot < len(inputs) and isinstance(inputs[slot], dict):
+            inputs[slot]["link"] = lid
+        return lid
+
+
+def _socket_by_name(node: dict, name: str) -> dict | None:
+    for inp in node.get("inputs") or []:
+        if isinstance(inp, dict) and inp.get("name") == name:
+            return inp
+    return None
+
+
+def _instance_widget(instance: dict, name: str):
+    """(found, value) from the subgraph instance. Named values win, including '' and 0."""
+    named = instance.get("widgets_values_named")
+    if isinstance(named, dict) and name in named:
+        return True, named[name]
+    return False, None
+
+
+def _input_widget_name(node: dict, slot: int) -> str:
+    inputs = node.get("inputs") or []
+    if not (0 <= int(slot) < len(inputs)) or not isinstance(inputs[int(slot)], dict):
+        return ""
+    inp = inputs[int(slot)]
+    return str((inp.get("widget") or {}).get("name") or inp.get("name") or "")
+
+
+def _write_widget(node: dict, widget_name: str, value: Any) -> None:
+    if not widget_name:
+        return
+    named = node.get("widgets_values_named")
+    if not isinstance(named, dict):
+        named = {}
+        node["widgets_values_named"] = named
+    vals = node.get("widgets_values")
+    if widget_name in named and isinstance(vals, list):
+        idx = list(named).index(widget_name)
+        if idx < len(vals):
+            vals[idx] = value
+    elif isinstance(vals, list):
+        wnames = []
+        for inp in node.get("inputs") or []:
+            if isinstance(inp, dict):
+                w = (inp.get("widget") or {}).get("name")
+                if w:
+                    wnames.append(w)
+        if widget_name in wnames and len(vals) == len(wnames):
+            vals[wnames.index(widget_name)] = value
+    elif isinstance(vals, dict):
+        vals[widget_name] = value
+    named[widget_name] = value
+
+
+def _copy_node(node: dict, new_id: Any) -> dict:
+    copied = copy.deepcopy(node)
+    copied["id"] = new_id
+    for inp in copied.get("inputs") or []:
+        if isinstance(inp, dict):
+            inp["link"] = None
+    return copied
+
+
+def _flatten_level(graph: dict, defs: dict[str, dict], prefix: str, linker: _Linker, stack: tuple[str, ...]) -> list:
+    out_nodes: list = []
+    nodes_by_old: dict[str, dict | None] = {}
+    output_map: dict[tuple[str, int], tuple] = {}
+    input_targets: dict[tuple[str, int], list] = {}
+    for node in graph.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        ntype = str(node.get("type") or "")
+        old = str(node.get("id"))
+        if ntype in defs:
+            if ntype in stack:
+                raise ValueError(f'subgraph "{ntype}" contains itself')
+            inst_prefix = str(_join_id(prefix, node.get("id")))
+            inner_nodes, in_by_name, out_by_slot = _expand_instance(node, defs[ntype], defs, inst_prefix, linker, stack + (ntype,))
+            out_nodes.extend(inner_nodes)
+            nodes_by_old[old] = None
+            for index, sock in enumerate(node.get("inputs") or []):
+                if isinstance(sock, dict):
+                    input_targets[(old, index)] = in_by_name.get(sock.get("name"), [])
+            for slot, origin in out_by_slot.items():
+                output_map[(old, slot)] = origin
+            continue
+        copied = _copy_node(node, _join_id(prefix, node.get("id")))
+        out_nodes.append(copied)
+        nodes_by_old[old] = copied
+    for link in graph.get("links") or []:
+        parsed = _parse_link(link)
+        if not parsed:
+            continue
+        origin_id, origin_slot, target_id, target_slot, typ = parsed
+        origin_key, target_key = str(origin_id), str(target_id)
+        origin_slot, target_slot = int(origin_slot), int(target_slot)
+        if (origin_key, origin_slot) in output_map:
+            origin_id, origin_slot = output_map[(origin_key, origin_slot)]
+        elif nodes_by_old.get(origin_key) is not None:
+            origin_id = nodes_by_old[origin_key]["id"]
+        else:
+            continue
+        if (target_key, target_slot) in input_targets:
+            for target_node, inner_slot in input_targets[(target_key, target_slot)]:
+                linker.add(origin_id, origin_slot, target_node, inner_slot, typ)
+            continue
+        target = nodes_by_old.get(target_key)
+        if target is None:
+            continue
+        linker.add(origin_id, origin_slot, target, target_slot, typ)
+    return out_nodes
+
+
+def _expand_instance(instance: dict, sg: dict, defs: dict[str, dict], inst_prefix: str, linker: _Linker,
+                     stack: tuple[str, ...]):
+    input_id = (sg.get("inputNode") or {}).get("id", -10)
+    output_id = (sg.get("outputNode") or {}).get("id", -20)
+    sg_inputs = [inp for inp in (sg.get("inputs") or []) if isinstance(inp, dict)]
+    inner_links = []
+    boundary_in = []
+    boundary_out: dict[int, tuple] = {}
+    for link in sg.get("links") or []:
+        parsed = _parse_link(link)
+        if not parsed:
+            continue
+        origin_id, origin_slot, target_id, target_slot, typ = parsed
+        if origin_id == input_id:
+            boundary_in.append((int(origin_slot), target_id, int(target_slot), typ))
+            continue
+        if target_id == output_id:
+            boundary_out[int(target_slot)] = (origin_id, int(origin_slot))
+            continue
+        inner_links.append(link)
+    inner_nodes = _flatten_level(
+        {"nodes": sg.get("nodes") or [], "links": inner_links, "definitions": {"subgraphs": list(defs.values())}},
+        defs, inst_prefix, linker, stack)
+    if instance.get("mode") not in ACTIVE_MODES:
+        for node in inner_nodes:
+            node["mode"] = instance.get("mode")
+    direct = {}
+    head = f"{inst_prefix}:"
+    for node in inner_nodes:
+        sid = str(node.get("id"))
+        if sid.startswith(head) and ":" not in sid[len(head):]:
+            direct[sid[len(head):]] = node
+    in_by_name: dict[str, list] = {}
+    for sg_slot, target_id, target_slot, _typ in boundary_in:
+        name = sg_inputs[sg_slot].get("name") if 0 <= sg_slot < len(sg_inputs) else ""
+        node = direct.get(str(target_id))
+        if node is None:
+            raise ValueError(f'subgraph "{sg.get("name") or sg.get("id")}" input "{name}" connects to missing node {target_id}')
+        in_by_name.setdefault(name, []).append((node, target_slot))
+        sock = _socket_by_name(instance, name)
+        if isinstance(sock, dict) and sock.get("link") is not None:
+            continue
+        found, value = _instance_widget(instance, name)
+        if not found:
+            continue
+        _write_widget(node, _input_widget_name(node, target_slot) or str(name or ""), value)
+    out_by_slot = {}
+    for slot, (origin_id, origin_slot) in boundary_out.items():
+        node = direct.get(str(origin_id))
+        if node is None:
+            raise ValueError(f'subgraph "{sg.get("name") or sg.get("id")}" output {slot} connects to missing node {origin_id}')
+        out_by_slot[slot] = (node.get("id"), origin_slot)
+    return inner_nodes, in_by_name, out_by_slot
+
+
+def flatten_subgraphs(graph: dict) -> dict:
+    """Copy of a UI graph with subgraph instances replaced by their inner nodes.
+
+    Node ids inside an instance are ``<instance id>:<inner id>`` so they do not collide with the
+    parent graph. A linked instance input is wired to the inner socket. An unlinked one writes the
+    instance widget value (including an empty string) onto that inner widget.
+    """
+    if not isinstance(graph, dict):
+        return graph
+    defs = _subgraph_defs(graph)
+    if not defs:
+        return graph
+    used = any(isinstance(n, dict) and str(n.get("type") or "") in defs for n in (graph.get("nodes") or []))
+    if not used:
+        return graph
+    linker = _Linker()
+    nodes = _flatten_level(graph, defs, "", linker, ())
+    out = {k: v for k, v in graph.items() if k not in ("nodes", "links", "definitions")}
+    out["nodes"] = nodes
+    out["links"] = linker.links
+    return out
+
+
 def _links(graph: dict) -> dict:
     out = {}
     for link in graph.get("links") or []:
@@ -109,10 +369,12 @@ def _links(graph: dict) -> dict:
 
 
 def ui_to_api(graph: dict, mappings: dict | None = None) -> dict:
-    """API prompt {"<id>": {"class_type", "inputs", "_meta"}} of a UI graph. Raises ValueError when a node cannot be
-    converted outside the canvas (unknown type, subgraph, bypassed node in the middle)."""
+    """API prompt {"<id>": {"class_type", "inputs", "_meta"}} of a UI graph. Subgraph instances are flattened first.
+    Raises ValueError when a node cannot be converted outside the canvas (unknown type with no saved widgets,
+    or a muted/bypassed node feeding an active one)."""
     if not isinstance(graph, dict) or not isinstance(graph.get("nodes"), list):
         raise ValueError("not a UI workflow")
+    graph = flatten_subgraphs(graph)
     mappings = _class_mappings() if mappings is None else mappings
     nodes = {n.get("id"): n for n in graph["nodes"] if isinstance(n, dict)}
     links = _links(graph)
@@ -138,6 +400,8 @@ def ui_to_api(graph: dict, mappings: dict | None = None) -> dict:
             continue
         spec = _spec_for(ntype, mappings)
         if spec is None:
+            spec = _spec_from_saved_widgets(n)
+        if spec is None:
             raise ValueError(f'node {nid} "{ntype}" is not a known node type')
         inputs: dict[str, Any] = {}
         vals = n.get("widgets_values")
@@ -149,14 +413,20 @@ def ui_to_api(graph: dict, mappings: dict | None = None) -> dict:
                     inputs[name] = named[name]
                 elif inputs.get(name) in (None, "") and named.get(name) not in (None, ""):
                     inputs[name] = named[name]
+                elif name not in inputs and name in named and named.get(name) == "":
+                    inputs[name] = ""
         else:
             vals = vals if isinstance(vals, list) else []
             pos = 0
             for name, default, extra in spec:
-                got = named[name] if _named_widget(named.get(name)) else (vals[pos] if pos < len(vals) else None)
+                present = pos < len(vals)
+                got = named[name] if _named_widget(named.get(name)) else (vals[pos] if present else None)
                 if got in (None, "") and named.get(name) not in (None, ""):
                     got = named[name]
-                if got not in (None, ""):
+                elif got is None and name in named and named.get(name) == "":
+                    got = ""
+                # "" is a real input. Omitting required text/prompt fails prompt validation.
+                if got is not None:
                     inputs[name] = got
                 elif default is not None:
                     inputs[name] = default

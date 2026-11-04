@@ -183,6 +183,7 @@ import { shouldClosePreviousShotTab } from "./gg_tab_close_core.js";
 import {
   graphFitsKind,
   shouldTryEmbeddedRepWorkflow,
+  storedCutKindFromWorkflow,
   workflowGraphKind,
   workflowSourceToastDetail,
   VERSION_WF_MISSING,
@@ -4458,7 +4459,11 @@ function syncProjectMemory(pid, cuts, { reload = false } = {}) {
   for (const cut of cuts || []) {
     if (!cut?.id) continue;
     if (projectMemory.getWorkflow(cut.id) || projectMemory.inflight(cut.id)) continue;
-    projectMemory.track(cut.id, storeCutWorkflow(cut, gen).catch(() => null));
+    const p = storeCutWorkflow(cut, gen).catch(() => null).then((entry) => {
+      if (projectMemory.generation() === gen) refreshQueuePlanUi();
+      return entry;
+    });
+    projectMemory.track(cut.id, p);
   }
 }
 
@@ -4473,6 +4478,7 @@ function refreshProjectMemoryFromServer(pid, cuts) {
     } catch (_) {}
   })();
   projectMemory.trackTemplate(templatePromise);
+  const pending = [];
   for (const cut of cuts || []) {
     if (!cut?.id) continue;
     const p = storeCutWorkflow(cut, gen).catch((e) => {
@@ -4480,7 +4486,12 @@ function refreshProjectMemoryFromServer(pid, cuts) {
       return null;
     });
     projectMemory.track(cut.id, p);
+    pending.push(p);
   }
+  void Promise.all(pending).then(() => {
+    if (projectMemory.generation() !== gen || projectMemory.pid() !== pid) return;
+    refreshQueuePlanUi();
+  });
   return gen;
 }
 
@@ -10017,12 +10028,41 @@ async function imageToVideoCut(cutId, { startVid = "" } = {}) {
   }
 }
 
-/** Status panel Queue: mode-aware jobs per selected cut (Image / Video / Auto). */
+/** Image or video from the workflow saved on the cut. Timeline `kind` is not this. */
+function storedQueueCutKind(cutId) {
+  const wf = projectMemory.getWorkflow(cutId)?.workflow;
+  return storedCutKindFromWorkflow(wf) === "video" ? "video" : "image";
+}
+
 function queueContextForCut(cutId) {
   const picked = stripPick.pid === state.pid && stripPick.cutId === cutId ? stripPick.vid : "";
   const o = wfOpenVersion;
   const open = o && o.projectId === state.pid && o.cutId === cutId ? o.vid : "";
-  return { picked, open };
+  return { picked, open, cutKind: storedQueueCutKind(cutId) };
+}
+
+function refreshQueuePlanUi() {
+  document.querySelectorAll(".gg-shots").forEach((root) => updateSelectionBar(root));
+}
+
+/** Wait until each cut's saved workflow is in memory so Auto can read its kind. */
+async function ensureStoredCutWorkflows(ids) {
+  const gen = projectMemory.generation();
+  const waits = [];
+  for (const id of ids) {
+    if (projectMemory.getWorkflow(id)?.workflow) continue;
+    const inflight = projectMemory.inflight(id);
+    if (inflight) {
+      waits.push(Promise.resolve(inflight).catch(() => null));
+      continue;
+    }
+    const cut = cutById(id);
+    if (!cut) continue;
+    const p = storeCutWorkflow(cut, gen).catch(() => null);
+    projectMemory.track(id, p);
+    waits.push(p);
+  }
+  if (waits.length) await Promise.all(waits);
 }
 
 function queuePlanForSelectedIds(ids) {
@@ -10122,7 +10162,7 @@ async function runQueueJobItem(item, { newSeed }) {
 }
 
 /** Status panel Queue: one selected cut = one mode job; two or more = generate-all of those jobs; Stop while that batch runs. */
-function queueButtonClick() {
+async function queueButtonClick() {
   if (isGenerateAllRunning(genAll.batch) && genAll.batch?.pid === state.pid && !genAll.batch?.stop) {
     return stopGenerateAll();
   }
@@ -10133,6 +10173,8 @@ function queueButtonClick() {
   }
   const ids = timelineSelectedCutIds();
   if (!ids.length || !isNativeProject()) return;
+  await ensureStoredCutWorkflows(ids);
+  refreshQueuePlanUi();
   const plan = queuePlanForSelectedIds(ids);
   if (!plan?.jobs?.length) return;
   const newSeed = projectRandomSeedOn();

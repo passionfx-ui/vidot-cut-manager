@@ -581,8 +581,8 @@ def native_add_cut_list(
     kind: str | None = None,
 ) -> dict:
     """AI Cut Split / AI Make Cut: one cut per entry, each with one copy of the options template and the
-    description in its prompt node. Image cuts use the Image template. `kind` "video" uses the Video
-    template the same way. `workflow` is ignored."""
+    description in its prompt widget (including an app template's subgraph prompt). Image cuts use the
+    Image template. `kind` "video" uses the Video template the same way. `workflow` is ignored."""
     try:
         from . import gg_ltx
     except ImportError:
@@ -603,7 +603,7 @@ def native_add_cut_list(
         try:
             for r in rows:
                 g = copy.deepcopy(base)
-                gg_wfnodes.set_prompt(g, r["prompt"])
+                gg_wfnodes.write_generation_prompt(g, r["prompt"])
                 entries.append({**r, "graph": g})
         except gg_wfnodes.NodeNotFound as ex:
             raise ValueError(f"{template_label}: {ex}") from None

@@ -56,6 +56,40 @@ class ConvertTests(unittest.TestCase):
         self.assertEqual(api["78"]["inputs"], {"image": "fox.jpg"})
         self.assertEqual(api["82"]["inputs"], {"img_compression": 40, "image": ["78", 0]})
 
+    def test_empty_text_inputs_are_kept(self):
+        class Qwen:
+            @classmethod
+            def INPUT_TYPES(cls):
+                return {"required": {"clip": ("CLIP",), "prompt": ("STRING", {"multiline": True})}}
+
+        g = {"nodes": [
+            {"id": 100, "type": "TextEncodeQwenImageEditPlus", "mode": 0, "widgets_values": [""],
+             "inputs": [{"name": "clip", "type": "CLIP", "link": None}]},
+            {"id": 8, "type": "CLIPTextEncode", "mode": 0, "title": "CLIP Text Encode (Negative Prompt)",
+             "widgets_values": [""], "inputs": [{"name": "clip", "type": "CLIP", "link": None}]},
+        ], "links": []}
+        api = gg_wfconvert.ui_to_api(g, mappings={"TextEncodeQwenImageEditPlus": Qwen})
+        self.assertEqual(api["100"]["inputs"]["prompt"], "")
+        self.assertEqual(api["8"]["inputs"]["text"], "")
+
+    def test_named_empty_text_is_kept(self):
+        g = {"nodes": [{
+            "id": 8, "type": "CLIPTextEncode", "mode": 0, "title": "CLIP Text Encode (Negative Prompt)",
+            "widgets_values": [],
+            "widgets_values_named": {"text": ""},
+        }], "links": []}
+        api = gg_wfconvert.ui_to_api(g, mappings={})
+        self.assertEqual(api["8"]["inputs"].get("text"), "")
+
+    def test_empty_named_does_not_wipe_positional_text(self):
+        g = {"nodes": [{
+            "id": 6, "type": "CLIPTextEncode", "mode": 0,
+            "widgets_values": ["a cat"],
+            "widgets_values_named": {"text": ""},
+        }], "links": []}
+        api = gg_wfconvert.ui_to_api(g, mappings={})
+        self.assertEqual(api["6"]["inputs"]["text"], "a cat")
+
     def test_named_widget_fills_empty_start_image(self):
         g = {"nodes": [{
             "id": 78, "type": "LoadImage", "mode": 0, "title": "Start Image",
