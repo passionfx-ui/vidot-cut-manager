@@ -4,8 +4,8 @@ import { isAnimatedImage, playsAsVideo } from "./gg_missing_media_core.js";
 import { sourceTimeAtClip, videoPreviewFrameIndex } from "./gg_timeline_scrub_core.js";
 
 export const TIMELINE_EDIT_MODE_KEY = "gg.timelineEditMode";
-/** Written only when the user toggles Edit after I26. Missing means default Edit. */
-export const TIMELINE_EDIT_MODE_CHOICE_KEY = "gg.timelineEditMode.i26";
+/** Written only when the user toggles Edit after I53. An older choice is not a choice. Missing means Edit. */
+export const TIMELINE_EDIT_MODE_CHOICE_KEY = "gg.timelineEditMode.i53";
 export const EDIT_MODE_LABEL = "Edit Mode";
 export const EDIT_MODE_ON_CLASS = "gg-edit-mode-on";
 export const EDIT_PREVIEW_GAP_PX = 4;
@@ -16,7 +16,7 @@ function normalizeEditPreviewMode(v) {
 
 /**
  * Edit is the default when Cut Manager opens and nothing has been chosen yet.
- * A value saved before I26 is not a choice. After the user toggles, that choice is kept.
+ * A value saved before I53 is not a choice. After the user toggles, that choice is kept.
  */
 export function loadEditPreviewMode(storage) {
   try {

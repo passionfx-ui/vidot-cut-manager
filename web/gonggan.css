@@ -1602,3 +1602,19 @@ html.gg-edit-mode-on .gg-bottom-strip {
 .gg-mention-pop { position: fixed; z-index: 80; display: flex; flex-direction: column; min-width: 140px; max-height: 180px; overflow: auto; background: #1b1d22; border: 1px solid var(--gg-line, #353a44); border-radius: 4px; }
 .gg-mention-pop button { text-align: left; background: transparent; color: inherit; border: 0; padding: 4px 8px; cursor: pointer; font: inherit; }
 .gg-mention-pop button.on, .gg-mention-pop button:hover { background: #3a5f9e; }
+/* I53: reference lists, buttons, and panels stay in the markup and are not shown. */
+html.gg-refs-held .gg-cut-refthumbs,
+html.gg-refs-held .gg-cut-reflinks,
+html.gg-refs-held .gg-ref-library,
+html.gg-refs-held .gg-ref-library-bar,
+html.gg-refs-held .gg-ref-group,
+html.gg-refs-held .gg-ref-sec,
+html.gg-refs-held .gg-ref-card-main,
+html.gg-refs-held .gg-cut-reference,
+html.gg-refs-held .gg-refpick,
+html.gg-refs-held .gg-sel-refs,
+html.gg-refs-held .gg-ref-fields,
+html.gg-refs-held .gg-mention-pop,
+html.gg-refs-held [data-mode="reference"] {
+  display: none !important;
+}

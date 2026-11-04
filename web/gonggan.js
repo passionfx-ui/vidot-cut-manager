@@ -550,6 +550,11 @@ const SHOW_SEL_BAR = false;
 const SHOW_REDO_FILTER = false;
 /** "Cuts | Final cut list" toggle in the Shots toolbar. Off = not shown and the view is forced to "cuts". */
 const SHOW_FINAL_LIST = false;
+/** I53: reference lists, buttons, and panels stay in the code and are not shown. */
+const SHOW_REFERENCES = false;
+if (!SHOW_REFERENCES) {
+  try { document.documentElement.classList.add("gg-refs-held"); } catch (_) {}
+}
 /**
  * AI Make Cut (internally "cut split") in the UI: the Shots toolbar button, the cut list right-click entry and the
  * Project Settings AI section (Use AI, model, pre-check). Off = none of it is shown and nothing calls
@@ -595,7 +600,7 @@ const shotsUi = {
   needsRedoOnly: false,
   dragSession: null,
   listMode: loadListMode(localStorage),
-  refTab: loadRefTab(),
+  refTab: SHOW_REFERENCES && loadRefTab(),
   playCutId: "",
   composing: false,
   paintDeferred: false,
@@ -2573,6 +2578,7 @@ function onRefPickerKey(e) {
 }
 
 function openRefPicker(anchor, cut) {
+  if (!SHOW_REFERENCES) return;
   closeRefPicker();
   if (!anchor || !cut) return;
   const picked = new Set();
@@ -2728,6 +2734,7 @@ function closeMentionPopup() {
 }
 
 function showMentionPopup(field) {
+  if (!SHOW_REFERENCES) return;
   closeMentionPopup();
   const hit = mentionAutocomplete(field.value, field.selectionStart || 0, activeReferences());
   if (!hit || !hit.items.length) return;
@@ -2839,6 +2846,14 @@ function bindSelectionDetail(root) {
 
 function paintCutRefStrip(root) {
   const host = root?.querySelector?.(".gg-cut-reflinks") || document.querySelector("#gg-root .gg-cut-reflinks");
+  if (!SHOW_REFERENCES) {
+    if (host) {
+      host.hidden = true;
+      host.dataset.html = "";
+      host.innerHTML = "";
+    }
+    return;
+  }
   if (!host) return;
   const cut = selectedShot();
   const show = !!(cut && isNativeProject());
@@ -10071,14 +10086,18 @@ function queueButtonClick() {
   if (isGenerateAllRunning(genAll.batch) && genAll.batch?.pid === state.pid && !genAll.batch?.stop) {
     return stopGenerateAll();
   }
-  if (shotsUi.refTab && isNativeProject()) {
+  if (SHOW_REFERENCES && shotsUi.refTab && isNativeProject()) {
     const ref = selectedReference();
     if (!ref) return;
     return void queueSelectedCuts([ref.id], { resolved: true });
   }
   const ids = timelineSelectedCutIds();
   if (!ids.length || !isNativeProject()) return;
-  return void queueSelectedCuts(ids);
+  const plan = queuePlanForSelectedIds(ids);
+  if (!plan?.jobs?.length) return;
+  const newSeed = projectRandomSeedOn();
+  if (plan.jobs.length === 1) return void runQueueJobItem(plan.jobs[0], { newSeed });
+  return void startGenerateAll(ids, { items: plan.jobs, randomSeed: newSeed });
 }
 
 /** Every cut of the shown native project in Shots list order (collapsed scenes included). */
@@ -11554,6 +11573,7 @@ let inputsTabBtn = null;
 let inputsPane = null;
 let inputsTabOn = false;
 let inputsTabWanted = false;
+let inputsPanelWasOpen = false;
 
 function cutManagerVisible() {
   const shots = document.querySelector(".gg-root.gg-shots");
@@ -11573,15 +11593,38 @@ function nativeRightTabRow() {
 function removeInputsTab() {
   inputsTabWanted = false;
   inputsTabOn = false;
+  inputsPanelWasOpen = false;
   inputsTabBtn?.parentElement?.classList.remove("gg-right-tab-row");
   inputsTabBtn?.remove();
   if (inputsPane) inputsPane.hidden = true;
   inputsPane?.remove();
 }
 
+function rightOverviewOpen() {
+  const tab = document.getElementById("tab-parameters");
+  const panel = tab?.closest(".p-splitterpanel");
+  if (!panel) return false;
+  const r = panel.getBoundingClientRect();
+  return r.width > 80 && r.height > 40;
+}
+
+function pinInputsTabLeft(row) {
+  if (!inputsTabBtn || !row) return;
+  if (inputsTabBtn.parentElement !== row || row.firstElementChild !== inputsTabBtn) {
+    row.insertBefore(inputsTabBtn, row.firstElementChild);
+  }
+  row.classList.add("gg-right-tab-row");
+}
+
 function applyInputsTabState() {
   if (inputsTabBtn) inputsTabBtn.setAttribute("aria-selected", inputsTabOn ? "true" : "false");
   if (inputsPane) inputsPane.hidden = !inputsTabOn;
+  if (!inputsTabOn || !inputsTabBtn?.parentElement) return;
+  for (const tab of inputsTabBtn.parentElement.children) {
+    if (tab === inputsTabBtn) continue;
+    if (tab.getAttribute("aria-selected") === "true") tab.setAttribute("aria-selected", "false");
+    if (tab.getAttribute("data-p-active") === "true") tab.setAttribute("data-p-active", "false");
+  }
 }
 
 function selectInputsTab(on) {
@@ -11611,8 +11654,8 @@ function bindInputsTabOnce() {
   const mo = new MutationObserver(() => {
     if (!inputsTabWanted || !inputsTabBtn || !cutManagerVisible()) return;
     const row = nativeRightTabRow();
-    if (!row || inputsTabBtn.parentElement === row) return;
-    row.appendChild(inputsTabBtn);
+    if (!row) return;
+    pinInputsTabLeft(row);
   });
   mo.observe(document.body, { childList: true, subtree: true });
   document.addEventListener("click", (e) => {
@@ -11628,14 +11671,18 @@ function bindInputsTabOnce() {
   }, true);
 }
 
-/** One Inputs button on ComfyUI's own right tab row, only while Cut Manager is open. */
+/** One Inputs button on ComfyUI's own right tab row, only while Cut Manager is open. Leftmost, and the active tab when that panel opens. */
 function ensureInputsTab() {
   if (!cutManagerVisible()) {
     removeInputsTab();
     return;
   }
+  const open = rightOverviewOpen();
   const row = nativeRightTabRow();
-  if (!row) return;
+  if (!row) {
+    if (!open) inputsPanelWasOpen = false;
+    return;
+  }
   inputsTabWanted = true;
   if (!inputsTabBtn) {
     const btn = document.createElement("button");
@@ -11647,8 +11694,9 @@ function ensureInputsTab() {
     btn.title = "Workflow inputs";
     inputsTabBtn = btn;
   }
-  if (inputsTabBtn.parentElement !== row) row.appendChild(inputsTabBtn);
-  row.classList.add("gg-right-tab-row");
+  pinInputsTabLeft(row);
+  if (open && !inputsPanelWasOpen) inputsTabOn = true;
+  inputsPanelWasOpen = open;
   if (!inputsPane) {
     const pane = document.createElement("div");
     pane.className = "gg-inputs-pane gg-app-controls";
@@ -11782,11 +11830,41 @@ function paintJobQueue(shotsRoot) {
   list.innerHTML = html;
 }
 
+function pinShotsHost(el) {
+  el.style.display = "flex";
+  el.style.flexDirection = "column";
+  el.style.flex = "1 1 auto";
+  el.style.minHeight = "0";
+  el.style.width = "100%";
+}
+
 function mountShots(el) {
+  if (!el) return;
+  pinShotsHost(el);
+  if (el._ggShotsRoot) {
+    if (!el.contains(el._ggShotsRoot)) el.appendChild(el._ggShotsRoot);
+    const fitNow = el._ggShotsFit;
+    if (typeof fitNow === "function") requestAnimationFrame(fitNow);
+    return;
+  }
   el.innerHTML = "";
   const root = document.createElement("div");
   root.className = `gg-root gg-shots${CUT_PANEL_ROOT_CLASS}`;
   el.appendChild(root);
+  el._ggShotsRoot = root;
+  if (!el._ggShotsKeep) {
+    const keep = new MutationObserver(() => {
+      const kept = el._ggShotsRoot;
+      if (!kept || !el.isConnected) return;
+      if (!el.contains(kept)) {
+        el.appendChild(kept);
+        const fitNow = el._ggShotsFit;
+        if (typeof fitNow === "function") requestAnimationFrame(fitNow);
+      }
+    });
+    keep.observe(el, { childList: true });
+    el._ggShotsKeep = keep;
+  }
   const extraCleanup = [];
   bindShotsTabActivated(el, extraCleanup);
   if (!root._ggProjOpenRefresh) {
@@ -11803,7 +11881,7 @@ function mountShots(el) {
   const scroller = () => {
     for (let e = el.parentElement; e && e !== document.body; e = e.parentElement) {
       const o = getComputedStyle(e).overflowY;
-      if (o === "auto" || o === "scroll" || o === "hidden") return e;
+      if ((o === "auto" || o === "scroll" || o === "hidden") && e.clientHeight > 80) return e;
     }
     return null;
   };
@@ -11816,6 +11894,7 @@ function mountShots(el) {
     const h = Math.floor(bottom - r.top - 1);
     if (h > 0) root.style.height = Math.max(200, h) + "px";
   };
+  el._ggShotsFit = fit;
   const ro = new ResizeObserver(fit);
   ro.observe(document.body);
   window.addEventListener("resize", fit);
@@ -12357,7 +12436,7 @@ function mountShots(el) {
         ? `<div class="gg-dim gg-list-empty gg-no-projects"><span>${esc(hintInfo.text)}</span>
             <button type="button" class="gg-btn gg-primary gg-new-project-btn">${esc(hintInfo.button)}</button></div>`
         : `<div class="gg-dim gg-list-empty">${esc(hintInfo.text)}</div>`;
-    const refTab = !!shotsUi.refTab && !!tl && isNativeProject() && !viewFinal;
+    const refTab = SHOW_REFERENCES && !!shotsUi.refTab && !!tl && isNativeProject() && !viewFinal;
     const listHtml = refTab ? referenceLibraryHtml() : (emptyHint || groupedListHtml(sections, {
       cutHtml: (c) => cutRowHtml(c, cutLabels),
       groupHue: groupColor,
@@ -12397,7 +12476,7 @@ function mountShots(el) {
           <button type="button" class="gg-btn${!refTab && listMode === "info" ? " gg-on" : ""}" data-mode="info" title="Show cut details">Info</button>
           <button type="button" class="gg-btn${!refTab && listPrompt ? " gg-on" : ""}" data-mode="prompt" title="Edit prompts per cut">Prompt</button>
           <button type="button" class="gg-btn${!refTab && listCaption ? " gg-on" : ""}" data-mode="caption" title="Edit dialogue per cut">Caption</button>
-          ${tl && isNativeProject() ? `<button type="button" class="gg-btn${refTab ? " gg-on" : ""}" data-mode="reference" title="References">Reference</button>` : ""}
+          ${SHOW_REFERENCES && tl && isNativeProject() ? `<button type="button" class="gg-btn${refTab ? " gg-on" : ""}" data-mode="reference" title="References">Reference</button>` : ""}
         </div>
         ${SHOW_REDO_FILTER ? `<label class="gg-filter-redo" title="Show only cuts marked for redo"><input type="checkbox"${shotsUi.needsRedoOnly ? " checked" : ""}${viewFinal ? " disabled" : ""} /> Show redo cuts only</label>` : ""}
       </div>
@@ -12445,6 +12524,7 @@ function mountShots(el) {
     root.querySelectorAll(".gg-list-toggle .gg-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         if (btn.dataset.mode === "reference") {
+          if (!SHOW_REFERENCES) return;
           if (!shotsUi.refTab) {
             noteLastShot(state.cutId);
             clearSceneGroupSelection();
@@ -15615,7 +15695,8 @@ function placeEditTakesStrip() {
 function editOverlayBottom(graph) {
   const caps = [];
   const base = overlayBottomLimit(graph);
-  if (base != null) caps.push(base);
+  // The overlay rect insets by EDIT_PREVIEW_GAP_PX, so add it back and the preview meets the timeline.
+  if (base != null) caps.push(base + EDIT_PREVIEW_GAP_PX);
   const dock = document.querySelector(".gg-vs-body.gg-vs-dock");
   if (dock) {
     const top = dock.getBoundingClientRect().top;
@@ -15680,7 +15761,7 @@ function editPreviewCoverRect(dockTop) {
   const bottomOf = (graph) => {
     const caps = [];
     const base = overlayBottomLimit(graph);
-    if (base != null) caps.push(base);
+    if (base != null) caps.push(base + EDIT_PREVIEW_GAP_PX);
     if (Number.isFinite(dockTop) && dockTop > 0) caps.push(dockTop + EDIT_PREVIEW_GAP_PX);
     else {
       const docked = editOverlayBottom(graph);
@@ -15847,7 +15928,7 @@ function mountTimeline(el) {
         <span class="gg-tl-title"></span>
         <span class="gg-tl-info"></span>
         <span class="gg-tip"></span>
-        <button type="button" class="gg-btn gg-edit-mode" title="Current cut over the graph. Video follows the playhead." aria-pressed="false">${EDIT_MODE_LABEL}</button>
+        <button type="button" class="gg-btn gg-edit-mode${timelineEditModeOn ? " gg-on" : ""}" title="Current cut over the graph. Video follows the playhead." aria-pressed="${timelineEditModeOn ? "true" : "false"}">${EDIT_MODE_LABEL}</button>
         <button class="gg-btn gg-snap" title="Snap: 1 s steps (off = 0.1 s)">Snap</button>
         <button type="button" class="gg-btn gg-close-gaps" title="Remove empty space so cuts sit back to back from the start. Selected cuts, or the whole timeline if none are selected.">Remove gaps</button>
         <button class="gg-btn gg-reset" title="Reset to original order and lengths">Reset</button>

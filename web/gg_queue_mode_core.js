@@ -1,6 +1,6 @@
-/** Queue mode (Image / Video / Auto): per-cut job planning from Best, selected thumbnail, and mode. Pure, no DOM. */
+/** Queue mode (Image / Video / Auto): per-cut job planning from the shown take and mode. A Best take does not block a new take. Pure, no DOM. */
 
-import { cutHasStartImage, isStillVersion } from "./gg_version_strip_core.js";
+import { cutHasStartImage, isStillVersion, stripSelectedVid } from "./gg_version_strip_core.js";
 
 export const QUEUE_MODE_LS_KEY = "gonggan-cut.queueMode";
 export const QUEUE_MODES = ["image", "video", "auto"];
@@ -48,9 +48,9 @@ function versionById(cut, vid) {
 
 export function queueCutJob(cut, mode, ctx = {}) {
   const m = normalizeQueueMode(mode);
-  if (cut?.pick) return { type: "skip", reason: "best" };
-
-  const selVid = queueStripSelectedVid(cut, ctx);
+  // The row's shown take, including Best when that is what the row is showing.
+  // A Best take does not block a new take.
+  const selVid = stripSelectedVid(cut, ctx) || queueStripSelectedVid(cut, ctx);
   const ver = versionById(cut, selVid);
   const still = ver && isStillVersion(ver);
   const video = ver && ver.kind === "video";
