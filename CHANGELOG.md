@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.140 (beta) - 2026-11-04
+
+> Cut Manager is still in beta. Please report issues on GitHub.
+
+Bug-fix release on top of 0.9.139. No changes to saved project data.
+
+### Fixes
+- Queueing a cut keeps empty text inputs as an empty string (`""`) instead of dropping them, so workflows with optional text fields queue correctly (`gg_wfconvert.py`).
+- Templates that use subgraphs are flattened before queueing (`flatten_subgraphs`), so subgraph-based templates such as the app templates run as cuts.
+- Queue mode **Auto** follows each cut's kind (image or video) and picks the matching workflow.
+- **AI Make Cut**: the menu opens in the right position, and the generated prompt is also written into prompt nodes inside subgraphs (`write_generation_prompt`).
+- Saving `project.json` retries when Windows briefly locks the file (WinError 5 / 32), instead of failing the save.
+
+### Packaging
+- `pyproject.toml` no longer starts with a UTF-8 BOM (strict TOML parsers rejected it).
+- Internal agent notes and scratch scripts are no longer tracked; `.gitignore` covers outputs, logs, `.env`, temp and test artifacts.
+
 ## 0.9.139 (beta) - 2026-11-02
 
 > Cut Manager is still in beta. Please report issues on GitHub.
